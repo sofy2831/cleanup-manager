@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>CleanUp Manager – Créer un compte</title>
 
-  <!-- Police pro -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -17,6 +16,8 @@
       --text:#111;
       --muted:#666;
       --border: rgba(122,92,255,0.18);
+      --bad:#b3261e;
+      --ok:#1b8f4d;
     }
 
     *, *::before, *::after{ box-sizing:border-box; }
@@ -178,11 +179,12 @@
       padding:10px 12px;
       border-radius:14px;
       background:#fff;
-      border-left:5px solid #b3261e;
+      border-left:5px solid var(--bad);
       color:#7a1d16;
       font-size:12px;
       font-weight:900;
       text-align:left;
+      white-space:pre-wrap;
     }
   </style>
 </head>
@@ -239,25 +241,14 @@
 
   <script type="module">
     import { auth, db } from "./firebase-init.js";
-
-
     import { createUserWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import { doc, setDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
-
-    function getParam(name){
-      const p = new URLSearchParams(location.search);
-      return (p.get(name) || "").trim();
-    }
-
-    const role = (getParam("role") || "conciergerie").toLowerCase();
-    if(role === "proprietaire"){
-      window.location.href = "index.html";
-    }
 
     const form = document.getElementById("signupForm");
     const msgBox = document.getElementById("msgBox");
     const submitBtn = document.getElementById("submitBtn");
 
+    // Mets ici tes mails admin gratuits
     const FREE_EMAILS = new Set([
       "mathilde.debout31@gmail.com",
       "s.dumas974@gmail.com"
@@ -267,8 +258,10 @@
       return String(e || "").trim().toLowerCase();
     }
 
-    function showError(text){
+    function showMsg(text, kind="bad"){
       msgBox.style.display = "block";
+      msgBox.style.borderLeftColor = (kind==="ok") ? "#1b8f4d" : "#b3261e";
+      msgBox.style.color = (kind==="ok") ? "#1b8f4d" : "#7a1d16";
       msgBox.textContent = text;
     }
 
@@ -278,14 +271,17 @@
       submitBtn.style.cursor = locked ? "not-allowed" : "pointer";
     }
 
-    let isSubmitting = false;
-
-    function fail(message){
-      showError(message);
-      lockUI(false);
-      isSubmitting = false;
-      return;
+    function setLocalSession({ uid, email, role, plan, planActive }){
+      localStorage.setItem("cm_auth", JSON.stringify({
+        uid,
+        email,
+        role,
+        plan: plan || "",
+        planActive: !!planActive
+      }));
     }
+
+    let isSubmitting = false;
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
@@ -300,10 +296,10 @@
       const company = document.getElementById("company").value.trim();
       const phone = document.getElementById("phone").value.trim();
 
-      if(!email) return fail("Email requis.");
-      if(!email.includes("@")) return fail("Email invalide.");
-      if(!password || password.length < 8) return fail("Mot de passe : 8 caractères minimum.");
-      if(!company) return fail("Nom de la conciergerie requis.");
+      if(!email) { showMsg("Email requis."); lockUI(false); isSubmitting=false; return; }
+      if(!email.includes("@")) { showMsg("Email invalide."); lockUI(false); isSubmitting=false; return; }
+      if(!password || password.length < 8) { showMsg("Mot de passe : 8 caractères minimum."); lockUI(false); isSubmitting=false; return; }
+      if(!company) { showMsg("Nom de la conciergerie requis."); lockUI(false); isSubmitting=false; return; }
 
       lockUI(true);
 
@@ -313,6 +309,7 @@
 
         const isFree = FREE_EMAILS.has(email);
 
+        // Firestore: profil utilisateur
         await setDoc(doc(db, "users", uid), {
           uid,
           role: "conciergerie",
@@ -325,6 +322,16 @@
           plan: isFree ? "free-admin" : ""
         });
 
+        // Session locale (c’est ça que conciergerie.html lit)
+        setLocalSession({
+          uid,
+          email,
+          role: "conciergerie",
+          plan: isFree ? "free-admin" : "",
+          planActive: isFree ? true : false
+        });
+
+        // Redirection
         if(isFree){
           window.location.href = "conciergerie.html";
         }else{
@@ -333,14 +340,18 @@
 
       }catch(err){
         const code = err?.code || "";
-        if(code.includes("email-already-in-use")) return fail("Cet email est déjà utilisé. Connecte-toi.");
-        if(code.includes("weak-password")) return fail("Mot de passe trop faible.");
-        if(code.includes("invalid-email")) return fail("Email invalide.");
-        return fail("Erreur création : " + (err?.message || "inconnue"));
+        if(code.includes("email-already-in-use")) showMsg("Cet email est déjà utilisé. Connecte-toi.");
+        else if(code.includes("weak-password")) showMsg("Mot de passe trop faible.");
+        else if(code.includes("invalid-email")) showMsg("Email invalide.");
+        else showMsg("Erreur création : " + (err?.message || "inconnue"));
+        lockUI(false);
+        isSubmitting = false;
       }
     });
   </script>
 </body>
 </html>
+
+
 
 
