@@ -277,28 +277,113 @@
   </main>
 
   <script type="module">
-    import { auth, db } from "./firebase-init.js";
-    import { createUserWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-    import { doc, setDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+  import { auth, db } from "./firebase-init.js";
+  import { createUserWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+  import { doc, setDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
-    const form = document.getElementById("signupForm");
-    const msgBox = document.getElementById("msgBox");
-    const submitBtn = document.getElementById("submitBtn");
+  const form = document.getElementById("signupForm");
+  const msgBox = document.getElementById("msgBox");
+  const submitBtn = document.getElementById("submitBtn");
 
+  let isSubmitting = false;
+
+  function showMsg(text, kind="bad"){
+    msgBox.style.display = "block";
+    msgBox.style.borderLeftColor = (kind==="ok") ? "#1b8f4d" : "#b3261e";
+    msgBox.style.color = (kind==="ok") ? "#1b8f4d" : "#7a1d16";
+    msgBox.textContent = text;
+  }
+
+  function lockUI(locked){
+    submitBtn.disabled = !!locked;
+    submitBtn.style.opacity = locked ? "0.7" : "1";
+    submitBtn.style.cursor = locked ? "not-allowed" : "pointer";
+  }
+
+  function normalizeEmail(e){
+    return String(e || "").trim().toLowerCase();
+  }
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if(isSubmitting) return;
+    isSubmitting = true;
+
+    msgBox.style.display = "none";
+    msgBox.textContent = "";
+
+    const email = normalizeEmail(document.getElementById("email").value);
+    const password = document.getElementById("password").value;
+    const company = document.getElementById("company").value.trim();
+    const phone = document.getElementById("phone").value.trim();
+
+    // 🔽 tes champs facture (MAINTENANT au bon endroit)
     const legalName = document.getElementById("legalName").value.trim();
-const siretRaw = document.getElementById("siret").value.trim();
-const addressLine1 = document.getElementById("addressLine1").value.trim();
-const zip = document.getElementById("zip").value.trim();
-const city = document.getElementById("city").value.trim();
-const vatRegime = (document.getElementById("vatRegime").value.trim() || "franchise").toLowerCase();
-const iban = document.getElementById("iban").value.trim();
+    const siretRaw = document.getElementById("siret").value.trim();
+    const addressLine1 = document.getElementById("addressLine1").value.trim();
+    const zip = document.getElementById("zip").value.trim();
+    const city = document.getElementById("city").value.trim();
+    const vatRegime = (document.getElementById("vatRegime").value.trim() || "franchise").toLowerCase();
+    const iban = document.getElementById("iban").value.trim();
 
-const siret = siretRaw.replace(/\s+/g, "");
-if(!legalName) { showMsg("Raison sociale requise."); lockUI(false); isSubmitting=false; return; }
-if(!siret || !/^\d{14}$/.test(siret)) { showMsg("SIRET invalide (14 chiffres)."); lockUI(false); isSubmitting=false; return; }
-if(!addressLine1) { showMsg("Adresse requise."); lockUI(false); isSubmitting=false; return; }
-if(!zip || !/^\d{4,5}$/.test(zip)) { showMsg("Code postal invalide."); lockUI(false); isSubmitting=false; return; }
-if(!city) { showMsg("Ville requise."); lockUI(false); isSubmitting=false; return; }
+    const siret = siretRaw.replace(/\s+/g, "");
+
+    // validations
+    if(!email) { showMsg("Email requis."); lockUI(false); isSubmitting=false; return; }
+    if(!email.includes("@")) { showMsg("Email invalide."); lockUI(false); isSubmitting=false; return; }
+    if(!password || password.length < 8) { showMsg("Mot de passe : 8 caractères minimum."); lockUI(false); isSubmitting=false; return; }
+    if(!company) { showMsg("Nom de la conciergerie requis."); lockUI(false); isSubmitting=false; return; }
+
+    if(!legalName) { showMsg("Raison sociale requise."); lockUI(false); isSubmitting=false; return; }
+    if(!siret || !/^\d{14}$/.test(siret)) { showMsg("SIRET invalide (14 chiffres)."); lockUI(false); isSubmitting=false; return; }
+    if(!addressLine1) { showMsg("Adresse requise."); lockUI(false); isSubmitting=false; return; }
+    if(!zip || !/^\d{4,5}$/.test(zip)) { showMsg("Code postal invalide."); lockUI(false); isSubmitting=false; return; }
+    if(!city) { showMsg("Ville requise."); lockUI(false); isSubmitting=false; return; }
+
+    lockUI(true);
+
+    try{
+      const cred = await createUserWithEmailAndPassword(auth, email, password);
+      const uid = cred.user.uid;
+
+      await setDoc(doc(db, "users", uid), {
+        uid,
+        role: "conciergerie",
+        email,
+        company: {
+          tradeName: company,
+          legalName,
+          siret,
+          vatRegime,
+          vatNumber: "",
+          naf: "",
+          address: { line1: addressLine1, zip, city, country: "FR" },
+          phone: phone || "",
+          iban: iban || ""
+        },
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        subscriptionStatus: "inactive",
+        plan: "",
+        billingReady: true
+      }, { merge: true });
+
+      // redirection vers abonnement
+      window.location.href = "abonnement/abonnement.html?plan=starter";
+
+    } catch(err){
+      const code = err?.code || "";
+      if(code.includes("email-already-in-use")) showMsg("Cet email est déjà utilisé. Connecte-toi.");
+      else if(code.includes("weak-password")) showMsg("Mot de passe trop faible.");
+      else if(code.includes("invalid-email")) showMsg("Email invalide.");
+      else showMsg("Erreur création : " + (err?.message || "inconnue"));
+
+      lockUI(false);
+      isSubmitting = false;
+    }
+  });
+</script>
+
 
     
 
