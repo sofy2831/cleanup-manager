@@ -4,25 +4,26 @@ const admin = require("firebase-admin");
 
 admin.initializeApp();
 
+// =====================
+// Secrets Stripe
+// =====================
 const STRIPE_SECRET = defineSecret("STRIPE_SECRET");
 const STRIPE_WEBHOOK_SECRET = defineSecret("STRIPE_WEBHOOK_SECRET");
 
-// ✅ Mets ton domaine GitHub Pages ici (ou "*" temporaire)
+// =====================
+// CORS – GitHub Pages
+// =====================
 const ALLOWED_ORIGINS = [
-  "https://github.com/sofy2831/cleanup-manager",
-  "https://github.com/sofy2831/cleanup-manager", // parfois nécessaire selon basepath
+  "https://sofy2831.github.io"
 ];
 
 function setCors(req, res) {
   const origin = req.headers.origin;
 
-  // ✅ Debug rapide : autorise tout en DEV si tu veux
-  // res.set("Access-Control-Allow-Origin", origin || "*");
-
   if (origin && ALLOWED_ORIGINS.includes(origin)) {
     res.set("Access-Control-Allow-Origin", origin);
   } else {
-    // temporaire pour débloquer (moins secure)
+    // fallback DEV (ok en V1)
     res.set("Access-Control-Allow-Origin", origin || "*");
   }
 
@@ -31,12 +32,18 @@ function setCors(req, res) {
   res.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
 }
 
+// =====================
+// API
+// =====================
 exports.api = onRequest(
-  { region: "europe-west1", secrets: [STRIPE_SECRET, STRIPE_WEBHOOK_SECRET] },
+  {
+    region: "europe-west1",
+    secrets: [STRIPE_SECRET, STRIPE_WEBHOOK_SECRET],
+  },
   async (req, res) => {
     setCors(req, res);
 
-    // ✅ préflight CORS
+    // Preflight CORS
     if (req.method === "OPTIONS") {
       return res.status(204).send("");
     }
@@ -45,36 +52,50 @@ exports.api = onRequest(
     const webhookSecret = STRIPE_WEBHOOK_SECRET.value();
     const db = admin.firestore();
 
-    // =========================================================
+    // =====================
     // 1) PING
-    // =========================================================
+    // =====================
     if (req.method === "GET" && req.path === "/") {
-      return res.json({ ok: true, path: req.path, method: req.method });
+      return res.json({ ok: true });
     }
 
-    // =========================================================
-    // 2) CREATE CHECKOUT SESSION (appelé par TON FRONT)
-    // POST https://.../api/create-checkout-session
-    // body: { uid, plan, priceId, successUrl, cancelUrl }
-    // =========================================================
+    // =====================
+    // 2) CREATE CHECKOUT SESSION
+    // POST /api/create-checkout-session
+    // body: { uid, plan, priceId }
+    // =====================
     if (req.method === "POST" && req.path === "/create-checkout-session") {
       try {
-        const { uid, plan, priceId, successUrl, cancelUrl } = req.body || {};
+        const { uid, plan, priceId } = req.body || {};
 
         if (!uid || !priceId) {
           return res.status(400).json({ error: "uid et priceId requis" });
         }
 
+        // Détection origine (GitHub Pages / futur hosting)
+        const origin =
+          req.headers.origin && req.headers.origin.startsWith("http")
+            ? req.headers.origin
+            : "https://sofy2831.github.io";
+
+        const basePath = origin.includes("sofy2831.github.io")
+          ? "/cleanup-manager"
+          : "";
+
         const session = await stripe.checkout.sessions.create({
           mode: "subscription",
           line_items: [{ price: priceId, quantity: 1 }],
-          success_url: successUrl || "https://github.com/sofy2831/cleanup-manager/merci.html",
-          cancel_url: cancelUrl || "https://github.com/sofy2831/cleanup-managerabonnement.html?cancel=1",
+
+          success_url: `${origin}${basePath}/merci.html`,
+          cancel_url: `${origin}${basePath}/abonnement/abonnement.html?cancel=1`,
+
           metadata: { uid, plan: plan || "starter" },
-          subscription_data: { metadata: { uid, plan: plan || "starter" } },
+          subscription_data: {
+            metadata: { uid, plan: plan || "starter" },
+          },
         });
 
-        // Optionnel: trace Firestore
+        // Trace Firestore (utile debug / support)
         await db.collection("users").doc(uid).set(
           {
             lastCheckoutSessionId: session.id,
@@ -90,17 +111,22 @@ exports.api = onRequest(
       }
     }
 
-    // =========================================================
-    // 3) STRIPE WEBHOOK (Stripe seulement)
-    // POST https://.../api/webhook
-    // =========================================================
+    // =====================
+    // 3) STRIPE WEBHOOK
+    // POST /api/webhook
+    // =====================
     if (req.method === "POST" && req.path === "/webhook") {
       let event;
+
       try {
         const sig = req.headers["stripe-signature"];
-        event = stripe.webhooks.constructEvent(req.rawBody, sig, webhookSecret);
+        event = stripe.webhooks.constructEvent(
+          req.rawBody,
+          sig,
+          webhookSecret
+        );
       } catch (err) {
-        console.error("❌ signature failed:", err.message);
+        console.error("❌ Webhook signature error:", err.message);
         return res.status(400).send(`Webhook Error: ${err.message}`);
       }
 
@@ -119,10 +145,11 @@ exports.api = onRequest(
           );
         }
 
+        // Checkout validé
         if (type === "checkout.session.completed") {
           const session = obj;
           const uid = session?.metadata?.uid || null;
-          const plan = session?.metadata?.plan || "illimite";
+          const plan = session?.metadata?.plan || "starter";
 
           await updateUser(uid, {
             subscriptionStatus: "active",
@@ -132,6 +159,7 @@ exports.api = onRequest(
           });
         }
 
+        // Mises à jour abonnement
         if (
           type === "customer.subscription.created" ||
           type === "customer.subscription.updated" ||
@@ -148,6 +176,7 @@ exports.api = onRequest(
           });
         }
 
+        // Paiement échoué
         if (type === "invoice.payment_failed") {
           const invoice = obj;
           const subId = invoice.subscription;
@@ -178,6 +207,9 @@ exports.api = onRequest(
       }
     }
 
-    return res.status(404).json({ error: "Not found", path: req.path });
+    // =====================
+    // 404
+    // =====================
+    return res.status(404).json({ error: "Not found" });
   }
 );
