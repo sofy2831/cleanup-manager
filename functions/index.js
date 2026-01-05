@@ -87,7 +87,7 @@ exports.api = onRequest(
           line_items: [{ price: priceId, quantity: 1 }],
 
           success_url: `${origin}${basePath}/merci.html`,
-          cancel_url: `${origin}${basePath}/abonnement/abonnement.html?cancel=1`,
+          cancel_url: `${origin}${basePath}/abonnement.html?cancel=1`,
 
           metadata: { uid, plan: plan || "starter" },
           subscription_data: {
