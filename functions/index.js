@@ -87,8 +87,9 @@ exports.api = onRequest(
           mode: "subscription",
           line_items: [{ price: priceId, quantity: 1 }],
 
-          success_url: `${origin}${basePath}/merci.html`,
+          success_url: `${origin}${basePath}/merci.html?session_id={CHECKOUT_SESSION_ID}`,
           cancel_url: `${origin}${basePath}/abonnement.html?cancel=1`,
+
 
           metadata: { uid, plan: plan || "starter" },
           subscription_data: {
