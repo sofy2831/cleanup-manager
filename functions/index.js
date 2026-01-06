@@ -56,8 +56,9 @@ exports.api = onRequest(
     // 1) PING
     // =====================
     if (req.method === "GET" && req.path === "/") {
-      return res.json({ ok: true });
-    }
+  return res.json({ ok: true, version: "no-example-v1" });
+}
+
 
     // =====================
     // 2) CREATE CHECKOUT SESSION
@@ -213,3 +214,4 @@ exports.api = onRequest(
     return res.status(404).json({ error: "Not found" });
   }
 );
+
