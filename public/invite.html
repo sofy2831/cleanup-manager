@@ -294,11 +294,15 @@
         <input id="invLink" type="text" placeholder="Le lien s’affiche ici…" readonly>
 
         <div class="actions">
-          <button class="btn" type="button" id="copyBtn">Copier</button>
-          <button class="btn primary" type="button" id="sendMailBtn">Envoyer par email</button>
+          <button class="btn" type="button" id="copyBtn" disabled>1) Copier le lien</button>
+  <button class="btn primary" type="button" id="sendMailBtn" disabled>2) Ouvrir l’email (puis coller)</button>
           <button class="btn danger" type="button" id="clearBtn">Effacer</button>
         </div>
-
+        
+<div class="small" id="stepsHint" style="margin-top:10px;">
+  Étapes : Génère le lien → copie → ouvre l’email → colle → envoie.
+</div>
+        
         <div class="fineprint">
           Mode V1 : stockage local (localStorage). En production : base sécurisée + emails + droits.
         </div>
@@ -419,67 +423,110 @@
       showAlert("✅ Lien généré. Tu peux le copier ou l’envoyer par email.", true);
     });
 
-    // ===== Copy link =====
-    copyBtn.addEventListener("click", async ()=>{
-      hideAlert();
-      const v = (invLink.value || "").trim();
-      if(!v) return showAlert("Rien à copier. Génère le lien d’abord.");
+    function setButtonsEnabled(enabled){
+  copyBtn.disabled = !enabled;
+  sendMailBtn.disabled = !enabled;
+}
 
-      try{
-        await navigator.clipboard.writeText(v);
-        showAlert("✅ Lien copié.", true);
-      }catch(err){
-        try{
-          invLink.focus();
-          invLink.select();
-          document.execCommand("copy");
-          showAlert("✅ Lien copié (fallback).", true);
-        }catch(e2){
-          showAlert("Copie manuelle nécessaire.");
-        }
-      }
-    });
+setButtonsEnabled(false);
 
-    // ===== Send email (Option A) =====
-    sendMailBtn.addEventListener("click", ()=>{
-      hideAlert();
+function getInviteData(){
+  const email = normalizeEmail(invEmail.value);
+  const by = (invBy.value || "").trim() || "CleanUp Manager";
+  const link = (invLink.value || "").trim();
+  return { email, by, link };
+}
 
-      const email = normalizeEmail(invEmail.value);
-      const by = (invBy.value || "").trim() || "CleanUp Manager";
-      const link = (invLink.value || "").trim();
+// Après génération : active boutons
+form.addEventListener("submit", (e)=>{
+  e.preventDefault();
+  hideAlert();
 
-      if(!email) return showAlert("Email manquant.");
-      if(!link) return showAlert("Génère le lien d’abord.");
+  const email = normalizeEmail(invEmail.value);
+  const by = (invBy.value || "").trim() || "CleanUp Manager";
 
-      const subject = encodeURIComponent("Votre accès propriétaire – CleanUp Manager");
-      const body = encodeURIComponent(
+  if(!email) return showAlert("Email manquant.");
+  if(!/^\S+@\S+\.\S+$/.test(email)) return showAlert("Email invalide.");
+
+  const token = makeToken();
+  const link = buildInviteUrl(email, by, token);
+
+  app.invitations.unshift({
+    id: uid("inv"),
+    email, by, token, link,
+    createdAt: Date.now(),
+    usedAt: null
+  });
+  saveData(app);
+
+  invLink.value = link;
+  setButtonsEnabled(true);
+  invLink.focus();
+  invLink.select();
+
+  showAlert("✅ Lien généré. Étape 1 : COPIE, puis Étape 2 : OUVRE l’email et COLLE le lien.", true);
+});
+
+// Copier
+copyBtn.addEventListener("click", async ()=>{
+  hideAlert();
+  const { link } = getInviteData();
+  if(!link) return showAlert("Rien à copier. Génère le lien d’abord.");
+
+  try{
+    await navigator.clipboard.writeText(link);
+    showAlert("✅ Lien copié. Maintenant : clique sur “Ouvrir l’email”, puis COLLE dans le message.", true);
+  }catch(err){
+    try{
+      invLink.focus();
+      invLink.select();
+      document.execCommand("copy");
+      showAlert("✅ Lien copié (fallback). Maintenant : ouvre l’email et COLLE.", true);
+    }catch(e2){
+      showAlert("Copie manuelle nécessaire.");
+    }
+  }
+});
+
+// Ouvrir l’email (et rappeler de coller)
+sendMailBtn.addEventListener("click", ()=>{
+  hideAlert();
+
+  const { email, by, link } = getInviteData();
+  if(!email) return showAlert("Email manquant.");
+  if(!link) return showAlert("Génère le lien d’abord.");
+
+  const subject = encodeURIComponent("Votre accès propriétaire – CleanUp Manager");
+  const body = encodeURIComponent(
 `Bonjour,
 
-Voici votre lien d’accès propriétaire (invitation) :.
-
-(Collez le lien ci-dessous)
-
+Voici votre lien d’accès propriétaire (invitation) :
+(Collez le lien ici si besoin)
 
 À bientôt,
 ${by}`
-      );
+  );
 
-      // ouvre le client mail par défaut (Gmail/Outlook/… selon config)
-      window.location.href = `mailto:${encodeURIComponent(email)}?subject=${subject}&body=${body}`;
-      showAlert("✅ Email prêt à envoyer (ton client mail s’ouvre).", true);
-    });
+  window.location.href = `mailto:${encodeURIComponent(email)}?subject=${subject}&body=${body}`;
 
-    // ===== Clear =====
-    clearBtn.addEventListener("click", ()=>{
-      hideAlert();
-      invEmail.value = "";
-      invLink.value = "";
-      invBy.value = "CleanUp Manager";
-      invEmail.focus();
-    });
+  // Message clair
+  showAlert("✅ Email ouvert. COLLE le lien copié dans le corps du mail, puis envoie.", true);
+});
+
+// Effacer
+clearBtn.addEventListener("click", ()=>{
+  hideAlert();
+  invEmail.value = "";
+  invLink.value = "";
+  invBy.value = "CleanUp Manager";
+  setButtonsEnabled(false);
+  invEmail.focus();
+});
+
   </script>
 </body>
 </html>
+
 
 
 
