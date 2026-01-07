@@ -15,7 +15,6 @@
       --violet-main:#7A5CFF;
       --violet-dark:#6238FF;
       --text-dark:#111;
-      --bad:#b3261e;
     }
 
     *{ box-sizing:border-box; font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
@@ -32,6 +31,7 @@
       flex-direction:column;
       align-items:center;
       padding:16px 16px 32px;
+      box-sizing:border-box;
     }
 
     .topbar{
@@ -71,8 +71,12 @@
       color:#fff;
       box-shadow:0 4px 12px rgba(0,0,0,.15);
     }
+    button.pill-link{
+      border:none;
+      border-radius:999px;
+    }
 
-    /* NAV top desktop (cache sur mobile) */
+    /* mini nav desktop */
     .top-nav{
       width:100%;
       max-width:980px;
@@ -92,14 +96,15 @@
       background:rgba(255,255,255,.75);
       border:1px solid rgba(122,92,255,.25);
     }
+    .top-nav a:hover{
+      background:#fff;
+      border-color:rgba(122,92,255,.45);
+    }
     .top-nav a.active{
       background:rgba(122,92,255,.18);
       border-color:rgba(122,92,255,.55);
       color:#3f2fb6;
       font-weight:900;
-    }
-    @media (max-width: 520px){
-      .top-nav{ display:none; }
     }
 
     .logo-title{
@@ -225,10 +230,16 @@
       text-align:center;
     }
 
-    /* ===== Bottom nav mobile ===== */
-    .bottom-nav{ display:none; }
+    /* Masquer la mini top-nav sur mobile (évite le doublon) */
     @media (max-width: 520px){
-      .page{ padding-bottom: 86px; }
+      .top-nav{ display:none; }
+    }
+
+    /* Bottom-nav mobile */
+    .bottom-nav{ display:none; }
+
+    @media (max-width: 520px){
+      .page{ padding-bottom: 86px; } /* laisse la place au bandeau */
 
       .bottom-nav{
         display:flex;
@@ -265,7 +276,7 @@
 
 <body>
 
-<!-- ===== Session guard ===== -->
+<!-- ===== Session + garde ===== -->
 <script>
   function getSession(){
     try{ return JSON.parse(localStorage.getItem("cm_auth") || "null"); }
@@ -290,14 +301,12 @@
     const s = requireRoleOneOf(["conciergerie","admin"]);
     if(!s) return;
 
-    if(!s.planActive){
-      location.href = "abonnement.html?plan=starter";
-      return;
-    }
+    // si session locale dit pas actif -> on laisse le module Firestore confirmer,
+    // mais on évite de bloquer brutalement ici
   })();
 </script>
 
-<!-- ===== Firestore subscription sync ===== -->
+<!-- ===== Sync Firestore subscription ===== -->
 <script type="module">
   import { db } from "./firebase-init.js";
   import { doc, getDoc } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
@@ -360,6 +369,7 @@
     <a href="prestations.html">Prestations</a>
     <a href="invite.html">Inviter</a>
     <a href="demandes.html">Demandes</a>
+    <a href="messagerie.html">Messagerie</a>
   </div>
 
   <div class="kpis">
@@ -368,16 +378,19 @@
       <div class="kpi-value" id="kpiToday">—</div>
       <div class="kpi-note">prestations</div>
     </div>
+
     <div class="kpi-card">
       <div class="kpi-title">Cette semaine</div>
       <div class="kpi-value" id="kpiWeek">—</div>
       <div class="kpi-note">prestations</div>
     </div>
+
     <div class="kpi-card">
       <div class="kpi-title">Événements</div>
       <div class="kpi-value" id="kpiEvents">—</div>
       <div class="kpi-note">total</div>
     </div>
+
     <a href="logements.html" class="card-link">
       <div class="kpi-card">
         <div class="kpi-title">Logements actifs</div>
@@ -437,9 +450,13 @@
 
 </div>
 
-<!-- ===== Local KPIs (si tu utilises encore la base locale) ===== -->
+<!-- ===== KPIs data (localStorage V1) ===== -->
 <script>
   const DATA_KEY = "cm_conciergerie_data_v1";
+
+  function uid(prefix){
+    return (prefix||"x") + "_" + Math.random().toString(16).slice(2) + "_" + Date.now().toString(16);
+  }
 
   function loadData(){
     try{
@@ -449,47 +466,82 @@
     return null;
   }
 
+  function saveData(d){
+    localStorage.setItem(DATA_KEY, JSON.stringify(d));
+  }
+
+  function ensureData(){
+    const existing = loadData();
+    if(existing) return existing;
+
+    const seeded = {
+      homes:[],
+      events:[],
+      services:[],
+      threads:[],
+      payments:[],
+      icalSources:[],
+      kits:[],
+      invitations:[],
+      owners:[],
+      requests:[]
+    };
+    saveData(seeded);
+    return seeded;
+  }
+
+  const app = ensureData();
+  app.homes = Array.isArray(app.homes) ? app.homes : [];
+  app.events = Array.isArray(app.events) ? app.events : [];
+
+  (function migrate(){
+    let changed = false;
+    app.homes.forEach(h=>{ if(!h.id){ h.id = uid("h"); changed = true; }});
+    app.events.forEach(e=>{ if(!e.id){ e.id = uid("e"); changed = true; }});
+    if(changed) saveData(app);
+  })();
+
   function pad2(n){ return n < 10 ? "0"+n : ""+n; }
   function dateKey(d){ return d.getFullYear()+"-"+pad2(d.getMonth()+1)+"-"+pad2(d.getDate()); }
 
-  function countToday(events){
+  function countToday(){
     const k = dateKey(new Date());
-    return events.filter(e => e.date === k).length;
+    return app.events.filter(e => e.date === k).length;
   }
 
-  function countWeek(events){
+  function countWeek(){
     const today = new Date();
     let total = 0;
     for(let i=0;i<7;i++){
       const d = new Date(today.getFullYear(), today.getMonth(), today.getDate()+i);
       const k = dateKey(d);
-      total += events.filter(e => e.date === k).length;
+      total += app.events.filter(e => e.date === k).length;
     }
     return total;
   }
 
-  (function renderKpis(){
-    const app = loadData() || {};
-    const homes = Array.isArray(app.homes) ? app.homes : [];
-    const events = Array.isArray(app.events) ? app.events : [];
-
+  function renderKpis(){
     const elHomes = document.getElementById("kpiHomes");
     const elEvents = document.getElementById("kpiEvents");
     const elToday = document.getElementById("kpiToday");
     const elWeek = document.getElementById("kpiWeek");
+    if(!elHomes || !elEvents || !elToday || !elWeek) return;
 
-    if(elHomes) elHomes.textContent = homes.length;
-    if(elEvents) elEvents.textContent = events.length;
-    if(elToday) elToday.textContent = countToday(events);
-    if(elWeek) elWeek.textContent = countWeek(events);
-  })();
+    elHomes.textContent = app.homes.length;
+    elEvents.textContent = app.events.length;
+    elToday.textContent = countToday();
+    elWeek.textContent = countWeek();
+  }
+
+  renderKpis();
 </script>
 
+<!-- Bottom nav mobile -->
 <nav class="bottom-nav">
   <a href="conciergerie.html" class="active">Menu</a>
   <a href="planning.html">Planning</a>
   <a href="logements.html">Logements</a>
-  <a href="prestations.html">Prestations</a>
+  <a href="demandes.html">Demandes</a>
 </nav>
 
 </body>
