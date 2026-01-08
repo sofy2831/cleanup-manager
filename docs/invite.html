@@ -1,3 +1,4 @@
+<!-- docs/invite.html -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -262,7 +263,7 @@
     </div>
 
     <div class="subtitle">Inviter un propriétaire</div>
-    <div class="badge">Générer un lien • Copier • Envoyer par email</div>
+    <div class="badge">Générer un lien • Copier • Ouvrir l’email</div>
 
     <div class="card">
       <div class="card-title">
@@ -300,9 +301,9 @@
         </div>
 
         <div class="small" id="stepsHint" style="margin-top:10px;">
-  Étapes : Génère le lien → copie → ouvre l’email → colle → envoie.
-</div>
-        
+          Étapes : Génère le lien → copie → ouvre l’email → colle → envoie.
+        </div>
+
         <div class="fineprint">
           Mode V1 : stockage local (localStorage). En production : base sécurisée + emails + droits.
         </div>
@@ -318,20 +319,19 @@
     }
     function requireRoleOneOf(roles){
       const s = getSession();
-       if(!s || !roles.includes(s.role)){
+      if(!s || !roles.includes(s.role)){
         location.href = "login.html?role=" + encodeURIComponent(roles[0] || "conciergerie");
-    return null;
+        return null;
       }
       return s;
     }
-      
     function logout(){
       localStorage.removeItem("cm_auth");
       location.href = "index.html";
     }
 
-requireRoleOneOf(["conciergerie","admin"]);
-    
+    requireRoleOneOf(["conciergerie","admin"]);
+
     // ===== Storage V1 =====
     const DATA_KEY = "cm_conciergerie_data_v1";
 
@@ -379,8 +379,6 @@ requireRoleOneOf(["conciergerie","admin"]);
     }
 
     function buildInviteUrl(email, by, token){
-      // IMPORTANT : page qui reçoit l’invitation propriétaire
-      // Renomme si besoin, mais garde ça cohérent dans tout le projet.
       const u = new URL("invite-proprietaire.html", location.href);
       u.searchParams.set("email", email);
       u.searchParams.set("by", by);
@@ -399,7 +397,20 @@ requireRoleOneOf(["conciergerie","admin"]);
 
     if(invBy && !invBy.value) invBy.value = "CleanUp Manager";
 
-    // ===== Generate link =====
+    function setButtonsEnabled(enabled){
+      copyBtn.disabled = !enabled;
+      sendMailBtn.disabled = !enabled;
+    }
+    setButtonsEnabled(false);
+
+    function getInviteData(){
+      const email = normalizeEmail(invEmail.value);
+      const by = (invBy.value || "").trim() || "CleanUp Manager";
+      const link = (invLink.value || "").trim();
+      return { email, by, link };
+    }
+
+    // ===== Generate link (ONE handler only) =====
     form.addEventListener("submit", (e)=>{
       e.preventDefault();
       hideAlert();
@@ -417,122 +428,72 @@ requireRoleOneOf(["conciergerie","admin"]);
         id: uid("inv"),
         email, by, token, link,
         createdAt: Date.now(),
-        usedAt: null
+        usedAt: null,
+        usedOwnerId: null
       });
       saveData(app);
 
       invLink.value = link;
-      showAlert("✅ Lien généré. Tu peux le copier ou l’envoyer par email.", true);
-    });
-
-    function setButtonsEnabled(enabled){
-  copyBtn.disabled = !enabled;
-  sendMailBtn.disabled = !enabled;
-}
-
-setButtonsEnabled(false);
-
-function getInviteData(){
-  const email = normalizeEmail(invEmail.value);
-  const by = (invBy.value || "").trim() || "CleanUp Manager";
-  const link = (invLink.value || "").trim();
-  return { email, by, link };
-}
-
-// Après génération : active boutons
-form.addEventListener("submit", (e)=>{
-  e.preventDefault();
-  hideAlert();
-
-  const email = normalizeEmail(invEmail.value);
-  const by = (invBy.value || "").trim() || "CleanUp Manager";
-
-  if(!email) return showAlert("Email manquant.");
-  if(!/^\S+@\S+\.\S+$/.test(email)) return showAlert("Email invalide.");
-
-  const token = makeToken();
-  const link = buildInviteUrl(email, by, token);
-
-  app.invitations.unshift({
-    id: uid("inv"),
-    email, by, token, link,
-    createdAt: Date.now(),
-    usedAt: null
-  });
-  saveData(app);
-
-  invLink.value = link;
-  setButtonsEnabled(true);
-  invLink.focus();
-  invLink.select();
-
-  showAlert("✅ Lien généré. Étape 1 : COPIE, puis Étape 2 : OUVRE l’email et COLLE le lien.", true);
-});
-
-// Copier
-copyBtn.addEventListener("click", async ()=>{
-  hideAlert();
-  const { link } = getInviteData();
-  if(!link) return showAlert("Rien à copier. Génère le lien d’abord.");
-
-  try{
-    await navigator.clipboard.writeText(link);
-    showAlert("✅ Lien copié. Maintenant : clique sur “Ouvrir l’email”, puis COLLE dans le message.", true);
-  }catch(err){
-    try{
+      setButtonsEnabled(true);
       invLink.focus();
       invLink.select();
-      document.execCommand("copy");
-      showAlert("✅ Lien copié (fallback). Maintenant : ouvre l’email et COLLE.", true);
-    }catch(e2){
-      showAlert("Copie manuelle nécessaire.");
-    }
-  }
-});
 
-// Ouvrir l’email (et rappeler de coller)
-sendMailBtn.addEventListener("click", ()=>{
-  hideAlert();
+      showAlert("✅ Lien généré. Étape 1 : COPIE, puis Étape 2 : OUVRE l’email et COLLE le lien.", true);
+    });
 
-  const { email, by, link } = getInviteData();
-  if(!email) return showAlert("Email manquant.");
-  if(!link) return showAlert("Génère le lien d’abord.");
+    // Copier
+    copyBtn.addEventListener("click", async ()=>{
+      hideAlert();
+      const { link } = getInviteData();
+      if(!link) return showAlert("Rien à copier. Génère le lien d’abord.");
 
-  const subject = encodeURIComponent("Votre accès propriétaire – CleanUp Manager");
-  const body = encodeURIComponent(
+      try{
+        await navigator.clipboard.writeText(link);
+        showAlert("✅ Lien copié. Maintenant : clique sur “Ouvrir l’email”, puis COLLE dans le message.", true);
+      }catch(err){
+        try{
+          invLink.focus();
+          invLink.select();
+          document.execCommand("copy");
+          showAlert("✅ Lien copié (fallback). Maintenant : ouvre l’email et COLLE.", true);
+        }catch(e2){
+          showAlert("Copie manuelle nécessaire.");
+        }
+      }
+    });
+
+    // Ouvrir l’email (et rappeler de coller)
+    sendMailBtn.addEventListener("click", ()=>{
+      hideAlert();
+
+      const { email, by, link } = getInviteData();
+      if(!email) return showAlert("Email manquant.");
+      if(!link) return showAlert("Génère le lien d’abord.");
+
+      const subject = encodeURIComponent("Votre accès propriétaire – CleanUp Manager");
+      const body = encodeURIComponent(
 `Bonjour,
 
 Voici votre lien d’accès propriétaire :
-(Collez le lien en dessous)
+${link}
 
 À bientôt,
 ${by}`
-  );
+      );
 
-  window.location.href = `mailto:${encodeURIComponent(email)}?subject=${subject}&body=${body}`;
+      window.location.href = `mailto:${encodeURIComponent(email)}?subject=${subject}&body=${body}`;
+      showAlert("✅ Email ouvert. Vérifie que le lien est bien dans le corps du mail, puis envoie.", true);
+    });
 
-  // Message clair
-  showAlert("✅ Email ouvert. COLLE le lien copié dans le corps du mail, puis envoie.", true);
-});
-
-// Effacer
-clearBtn.addEventListener("click", ()=>{
-  hideAlert();
-  invEmail.value = "";
-  invLink.value = "";
-  invBy.value = "CleanUp Manager";
-  setButtonsEnabled(false);
-  invEmail.focus();
-});
-
-    
+    // Effacer
+    clearBtn.addEventListener("click", ()=>{
+      hideAlert();
+      invEmail.value = "";
+      invLink.value = "";
+      invBy.value = "CleanUp Manager";
+      setButtonsEnabled(false);
+      invEmail.focus();
+    });
   </script>
 </body>
 </html>
-
-
-
-
-
-
-
