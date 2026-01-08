@@ -1,3 +1,4 @@
+<!-- docs/invite-proprietaire.html -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -258,12 +259,14 @@
         <div class="row">
           <div>
             <label for="password">Mot de passe</label>
-<input id="password" type="password" autocomplete="new-password" placeholder="Au moins 8 caractères" required />
-<div class="small">Choisis un mot de passe solide (min. 8 caractères, 1 lettre + 1 chiffre).</div>
-
-<label for="password2">Confirmer le mot de passe</label>
-<input id="password2" type="password" autocomplete="new-password" placeholder="Ressaisis le mot de passe" required />
-
+            <input id="password" type="password" autocomplete="new-password" placeholder="Au moins 8 caractères" required />
+            <div class="small">Min. 8 caractères avec 1 lettre + 1 chiffre.</div>
+          </div>
+          <div>
+            <label for="password2">Confirmer le mot de passe</label>
+            <input id="password2" type="password" autocomplete="new-password" placeholder="Ressaisis le mot de passe" required />
+          </div>
+        </div>
 
         <div class="checkbox">
           <input id="accept" type="checkbox" />
@@ -275,7 +278,7 @@
         <button class="cta" type="submit">Créer mon accès</button>
 
         <div class="fineprint">
-          Mode V1 : stockage local (dans le navigateur). En production : base sécurisée + emails + droits.
+          Mode V1 : stockage local (dans le navigateur). En production : Firebase Auth + Firestore + droits.
         </div>
       </form>
     </div>
@@ -335,11 +338,24 @@
       }));
     }
 
+    function isStrongPassword(pw){
+      return typeof pw === "string"
+        && pw.length >= 8
+        && /[A-Za-z]/.test(pw)
+        && /\d/.test(pw);
+    }
+
+    async function sha256(str){
+      const enc = new TextEncoder().encode(str);
+      const buf = await crypto.subtle.digest("SHA-256", enc);
+      return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,"0")).join("");
+    }
+
     const emailEl = document.getElementById("email");
     const fullnameEl = document.getElementById("fullname");
     const phoneEl = document.getElementById("phone");
     const passwordEl = document.getElementById("password");
-const password2El = document.getElementById("password2");
+    const password2El = document.getElementById("password2");
     const acceptEl = document.getElementById("accept");
     const invitedByLabel = document.getElementById("invitedByLabel");
     const badgeLine = document.getElementById("badgeLine");
@@ -356,7 +372,7 @@ const password2El = document.getElementById("password2");
       badgeLine.textContent = "Invitation pré-remplie";
     }else{
       badgeLine.textContent = "Lien d’invitation incomplet";
-      showAlert("⚠️ Ton lien d’invitation ne contient pas l’email. Tu peux le saisir manuellement (V1).", false);
+      showAlert("⛔ Ton lien d’invitation ne contient pas l’email. Demande à la conciergerie de renvoyer un lien.", false);
     }
 
     let matchedInvite = null;
@@ -372,8 +388,16 @@ const password2El = document.getElementById("password2");
       }
     }
 
+    // Blocage strict : pas de token = pas d'accès
+    if(!token){
+      showAlert("⛔ Invitation invalide : token manquant. Demande à la conciergerie de renvoyer un lien.", false);
+      document.getElementById("inviteForm").querySelectorAll("input,button").forEach(el => el.disabled = true);
+    }
+
+    // Blocage strict : token non reconnu
     if(token && !matchedInvite){
-      showAlert("⚠️ Invitation introuvable (token/email). En production : accès bloqué. Ici (V1), tu peux quand même créer l’accès.", false);
+      showAlert("⛔ Invitation introuvable. Demande à la conciergerie de générer un nouveau lien.", false);
+      document.getElementById("inviteForm").querySelectorAll("input,button").forEach(el => el.disabled = true);
     }
 
     if(matchedInvite && matchedInvite.usedAt){
@@ -381,67 +405,40 @@ const password2El = document.getElementById("password2");
       document.getElementById("inviteForm").querySelectorAll("input,button").forEach(el => el.disabled = true);
     }
 
-    if(!token){
-      showAlert("⚠️ Token manquant dans l’URL. En V1 on laisse passer, mais en production ce serait bloqué.", false);
-    }
-
-    document.getElementById("inviteForm").addEventListener("submit", (e)=>{
+    document.getElementById("inviteForm").addEventListener("submit", async (e)=>{
       e.preventDefault();
       hideAlert();
-const password = (passwordEl.value || "");
-const password2 = (password2El.value || "");
+
       const email = normalizeEmail(emailEl.value);
       const fullname = fullnameEl.value.trim();
       const phone = phoneEl.value.trim();
-     
+      const password = passwordEl.value || "";
+      const password2 = password2El.value || "";
 
       if(!email || !fullname) return showAlert("Champs manquants : email + nom/prénom.", false);
       if(!/^\S+@\S+\.\S+$/.test(email)) return showAlert("Email invalide.", false);
-if(!email || !fullname) return showAlert("Champs manquants : email + nom/prénom.", false);
-if(!/^\S+@\S+\.\S+$/.test(email)) return showAlert("Email invalide.", false);
-      
+
+      if(!isStrongPassword(password)){
+        return showAlert("Mot de passe trop faible : <b>8 caractères minimum</b>, avec <b>1 lettre</b> et <b>1 chiffre</b>.", false);
+      }
+      if(password !== password2) return showAlert("Les deux mots de passe ne correspondent pas.", false);
       if(!acceptEl.checked) return showAlert("Tu dois cocher l’acceptation (V1).", false);
 
+      // Interdire la recréation d'un compte existant
       const existing = app.owners.find(o => normalizeEmail(o.email) === email);
       if(existing){
-        
-
-        existing.lastLoginAt = Date.now();
-
-        if(matchedInvite && !matchedInvite.usedAt){
-          matchedInvite.usedAt = Date.now();
-          matchedInvite.usedOwnerId = existing.id;
-        }
-
-
-        
-        saveData(app);
-        setSessionOwner(existing);
-        showAlert("✅ Accès déjà existant. Connexion…", true);
-        setTimeout(()=> location.href = "proprietaire.html", 500);
+        showAlert("⛔ Un accès existe déjà pour cet email. Clique sur <b>“J’ai déjà un accès”</b> pour te connecter.", false);
         return;
       }
-function isStrongPassword(pw){
-  // simple mais pro : 8+ / 1 lettre / 1 chiffre
-  return typeof pw === "string"
-    && pw.length >= 8
-    && /[A-Za-z]/.test(pw)
-    && /\d/.test(pw);
-}
 
-// Hash léger V1 (pas du chiffrement sérieux, mais évite le stockage en clair)
-async function sha256(str){
-  const enc = new TextEncoder().encode(str);
-  const buf = await crypto.subtle.digest("SHA-256", enc);
-  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,"0")).join("");
-}
+      const passwordHash = await sha256(password);
 
       const owner = {
         id: uid("own"),
         email,
         fullname,
         phone,
-        pin,
+        passwordHash,
         invitedBy: invitedBy || (matchedInvite?.by || ""),
         inviteToken: token || "",
         invitationId: matchedInvite?.id || null,
@@ -459,10 +456,13 @@ async function sha256(str){
 
       saveData(app);
       setSessionOwner(owner);
+
+      passwordEl.value = "";
+      password2El.value = "";
+
       showAlert("✅ Accès créé. Connexion…", true);
-      setTimeout(()=> location.href = "proprietaire.html", 700);
+      setTimeout(()=> location.href = "proprietaire.html", 600);
     });
   </script>
 </body>
 </html>
-
