@@ -18,7 +18,6 @@
       --text-dark:#111;
       --muted:#666;
       --ok:#1b8f4d;
-      --warn:#b37400;
       --bad:#b3261e;
     }
     *{ box-sizing:border-box; font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
@@ -250,315 +249,300 @@
       margin-top:10px;
     }
 
-    /* bottom nav (mobile) */
-    .bottom-nav{ display:none; }
-    @media (max-width: 520px){
-      .page{ padding-bottom: 86px; }
-      .bottom-nav{
-        display:flex;
-        position:fixed;
-        left:12px; right:12px; bottom:12px;
-        background: rgba(255,255,255,0.92);
-        border:1px solid rgba(122,92,255,.25);
-        border-radius: 16px;
-        box-shadow: 0 10px 30px rgba(0,0,0,.12);
-        padding:10px;
-        gap:8px;
-        justify-content:space-between;
-        z-index:9999;
-        backdrop-filter: blur(10px);
-      }
-      .bottom-nav a{
-        flex:1;
-        text-decoration:none;
-        font-size:12px;
-        font-weight:900;
-        color:#5b45c8;
-        background: rgba(122,92,255,.10);
-        border-radius: 12px;
-        padding:10px 8px;
-        text-align:center;
-      }
-      .bottom-nav a.active{
-        background: linear-gradient(90deg,var(--violet-main),var(--violet-dark));
-        color:#fff;
-      }
+    .alert{
+      display:none;
+      margin-top:10px;
+      padding:10px 12px;
+      background:#fff;
+      border-radius:14px;
+      border-left:5px solid var(--bad);
+      box-shadow:0 3px 10px rgba(0,0,0,.06);
+      font-size:12px;
+      color:#444;
+      white-space:pre-wrap;
+      max-width:980px;
+      width:100%;
     }
+    .alert.ok{ border-left-color: var(--ok); }
   </style>
 </head>
 
 <body>
+  <div class="page">
+    <div class="topbar">
+      <a class="pill-link" href="conciergerie.html">← Tableau de bord</a>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <a class="pill-link primary" href="planning.html">Planning</a>
+        <button class="pill-link" id="logoutBtn" type="button">Déconnexion</button>
+      </div>
+    </div>
 
-<script>
-  function getSession(){
-    try{ return JSON.parse(localStorage.getItem("cm_auth") || "null"); }
-    catch(e){ return null; }
-  }
-  function requireRoleOneOf(roles){
-    const s = getSession();
-    if(!s || !roles.includes(s.role)){
-      location.href = "login.html?role=" + encodeURIComponent(roles[0] || "conciergerie");
-      return null;
-    }
-    return s;
-  }
-  function logout(){
-    localStorage.removeItem("cm_auth");
-    location.href = "index.html";
-  }
-  (function guard(){
-    const s = requireRoleOneOf(["conciergerie","admin"]);
-    if(!s) return;
-    if(!s.planActive){
-      location.href = "abonnement.html?plan=starter";
-      return;
-    }
-  })();
-</script>
+    <div class="logo-title">
+      <div class="logo-icon">✓</div>
+      <h1>CleanUp Manager</h1>
+    </div>
 
-<div class="page">
-  <div class="topbar">
-    <a class="pill-link" href="conciergerie.html">← Tableau de bord</a>
-    <div style="display:flex; gap:8px; align-items:center;">
-      <a class="pill-link primary" href="planning.html">Planning</a>
-      <button class="pill-link" type="button" onclick="logout()">Déconnexion</button>
+    <div class="subtitle">Demandes propriétaires</div>
+    <div class="badge">Firestore • Temps réel</div>
+
+    <div class="alert" id="alertBox"></div>
+
+    <div class="wrap">
+      <div class="card">
+        <div class="card-title">
+          <div>
+            <div class="t">Boîte de demandes</div>
+            <div class="sub"><span id="pendingCount">0</span> en attente</div>
+          </div>
+          <div class="tabs">
+            <button class="tab active" id="tabPending" type="button">En attente</button>
+            <button class="tab" id="tabDone" type="button">Traitées</button>
+            <button class="tab" id="tabRejected" type="button">Refusées</button>
+          </div>
+        </div>
+
+        <div class="hint">
+          “Accepter” : si c’est un ajout logement → crée le logement (homes) + rattache au propriétaire (ownerUid) + met la demande en accepted.
+          Sinon : met en done.
+        </div>
+
+        <div id="reqList"></div>
+      </div>
     </div>
   </div>
 
-  <div class="logo-title">
-    <div class="logo-icon">✓</div>
-    <h1>CleanUp Manager</h1>
-  </div>
+  <script type="module">
+    import { auth, db } from "./firebase-init.js";
+    import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+    import {
+      collection, query, orderBy, onSnapshot,
+      doc, updateDoc, addDoc, serverTimestamp
+    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
-  <div class="subtitle">Demandes propriétaires</div>
-  <div class="badge">Accepter • Traiter • Refuser</div>
+    const alertBox = document.getElementById("alertBox");
+    function showAlert(msg, ok=false){
+      alertBox.style.display = "block";
+      alertBox.classList.toggle("ok", !!ok);
+      alertBox.textContent = msg;
+    }
+    function hideAlert(){
+      alertBox.style.display = "none";
+      alertBox.classList.remove("ok");
+      alertBox.textContent = "";
+    }
 
-  <div class="wrap">
-    <div class="card">
-      <div class="card-title">
-        <div>
-          <div class="t">Boîte de demandes</div>
-          <div class="sub"><span id="pendingCount">0</span> en attente</div>
-        </div>
-        <div class="tabs">
-          <button class="tab active" id="tabPending" type="button">En attente</button>
-          <button class="tab" id="tabDone" type="button">Traitées</button>
-          <button class="tab" id="tabRejected" type="button">Refusées</button>
-        </div>
-      </div>
-
-      <div class="hint">
-        “Accepter” : si c’est un ajout logement → crée le logement + rattache au propriétaire (V1). Sinon : passe en “Traité”.
-      </div>
-
-      <div id="reqList"></div>
-    </div>
-  </div>
-</div>
-
-<nav class="bottom-nav">
-  <a href="conciergerie.html">Menu</a>
-  <a href="planning.html">Planning</a>
-  <a href="logements.html">Logements</a>
-  <a href="demandes.html" class="active">Demandes</a>
-</nav>
-
-<script>
-  const DATA_KEY = "cm_conciergerie_data_v1";
-
-  function uid(prefix){
-    return (prefix||"x") + "_" + Math.random().toString(16).slice(2) + "_" + Date.now().toString(16);
-  }
-  function loadData(){
-    try{
-      const raw = localStorage.getItem(DATA_KEY);
-      if(raw) return JSON.parse(raw);
-    }catch(e){}
-    return null;
-  }
-  function saveData(d){ localStorage.setItem(DATA_KEY, JSON.stringify(d)); }
-  function ensureData(){
-    const existing = loadData();
-    if(existing) return existing;
-    const seeded = {
-      homes:[], events:[], services:[], threads:[], payments:[],
-      owners:[], invitations:[], icalSources:[], kits:[], requests:[]
-    };
-    saveData(seeded);
-    return seeded;
-  }
-
-  const app = ensureData();
-  app.homes = Array.isArray(app.homes) ? app.homes : [];
-  app.owners = Array.isArray(app.owners) ? app.owners : [];
-  app.requests = Array.isArray(app.requests) ? app.requests : [];
-
-  // migration requests
-  (function migrate(){
-    let changed = false;
-    app.requests.forEach(r=>{
-      if(!r.id){ r.id = uid("req"); changed = true; }
-      if(!r.status){ r.status = "pending"; changed = true; }
-      if(!r.createdAt){ r.createdAt = Date.now(); changed = true; }
+    const logoutBtn = document.getElementById("logoutBtn");
+    logoutBtn.addEventListener("click", async ()=>{
+      await signOut(auth);
+      localStorage.removeItem("cm_auth");
+      location.href = "index.html";
     });
-    if(changed) saveData(app);
-  })();
 
-  const reqList = document.getElementById("reqList");
-  const pendingCount = document.getElementById("pendingCount");
+    const reqList = document.getElementById("reqList");
+    const pendingCount = document.getElementById("pendingCount");
 
-  const tabPending = document.getElementById("tabPending");
-  const tabDone = document.getElementById("tabDone");
-  const tabRejected = document.getElementById("tabRejected");
+    const tabPending = document.getElementById("tabPending");
+    const tabDone = document.getElementById("tabDone");
+    const tabRejected = document.getElementById("tabRejected");
 
-  let view = "pending";
+    let view = "pending";
+    let unsubscribe = null;
 
-  function escapeText(s){
-    return (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
-  }
-  function fmt(ts){
-    const d = new Date(ts || Date.now());
-    const dd = String(d.getDate()).padStart(2,"0");
-    const mm = String(d.getMonth()+1).padStart(2,"0");
-    const hh = String(d.getHours()).padStart(2,"0");
-    const mi = String(d.getMinutes()).padStart(2,"0");
-    return `${dd}/${mm} ${hh}:${mi}`;
-  }
-
-  function findOwnerForRequest(r){
-    if(r.ownerId){
-      const byId = app.owners.find(o => o.id === r.ownerId);
-      if(byId) return byId;
+    function esc(s){
+      return String(s||"")
+        .replace(/&/g,"&amp;")
+        .replace(/</g,"&lt;")
+        .replace(/>/g,"&gt;");
     }
-    if(r.ownerEmail){
-      const email = (r.ownerEmail||"").trim().toLowerCase();
-      const byMail = app.owners.find(o => (o.email||"").trim().toLowerCase() === email);
-      if(byMail) return byMail;
+
+    function fmt(ts){
+      try{
+        const d = ts?.toDate ? ts.toDate() : new Date(ts || Date.now());
+        const dd = String(d.getDate()).padStart(2,"0");
+        const mm = String(d.getMonth()+1).padStart(2,"0");
+        const hh = String(d.getHours()).padStart(2,"0");
+        const mi = String(d.getMinutes()).padStart(2,"0");
+        return `${dd}/${mm} ${hh}:${mi}`;
+      }catch(e){
+        return "";
+      }
     }
-    return null;
-  }
 
-  function setStatus(reqId, status){
-    const r = app.requests.find(x => x.id === reqId);
-    if(!r) return;
-    r.status = status;
-    r.usedAt = Date.now();
-    saveData(app);
-    render();
-  }
+    function setTab(newView){
+      view = newView;
+      tabPending.classList.toggle("active", view === "pending");
+      tabDone.classList.toggle("active", view === "done");
+      tabRejected.classList.toggle("active", view === "rejected");
+      // re-render depuis le dernier snapshot
+      if(window.__lastItems) render(window.__lastItems);
+    }
 
-  function acceptRequest(reqId){
-    const r = app.requests.find(x => x.id === reqId);
-    if(!r) return;
+    tabPending.addEventListener("click", ()=>setTab("pending"));
+    tabDone.addEventListener("click", ()=>setTab("done"));
+    tabRejected.addEventListener("click", ()=>setTab("rejected"));
 
-    // si c'est un add_home -> créer logement + rattacher
-    if(r.type === "add_home"){
-      const owner = findOwnerForRequest(r);
-      if(!owner){
-        alert("Propriétaire introuvable (ownerId/ownerEmail).");
+    function statusBucket(status){
+      const s = status || "pending";
+      if(s === "pending") return "pending";
+      if(s === "refused" || s === "rejected") return "rejected";
+      // accepted / done
+      return "done";
+    }
+
+    function render(items){
+      // count pending global
+      const pending = items.filter(r => (r.status || "pending") === "pending").length;
+      pendingCount.textContent = String(pending);
+
+      // filter by tab
+      let list = [];
+      if(view === "pending") list = items.filter(r => statusBucket(r.status) === "pending");
+      if(view === "done") list = items.filter(r => statusBucket(r.status) === "done");
+      if(view === "rejected") list = items.filter(r => statusBucket(r.status) === "rejected");
+
+      reqList.innerHTML = "";
+      if(!list.length){
+        const e = document.createElement("div");
+        e.className = "empty";
+        e.textContent = view === "pending"
+          ? "Aucune demande en attente."
+          : (view === "done" ? "Aucune demande traitée." : "Aucune demande refusée.");
+        reqList.appendChild(e);
         return;
       }
-      owner.homes = Array.isArray(owner.homes) ? owner.homes : [];
 
-      const home = {
-        id: uid("h"),
-        name: r.homeName || "Logement",
-        city: r.city || "",
-        owner: owner.fullname || owner.email || "Propriétaire",
-        type: r.homeType || "Studio",
-        team: r.team || "Équipe A",
-        ownerId: owner.id
-      };
-
-      app.homes.unshift(home);
-      owner.homes.unshift(home.id);
-
-      r.status = "accepted";
-      r.usedAt = Date.now();
-      saveData(app);
-      render();
-      alert("✅ Logement créé et demande acceptée.");
-      return;
-    }
-
-    // sinon : traité
-    setStatus(reqId, "done");
-  }
-
-  function render(){
-    const pending = app.requests.filter(r => (r.status || "pending") === "pending");
-    pendingCount.textContent = String(pending.length);
-
-    let list = [];
-    if(view === "pending") list = pending;
-    if(view === "done") list = app.requests.filter(r => ["done","accepted"].includes(r.status));
-    if(view === "rejected") list = app.requests.filter(r => r.status === "rejected");
-
-    reqList.innerHTML = "";
-
-    if(!list.length){
-      const e = document.createElement("div");
-      e.className = "empty";
-      e.textContent = view === "pending"
-        ? "Aucune demande en attente."
-        : (view === "done" ? "Aucune demande traitée." : "Aucune demande refusée.");
-      reqList.appendChild(e);
-      return;
-    }
-
-    list
-      .slice()
-      .sort((a,b)=> (b.createdAt||0) - (a.createdAt||0))
-      .forEach(r=>{
-        const ownerLabel = r.ownerName || r.ownerEmail || "Propriétaire";
-        const typeLabel = r.type === "add_home" ? "Ajout logement" : (r.type || "Message");
-        const msg = escapeText(r.message || "");
+      list.forEach(r=>{
+        const ownerLabel = r.ownerEmail || r.ownerUid || "Propriétaire";
+        const typeLabel = (r.type === "add_home") ? "Ajout logement" : (r.type || "Message");
+        const title = r.title ? r.title : "";
+        const msg = r.message ? r.message : "";
 
         const wrap = document.createElement("div");
         wrap.className = "req-item";
+        wrap.setAttribute("data-id", r.id);
+
         wrap.innerHTML = `
           <div class="req-meta">
-            <span>${escapeText(typeLabel)} • ${escapeText(ownerLabel)}</span>
+            <span>${esc(typeLabel)} • ${esc(ownerLabel)}</span>
             <span>${fmt(r.createdAt)}</span>
           </div>
-          <p class="req-message">${msg || "<i>(pas de message)</i>"}</p>
 
-          ${view === "pending" ? `
+          ${title ? `<div style="font-weight:900; font-size:13px; margin-bottom:6px;">${esc(title)}</div>` : ""}
+
+          <p class="req-message">${esc(msg) || "<i>(pas de message)</i>"}</p>
+
+          ${(view === "pending") ? `
             <div class="req-actions">
-              <button class="btn-accept" type="button" data-act="accept" data-id="${r.id}">Accepter</button>
-              <button class="btn-done" type="button" data-act="done" data-id="${r.id}">Traiter</button>
-              <button class="btn-reject" type="button" data-act="reject" data-id="${r.id}">Refuser</button>
+              <button class="btn-accept" type="button" data-act="accept">Accepter</button>
+              <button class="btn-done" type="button" data-act="done">Traiter</button>
+              <button class="btn-reject" type="button" data-act="reject">Refuser</button>
             </div>
           ` : ""}
         `;
+
         reqList.appendChild(wrap);
       });
+    }
 
-    reqList.querySelectorAll("button[data-act]").forEach(btn=>{
-      btn.addEventListener("click", ()=>{
-        const id = btn.getAttribute("data-id");
-        const act = btn.getAttribute("data-act");
-        if(act === "accept") acceptRequest(id);
-        if(act === "done") setStatus(id, "done");
-        if(act === "reject") setStatus(id, "rejected");
+    async function setStatus(reqId, status){
+      await updateDoc(doc(db, "requests", reqId), {
+        status,
+        decidedAt: serverTimestamp()
       });
+    }
+
+    async function acceptRequest(req){
+      // Si ajout logement : créer un doc homes + rattacher ownerUid + update request
+      if(req.type === "add_home"){
+        const p = req.payload || {};
+        const homeRef = await addDoc(collection(db, "homes"), {
+          ownerUid: req.ownerUid || null,
+          ownerEmail: req.ownerEmail || "",
+          name: p.homeName || "Logement",
+          city: p.city || "",
+          type: p.homeType || "Studio",
+          createdAt: serverTimestamp(),
+          status: "draft"
+        });
+
+        await updateDoc(doc(db, "requests", req.id), {
+          status: "accepted",
+          decidedAt: serverTimestamp(),
+          homeId: homeRef.id
+        });
+
+        showAlert("✅ Logement créé (homes/" + homeRef.id + ") + demande acceptée.", true);
+        return;
+      }
+
+      // Sinon : traité
+      await setStatus(req.id, "done");
+      showAlert("✅ Demande traitée.", true);
+    }
+
+    function bindActions(items){
+      reqList.querySelectorAll("button[data-act]").forEach(btn=>{
+        btn.addEventListener("click", async ()=>{
+          hideAlert();
+
+          const card = btn.closest(".req-item");
+          const id = card?.getAttribute("data-id");
+          if(!id) return;
+
+          const act = btn.getAttribute("data-act");
+          const req = items.find(x => x.id === id);
+          if(!req) return;
+
+          btn.disabled = true;
+          btn.style.opacity = "0.7";
+
+          try{
+            if(act === "accept") await acceptRequest(req);
+            if(act === "done"){
+              await setStatus(id, "done");
+              showAlert("✅ Demande marquée traitée.", true);
+            }
+            if(act === "reject"){
+              await setStatus(id, "refused");
+              showAlert("✅ Demande refusée.", true);
+            }
+          }catch(err){
+            console.error(err);
+            showAlert("Erreur action : " + (err?.message || "inconnue"));
+          }finally{
+            btn.disabled = false;
+            btn.style.opacity = "1";
+          }
+        });
+      });
+    }
+
+    function startListening(){
+      if(unsubscribe) unsubscribe();
+      hideAlert();
+
+      const q = query(collection(db, "requests"), orderBy("createdAt", "desc"));
+
+      unsubscribe = onSnapshot(q, (snap)=>{
+        const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        window.__lastItems = items;
+
+        render(items);
+        bindActions(items);
+      }, (err)=>{
+        console.error(err);
+        showAlert("Erreur Firestore (lecture) : " + (err?.message || "inconnue"));
+      });
+    }
+
+    onAuthStateChanged(auth, (user)=>{
+      if(!user){
+        location.href = "login.html";
+        return;
+      }
+      // (optionnel) si tu veux forcer planActive via localStorage cm_auth, tu peux garder ton guard ailleurs.
+      startListening();
     });
-  }
-
-  function setTab(newView){
-    view = newView;
-    tabPending.classList.toggle("active", view === "pending");
-    tabDone.classList.toggle("active", view === "done");
-    tabRejected.classList.toggle("active", view === "rejected");
-    render();
-  }
-
-  tabPending.addEventListener("click", ()=>setTab("pending"));
-  tabDone.addEventListener("click", ()=>setTab("done"));
-  tabRejected.addEventListener("click", ()=>setTab("rejected"));
-
-  render();
-</script>
-
+  </script>
 </body>
 </html>
