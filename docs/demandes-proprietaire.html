@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CleanUp Manager – Demandes propriétaire</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root{--v:#7A5CFF;--vd:#6238FF;--bg1:#F8F4FF;--bg2:#EDE6FF;--bad:#b3261e;--ok:#1b8f4d;}
+    *{box-sizing:border-box;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
+    body{margin:0;min-height:100vh;background:linear-gradient(180deg,var(--bg1),var(--bg2));color:#111}
+    .page{max-width:860px;margin:0 auto;padding:16px 16px 32px}
+    .top{display:flex;justify-content:space-between;align-items:center;gap:10px;position:sticky;top:0;background:rgba(248,244,255,.88);backdrop-filter:blur(6px);padding:10px 0}
+    .pill{border:2px solid var(--v);background:#fff;color:var(--v);font-weight:900;border-radius:999px;padding:8px 12px;text-decoration:none;cursor:pointer}
+    h1{margin:10px 0 4px;font-size:22px}
+    .sub{margin:0 0 12px;color:#444}
+    .card{background:linear-gradient(180deg,#fff,#EEE4FF);border-radius:18px;box-shadow:0 6px 18px rgba(0,0,0,.10);padding:14px}
+    label{display:block;font-size:12px;font-weight:900;margin:10px 0 4px}
+    input,textarea,select{width:100%;padding:10px 12px;border-radius:12px;border:1px solid #D3C7FF;background:#fff;font-size:14px;outline:none}
+    textarea{min-height:110px;resize:vertical}
+    .cta{margin-top:12px;width:100%;border:none;border-radius:999px;padding:11px 14px;font-weight:900;color:#fff;background:linear-gradient(90deg,var(--v),var(--vd));cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.18)}
+    .alert{display:none;margin-top:10px;padding:10px 12px;border-radius:14px;background:#fff;border-left:5px solid var(--bad);box-shadow:0 3px 10px rgba(0,0,0,.06);font-size:12px;white-space:pre-wrap}
+    .alert.ok{border-left-color:var(--ok)}
+    .small{font-size:12px;color:#666;line-height:1.3}
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="top">
+      <a class="pill" href="proprietaire.html">← Espace propriétaire</a>
+      <button class="pill" id="logoutBtn" type="button">Déconnexion</button>
+    </div>
+
+    <h1>Envoyer une demande</h1>
+    <p class="sub">Test Firestore : le message doit apparaître côté conciergerie.</p>
+
+    <div class="card">
+      <div class="alert" id="alertBox"></div>
+
+      <form id="reqForm">
+        <label for="type">Type de demande</label>
+        <select id="type" required>
+          <option value="new-home">Ajouter un logement</option>
+          <option value="question">Question / Support</option>
+          <option value="planning">Planning</option>
+          <option value="billing">Facturation</option>
+        </select>
+
+        <label for="title">Titre</label>
+        <input id="title" required placeholder="Ex. Ajout logement – 12 rue des Lilas">
+
+        <label for="message">Message</label>
+        <textarea id="message" required placeholder="Détails (adresse, dates, contraintes, etc.)"></textarea>
+
+        <button class="cta" type="submit" id="sendBtn">Envoyer la demande</button>
+
+        <p class="small" style="margin-top:10px;">
+          Statut initial : <b>pending</b>. La conciergerie pourra accepter/refuser.
+        </p>
+      </form>
+    </div>
+  </div>
+
+  <script type="module">
+    import { auth, db } from "./firebase-init.js";
+    import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+    import { addDoc, collection, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+
+    const alertBox = document.getElementById("alertBox");
+    function showAlert(msg, ok=false){
+      alertBox.style.display = "block";
+      alertBox.classList.toggle("ok", !!ok);
+      alertBox.textContent = msg;
+    }
+    function hideAlert(){
+      alertBox.style.display = "none";
+      alertBox.classList.remove("ok");
+      alertBox.textContent = "";
+    }
+
+    const logoutBtn = document.getElementById("logoutBtn");
+    logoutBtn.addEventListener("click", async ()=>{
+      await signOut(auth);
+      localStorage.removeItem("cm_auth");
+      location.href = "index.html";
+    });
+
+    let currentUser = null;
+    onAuthStateChanged(auth, (user)=>{
+      if(!user){
+        location.href = "login.html?role=proprietaire";
+        return;
+      }
+      currentUser = user;
+    });
+
+    const form = document.getElementById("reqForm");
+    const sendBtn = document.getElementById("sendBtn");
+
+    form.addEventListener("submit", async (e)=>{
+      e.preventDefault();
+      hideAlert();
+
+      if(!currentUser) return showAlert("⛔ Non connecté. Recharge.");
+
+      const type = document.getElementById("type").value;
+      const title = document.getElementById("title").value.trim();
+      const message = document.getElementById("message").value.trim();
+
+      if(!title || !message) return showAlert("Champs requis : titre + message.");
+
+      sendBtn.disabled = true;
+      sendBtn.style.opacity = "0.75";
+
+      try{
+        await addDoc(collection(db, "requests"), {
+          ownerUid: currentUser.uid,
+          ownerEmail: currentUser.email || "",
+          type,
+          title,
+          message,
+          status: "pending",
+          createdAt: serverTimestamp()
+        });
+
+        showAlert("✅ Demande envoyée. Va côté conciergerie pour vérifier.", true);
+        form.reset();
+      }catch(err){
+        console.error(err);
+        showAlert("Erreur Firestore : " + (err?.message || "inconnue"));
+      }finally{
+        sendBtn.disabled = false;
+        sendBtn.style.opacity = "1";
+      }
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CleanUp Manager – Planning propriétaire</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+  <style>
+    :root{ --violet:#7A5CFF; --bg1:#F8F4FF; --bg2:#EDE6FF; }
+    body{ margin:0; font-family:Inter,system-ui; background:linear-gradient(180deg,var(--bg1),var(--bg2)); }
+    .page{ max-width:980px; margin:0 auto; padding:16px 16px 32px; }
+    .topbar{ display:flex; justify-content:space-between; gap:10px; align-items:center; position:sticky; top:0; background:rgba(248,244,255,.85); backdrop-filter:blur(6px); padding:10px 0; }
+    .pill{ display:inline-flex; align-items:center; gap:8px; padding:8px 12px; border-radius:999px; border:2px solid var(--violet); color:var(--violet); text-decoration:none; font-weight:900; background:#fff; cursor:pointer; }
+    .card{ background:linear-gradient(180deg,#fff,#EEE4FF); border-radius:18px; box-shadow:0 6px 18px rgba(0,0,0,.10); padding:14px; margin-top:12px; }
+    h1{ margin:10px 0 0; font-size:22px; font-weight:900; }
+    .muted{ color:#666; font-size:12px; margin-top:4px; }
+    .item{ background:#fff; border-radius:14px; padding:10px; box-shadow:0 3px 10px rgba(0,0,0,.06); border-left:5px solid var(--violet); margin-top:10px; }
+    .meta{ display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; font-size:12px; font-weight:900; color:#555; }
+    .msg{ margin:6px 0 0; font-size:13px; white-space:pre-wrap; }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="topbar">
+      <a class="pill" href="proprietaire.html">← Propriétaire</a>
+      <a class="pill" href="index.html">Accueil</a>
+    </div>
+
+    <h1 id="title">Planning</h1>
+    <div class="muted" id="sub">—</div>
+
+    <div class="card">
+      <div class="meta">
+        <span>Événements (filtre JS • sans index)</span>
+        <span id="count">—</span>
+      </div>
+      <div id="list"></div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { auth, db } from "./firebase-init.js";
+    import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+    import { doc, getDoc, collection, query, where, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+
+    const p = new URLSearchParams(location.search);
+    const homeId = p.get("homeId");
+    const titleEl = document.getElementById("title");
+    const subEl = document.getElementById("sub");
+    const countEl = document.getElementById("count");
+    const listEl = document.getElementById("list");
+
+    function esc(s){ return String(s||""); }
+
+    async function loadHome(){
+      if(!homeId) throw new Error("homeId manquant");
+      const snap = await getDoc(doc(db,"homes",homeId));
+      if(!snap.exists()) throw new Error("home introuvable");
+      return { id:snap.id, ...snap.data() };
+    }
+
+    onAuthStateChanged(auth, async (user)=>{
+      if(!user){
+        location.href = "login.html?role=proprietaire";
+        return;
+      }
+      if(!homeId){
+        subEl.textContent = "Erreur : homeId manquant dans l’URL";
+        return;
+      }
+
+      try{
+        const home = await loadHome();
+
+        // sécurité logique côté UI : il faut être le ownerUid
+        if(home.ownerUid && home.ownerUid !== user.uid){
+          subEl.textContent = "Accès refusé (ce logement n’est pas le tien).";
+          return;
+        }
+
+        titleEl.textContent = `Planning — ${home.name || "Logement"}`;
+        subEl.textContent = `${home.city || ""} • ${home.type || ""}`;
+
+        // 1 seul where => pas d’index. On filtre le reste en JS si tu veux par dates plus tard.
+        const qEv = query(collection(db,"events"), where("homeId","==", homeId));
+
+        onSnapshot(qEv, (snap)=>{
+          const evs = snap.docs.map(d => ({ id:d.id, ...d.data() }));
+          // tri JS (date/time)
+          evs.sort((a,b)=> ((a.date||"")+" "+(a.time||"")).localeCompare((b.date||"")+" "+(b.time||"")));
+          countEl.textContent = String(evs.length);
+
+          listEl.innerHTML = "";
+          if(!evs.length){
+            listEl.innerHTML = `<div class="item"><div class="meta"><span>Aucun événement</span><span>—</span></div><p class="msg">La conciergerie n’a rien planifié.</p></div>`;
+            return;
+          }
+
+          evs.forEach(e=>{
+            const el = document.createElement("div");
+            el.className = "item";
+            el.innerHTML = `
+              <div class="meta">
+                <span>${esc(e.date)} • ${esc(e.time || "—")}</span>
+                <span>${esc(e.type || "Prestation")}${e.isBlocked ? " • 🔒 bloquée" : ""}</span>
+              </div>
+              <p class="msg">${esc(e.meta || "")}</p>
+            `;
+            listEl.appendChild(el);
+          });
+        });
+
+      }catch(err){
+        console.error(err);
+        subEl.textContent = "Erreur : " + (err?.message || "inconnue");
+      }
+    });
+  </script>
+</body>
+</html>
