@@ -271,6 +271,16 @@
 
           <div class="alert" id="alertMsg"></div>
 
+<div class="card">
+  <div class="card-title">
+    <span>Mes logements</span>
+    <span class="sub" id="myHomesCount">—</span>
+  </div>
+  <div class="hint" style="margin-top:-2px;">Lecture Firestore homes (ownerUid = moi)</div>
+  <div id="myHomesList" class="list"></div>
+</div>
+
+          
           <form id="msgReqForm">
             <label for="needMsg">Ton message</label>
             <textarea id="needMsg" placeholder="Ex. J’ai besoin d’un réassort..." required></textarea>
@@ -306,12 +316,63 @@
     const badgeLine = document.getElementById("badgeLine");
     const logoutBtn = document.getElementById("logoutBtn");
 
+    const myHomesList = document.getElementById("myHomesList");
+const myHomesCount = document.getElementById("myHomesCount");
+
+
     const alertHome = document.getElementById("alertHome");
     const alertMsg = document.getElementById("alertMsg");
 
     const myReqList = document.getElementById("myReqList");
     const myReqCount = document.getElementById("myReqCount");
 
+    
+    
+    function listenMyHomes(){
+  const qh = query(
+    collection(db, "homes"),
+    where("ownerUid", "==", currentUser.uid)
+  );
+
+  onSnapshot(qh, (snap)=>{
+    const homes = snap.docs.map(d => ({ id:d.id, ...d.data() }));
+    // tri JS
+    homes.sort((a,b)=>{
+      const ta = a.createdAt?.seconds ? a.createdAt.seconds : 0;
+      const tb = b.createdAt?.seconds ? b.createdAt.seconds : 0;
+      return tb - ta;
+    });
+
+    myHomesCount.textContent = String(homes.length);
+    myHomesList.innerHTML = "";
+
+    if(!homes.length){
+      myHomesList.innerHTML = `<div class="item"><div class="meta"><span>Aucun logement</span><span>—</span></div><p class="msg">Fais une demande, puis la conciergerie doit accepter.</p></div>`;
+      return;
+    }
+
+    homes.forEach(h=>{
+      const el = document.createElement("div");
+      el.className = "item";
+      el.innerHTML = `
+        <div class="meta">
+          <span>${esc(h.name || "Logement")} • ${esc(h.city || "")}</span>
+          <span>${esc(h.type || "")}</span>
+        </div>
+        <p class="msg">Conciergerie: ${esc(h.conciergerieUid || "—")}\nProprio: ${esc(h.ownerEmail || "")}</p>
+        <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
+          <a class="pill-link primary" style="text-decoration:none;" href="planning-proprietaire.html?homeId=${encodeURIComponent(h.id)}">Voir planning</a>
+        </div>
+      `;
+      myHomesList.appendChild(el);
+    });
+  }, (err)=>{
+    console.error(err);
+  });
+}
+
+    
+    
     function showAlert(el, msg, ok=false){
       if(!el) return;
       el.style.display = "block";
@@ -354,6 +415,9 @@
       badgeLine.textContent = `Connecté : ${user.email || user.uid}`;
 
       listenMyRequests();
+
+      listenMyHomes();
+
     });
 
     async function sendRequest({ type, title, message, payload={} }){
