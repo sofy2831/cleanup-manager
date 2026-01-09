@@ -129,10 +129,19 @@
   </main>
 
   <script type="module">
-    // =========================
-    // Helpers UI + data V1
-    // =========================
-    const DATA_KEY = "cm_conciergerie_data_v1";
+    import { auth, db } from "./firebase-init.js";
+
+    import { signInWithEmailAndPassword, sendPasswordResetEmail }
+      from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+
+    import { doc, getDoc }
+      from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+
+    // Mails admin gratuits (conciergerie)
+    const FREE_EMAILS = new Set([
+      "mathilde.debout31@gmail.com",
+      "s.dumas974@gmail.com"
+    ]);
 
     const form = document.getElementById("loginForm");
     const msgBox = document.getElementById("msgBox");
@@ -160,76 +169,51 @@
     function getRoleFromUrl(){
       const p = new URLSearchParams(location.search);
       const r = (p.get("role") || "").trim().toLowerCase();
-      if(r === "proprietaire" || r === "owner") return "proprietaire";
-      return "conciergerie";
+      return (r === "proprietaire" || r === "owner") ? "proprietaire" : "conciergerie";
     }
 
-    function loadLocalData(){
-      try{
-        const raw = localStorage.getItem(DATA_KEY);
-        if(raw) return JSON.parse(raw);
-      }catch(e){}
-      return null;
-    }
-
-    function setLocalSession(session){
-      localStorage.setItem("cm_auth", JSON.stringify(session));
-    }
-
-    async function sha256(str){
-      const enc = new TextEncoder().encode(str);
-      const buf = await crypto.subtle.digest("SHA-256", enc);
-      return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,"0")).join("");
+    function setLocalSession({ uid, email, role, plan, planActive }){
+      localStorage.setItem("cm_auth", JSON.stringify({
+        uid,
+        email,
+        role,
+        plan: plan || "",
+        planActive: !!planActive
+      }));
     }
 
     const roleMode = getRoleFromUrl();
 
-    // UI copy selon rôle
+    // UI selon rôle
     if(roleMode === "proprietaire"){
       titleH1.textContent = "Connexion propriétaire";
       subtitleP.textContent = "Connecte-toi pour accéder à ton espace propriétaire.";
-      // Un proprio n'a pas à voir "Créer un compte" ici (il est invité)
       signupLine.innerHTML = 'Pas d’accès ? <a class="link" href="index.html">Demande une invitation</a>';
     }else{
-      titleH1.textContent = "Connexion";
+      titleH1.textContent = "Connexion conciergerie";
       subtitleP.textContent = "Connecte-toi pour accéder à ton espace conciergerie.";
       signupLine.innerHTML = 'Pas de compte ? <a class="link" href="signup.html">Créer un compte</a>';
     }
 
-    // =========================
-    // Reset password
-    // =========================
-    if(resetLink){
-      resetLink.addEventListener("click", async (e)=>{
-        e.preventDefault();
-        msgBox.style.display = "none";
-        msgBox.textContent = "";
+    // Reset password (Firebase pour TOUT le monde)
+    resetLink.addEventListener("click", async (e)=>{
+      e.preventDefault();
+      msgBox.style.display = "none";
+      msgBox.textContent = "";
 
-        const email = normalizeEmail(document.getElementById("email").value);
-        if(!email) return showMsg("Tape ton email d’abord, puis clique ici.");
+      const email = normalizeEmail(document.getElementById("email").value);
+      if(!email) return showMsg("Tape ton email d’abord, puis clique ici.");
 
-        if(roleMode === "proprietaire"){
-          // V1 localStorage : pas de reset par email
-          return showMsg("V1 : pas de réinitialisation automatique. Demande à la conciergerie un nouveau lien d’invitation.");
-        }
+      try{
+        await sendPasswordResetEmail(auth, email);
+        showMsg("✅ Email de réinitialisation envoyé. Regarde ta boîte mail (et les spams).", "ok");
+      }catch(err){
+        const code = err?.code || "";
+        if(code.includes("auth/user-not-found")) showMsg("Aucun compte trouvé avec cet email.");
+        else showMsg("Erreur reset : " + (err?.message || "inconnue"));
+      }
+    });
 
-        // Conciergerie (Firebase)
-        try{
-          const { auth } = await import("./firebase-init.js");
-          const { sendPasswordResetEmail } = await import("https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js");
-          await sendPasswordResetEmail(auth, email);
-          showMsg("✅ Email de réinitialisation envoyé. Regarde ta boîte mail (et les spams).", "ok");
-        }catch(err){
-          const code = err?.code || "";
-          if(code.includes("auth/user-not-found")) showMsg("Aucun compte trouvé avec cet email.");
-          else showMsg("Erreur reset : " + (err?.message || "inconnue"));
-        }
-      });
-    }
-
-    // =========================
-    // Submit login
-    // =========================
     let isSubmitting = false;
 
     form.addEventListener("submit", async (e)=>{
@@ -242,66 +226,24 @@
       lockUI(true);
 
       const email = normalizeEmail(document.getElementById("email").value);
-      const password = document.getElementById("password").value || "";
+      const password = document.getElementById("password").value;
 
       if(!email){ lockUI(false); isSubmitting=false; return showMsg("Email requis."); }
       if(!password){ lockUI(false); isSubmitting=false; return showMsg("Mot de passe requis."); }
 
-      // ============
-      // Propriétaire V1 localStorage
-      // ============
-      if(roleMode === "proprietaire"){
-        try{
-          const data = loadLocalData();
-          const owners = Array.isArray(data?.owners) ? data.owners : [];
-          const owner = owners.find(o => normalizeEmail(o?.email) === email);
-
-          if(!owner){
-            lockUI(false); isSubmitting=false;
-            return showMsg("Accès propriétaire introuvable. Demande à la conciergerie un nouveau lien d’invitation.");
-          }
-
-          const hash = await sha256(password);
-          if(owner.passwordHash !== hash){
-            lockUI(false); isSubmitting=false;
-            return showMsg("Email ou mot de passe incorrect.");
-          }
-
-          // session V1
-          setLocalSession({
-            role: "proprietaire",
-            ownerId: owner.id,
-            email: owner.email,
-            name: owner.fullname || "",
-            createdAt: Date.now()
-          });
-
-          location.href = "proprietaire.html";
-          return;
-        }catch(err){
-          lockUI(false); isSubmitting=false;
-          return showMsg("Erreur connexion propriétaire : " + (err?.message || "inconnue"));
-        }
-      }
-
-      // ============
-      // Conciergerie Firebase (ton code original)
-      // ============
       try{
-        const { auth, db } = await import("./firebase-init.js");
-        const { signInWithEmailAndPassword } = await import("https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js");
-        const { doc, getDoc } = await import("https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js");
-
-        // Mets ici tes mails admin gratuits
-        const FREE_EMAILS = new Set([
-          "mathilde.debout31@gmail.com",
-          "s.dumas974@gmail.com"
-        ]);
-
         const cred = await signInWithEmailAndPassword(auth, email, password);
         const uid = cred.user.uid;
 
-        // Defaults
+        if(roleMode === "proprietaire"){
+          // Optionnel : vérifier que owners/{uid} existe
+          // (si pas créé, on peut le créer plus tard)
+          setLocalSession({ uid, email, role: "proprietaire", plan: "", planActive: true });
+          location.href = "proprietaire.html";
+          return;
+        }
+
+        // Conciergerie : garder ta logique plan
         let role = "conciergerie";
         let plan = "";
         let planActive = false;
@@ -312,7 +254,6 @@
           planActive = true;
         }
 
-        // Profil Firestore (best effort)
         try{
           const snap = await getDoc(doc(db, "users", uid));
           if(snap.exists()){
@@ -326,10 +267,8 @@
           console.warn("Firestore non dispo, on continue sans profil :", fireErr);
         }
 
-        // session locale
-        setLocalSession({ uid, email, role, plan: plan || "", planActive: !!planActive });
+        setLocalSession({ uid, email, role, plan, planActive });
 
-        // redirect
         if(planActive){
           location.href = "conciergerie.html";
         }else{
@@ -341,7 +280,7 @@
         if(code.includes("auth/invalid-credential") || code.includes("wrong-password")){
           showMsg("Email ou mot de passe incorrect.");
         } else if(code.includes("auth/user-not-found")){
-          showMsg("Compte introuvable. Crée un compte.");
+          showMsg("Compte introuvable.");
         } else if(code.includes("auth/too-many-requests")){
           showMsg("Trop d’essais. Réessaie dans quelques minutes.");
         } else {
