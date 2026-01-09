@@ -16,7 +16,7 @@
     }
     body {
       margin: 0;
-      font-family: "Comic Sans MS", sans-serif;
+      font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
       background: linear-gradient(180deg, #F8F4FF 0%, #EDE6FF 80%);
       color: var(--text-dark);
     }
@@ -52,7 +52,7 @@
       border: 2px solid var(--violet-main);
       color: var(--violet-main);
       text-decoration: none;
-      font-weight: 800;
+      font-weight: 900;
       font-size: 13px;
       box-shadow: 0 3px 10px rgba(0,0,0,0.06);
       white-space: nowrap;
@@ -96,7 +96,7 @@
       font-size: 12px;
       color: var(--violet-main);
     }
-    h1 { font-size: 24px; margin: 0; font-weight: 800; color: #111; }
+    h1 { font-size: 24px; margin: 0; font-weight: 900; color: #111; }
     .subtitle { font-size: 16px; color: #444; margin-top: 4px; text-align: center; }
     .badge {
       margin-top: 10px;
@@ -169,7 +169,7 @@
       padding: 10px 10px 12px;
       text-align: left;
     }
-    .summary-title { font-size: 12px; color: #666; font-weight: 800; margin-bottom: 4px; }
+    .summary-title { font-size: 12px; color: #666; font-weight: 900; margin-bottom: 4px; }
     .summary-value { font-size: 18px; font-weight: 900; color: #222; }
     .summary-note { font-size: 11px; color: #666; margin-top: 2px; }
 
@@ -385,6 +385,8 @@
 </head>
 
 <body>
+
+<!-- ✅ UN SEUL guard localStorage (conciergerie/admin). Plus de requireRole("conciergerie") -->
 <script>
   function getSession(){
     try{ return JSON.parse(localStorage.getItem("cm_auth") || "null"); }
@@ -402,7 +404,6 @@
     localStorage.removeItem("cm_auth");
     location.href = "index.html";
   }
-
   (function guard(){
     const s = requireRoleOneOf(["conciergerie","admin"]);
     if(!s) return;
@@ -411,26 +412,6 @@
       return;
     }
   })();
-</script>
-
-
-  
-<script>
-  function getSession(){
-    try{ return JSON.parse(localStorage.getItem("cm_auth") || "null"); }
-    catch(e){ return null; }
-  }
-  function requireRole(role){
-    const s = getSession();
-    if(!s || s.role !== role){
-      location.href = "login.html?role=" + encodeURIComponent(role);
-    }
-  }
-  function logout(){
-    localStorage.removeItem("cm_auth");
-    location.href = "index.html";
-  }
-  requireRole("conciergerie");
 </script>
 
 <div class="page">
@@ -449,7 +430,7 @@
   </div>
 
   <div class="subtitle" id="subtitle">Planning des prestations</div>
-  <div class="badge" id="badge">Firestore (homes + events)</div>
+  <div class="badge" id="badge">Firestore (homes + events) • sans index (tri JS)</div>
 
   <div class="alert" id="alertBox"></div>
 
@@ -507,9 +488,7 @@
     </div>
 
     <div class="agenda-card">
-      <div class="card-title">
-        <span>Agenda du jour</span>
-      </div>
+      <div class="card-title"><span>Agenda du jour</span></div>
 
       <div class="agenda-header">
         Prestations du <span class="agenda-date" id="agendaDateLabel"></span>
@@ -519,7 +498,7 @@
 
       <div class="agenda-cta">
         <button type="button" id="addBtn">+ Ajouter une prestation</button>
-        <div class="fineprint">Clique une prestation pour la modifier/supprimer (V1 : prompt).</div>
+        <div class="fineprint">Clique une prestation pour la voir (V1).</div>
       </div>
     </div>
   </div>
@@ -528,11 +507,10 @@
 <script type="module">
   import { auth, db } from "./firebase-init.js";
   import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-  import {
-    collection, query, where, orderBy, onSnapshot,
-    addDoc, serverTimestamp
-  } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+  import { collection, query, where, onSnapshot, addDoc, serverTimestamp } from
+    "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
+  // ===== UI =====
   const alertBox = document.getElementById("alertBox");
   function showAlert(msg, ok=false){
     alertBox.style.display = "block";
@@ -545,34 +523,6 @@
     alertBox.textContent = "";
   }
 
-  const MONTHS = ["janvier","février","mars","avril","mai","juin","juillet","août","septembre","octobre","novembre","décembre"];
-  function pad2(n){ return n < 10 ? "0"+n : ""+n; }
-  function formatDateKey(date){ return date.getFullYear()+"-"+pad2(date.getMonth()+1)+"-"+pad2(date.getDate()); }
-  function formatDateLabel(date){ return date.getDate()+" "+MONTHS[date.getMonth()]+" "+date.getFullYear(); }
-  function monthStartKey(y,m){ return y+"-"+pad2(m+1)+"-01"; }
-  function monthEndKey(y,m){
-    const last = new Date(y, m+1, 0).getDate();
-    return y+"-"+pad2(m+1)+"-"+pad2(last);
-  }
-  function typeClass(label){
-    const s = (label || "").toLowerCase();
-    if (s.includes("ménage")) return "t-menage";
-    if (s.includes("check-in") || s.includes("check in")) return "t-checkin";
-    if (s.includes("check-out") || s.includes("check out")) return "t-checkout";
-    if (s.includes("réassort") || s.includes("reassort")) return "t-reassort";
-    if (s.includes("maintenance")) return "t-maintenance";
-    if (s.includes("photo")) return "t-photos";
-    if (s.includes("urgence")) return "t-urgence";
-    return "t-maintenance";
-  }
-
-  function getHomeIdFromUrl(){
-    const p = new URLSearchParams(location.search);
-    return p.get("homeId");
-  }
-  let focusHomeId = getHomeIdFromUrl();
-
-  // UI refs
   const monthLabelEl = document.getElementById("monthLabel");
   const calendarDaysEl = document.getElementById("calendarDays");
   const agendaDateLabelEl = document.getElementById("agendaDateLabel");
@@ -589,58 +539,116 @@
   const badgeEl = document.getElementById("badge");
   const addBtn = document.getElementById("addBtn");
 
-  // State
+  // ===== Utils =====
+  const MONTHS = ["janvier","février","mars","avril","mai","juin","juillet","août","septembre","octobre","novembre","décembre"];
+  function pad2(n){ return n < 10 ? "0"+n : ""+n; }
+  function formatDateKey(date){ return date.getFullYear()+"-"+pad2(date.getMonth()+1)+"-"+pad2(date.getDate()); }
+  function formatDateLabel(date){ return date.getDate()+" "+MONTHS[date.getMonth()]+" "+date.getFullYear(); }
+  function typeClass(label){
+    const s = (label || "").toLowerCase();
+    if (s.includes("ménage")) return "t-menage";
+    if (s.includes("check-in") || s.includes("check in")) return "t-checkin";
+    if (s.includes("check-out") || s.includes("check out")) return "t-checkout";
+    if (s.includes("réassort") || s.includes("reassort")) return "t-reassort";
+    if (s.includes("maintenance")) return "t-maintenance";
+    if (s.includes("photo")) return "t-photos";
+    if (s.includes("urgence")) return "t-urgence";
+    return "t-maintenance";
+  }
+
+  function getHomeIdFromUrl(){
+    const p = new URLSearchParams(location.search);
+    return p.get("homeId");
+  }
+  const focusHomeId = getHomeIdFromUrl();
+
+  // ===== State =====
   const today = new Date();
   let currentMonth = today.getMonth();
   let currentYear  = today.getFullYear();
   let selectedDate = new Date(currentYear, currentMonth, today.getDate());
 
-  // Data in-memory
-  let homes = [];           // homes of this conciergerie
+  let homes = [];
   let homesById = new Map();
-  let eventsMonth = [];     // events of current month (and optional home filter)
-  let eventsWeek = [];      // events next 7 days (same filter)
-  let unsubHomes = null, unsubMonth = null, unsubWeek = null;
+  let allEvents = []; // on écoute tout, filtre JS => 0 index
+
+  let unsubHomes = null;
+  let unsubEvents = null;
 
   function setHomes(list){
     homes = list || [];
     homesById = new Map(homes.map(h => [h.id, h]));
   }
-
-  function getHomeById(id){
-    return homesById.get(id) || null;
-  }
+  function getHomeById(id){ return homesById.get(id) || null; }
 
   function setHeader(){
     if(focusHomeId){
       const h = getHomeById(focusHomeId);
       const label = h ? `${h.name} — ${h.city}` : "Logement inconnu";
       subtitleEl.textContent = "Planning (filtré) : " + label;
-      badgeEl.textContent = "planning.html?homeId=" + focusHomeId;
+      badgeEl.textContent = "planning.html?homeId=" + focusHomeId + " • Firestore";
     }else{
       subtitleEl.textContent = "Planning des prestations";
-      badgeEl.textContent = "Firestore (homes + events)";
+      badgeEl.textContent = "Firestore (homes + events) • sans index (tri JS)";
     }
   }
 
-  function eventsForDateKeyInMonth(dateKey){
-    let evs = eventsMonth.filter(e => e.date === dateKey);
-    evs.sort((a,b)=> (a.time||"").localeCompare(b.time||""));
+  function inCurrentMonth(dateKey){
+    // dateKey = YYYY-MM-DD
+    const [y,m] = dateKey.split("-").map(Number);
+    return y === currentYear && m === (currentMonth+1);
+  }
+
+  function filteredEvents(){
+    let evs = allEvents.slice();
+
+    // filtre home si besoin
+    if(focusHomeId){
+      evs = evs.filter(e => e.homeId === focusHomeId);
+    }
+
+    // filtre mois courant
+    evs = evs.filter(e => e.date && inCurrentMonth(e.date));
+
+    // tri local
+    evs.sort((a,b)=>{
+      const ak = (a.date||"") + " " + (a.time||"");
+      const bk = (b.date||"") + " " + (b.time||"");
+      return ak.localeCompare(bk);
+    });
+
     return evs;
   }
 
+  function eventsForDateKey(dateKey){
+    return filteredEvents().filter(e => e.date === dateKey);
+  }
+
   function dayHasBlocked(dateKey){
-    return eventsForDateKeyInMonth(dateKey).some(e => e && e.isBlocked === true);
+    return eventsForDateKey(dateKey).some(e => e && e.isBlocked === true);
   }
 
   function renderKpis(){
     kpiHomesEl.textContent = String(homes.length);
-    kpiEventsEl.textContent = String(eventsMonth.length);
+
+    const monthEvents = filteredEvents();
+    kpiEventsEl.textContent = String(monthEvents.length);
 
     const todayKey = formatDateKey(today);
-    kpiTodayEl.textContent = String(eventsMonth.filter(e => e.date === todayKey).length);
+    kpiTodayEl.textContent = String(monthEvents.filter(e => e.date === todayKey).length);
 
-    kpiWeekEl.textContent = String(eventsWeek.length);
+    // 7 jours glissants (depuis aujourd'hui), pas besoin d'index : filtre JS
+    const end7 = new Date(today.getFullYear(), today.getMonth(), today.getDate()+6);
+    const startKey = formatDateKey(today);
+    const endKey = formatDateKey(end7);
+
+    const weekCount = allEvents.filter(e=>{
+      if(focusHomeId && e.homeId !== focusHomeId) return false;
+      if(!e.date) return false;
+      return e.date >= startKey && e.date <= endKey;
+    }).length;
+
+    kpiWeekEl.textContent = String(weekCount);
   }
 
   function renderCalendar(){
@@ -685,7 +693,7 @@
       if(cellKey === todayKey && cellDate.getMonth() === today.getMonth()){
         cell.classList.add("today");
       }
-      if(eventsForDateKeyInMonth(cellKey).length){
+      if(eventsForDateKey(cellKey).length){
         cell.classList.add("has-events");
       }
       if(dayHasBlocked(cellKey)){
@@ -713,7 +721,7 @@
     agendaDateLabelEl.textContent = formatDateLabel(selectedDate);
     agendaListEl.innerHTML = "";
 
-    const events = eventsForDateKeyInMonth(key);
+    const events = eventsForDateKey(key);
 
     if(!events.length){
       const empty = document.createElement("div");
@@ -731,7 +739,6 @@
       if(ev.isBlocked) item.classList.add("blocked");
 
       item.addEventListener("click", ()=>{
-        // V1 : pas de page detail ici, on fait simple
         alert(
           [
             `${ev.time || "—"} • ${ev.type || "Prestation"}`,
@@ -776,17 +783,13 @@
 
       const meta = document.createElement("div");
       meta.classList.add("agenda-meta");
-
       const parts = [
         home?.ownerName ? `Proprio: ${home.ownerName}` : (home?.ownerEmail ? `Proprio: ${home.ownerEmail}` : null),
         ev.team ? `Équipe: ${ev.team}` : null,
         ev.meta ? ev.meta : null
       ].filter(Boolean);
 
-      if(ev.isBlocked){
-        parts.push(ev.blockReason ? ev.blockReason : "Paiement requis");
-      }
-
+      if(ev.isBlocked) parts.push(ev.blockReason ? ev.blockReason : "Paiement requis");
       meta.textContent = parts.join(" • ");
 
       item.appendChild(line1);
@@ -797,82 +800,40 @@
     });
   }
 
-  function startListeners(user){
-    // HOMES
-    const qHomes = query(
-      collection(db, "homes"),
-      where("conciergerieUid", "==", user.uid),
-      orderBy("createdAt", "desc")
-    );
-
-    unsubHomes = onSnapshot(qHomes, (snap)=>{
-      const list = snap.docs.map(d => ({ id:d.id, ...d.data() }));
-      setHomes(list);
-      setHeader();
-      renderKpis();
-    }, (err)=>{
-      showAlert("Erreur lecture homes : " + (err?.message || "inconnue"));
-    });
-
-    // EVENTS month
-    const start = monthStartKey(currentYear, currentMonth);
-    const end   = monthEndKey(currentYear, currentMonth);
-
-    let baseMonth = [
-      where("conciergerieUid", "==", user.uid),
-      where("date", ">=", start),
-      where("date", "<=", end),
-      orderBy("date", "asc"),
-      orderBy("time", "asc")
-    ];
-
-    if(focusHomeId){
-      baseMonth.unshift(where("homeId", "==", focusHomeId));
-    }
-
-    const qMonth = query(collection(db, "events"), ...baseMonth);
-
-    unsubMonth = onSnapshot(qMonth, (snap)=>{
-      eventsMonth = snap.docs.map(d => ({ id:d.id, ...d.data() }));
-      hideAlert();
-      renderCalendar();
-      renderAgenda();
-      renderKpis();
-    }, (err)=>{
-      // Si Firestore te demande un index composite, il faut le créer (message dans console)
-      showAlert("Erreur lecture events (mois) : " + (err?.message || "inconnue"));
-    });
-
-    // EVENTS next 7 days (KPI semaine)
-    const todayKey = formatDateKey(today);
-    const end7 = new Date(today.getFullYear(), today.getMonth(), today.getDate()+6);
-    const endKey = formatDateKey(end7);
-
-    let baseWeek = [
-      where("conciergerieUid", "==", user.uid),
-      where("date", ">=", todayKey),
-      where("date", "<=", endKey),
-      orderBy("date", "asc"),
-      orderBy("time", "asc")
-    ];
-    if(focusHomeId){
-      baseWeek.unshift(where("homeId", "==", focusHomeId));
-    }
-    const qWeek = query(collection(db, "events"), ...baseWeek);
-
-    unsubWeek = onSnapshot(qWeek, (snap)=>{
-      eventsWeek = snap.docs.map(d => ({ id:d.id, ...d.data() }));
-      renderKpis();
-    }, ()=>{
-      // pas critique
-    });
+  function stop(){
+    if(unsubHomes) unsubHomes();
+    if(unsubEvents) unsubEvents();
+    unsubHomes = unsubEvents = null;
   }
 
-  function stopListeners(){
-    if(unsubHomes) unsubHomes();
-    if(unsubMonth) unsubMonth();
-    if(unsubWeek) unsubWeek();
-    unsubHomes = unsubMonth = unsubWeek = null;
+  function start(user){
+    // HOMES : 1 filtre => pas d’index, tri JS
+    unsubHomes = onSnapshot(
+      query(collection(db, "homes"), where("conciergerieUid","==", user.uid)),
+      (snap)=>{
+        const list = snap.docs.map(d => ({ id:d.id, ...d.data() }));
+        list.sort((a,b)=>{
+          const ta = a.createdAt?.seconds ? a.createdAt.seconds : 0;
+          const tb = b.createdAt?.seconds ? b.createdAt.seconds : 0;
+          return tb - ta;
+        });
+        setHomes(list);
+        setHeader();
+        renderCalendar(); renderAgenda(); renderKpis();
+      },
+      (err)=> showAlert("Erreur homes : " + (err?.message || "inconnue"))
+    );
+
+    // EVENTS : 1 filtre => pas d’index, filtre/tri JS
+    unsubEvents = onSnapshot(
+      query(collection(db, "events"), where("conciergerieUid","==", user.uid)),
+      (snap)=>{
+        allEvents = snap.docs.map(d => ({ id:d.id, ...d.data() }));
+        hideAlert();
+        renderCalendar(); renderAgenda(); renderKpis();
+      },
+      (err)=> showAlert("Erreur events : " + (err?.message || "inconnue"))
+    );
   }
 
   async function addPresta(){
@@ -917,7 +878,6 @@
       team: String(team).trim(),
       source: "manuel",
       createdAt: serverTimestamp(),
-
       isBlocked: false,
       blockReason: "",
       paymentId: null
@@ -938,42 +898,27 @@
     currentMonth--;
     if(currentMonth < 0){ currentMonth = 11; currentYear--; }
     selectedDate = new Date(currentYear, currentMonth, 1);
-
-    // relance listener month
-    const user = auth.currentUser;
-    if(user){
-      stopListeners();
-      startListeners(user);
-    }else{
-      renderCalendar(); renderAgenda(); renderKpis();
-    }
+    renderCalendar(); renderAgenda(); renderKpis();
   });
 
   nextMonthBtn.addEventListener("click", ()=>{
     currentMonth++;
     if(currentMonth > 11){ currentMonth = 0; currentYear++; }
     selectedDate = new Date(currentYear, currentMonth, 1);
-
-    const user = auth.currentUser;
-    if(user){
-      stopListeners();
-      startListeners(user);
-    }else{
-      renderCalendar(); renderAgenda(); renderKpis();
-    }
+    renderCalendar(); renderAgenda(); renderKpis();
   });
 
-  // Boot
   onAuthStateChanged(auth, (user)=>{
     if(!user){
-      showAlert("Session Firebase absente. Reconnecte-toi.");
+      // Firebase auth absent => login
+      location.href = "login.html?role=conciergerie";
       return;
     }
     hideAlert();
-    startListeners(user);
-    renderCalendar();
-    renderAgenda();
-    renderKpis();
+    stop();
+    start(user);
+    setHeader();
+    renderCalendar(); renderAgenda(); renderKpis();
   });
 </script>
 </body>
