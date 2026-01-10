@@ -140,6 +140,7 @@
       margin-top:4px;
       text-align:center;
     }
+
     .badge{
       margin-top:10px;
       padding:4px 10px;
@@ -149,6 +150,23 @@
       color:#555;
       box-shadow:0 3px 10px rgba(0,0,0,.06);
       text-align:center;
+    }
+
+    /* Badge demandes pending */
+    .badge.pending{
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      gap:8px;
+      margin-top:10px;
+      padding:6px 12px;
+      border-radius:999px;
+      background:#fff;
+      font-size:12px;
+      color:#333;
+      box-shadow:0 3px 10px rgba(0,0,0,.06);
+      border:1px solid rgba(122,92,255,.25);
+      font-weight:900;
     }
 
     .kpis{
@@ -230,7 +248,7 @@
       text-align:center;
     }
 
-    /* Masquer la mini top-nav sur mobile (évite le doublon) */
+    /* Masquer la mini top-nav sur mobile */
     @media (max-width: 520px){
       .top-nav{ display:none; }
     }
@@ -239,7 +257,7 @@
     .bottom-nav{ display:none; }
 
     @media (max-width: 520px){
-      .page{ padding-bottom: 86px; } /* laisse la place au bandeau */
+      .page{ padding-bottom: 86px; }
 
       .bottom-nav{
         display:flex;
@@ -276,73 +294,168 @@
 
 <body>
 
-<!-- ===== Session + garde ===== -->
-<script>
-  function getSession(){
-    try{ return JSON.parse(localStorage.getItem("cm_auth") || "null"); }
-    catch(e){ return null; }
-  }
-
-  function requireRoleOneOf(roles){
-    const s = getSession();
-    if(!s || !roles.includes(s.role)){
-      location.href = "login.html?role=" + encodeURIComponent(roles[0] || "conciergerie");
-      return null;
-    }
-    return s;
-  }
-
-  function logout(){
-    localStorage.removeItem("cm_auth");
-    location.href = "index.html";
-  }
-
-  (function guard(){
-    const s = requireRoleOneOf(["conciergerie","admin"]);
-    if(!s) return;
-
-    // si session locale dit pas actif -> on laisse le module Firestore confirmer,
-    // mais on évite de bloquer brutalement ici
-  })();
-</script>
-
-<!-- ===== Sync Firestore subscription ===== -->
+<!-- ===== Firebase guard + subscription + badge + KPIs (NO localStorage) ===== -->
 <script type="module">
-  import { db } from "./firebase-init.js";
-  import { doc, getDoc } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+  import { db, auth } from "./firebase-init.js";
 
-  function getSession(){
-    try{ return JSON.parse(localStorage.getItem("cm_auth") || "null"); }
-    catch(e){ return null; }
+  import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+  import {
+    doc, getDoc,
+    collection, query, where, onSnapshot, getCountFromServer
+  } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+
+  // ---- logout (appelé par ton bouton)
+  window.logout = async function(){
+    try { await signOut(auth); } catch(e){}
+    location.href = "index.html";
+  };
+
+  // ---- DOM
+  const pendingBadge = document.getElementById("pendingBadge");
+  const kpiToday  = document.getElementById("kpiToday");
+  const kpiWeek   = document.getElementById("kpiWeek");
+  const kpiEvents = document.getElementById("kpiEvents");
+  const kpiHomes  = document.getElementById("kpiHomes");
+
+  function setPending(v){
+    if(pendingBadge) pendingBadge.textContent = `Demandes en attente : ${v}`;
   }
-  function setSession(s){
-    localStorage.setItem("cm_auth", JSON.stringify(s));
+  function setText(el, v){
+    if(el) el.textContent = String(v);
   }
 
-  async function syncSubscription(){
-    const s = getSession();
-    if(!s || !s.uid) return;
+  function pad2(n){ return n < 10 ? "0"+n : ""+n; }
+  function dateKey(d){ return d.getFullYear()+"-"+pad2(d.getMonth()+1)+"-"+pad2(d.getDate()); }
+
+  function nextDaysKeys(n){
+    const today = new Date();
+    const keys = [];
+    for(let i=0;i<n;i++){
+      const d = new Date(today.getFullYear(), today.getMonth(), today.getDate()+i);
+      keys.push(dateKey(d));
+    }
+    return keys;
+  }
+
+  async function requireUserAndRole(user){
+    const uref = doc(db, "users", user.uid);
+    const usnap = await getDoc(uref);
+    if(!usnap.exists()){
+      location.href = "login.html?role=conciergerie";
+      throw new Error("Missing user profile (users/{uid})");
+    }
+
+    const u = usnap.data() || {};
+    const role = u.role || "";
+    if(role !== "conciergerie" && role !== "admin"){
+      location.href = "login.html?role=conciergerie";
+      throw new Error("Forbidden role");
+    }
+
+    const active = (u.subscriptionStatus === "active");
+    if(!active){
+      location.href = "abonnement.html?plan=starter";
+      throw new Error("Subscription inactive");
+    }
+
+    return u;
+  }
+
+  function attachPendingBadge(uid){
+    const qPending = query(
+      collection(db, "requests"),
+      where("conciergerieUid", "==", uid),
+      where("status", "==", "pending")
+    );
+
+    return onSnapshot(qPending, (snap) => {
+      setPending(snap.size);
+    }, (err) => {
+      console.error("pendingBadge snapshot error:", err);
+      setPending("Erreur");
+    });
+  }
+
+  async function attachKpis(uid){
+    // Homes count
+    try{
+      const qHomes = query(collection(db, "homes"), where("conciergerieUid", "==", uid));
+      const homesCount = await getCountFromServer(qHomes);
+      setText(kpiHomes, homesCount.data().count);
+    }catch(e){
+      console.warn("kpiHomes failed:", e);
+      setText(kpiHomes, "—");
+    }
+
+    // Total events count
+    try{
+      const qEvents = query(collection(db, "events"), where("conciergerieUid", "==", uid));
+      const eventsCount = await getCountFromServer(qEvents);
+      setText(kpiEvents, eventsCount.data().count);
+    }catch(e){
+      console.warn("kpiEvents failed:", e);
+      setText(kpiEvents, "—");
+    }
+
+    // Today + Week (next 7 days) - realtime
+    const keys7 = nextDaysKeys(7);
+    const todayKey = keys7[0];
+
+    // Firestore limite "in" = 10 valeurs => OK
+    const qWeek = query(
+      collection(db, "events"),
+      where("conciergerieUid", "==", uid),
+      where("date", "in", keys7)
+    );
+
+    return onSnapshot(qWeek, (snap) => {
+      let today = 0;
+      let week = snap.size;
+
+      snap.forEach(d => {
+        const data = d.data() || {};
+        if(data.date === todayKey) today++;
+      });
+
+      setText(kpiToday, today);
+      setText(kpiWeek, week);
+    }, (err) => {
+      console.error("kpiWeek snapshot error:", err);
+      setText(kpiToday, "—");
+      setText(kpiWeek, "—");
+    });
+  }
+
+  // ---- Boot
+  let unsubPending = null;
+  let unsubWeek = null;
+
+  onAuthStateChanged(auth, async (user) => {
+    // reset UI
+    setPending("—");
+    setText(kpiHomes, "—");
+    setText(kpiEvents, "—");
+    setText(kpiToday, "—");
+    setText(kpiWeek, "—");
+
+    // cleanup listeners
+    if(unsubPending) { try{ unsubPending(); }catch(e){} unsubPending = null; }
+    if(unsubWeek) { try{ unsubWeek(); }catch(e){} unsubWeek = null; }
+
+    if(!user){
+      location.href = "login.html?role=conciergerie";
+      return;
+    }
 
     try{
-      const snap = await getDoc(doc(db, "users", s.uid));
-      if(!snap.exists()) return;
-
-      const u = snap.data() || {};
-      const active = (u.subscriptionStatus === "active");
-
-      s.planActive = !!active;
-      s.plan = u.plan || s.plan || "";
-      setSession(s);
-
-      if(!active){
-        location.href = "abonnement.html?plan=starter";
-      }
-    }catch(err){
-      console.warn("syncSubscription failed:", err);
+      await requireUserAndRole(user);
+      unsubPending = attachPendingBadge(user.uid);
+      unsubWeek = await attachKpis(user.uid);
+    }catch(e){
+      console.warn("Guard blocked:", e);
+      // redirection déjà faite dans requireUserAndRole()
     }
-  }
-
-  syncSubscription();
+  });
 </script>
 
 <div class="page">
@@ -360,6 +473,10 @@
     <h1>CleanUp Manager</h1>
   </div>
   <div class="subtitle">Tableau de bord</div>
+
+  <!-- Badge demandes en attente -->
+  <div class="badge pending" id="pendingBadge">Demandes en attente : —</div>
+
   <div class="badge">Piloter • planifier • facturer • communiquer</div>
 
   <div class="top-nav">
@@ -449,92 +566,6 @@
   </div>
 
 </div>
-
-<!-- ===== KPIs data (localStorage V1) ===== -->
-<script>
-  const DATA_KEY = "cm_conciergerie_data_v1";
-
-  function uid(prefix){
-    return (prefix||"x") + "_" + Math.random().toString(16).slice(2) + "_" + Date.now().toString(16);
-  }
-
-  function loadData(){
-    try{
-      const raw = localStorage.getItem(DATA_KEY);
-      if(raw) return JSON.parse(raw);
-    }catch(e){}
-    return null;
-  }
-
-  function saveData(d){
-    localStorage.setItem(DATA_KEY, JSON.stringify(d));
-  }
-
-  function ensureData(){
-    const existing = loadData();
-    if(existing) return existing;
-
-    const seeded = {
-      homes:[],
-      events:[],
-      services:[],
-      threads:[],
-      payments:[],
-      icalSources:[],
-      kits:[],
-      invitations:[],
-      owners:[],
-      requests:[]
-    };
-    saveData(seeded);
-    return seeded;
-  }
-
-  const app = ensureData();
-  app.homes = Array.isArray(app.homes) ? app.homes : [];
-  app.events = Array.isArray(app.events) ? app.events : [];
-
-  (function migrate(){
-    let changed = false;
-    app.homes.forEach(h=>{ if(!h.id){ h.id = uid("h"); changed = true; }});
-    app.events.forEach(e=>{ if(!e.id){ e.id = uid("e"); changed = true; }});
-    if(changed) saveData(app);
-  })();
-
-  function pad2(n){ return n < 10 ? "0"+n : ""+n; }
-  function dateKey(d){ return d.getFullYear()+"-"+pad2(d.getMonth()+1)+"-"+pad2(d.getDate()); }
-
-  function countToday(){
-    const k = dateKey(new Date());
-    return app.events.filter(e => e.date === k).length;
-  }
-
-  function countWeek(){
-    const today = new Date();
-    let total = 0;
-    for(let i=0;i<7;i++){
-      const d = new Date(today.getFullYear(), today.getMonth(), today.getDate()+i);
-      const k = dateKey(d);
-      total += app.events.filter(e => e.date === k).length;
-    }
-    return total;
-  }
-
-  function renderKpis(){
-    const elHomes = document.getElementById("kpiHomes");
-    const elEvents = document.getElementById("kpiEvents");
-    const elToday = document.getElementById("kpiToday");
-    const elWeek = document.getElementById("kpiWeek");
-    if(!elHomes || !elEvents || !elToday || !elWeek) return;
-
-    elHomes.textContent = app.homes.length;
-    elEvents.textContent = app.events.length;
-    elToday.textContent = countToday();
-    elWeek.textContent = countWeek();
-  }
-
-  renderKpis();
-</script>
 
 <!-- Bottom nav mobile -->
 <nav class="bottom-nav">
