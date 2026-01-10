@@ -386,41 +386,13 @@
 
 <body>
 
-
-<script>
-  function getSession(){
-    try{ return JSON.parse(localStorage.getItem("cm_auth") || "null"); }
-    catch(e){ return null; }
-  }
-  function requireRoleOneOf(roles){
-    const s = getSession();
-    if(!s || !roles.includes(s.role)){
-      location.href = "login.html?role=" + encodeURIComponent(roles[0] || "conciergerie");
-      return null;
-    }
-    return s;
-  }
-  function logout(){
-    localStorage.removeItem("cm_auth");
-    location.href = "index.html";
-  }
-  (function guard(){
-    const s = requireRoleOneOf(["conciergerie","admin"]);
-    if(!s) return;
-    if(!s.planActive){
-      location.href = "abonnement.html?plan=starter";
-      return;
-    }
-  })();
-</script>
-
 <div class="page">
   <div class="topbar">
     <a class="pill-link" href="conciergerie.html">← Tableau de bord</a>
     <div style="display:flex; gap:8px; align-items:center;">
       <a class="pill-link" href="logements.html">Logements</a>
       <a class="pill-link" href="prestations.html">Catalogue</a>
-      <button class="pill-link" onclick="logout()" type="button">Déconnexion</button>
+      <button class="pill-link" id="logoutBtn" type="button">Déconnexion</button>
     </div>
   </div>
 
@@ -430,7 +402,7 @@
   </div>
 
   <div class="subtitle" id="subtitle">Planning des prestations</div>
-  <div class="badge" id="badge">Firestore (homes + events) • sans index (tri JS)</div>
+  <div class="badge" id="badge">Firestore (homes + events) • dateKey • tri JS</div>
 
   <div class="alert" id="alertBox"></div>
 
@@ -498,7 +470,7 @@
 
       <div class="agenda-cta">
         <button type="button" id="addBtn">+ Ajouter une prestation</button>
-        <div class="fineprint">Clique une prestation pour la voir (V1).</div>
+        <div class="fineprint">Clique une prestation pour l’ouvrir (détail).</div>
       </div>
     </div>
   </div>
@@ -506,9 +478,17 @@
 
 <script type="module">
   import { auth, db } from "./firebase-init.js";
-  import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-  import { collection, query, where, onSnapshot, addDoc, serverTimestamp } from
-    "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+  import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+  import {
+    collection, query, where, onSnapshot, addDoc,
+    serverTimestamp, doc, getDoc
+  } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+
+  // ===== Admin/gratuits =====
+  const FREE_EMAILS = new Set([
+    "mathilde.debout31@gmail.com",
+    "s.dumas974@gmail.com"
+  ]);
 
   // ===== UI =====
   const alertBox = document.getElementById("alertBox");
@@ -538,12 +518,19 @@
   const subtitleEl = document.getElementById("subtitle");
   const badgeEl = document.getElementById("badge");
   const addBtn = document.getElementById("addBtn");
+  const logoutBtn = document.getElementById("logoutBtn");
 
   // ===== Utils =====
   const MONTHS = ["janvier","février","mars","avril","mai","juin","juillet","août","septembre","octobre","novembre","décembre"];
   function pad2(n){ return n < 10 ? "0"+n : ""+n; }
   function formatDateKey(date){ return date.getFullYear()+"-"+pad2(date.getMonth()+1)+"-"+pad2(date.getDate()); }
   function formatDateLabel(date){ return date.getDate()+" "+MONTHS[date.getMonth()]+" "+date.getFullYear(); }
+
+  function getEventDateKey(ev){
+    // compat : dateKey (nouveau) ou date (ancien)
+    return (ev?.dateKey || ev?.date || "").trim();
+  }
+
   function typeClass(label){
     const s = (label || "").toLowerCase();
     if (s.includes("ménage")) return "t-menage";
@@ -562,6 +549,8 @@
   }
   const focusHomeId = getHomeIdFromUrl();
 
+  function toLowerEmail(s){ return String(s||"").trim().toLowerCase(); }
+
   // ===== State =====
   const today = new Date();
   let currentMonth = today.getMonth();
@@ -570,7 +559,7 @@
 
   let homes = [];
   let homesById = new Map();
-  let allEvents = []; // on écoute tout, filtre JS => 0 index
+  let allEvents = [];
 
   let unsubHomes = null;
   let unsubEvents = null;
@@ -586,15 +575,15 @@
       const h = getHomeById(focusHomeId);
       const label = h ? `${h.name} — ${h.city}` : "Logement inconnu";
       subtitleEl.textContent = "Planning (filtré) : " + label;
-      badgeEl.textContent = "planning.html?homeId=" + focusHomeId + " • Firestore";
+      badgeEl.textContent = "planning.html?homeId=" + focusHomeId + " • Firestore • dateKey";
     }else{
       subtitleEl.textContent = "Planning des prestations";
-      badgeEl.textContent = "Firestore (homes + events) • sans index (tri JS)";
+      badgeEl.textContent = "Firestore (homes + events) • dateKey • tri JS";
     }
   }
 
   function inCurrentMonth(dateKey){
-    // dateKey = YYYY-MM-DD
+    if(!dateKey || dateKey.length < 7) return false;
     const [y,m] = dateKey.split("-").map(Number);
     return y === currentYear && m === (currentMonth+1);
   }
@@ -602,18 +591,17 @@
   function filteredEvents(){
     let evs = allEvents.slice();
 
-    // filtre home si besoin
     if(focusHomeId){
       evs = evs.filter(e => e.homeId === focusHomeId);
     }
 
     // filtre mois courant
-    evs = evs.filter(e => e.date && inCurrentMonth(e.date));
+    evs = evs.filter(e => inCurrentMonth(getEventDateKey(e)));
 
     // tri local
     evs.sort((a,b)=>{
-      const ak = (a.date||"") + " " + (a.time||"");
-      const bk = (b.date||"") + " " + (b.time||"");
+      const ak = (getEventDateKey(a)||"") + " " + (a.time||"");
+      const bk = (getEventDateKey(b)||"") + " " + (b.time||"");
       return ak.localeCompare(bk);
     });
 
@@ -621,7 +609,7 @@
   }
 
   function eventsForDateKey(dateKey){
-    return filteredEvents().filter(e => e.date === dateKey);
+    return filteredEvents().filter(e => getEventDateKey(e) === dateKey);
   }
 
   function dayHasBlocked(dateKey){
@@ -635,17 +623,18 @@
     kpiEventsEl.textContent = String(monthEvents.length);
 
     const todayKey = formatDateKey(today);
-    kpiTodayEl.textContent = String(monthEvents.filter(e => e.date === todayKey).length);
+    kpiTodayEl.textContent = String(monthEvents.filter(e => getEventDateKey(e) === todayKey).length);
 
-    // 7 jours glissants (depuis aujourd'hui), pas besoin d'index : filtre JS
+    // 7 jours glissants
     const end7 = new Date(today.getFullYear(), today.getMonth(), today.getDate()+6);
     const startKey = formatDateKey(today);
     const endKey = formatDateKey(end7);
 
     const weekCount = allEvents.filter(e=>{
       if(focusHomeId && e.homeId !== focusHomeId) return false;
-      if(!e.date) return false;
-      return e.date >= startKey && e.date <= endKey;
+      const dk = getEventDateKey(e);
+      if(!dk) return false;
+      return dk >= startKey && dk <= endKey;
     }).length;
 
     kpiWeekEl.textContent = String(weekCount);
@@ -716,6 +705,16 @@
     }
   }
 
+  function openEventDetail(ev){
+    const dateKey = getEventDateKey(ev) || formatDateKey(selectedDate);
+    const url = new URL("prestation-detail.html", location.href);
+    url.searchParams.set("eventId", ev.id);
+    url.searchParams.set("returnTo", "planning");
+    if(ev.homeId) url.searchParams.set("homeId", ev.homeId);
+    url.searchParams.set("date", dateKey);
+    location.href = url.toString();
+  }
+
   function renderAgenda(){
     const key = formatDateKey(selectedDate);
     agendaDateLabelEl.textContent = formatDateLabel(selectedDate);
@@ -738,17 +737,7 @@
       item.classList.add("agenda-item");
       if(ev.isBlocked) item.classList.add("blocked");
 
-      item.addEventListener("click", ()=>{
-        alert(
-          [
-            `${ev.time || "—"} • ${ev.type || "Prestation"}`,
-            home ? `${home.name} — ${home.city}` : (ev.homeName || "Logement"),
-            ev.meta ? `Détail: ${ev.meta}` : null,
-            ev.team ? `Équipe: ${ev.team}` : null,
-            ev.isBlocked ? `🔒 BLOQUÉ : ${ev.blockReason || "paiement requis"}` : null,
-          ].filter(Boolean).join("\n")
-        );
-      });
+      item.addEventListener("click", ()=> openEventDetail(ev));
 
       const line1 = document.createElement("div");
       line1.classList.add("agenda-line1");
@@ -807,7 +796,6 @@
   }
 
   function start(user){
-    // HOMES : 1 filtre => pas d’index, tri JS
     unsubHomes = onSnapshot(
       query(collection(db, "homes"), where("conciergerieUid","==", user.uid)),
       (snap)=>{
@@ -824,7 +812,6 @@
       (err)=> showAlert("Erreur homes : " + (err?.message || "inconnue"))
     );
 
-    // EVENTS : 1 filtre => pas d’index, filtre/tri JS
     unsubEvents = onSnapshot(
       query(collection(db, "events"), where("conciergerieUid","==", user.uid)),
       (snap)=>{
@@ -869,7 +856,7 @@
 
     const payload = {
       conciergerieUid: user.uid,
-      date: formatDateKey(selectedDate),
+      dateKey: formatDateKey(selectedDate), // ✅ standard
       time: String(time).trim(),
       type: String(type).trim(),
       homeId: chosenHome.id,
@@ -908,18 +895,58 @@
     renderCalendar(); renderAgenda(); renderKpis();
   });
 
-  onAuthStateChanged(auth, (user)=>{
+  logoutBtn.addEventListener("click", async ()=>{
+    try{ await signOut(auth); } catch(e){}
+    location.href = "index.html";
+  });
+
+  // ===== Guard Auth + Abonnement =====
+  onAuthStateChanged(auth, async (user)=>{
     if(!user){
-      // Firebase auth absent => login
       location.href = "login.html?role=conciergerie";
       return;
     }
+
     hideAlert();
     stop();
+
+    const email = toLowerEmail(user.email);
+    const isFree = FREE_EMAILS.has(email);
+
+    let role = "conciergerie";
+    let subscriptionStatus = "inactive";
+
+    try{
+      const snap = await getDoc(doc(db, "users", user.uid));
+      if(snap.exists()){
+        const data = snap.data();
+        role = (data?.role || role);
+        subscriptionStatus = (data?.subscriptionStatus || subscriptionStatus);
+      }
+    }catch(err){
+      // si Firestore tombe, on évite un écran noir
+      console.warn("Firestore users/{uid} non lisible:", err);
+    }
+
+    // rôle minimal
+    if(role !== "conciergerie" && role !== "admin"){
+      showAlert("Accès refusé (rôle).");
+      setTimeout(()=> location.href = "index.html", 700);
+      return;
+    }
+
+    // abonnement
+    const planActive = isFree ? true : (subscriptionStatus === "active");
+    if(!planActive){
+      location.href = "abonnement.html?plan=starter";
+      return;
+    }
+
     start(user);
     setHeader();
     renderCalendar(); renderAgenda(); renderKpis();
   });
 </script>
+
 </body>
 </html>
