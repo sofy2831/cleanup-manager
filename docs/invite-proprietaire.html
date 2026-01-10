@@ -97,6 +97,7 @@
     }
     h1{margin:0;font-size:24px;font-weight:900;color:#111;}
     .subtitle{font-size:15px;color:#444;margin-top:4px;text-align:center;}
+
     .badge{
       margin-top:10px;
       padding:4px 10px;
@@ -160,6 +161,7 @@
       line-height:1.25;
     }
     .checkbox input{ width:auto; margin-top:2px; }
+
     .cta{
       margin-top:12px;
       width:100%;
@@ -173,6 +175,34 @@
       cursor:pointer;
       box-shadow:0 4px 12px rgba(0,0,0,.18);
     }
+
+    .alt-actions{
+      margin-top:10px;
+      display:flex;
+      flex-wrap:wrap;
+      gap:8px;
+    }
+    .btn{
+      flex:1;
+      border:none;
+      border-radius:999px;
+      padding:10px 12px;
+      font-size:13px;
+      font-weight:900;
+      cursor:pointer;
+      background:#fff;
+      color:var(--violet-main);
+      border:2px solid var(--violet-main);
+      box-shadow:0 3px 10px rgba(0,0,0,.06);
+      white-space:nowrap;
+    }
+    .btn.primary{
+      background:linear-gradient(90deg,var(--violet-main),var(--violet-dark));
+      border-color:transparent;
+      color:#fff;
+      box-shadow:0 4px 12px rgba(0,0,0,.15);
+    }
+
     .alert{
       margin-top:10px;
       padding:10px 12px;
@@ -186,6 +216,7 @@
       white-space:pre-wrap;
     }
     .alert.ok{ border-left-color: var(--ok); }
+
     .fineprint{
       margin-top:10px;
       text-align:center;
@@ -200,7 +231,7 @@
   <div class="page">
     <div class="topbar">
       <a class="pill-link" href="index.html">← Accueil</a>
-      <a class="pill-link primary" href="login.html?role=proprietaire">J’ai déjà un accès</a>
+      <a class="pill-link primary" id="alreadyLink" href="login.html?role=proprietaire">J’ai déjà un accès</a>
     </div>
 
     <div class="logo-title">
@@ -209,7 +240,7 @@
     </div>
 
     <div class="subtitle">Création d’accès propriétaire</div>
-    <div class="badge" id="badgeLine">Invitation Firestore</div>
+    <div class="badge" id="badgeLine">Vérification de l’invitation…</div>
 
     <div class="card">
       <div class="card-title">
@@ -219,7 +250,7 @@
 
       <div class="small" style="margin-bottom:10px;">
         Tu crées ton accès en 30 secondes. Ensuite tu peux consulter : planning, demandes, paiements, messages.
-        <br><b>Gratuit pour les propriétaires</b> (accès invité par la conciergerie).
+        <br><b>Gratuit pour les propriétaires</b>.
       </div>
 
       <div class="alert" id="alertBox"></div>
@@ -261,7 +292,7 @@
         <button class="cta" type="submit" id="createBtn">Créer mon accès</button>
 
         <div class="fineprint">
-          Production : Firebase Auth + Firestore + droits.
+          Si tu as déjà un compte, clique “J’ai déjà un accès”.
         </div>
       </form>
     </div>
@@ -269,7 +300,7 @@
 
   <script type="module">
     import { auth, db } from "./firebase-init.js";
-    import { createUserWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+    import { createUserWithEmailAndPassword, sendPasswordResetEmail } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import { doc, getDoc, setDoc, updateDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const alertBox = document.getElementById("alertBox");
@@ -301,6 +332,7 @@
     const acceptEl = document.getElementById("accept");
     const invitedByLabel = document.getElementById("invitedByLabel");
     const badgeLine = document.getElementById("badgeLine");
+    const alreadyLink = document.getElementById("alreadyLink");
     const form = document.getElementById("inviteForm");
     const createBtn = document.getElementById("createBtn");
 
@@ -315,10 +347,13 @@
     async function loadInvite(){
       if(!token){
         badgeLine.textContent = "Invitation invalide";
-        showAlert("⛔ Token manquant. Demande à la conciergerie de renvoyer un lien.", false);
+        showAlert("⛔ Lien incomplet. Demande à la conciergerie de renvoyer une invitation.", false);
         disableForm();
         return;
       }
+
+      // garder le token si l'utilisateur clique "j'ai déjà un accès"
+      alreadyLink.href = "login.html?role=proprietaire&token=" + encodeURIComponent(token);
 
       try{
         const snap = await getDoc(doc(db, "invites", token));
@@ -355,7 +390,7 @@
 
     await loadInvite();
 
-    // ===== Submit: create Firebase Auth + owners doc + mark invite accepted =====
+    // ===== Submit: create Firebase Auth + profile docs + mark invite accepted =====
     form.addEventListener("submit", async (e)=>{
       e.preventDefault();
       hideAlert();
@@ -384,77 +419,98 @@
         const cred = await createUserWithEmailAndPassword(auth, email, password);
         const uid = cred.user.uid;
 
-        // 2) owners/{uid}
-        await setDoc(doc(db, "owners", uid), {
+        const conciergerieUid = invite.conciergerieUid || null;
+
+        // 2) users/{uid} (profil unifié)
+        await setDoc(doc(db, "users", uid), {
+          uid,
+          role: "proprietaire",
           email,
           fullname,
           phone: phone || "",
-          role: "proprietaire",
-          createdAt: serverTimestamp(),
+          conciergerieUid,
           inviteToken: token,
           invitedBy: invite.by || "",
-          conciergerieUid: invite.conciergerieUid || null
-        });
+          subscriptionStatus: "active", // propriétaire gratuit
+          plan: "owner-free",
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        }, { merge: true });
 
-        // 3) Mark invite used
+        // 3) owners/{uid} (optionnel, si tu veux garder)
+        await setDoc(doc(db, "owners", uid), {
+          uid,
+          role: "proprietaire",
+          email,
+          fullname,
+          phone: phone || "",
+          conciergerieUid,
+          inviteToken: token,
+          invitedBy: invite.by || "",
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        }, { merge: true });
+
+        // 4) Mark invite used
         await updateDoc(doc(db, "invites", token), {
           status: "accepted",
           usedAt: serverTimestamp(),
           usedOwnerUid: uid
         });
 
-        // 4) local session (si tes pages utilisent encore cm_auth)
-        localStorage.setItem("cm_auth", JSON.stringify({
-          role: "proprietaire",
-          uid,
-          email,
-          name: fullname,
-          createdAt: Date.now()
-        }));
-
         showAlert("✅ Accès créé. Redirection…", true);
         setTimeout(()=> location.href = "proprietaire.html", 600);
 
-            }catch(err){
+      }catch(err){
         console.error(err);
         const code = err?.code || "";
 
-        // Si le compte existe déjà : on propose reset immédiat
         if(code.includes("auth/email-already-in-use")){
-          const email = normalizeEmail(emailEl.value);
-
+          // On NE consomme pas l’invite ici : la personne doit se connecter.
+          // On garde le token dans l'URL et on propose reset + login.
           showAlert(
             `⛔ Cet email a déjà un compte.<br><br>
-             👉 Clique sur le bouton ci-dessous pour recevoir un email de réinitialisation, puis reconnecte-toi via “J’ai déjà un accès”.<br><br>
-             <button id="resetNowBtn" style="margin-top:6px; padding:10px 12px; border-radius:999px; border:none; font-weight:900; cursor:pointer; background:linear-gradient(90deg,#7A5CFF,#6238FF); color:#fff; width:100%;">
-               Envoyer un email de réinitialisation
-             </button>`,
+             👉 Option 1 : te connecter (recommandé).<br>
+             👉 Option 2 : réinitialiser ton mot de passe.<br><br>
+             <div class="alt-actions">
+               <button id="loginNowBtn" class="btn primary" type="button">Se connecter</button>
+               <button id="resetNowBtn" class="btn" type="button">Réinitialiser le mot de passe</button>
+             </div>`,
             false
           );
 
-          // Attacher handler après injection HTML
-          setTimeout(async ()=>{
-            const btn = document.getElementById("resetNowBtn");
-            if(!btn) return;
-            btn.addEventListener("click", async ()=>{
-              btn.disabled = true;
-              btn.style.opacity = "0.75";
-              try{
-                const { sendPasswordResetEmail } =
-                  await import("https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js");
-                await sendPasswordResetEmail(auth, email);
+          setTimeout(()=>{
+            const loginBtn = document.getElementById("loginNowBtn");
+            const resetBtn = document.getElementById("resetNowBtn");
 
-                showAlert("✅ Email de réinitialisation envoyé. Regarde tes spams. Ensuite, connecte-toi via “J’ai déjà un accès”.", true);
-              }catch(resetErr){
-                console.error(resetErr);
-                showAlert("Erreur reset : " + (resetErr?.message || "inconnue"), false);
-              }finally{
-                btn.disabled = false;
-                btn.style.opacity = "1";
-              }
-            });
+            if(loginBtn){
+              loginBtn.addEventListener("click", ()=>{
+                location.href = "login.html?role=proprietaire&token=" + encodeURIComponent(token);
+              });
+            }
+
+            if(resetBtn){
+              resetBtn.addEventListener("click", async ()=>{
+                resetBtn.disabled = true;
+                resetBtn.style.opacity = "0.75";
+                try{
+                  await sendPasswordResetEmail(auth, email);
+                  showAlert("✅ Email de réinitialisation envoyé. Ensuite, connecte-toi via “J’ai déjà un accès”.", true);
+                }catch(resetErr){
+                  console.error(resetErr);
+                  showAlert("Erreur reset : " + (resetErr?.message || "inconnue"), false);
+                }finally{
+                  resetBtn.disabled = false;
+                  resetBtn.style.opacity = "1";
+                }
+              });
+            }
           }, 0);
 
+        } else if(code.includes("auth/invalid-email")){
+          showAlert("Email invalide.", false);
+        } else if(code.includes("auth/weak-password")){
+          showAlert("Mot de passe trop faible.", false);
         } else {
           showAlert("Erreur : " + (err?.message || "inconnue"), false);
         }
@@ -462,9 +518,7 @@
         createBtn.disabled = false;
         createBtn.style.opacity = "1";
       }
-
     });
   </script>
 </body>
 </html>
-
