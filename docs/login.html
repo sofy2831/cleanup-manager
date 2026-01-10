@@ -131,13 +131,19 @@
   <script type="module">
     import { auth, db } from "./firebase-init.js";
 
-    import { signInWithEmailAndPassword, sendPasswordResetEmail }
-      from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+    import {
+      signInWithEmailAndPassword,
+      sendPasswordResetEmail
+    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
 
-    import { doc, getDoc }
-      from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import {
+      doc,
+      getDoc,
+      setDoc,
+      serverTimestamp
+    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
-    // Conciergerie: mails admin gratuits
+    // Comptes gratuits (DEV/admin)
     const FREE_EMAILS = new Set([
       "mathilde.debout31@gmail.com",
       "s.dumas974@gmail.com"
@@ -166,24 +172,29 @@
       submitBtn.style.cursor = locked ? "not-allowed" : "pointer";
     }
 
-    function getRoleFromUrl(){
+    function getParam(name){
       const p = new URLSearchParams(location.search);
-      const r = (p.get("role") || "").trim().toLowerCase();
+      return (p.get(name) || "").trim();
+    }
+
+    function getRoleFromUrl(){
+      const r = (getParam("role") || "").toLowerCase();
       return (r === "proprietaire" || r === "proprio" || r === "owner") ? "proprietaire" : "conciergerie";
     }
 
-    function setLocalSession({ uid, email, role, plan, planActive }){
-      localStorage.setItem("cm_auth", JSON.stringify({
-        uid,
-        email,
-        role,
-        plan: plan || "",
-        planActive: !!planActive
-      }));
+    function desiredPostLoginRedirect(roleMode){
+      // priorité: next=abonnement
+      const next = getParam("next");
+      const plan = getParam("plan") || "starter";
+      if(next === "abonnement"){
+        return "abonnement.html?plan=" + encodeURIComponent(plan);
+      }
+
+      if(roleMode === "proprietaire") return "proprietaire.html";
+      return "conciergerie.html";
     }
 
     const roleMode = getRoleFromUrl();
-    console.log("LOGIN roleMode =", roleMode, "URL =", location.href);
 
     // UI
     if(roleMode === "proprietaire"){
@@ -196,7 +207,7 @@
       signupLine.innerHTML = 'Pas de compte ? <a class="link" href="signup.html">Créer un compte</a>';
     }
 
-    // Reset password (Firebase pour tous)
+    // Reset password
     resetLink.addEventListener("click", async (e)=>{
       e.preventDefault();
       msgBox.style.display = "none";
@@ -217,6 +228,18 @@
 
     let isSubmitting = false;
 
+    async function ensureFreeAdminProfile(uid, email){
+      // On force un profil "actif" pour tes emails admin (merge, sans casser le reste)
+      await setDoc(doc(db, "users", uid), {
+        uid,
+        email,
+        role: "conciergerie",
+        subscriptionStatus: "active",
+        plan: "free-admin",
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+    }
+
     form.addEventListener("submit", async (e)=>{
       e.preventDefault();
       if(isSubmitting) return;
@@ -233,53 +256,63 @@
       if(!password){ lockUI(false); isSubmitting=false; return showMsg("Mot de passe requis."); }
 
       try{
-        console.log("LOGIN email =", email);
-
         const cred = await signInWithEmailAndPassword(auth, email, password);
         const uid = cred.user.uid;
-        console.log("AUTH OK uid =", uid);
 
-        // ===== Propriétaire : redirection directe =====
+        // Propriétaire : redirection directe (on ne dépend pas de Firestore)
         if(roleMode === "proprietaire"){
-          setLocalSession({ uid, email, role: "proprietaire", plan: "", planActive: true });
-          console.log("REDIRECT -> proprietaire.html (replace)");
-          location.replace("proprietaire.html"); // ✅ c'est bien une FONCTION
-          setTimeout(()=>{
-            if(!location.pathname.endsWith("proprietaire.html")) location.href = "proprietaire.html";
-          }, 300);
+          location.replace(desiredPostLoginRedirect(roleMode));
           return;
         }
 
-        // ===== Conciergerie : logique plan =====
+        const isFree = FREE_EMAILS.has(email);
+
+        // Conciergerie : on lit le profil Firestore
         let role = "conciergerie";
-        let plan = "";
         let planActive = false;
 
-        const isFree = FREE_EMAILS.has(email);
         if(isFree){
-          plan = "free-admin";
+          // Force active + plan free-admin
+          try{ await ensureFreeAdminProfile(uid, email); }catch(_){}
           planActive = true;
-        }
-
-        try{
-          const snap = await getDoc(doc(db, "users", uid));
-          if(snap.exists()){
-            const data = snap.data();
-            role = data?.role || role;
-            const sub = data?.subscriptionStatus || "";
-            plan = isFree ? "free-admin" : (data?.plan || plan);
-            planActive = isFree ? true : (sub === "active");
-          }
-        }catch(fireErr){
-          console.warn("Firestore non dispo, on continue sans profil :", fireErr);
-        }
-
-        setLocalSession({ uid, email, role, plan, planActive });
-
-        if(planActive){
-          location.href = "conciergerie.html";
         }else{
-          location.href = "abonnement.html?plan=starter";
+          try{
+            const snap = await getDoc(doc(db, "users", uid));
+            if(snap.exists()){
+              const data = snap.data() || {};
+              role = data.role || role;
+              planActive = (data.subscriptionStatus === "active");
+            }else{
+              // Profil absent => on crée un minimum pour éviter le vide
+              await setDoc(doc(db, "users", uid), {
+                uid,
+                email,
+                role: "conciergerie",
+                subscriptionStatus: "inactive",
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp()
+              }, { merge: true });
+              planActive = false;
+            }
+          }catch(err){
+            // Si Firestore plante, on reste safe: renvoi abonnement (pas accès)
+            console.warn("Firestore read failed:", err);
+            planActive = false;
+          }
+        }
+
+        // Si tu veux respecter un next=abonnement, on le fait (même si inactif)
+        const next = getParam("next");
+        if(next === "abonnement"){
+          location.replace(desiredPostLoginRedirect(roleMode));
+          return;
+        }
+
+        // Sinon : accès si actif, sinon abonnement
+        if(role === "conciergerie" && planActive){
+          location.replace("conciergerie.html");
+        }else{
+          location.replace("abonnement.html?plan=starter");
         }
 
       }catch(err){
