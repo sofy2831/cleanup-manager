@@ -15,6 +15,8 @@
       --violet-main:#7A5CFF;
       --violet-dark:#6238FF;
       --text-dark:#111;
+      --ok:#1b8f4d;
+      --bad:#b3261e;
     }
 
     *{ box-sizing:border-box; font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
@@ -143,31 +145,26 @@
 
     .badge{
       margin-top:10px;
-      padding:4px 10px;
+      padding:6px 10px;
       border-radius:999px;
       background:#fff;
       font-size:12px;
       color:#555;
       box-shadow:0 3px 10px rgba(0,0,0,.06);
       text-align:center;
-    }
-
-    /* Badge demandes pending */
-    .badge.pending{
       display:inline-flex;
+      gap:8px;
       align-items:center;
       justify-content:center;
-      gap:8px;
-      margin-top:10px;
-      padding:6px 12px;
-      border-radius:999px;
-      background:#fff;
-      font-size:12px;
-      color:#333;
-      box-shadow:0 3px 10px rgba(0,0,0,.06);
-      border:1px solid rgba(122,92,255,.25);
-      font-weight:900;
+      flex-wrap:wrap;
     }
+    .badge .dot{
+      width:8px;height:8px;border-radius:50%;
+      background:var(--ok);
+      box-shadow:0 0 0 3px rgba(27,143,77,.12);
+    }
+    .badge.warn .dot{ background:var(--bad); box-shadow:0 0 0 3px rgba(179,38,30,.12); }
+    .badge strong{ font-weight:900; }
 
     .kpis{
       width:100%;
@@ -198,7 +195,7 @@
       gap:14px;
       margin-top:16px;
     }
-    @media(min-width:900px){ .modules{ grid-template-columns:repeat(3,1fr);} }
+    @media(min-width:900px){ .modules{ grid-template-columns:repeat(2,1fr);} }
 
     .card-link{ text-decoration:none; color:inherit; display:block; }
     .module-card{
@@ -248,12 +245,10 @@
       text-align:center;
     }
 
-    /* Masquer la mini top-nav sur mobile */
     @media (max-width: 520px){
       .top-nav{ display:none; }
     }
 
-    /* Bottom-nav mobile */
     .bottom-nav{ display:none; }
 
     @media (max-width: 520px){
@@ -294,167 +289,168 @@
 
 <body>
 
-<!-- ===== Firebase guard + subscription + badge + KPIs (NO localStorage) ===== -->
 <script type="module">
-  import { db, auth } from "./firebase-init.js";
-
+  import { auth, db } from "./firebase-init.js";
   import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
   import {
     doc, getDoc,
-    collection, query, where, onSnapshot, getCountFromServer
+    collection, query, where, onSnapshot
   } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
-  // ---- logout (appelé par ton bouton)
-  window.logout = async function(){
-    try { await signOut(auth); } catch(e){}
+  // === ADMIN GRATUIT ===
+  const FREE_EMAILS = new Set([
+    "mathilde.debout31@gmail.com",
+    "s.dumas974@gmail.com"
+  ]);
+
+  // UI refs
+  const kpiToday = () => document.getElementById("kpiToday");
+  const kpiWeek = () => document.getElementById("kpiWeek");
+  const kpiEvents = () => document.getElementById("kpiEvents");
+  const kpiHomes = () => document.getElementById("kpiHomes");
+  const statusBadge = () => document.getElementById("statusBadge");
+
+  window.logout = async function logout(){
+    try{ await signOut(auth); }catch(e){}
     location.href = "index.html";
   };
 
-  // ---- DOM
-  const pendingBadge = document.getElementById("pendingBadge");
-  const kpiToday  = document.getElementById("kpiToday");
-  const kpiWeek   = document.getElementById("kpiWeek");
-  const kpiEvents = document.getElementById("kpiEvents");
-  const kpiHomes  = document.getElementById("kpiHomes");
-
-  function setPending(v){
-    if(pendingBadge) pendingBadge.textContent = `Demandes en attente : ${v}`;
-  }
-  function setText(el, v){
-    if(el) el.textContent = String(v);
+  function setBadge(ok, text){
+    const el = statusBadge();
+    if(!el) return;
+    el.classList.toggle("warn", !ok);
+    el.innerHTML = `<span class="dot"></span><span>${text}</span>`;
   }
 
-  function pad2(n){ return n < 10 ? "0"+n : ""+n; }
-  function dateKey(d){ return d.getFullYear()+"-"+pad2(d.getMonth()+1)+"-"+pad2(d.getDate()); }
-
-  function nextDaysKeys(n){
-    const today = new Date();
-    const keys = [];
-    for(let i=0;i<n;i++){
-      const d = new Date(today.getFullYear(), today.getMonth(), today.getDate()+i);
-      keys.push(dateKey(d));
-    }
-    return keys;
+  function setKpi(el, val){
+    if(!el) return;
+    el.textContent = (val === null || val === undefined) ? "—" : String(val);
   }
 
-  async function requireUserAndRole(user){
-    const uref = doc(db, "users", user.uid);
-    const usnap = await getDoc(uref);
-    if(!usnap.exists()){
-      location.href = "login.html?role=conciergerie";
-      throw new Error("Missing user profile (users/{uid})");
-    }
-
-    const u = usnap.data() || {};
-    const role = u.role || "";
-    if(role !== "conciergerie" && role !== "admin"){
-      location.href = "login.html?role=conciergerie";
-      throw new Error("Forbidden role");
-    }
-
-    const active = (u.subscriptionStatus === "active");
-    if(!active){
-      location.href = "abonnement.html?plan=starter";
-      throw new Error("Subscription inactive");
-    }
-
-    return u;
+  function mondayOfWeek(d){
+    const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    const day = x.getDay(); // 0=dim
+    const diff = (day === 0 ? -6 : 1) - day;
+    x.setDate(x.getDate() + diff);
+    x.setHours(0,0,0,0);
+    return x;
   }
 
-  function attachPendingBadge(uid){
-    const qPending = query(
-      collection(db, "requests"),
-      where("conciergerieUid", "==", uid),
-      where("status", "==", "pending")
+  // === IMPORTANT ===
+  // Ici j'assume :
+  // - logements dans collection "homes" avec champ conciergerieUid
+  // - événements/prestations dans collection "events" avec champ conciergerieUid + champ dateKey "YYYY-MM-DD"
+  //
+  // Si ton schéma est différent, tu me le dis et je le recale.
+  function dateKey(d){
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth()+1).padStart(2,"0");
+    const dd = String(d.getDate()).padStart(2,"0");
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
+  let unsubHomes = null;
+  let unsubEvents = null;
+
+  function bindKpis(uid){
+    // HOMES count
+    if(unsubHomes) unsubHomes();
+    const qHomes = query(
+      collection(db, "homes"),
+      where("conciergerieUid", "==", uid)
     );
-
-    return onSnapshot(qPending, (snap) => {
-      setPending(snap.size);
-    }, (err) => {
-      console.error("pendingBadge snapshot error:", err);
-      setPending("Erreur");
+    unsubHomes = onSnapshot(qHomes, (snap)=>{
+      setKpi(kpiHomes(), snap.size);
+    }, (err)=>{
+      console.warn("homes KPI error:", err);
+      setKpi(kpiHomes(), "—");
     });
-  }
 
-  async function attachKpis(uid){
-    // Homes count
-    try{
-      const qHomes = query(collection(db, "homes"), where("conciergerieUid", "==", uid));
-      const homesCount = await getCountFromServer(qHomes);
-      setText(kpiHomes, homesCount.data().count);
-    }catch(e){
-      console.warn("kpiHomes failed:", e);
-      setText(kpiHomes, "—");
-    }
-
-    // Total events count
-    try{
-      const qEvents = query(collection(db, "events"), where("conciergerieUid", "==", uid));
-      const eventsCount = await getCountFromServer(qEvents);
-      setText(kpiEvents, eventsCount.data().count);
-    }catch(e){
-      console.warn("kpiEvents failed:", e);
-      setText(kpiEvents, "—");
-    }
-
-    // Today + Week (next 7 days) - realtime
-    const keys7 = nextDaysKeys(7);
-    const todayKey = keys7[0];
-
-    // Firestore limite "in" = 10 valeurs => OK
-    const qWeek = query(
+    // EVENTS total + today + week
+    if(unsubEvents) unsubEvents();
+    const qEvents = query(
       collection(db, "events"),
-      where("conciergerieUid", "==", uid),
-      where("date", "in", keys7)
+      where("conciergerieUid", "==", uid)
     );
 
-    return onSnapshot(qWeek, (snap) => {
-      let today = 0;
-      let week = snap.size;
+    unsubEvents = onSnapshot(qEvents, (snap)=>{
+      const all = [];
+      snap.forEach(docSnap => all.push(docSnap.data() || {}));
 
-      snap.forEach(d => {
-        const data = d.data() || {};
-        if(data.date === todayKey) today++;
-      });
+      const today = new Date();
+      const todayKey = dateKey(today);
 
-      setText(kpiToday, today);
-      setText(kpiWeek, week);
-    }, (err) => {
-      console.error("kpiWeek snapshot error:", err);
-      setText(kpiToday, "—");
-      setText(kpiWeek, "—");
+      const weekStart = mondayOfWeek(today);
+      const weekEnd = new Date(weekStart);
+      weekEnd.setDate(weekEnd.getDate()+7);
+
+      let total = all.length;
+      let countToday = 0;
+      let countWeek = 0;
+
+      for(const ev of all){
+        const dk = String(ev.dateKey || ev.date || "").trim(); // tolérant
+        if(dk === todayKey) countToday++;
+
+        // comptage semaine basé sur dateKey
+        if(dk && /^\d{4}-\d{2}-\d{2}$/.test(dk)){
+          const dt = new Date(dk + "T00:00:00");
+          if(dt >= weekStart && dt < weekEnd) countWeek++;
+        }
+      }
+
+      setKpi(kpiEvents(), total);
+      setKpi(kpiToday(), countToday);
+      setKpi(kpiWeek(), countWeek);
+
+    }, (err)=>{
+      console.warn("events KPI error:", err);
+      setKpi(kpiEvents(), "—");
+      setKpi(kpiToday(), "—");
+      setKpi(kpiWeek(), "—");
     });
   }
 
-  // ---- Boot
-  let unsubPending = null;
-  let unsubWeek = null;
+  async function loadUserProfile(uid){
+    try{
+      const snap = await getDoc(doc(db, "users", uid));
+      if(!snap.exists()) return null;
+      return snap.data() || null;
+    }catch(err){
+      console.warn("profile read failed:", err);
+      return null;
+    }
+  }
 
-  onAuthStateChanged(auth, async (user) => {
-    // reset UI
-    setPending("—");
-    setText(kpiHomes, "—");
-    setText(kpiEvents, "—");
-    setText(kpiToday, "—");
-    setText(kpiWeek, "—");
-
-    // cleanup listeners
-    if(unsubPending) { try{ unsubPending(); }catch(e){} unsubPending = null; }
-    if(unsubWeek) { try{ unsubWeek(); }catch(e){} unsubWeek = null; }
-
+  onAuthStateChanged(auth, async (user)=>{
     if(!user){
       location.href = "login.html?role=conciergerie";
       return;
     }
 
-    try{
-      await requireUserAndRole(user);
-      unsubPending = attachPendingBadge(user.uid);
-      unsubWeek = await attachKpis(user.uid);
-    }catch(e){
-      console.warn("Guard blocked:", e);
-      // redirection déjà faite dans requireUserAndRole()
+    // profil Firestore
+    const profile = await loadUserProfile(user.uid);
+    const email = (user.email || "").toLowerCase();
+    const isFree = FREE_EMAILS.has(email);
+
+    const role = (profile?.role || "conciergerie").toLowerCase();
+    if(role !== "conciergerie" && role !== "admin"){
+      // mauvais rôle = dehors
+      location.href = "login.html?role=conciergerie";
+      return;
     }
+
+    const sub = (profile?.subscriptionStatus || "").toLowerCase();
+    const active = isFree ? true : (sub === "active");
+
+    if(!active){
+      location.href = "abonnement.html?plan=starter";
+      return;
+    }
+
+    // OK : on est loggé + actif
+    setBadge(true, isFree ? "Compte admin (gratuit) • accès actif" : "Abonnement actif • accès complet");
+    bindKpis(user.uid);
   });
 </script>
 
@@ -472,20 +468,20 @@
     <div class="logo-icon">✓</div>
     <h1>CleanUp Manager</h1>
   </div>
-  <div class="subtitle">Tableau de bord</div>
+  <div class="subtitle">Tableau de bord conciergerie</div>
 
-  <!-- Badge demandes en attente -->
-  <div class="badge pending" id="pendingBadge">Demandes en attente : —</div>
-
-  <div class="badge">Piloter • planifier • facturer • communiquer</div>
+  <div class="badge" id="statusBadge">
+    <span class="dot"></span>
+    <span>Vérification accès…</span>
+  </div>
 
   <div class="top-nav">
     <a href="conciergerie.html" class="active">Menu</a>
     <a href="planning.html">Planning</a>
     <a href="logements.html">Logements</a>
-    <a href="prestations.html">Prestations</a>
     <a href="invite.html">Inviter</a>
     <a href="demandes.html">Demandes</a>
+    <a href="prestations.html">Prestations</a>
     <a href="messagerie.html">Messagerie</a>
   </div>
 
@@ -518,56 +514,41 @@
   </div>
 
   <div class="modules">
-    <a class="card-link" href="planning.html">
+    <a class="card-link" href="invite.html">
       <div class="module-card">
-        <div class="module-title">Planning <span class="chip">réel</span></div>
-        <div class="module-desc">Calendrier + agenda.</div>
+        <div class="module-title">Inviter un propriétaire <span class="chip">V1</span></div>
+        <div class="module-desc">Générer un lien d’invitation et rattacher un propriétaire.</div>
       </div>
     </a>
 
     <a class="card-link" href="logements.html">
       <div class="module-card">
-        <div class="module-title">Logements <span class="chip">réel</span></div>
-        <div class="module-desc">Gestion + ajout des logements.</div>
+        <div class="module-title">Ajouter un logement <span class="chip">réel</span></div>
+        <div class="module-desc">Créer un logement + infos + iCal (ensuite).</div>
       </div>
     </a>
 
-    <a class="card-link" href="prestations.html">
+    <a class="card-link" href="planning.html">
       <div class="module-card">
-        <div class="module-title">Prestations <span class="chip">réel</span></div>
-        <div class="module-desc">Catalogue des services (tarifs / durées).</div>
+        <div class="module-title">Planning <span class="chip">réel</span></div>
+        <div class="module-desc">Vision globale : ménages, check-in/out, réassort.</div>
       </div>
     </a>
 
-    <a class="card-link" href="invite.html">
+    <a class="card-link" href="planning.html">
       <div class="module-card">
-        <div class="module-title">Inviter un propriétaire <span class="chip">V1</span></div>
-        <div class="module-desc">Générer un lien d’invitation.</div>
-      </div>
-    </a>
-
-    <a class="card-link" href="demandes.html">
-      <div class="module-card">
-        <div class="module-title">Demandes propriétaires <span class="chip">V1</span></div>
-        <div class="module-desc">Accepter / traiter les demandes.</div>
-      </div>
-    </a>
-
-    <a class="card-link" href="messagerie.html">
-      <div class="module-card">
-        <div class="module-title">Messagerie <span class="chip">réel</span></div>
-        <div class="module-desc">Messages conciergerie ↔ propriétaires.</div>
+        <div class="module-title">Créer une prestation <span class="chip">V1</span></div>
+        <div class="module-desc">Raccourci : choisir logement → prestation → date/heure.</div>
       </div>
     </a>
   </div>
 
   <div class="foot">
-    V1 stable : dashboard léger + modules + navigation mobile.
+    V1 : 4 cartes principales + KPIs Firestore. Le reste passe par le menu.
   </div>
 
 </div>
 
-<!-- Bottom nav mobile -->
 <nav class="bottom-nav">
   <a href="conciergerie.html" class="active">Menu</a>
   <a href="planning.html">Planning</a>
