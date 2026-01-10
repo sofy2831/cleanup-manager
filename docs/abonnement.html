@@ -239,13 +239,6 @@
     }
     .features li{ margin:6px 0; }
 
-    .cta{
-      margin-top:12px;
-      display:flex;
-      flex-wrap:wrap;
-      gap:8px;
-    }
-
     .cta-btn{
       border:none;
       border-radius:999px;
@@ -256,11 +249,17 @@
       box-shadow:0 4px 12px rgba(0,0,0,.18);
       background:linear-gradient(90deg,var(--violet-main),var(--violet-dark));
       color:#fff;
-      flex:1;
-      min-width:220px;
+      width:100%;
       text-decoration:none;
       text-align:center;
       display:inline-block;
+    }
+
+    .cta.stack{
+      margin-top:12px;
+      display:flex;
+      flex-direction:column;
+      gap:8px;
     }
 
     .msg{
@@ -279,15 +278,6 @@
     @media (min-width:700px){
       .plan-grid{ grid-template-columns: repeat(2, 1fr); }
     }
-.cta.stack{
-  flex-direction: column;
-}
-.cta.stack .cta-btn{
-  min-width: 0;
-  width: 100%;
-}
-
-    
   </style>
 </head>
 
@@ -319,10 +309,9 @@
       <ul class="features" id="planFeatures"></ul>
 
       <div class="cta stack">
-  <a class="cta-btn" id="payNowLink" href="#">Payer en ligne</a>
-  <a class="cta-btn" id="createAccountBtn" href="#">Créer mon compte pour m’abonner</a>
-</div>
-
+        <a class="cta-btn" id="payNowLink" href="#">Payer en ligne</a>
+        <a class="cta-btn" id="createAccountBtn" href="#">Créer mon compte pour m’abonner</a>
+      </div>
 
       <div class="msg" id="msgBox"></div>
 
@@ -333,7 +322,10 @@
 
   </div>
 
-  <script>
+  <script type="module">
+    import { auth } from "./firebase-init.js";
+    import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+
     // ✅ Ton endpoint Functions (projet cleanup-manager-d9301)
     const FUNCTIONS_BASE = "https://europe-west1-cleanup-manager-d9301.cloudfunctions.net/api";
 
@@ -350,7 +342,6 @@
           "Messagerie (V1) • Boutique • Import iCal",
           "Historique + export comptable (CSV/PDF)"
         ],
-        // ✅ mets ton vrai priceId :
         priceId: "price_1SkPlYAMMazMXNc11Ir93REb"
       },
       pro: {
@@ -413,22 +404,35 @@
       box.textContent = text;
     }
 
-    function getSession(){
-      try{ return JSON.parse(localStorage.getItem("cm_auth") || "null"); }
-      catch(e){ return null; }
+    function disablePay(disabled){
+      const payLink = document.getElementById("payNowLink");
+      payLink.style.opacity = disabled ? "0.7" : "1";
+      payLink.style.pointerEvents = disabled ? "none" : "auto";
+    }
+
+    function waitForUser(){
+      return new Promise((resolve) => {
+        const unsub = onAuthStateChanged(auth, (user) => {
+          unsub();
+          resolve(user || null);
+        });
+      });
     }
 
     async function startCheckout(planKey){
-      const s = getSession();
-      if(!s || !s.uid || !s.email){
-        showMsg("Session absente. Reconnecte-toi.");
-        location.href = "login.html";
+      disablePay(true);
+
+      const user = auth.currentUser || await waitForUser();
+      if(!user){
+        showMsg("Connecte-toi d’abord pour payer.");
+        location.href = "login.html?next=abonnement&plan=" + encodeURIComponent(planKey);
         return;
       }
 
       const plan = PLANS[planKey];
       if(!plan || !plan.priceId || !plan.priceId.startsWith("price_")){
         showMsg("Price ID manquant/incorrect pour ce plan.");
+        disablePay(false);
         return;
       }
 
@@ -437,9 +441,9 @@
           method: "POST",
           headers: { "Content-Type":"application/json" },
           body: JSON.stringify({
-            uid: s.uid,
-            email: s.email,
-            role: s.role || "conciergerie",
+            uid: user.uid,
+            email: user.email || "",
+            role: "conciergerie",
             plan: plan.key,
             priceId: plan.priceId
           })
@@ -449,15 +453,16 @@
         if(!res.ok || !data.url){
           console.error(data);
           showMsg("Erreur création paiement : " + (data.error || "inconnue"));
+          disablePay(false);
           return;
         }
 
-        // redirection Stripe checkout
         location.href = data.url;
 
       }catch(err){
         console.error(err);
         showMsg("Erreur réseau : " + err.message);
+        disablePay(false);
       }
     }
 
@@ -490,28 +495,16 @@
     document.getElementById("planDesc").textContent = plan.desc;
     document.getElementById("planFeatures").innerHTML = plan.features.map(x => `<li>${x}</li>`).join("");
 
-// Bouton : créer un compte puis revenir ici
-const createBtn = document.getElementById("createAccountBtn");
-createBtn.href = `signup.html?next=abonnement&plan=${encodeURIComponent(plan.key)}`;
-createBtn.addEventListener("click", (e) => {
-  // pas obligatoire, mais garde un plan en mémoire au cas où
-  localStorage.setItem("cm_selected_plan", plan.key);
-});
+    // Bouton : créer un compte puis revenir ici (SANS localStorage)
+    const createBtn = document.getElementById("createAccountBtn");
+    createBtn.href = `signup.html?next=abonnement&plan=${encodeURIComponent(plan.key)}`;
 
-
-    
     // Button checkout
     const payLink = document.getElementById("payNowLink");
-    payLink.href = "#";
     payLink.addEventListener("click", (e)=>{
       e.preventDefault();
       startCheckout(plan.key);
     });
   </script>
 </body>
-
 </html>
-
-
-
-
