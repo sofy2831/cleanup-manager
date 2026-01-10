@@ -173,6 +173,12 @@
       text-decoration:none;
     }
 
+    .divider{
+      margin:14px 0 10px;
+      height:1px;
+      background:rgba(0,0,0,0.06);
+    }
+
     .msg{
       display:none;
       margin-top:12px;
@@ -186,6 +192,18 @@
       text-align:left;
       white-space:pre-wrap;
     }
+
+    .mutedbox{
+      margin-top:10px;
+      font-size:12px;
+      color:#666;
+      background:rgba(122,92,255,.10);
+      border:1px solid rgba(122,92,255,.18);
+      padding:10px 12px;
+      border-radius:12px;
+      text-align:left;
+      line-height:1.35;
+    }
   </style>
 </head>
 
@@ -194,6 +212,7 @@
 
     <div class="topbar">
       <a class="pill" href="index.html">← Accueil</a>
+      <a class="pill" href="login.html">Connexion</a>
     </div>
 
     <div class="logo-title">
@@ -202,7 +221,7 @@
     </div>
 
     <p class="subtitle">
-      Création de compte conciergerie. Les informations ci-dessous serviront à éditer vos factures propriétaires.
+      Compte conciergerie. Tu peux compléter les infos de facturation plus tard (Paramètres).
     </p>
 
     <form id="signupForm" novalidate>
@@ -223,35 +242,37 @@
       </div>
 
       <div class="field">
-        <label for="legalName">Raison sociale / Nom</label>
-        <input id="legalName" name="legalName" type="text" required placeholder="ex: SARL Riviera Clean">
+        <label for="phone">Téléphone (optionnel)</label>
+        <input id="phone" name="phone" type="tel" autocomplete="tel" placeholder="ex: 06 12 34 56 78">
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="field">
+        <label for="siret">SIRET (optionnel)</label>
+        <input id="siret" name="siret" type="text" inputmode="numeric" placeholder="14 chiffres">
+        <div class="hint">Tu pourras le rendre obligatoire au moment des devis/factures.</div>
       </div>
 
       <div class="field">
-        <label for="siret">SIRET</label>
-        <input id="siret" name="siret" type="text" inputmode="numeric" required placeholder="14 chiffres">
-        <div class="hint">14 chiffres (sans espaces). Obligatoire pour éditer des factures.</div>
+        <label for="addressLine1">Adresse (optionnel)</label>
+        <input id="addressLine1" name="addressLine1" type="text" placeholder="N° et rue">
       </div>
 
       <div class="field">
-        <label for="addressLine1">Adresse</label>
-        <input id="addressLine1" name="addressLine1" type="text" required placeholder="N° et rue">
+        <label for="zip">Code postal (optionnel)</label>
+        <input id="zip" name="zip" type="text" inputmode="numeric" placeholder="ex: 31000">
       </div>
 
       <div class="field">
-        <label for="zip">Code postal</label>
-        <input id="zip" name="zip" type="text" inputmode="numeric" required placeholder="ex: 31000">
+        <label for="city">Ville (optionnel)</label>
+        <input id="city" name="city" type="text" placeholder="ex: Toulouse">
       </div>
 
       <div class="field">
-        <label for="city">Ville</label>
-        <input id="city" name="city" type="text" required placeholder="ex: Toulouse">
-      </div>
-
-      <div class="field">
-        <label for="vatRegime">TVA</label>
+        <label for="vatRegime">TVA (optionnel)</label>
         <input id="vatRegime" name="vatRegime" type="text" placeholder="franchise">
-        <div class="hint">Mets “franchise” ou “assujetti”. Si franchise : “TVA non applicable, art. 293 B du CGI”.</div>
+        <div class="hint">Ex : “franchise” → “TVA non applicable, art. 293 B du CGI”.</div>
       </div>
 
       <div class="field">
@@ -259,18 +280,18 @@
         <input id="iban" name="iban" type="text" placeholder="FR76....">
       </div>
 
-      <div class="field">
-        <label for="phone">Téléphone (optionnel)</label>
-        <input id="phone" name="phone" type="tel" autocomplete="tel" placeholder="ex: 06 12 34 56 78">
-      </div>
-
-      <button class="btn" type="submit" id="submitBtn">Créer mon compte conciergerie</button>
+      <button class="btn" type="submit" id="submitBtn">Créer mon compte (essai 30 jours)</button>
 
       <div class="msg" id="msgBox"></div>
 
+      <div class="mutedbox">
+        <b>Essai 30 jours :</b> tu peux accéder au dashboard sans payer.  
+        Tu ne paies que si tu veux continuer après l’essai.
+      </div>
+
       <div class="below">
         Déjà un compte ? <a class="link" href="login.html">Se connecter</a><br>
-        En créant un compte, vous acceptez les conditions d’utilisation.
+        En créant un compte, tu acceptes les conditions d’utilisation.
       </div>
     </form>
 
@@ -285,13 +306,18 @@
     const msgBox = document.getElementById("msgBox");
     const submitBtn = document.getElementById("submitBtn");
 
-    // Comptes gratuits (admin / équipe)
+    // DEV ONLY: comptes gratuits
     const FREE_EMAILS = new Set([
       "mathilde.debout31@gmail.com",
       "s.dumas974@gmail.com"
     ]);
 
     let isSubmitting = false;
+
+    function getParam(name){
+      const p = new URLSearchParams(location.search);
+      return (p.get(name) || "").trim();
+    }
 
     function normalizeEmail(e){
       return String(e || "").trim().toLowerCase();
@@ -310,14 +336,13 @@
       submitBtn.style.cursor = locked ? "not-allowed" : "pointer";
     }
 
-    function setLocalSession({ uid, email, role, plan, planActive }){
-      localStorage.setItem("cm_auth", JSON.stringify({
-        uid,
-        email,
-        role,
-        plan: plan || "",
-        planActive: !!planActive
-      }));
+    function buildRedirectAfterSignup(){
+      const next = getParam("next");     // ex: "abonnement"
+      const plan = getParam("plan");     // ex: "starter"
+      if(next === "abonnement"){
+        return "abonnement.html?plan=" + encodeURIComponent(plan || "starter");
+      }
+      return "conciergerie.html";
     }
 
     form.addEventListener("submit", async (e) => {
@@ -333,7 +358,7 @@
       const tradeName = document.getElementById("company").value.trim();
       const phone = document.getElementById("phone").value.trim();
 
-      const legalName = document.getElementById("legalName").value.trim();
+      // Facturation (optionnel)
       const siretRaw = document.getElementById("siret").value.trim();
       const addressLine1 = document.getElementById("addressLine1").value.trim();
       const zip = document.getElementById("zip").value.trim();
@@ -343,17 +368,15 @@
 
       const siret = siretRaw.replace(/\s+/g, "");
 
-      // validations
+      // validations minimales
       if(!email) { showMsg("Email requis."); lockUI(false); isSubmitting=false; return; }
       if(!email.includes("@")) { showMsg("Email invalide."); lockUI(false); isSubmitting=false; return; }
       if(!password || password.length < 8) { showMsg("Mot de passe : 8 caractères minimum."); lockUI(false); isSubmitting=false; return; }
       if(!tradeName) { showMsg("Nom commercial requis."); lockUI(false); isSubmitting=false; return; }
 
-      if(!legalName) { showMsg("Raison sociale requise."); lockUI(false); isSubmitting=false; return; }
-      if(!siret || !/^\d{14}$/.test(siret)) { showMsg("SIRET invalide (14 chiffres)."); lockUI(false); isSubmitting=false; return; }
-      if(!addressLine1) { showMsg("Adresse requise."); lockUI(false); isSubmitting=false; return; }
-      if(!zip || !/^\d{4,5}$/.test(zip)) { showMsg("Code postal invalide."); lockUI(false); isSubmitting=false; return; }
-      if(!city) { showMsg("Ville requise."); lockUI(false); isSubmitting=false; return; }
+      // validations soft (si rempli)
+      if(siret && !/^\d{14}$/.test(siret)){ showMsg("SIRET invalide (14 chiffres)."); lockUI(false); isSubmitting=false; return; }
+      if(zip && !/^\d{4,5}$/.test(zip)){ showMsg("Code postal invalide."); lockUI(false); isSubmitting=false; return; }
 
       lockUI(true);
 
@@ -363,41 +386,43 @@
 
         const isFree = FREE_EMAILS.has(email);
 
+        // billingReady = vrai seulement si le minimum est rempli
+        const billingReady = !!(siret && addressLine1 && zip && city);
+
         await setDoc(doc(db, "users", uid), {
           uid,
           role: "conciergerie",
           email,
+          displayName: tradeName,
           company: {
             tradeName,
-            legalName,
-            siret,
-            vatRegime,
-            vatNumber: "",
-            naf: "",
-            address: { line1: addressLine1, zip, city, country: "FR" },
+            siret: siret || "",
+            vatRegime: vatRegime || "franchise",
+            address: {
+              line1: addressLine1 || "",
+              zip: zip || "",
+              city: city || "",
+              country: "FR"
+            },
             phone: phone || "",
             iban: iban || ""
           },
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
+
+          // Subscription (essai 30j => inactive mais utilisable, tu gèreras la règle côté app)
           subscriptionStatus: isFree ? "active" : "inactive",
           plan: isFree ? "free-admin" : "",
-          billingReady: true
+          trial: {
+            startedAt: serverTimestamp(),
+            days: 30
+          },
+
+          billingReady
         }, { merge: true });
 
-        setLocalSession({
-          uid,
-          email,
-          role: "conciergerie",
-          plan: isFree ? "free-admin" : "",
-          planActive: isFree ? true : false
-        });
-
-        if(isFree){
-          window.location.href = "conciergerie.html";
-        } else {
-          window.location.href = "abonnement.html?plan=starter";
-        }
+        showMsg("Compte créé. Redirection…", "ok");
+        window.location.href = buildRedirectAfterSignup();
 
       } catch(err){
         const code = err?.code || "";
