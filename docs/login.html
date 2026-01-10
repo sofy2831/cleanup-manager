@@ -87,6 +87,18 @@
       text-align:left;
       white-space:pre-wrap;
     }
+    .pill-info{
+      display:none;
+      margin:8px 0 0;
+      padding:6px 10px;
+      border-radius:999px;
+      background:#fff;
+      border:1px solid rgba(122,92,255,0.25);
+      font-size:12px;
+      font-weight:900;
+      color:#5b45c8;
+      text-align:center;
+    }
   </style>
 </head>
 
@@ -102,6 +114,7 @@
     </div>
 
     <p class="subtitle" id="subtitleP">Connecte-toi pour accéder à ton espace.</p>
+    <div class="pill-info" id="tokenInfo">Invitation détectée : on va rattacher ton accès à ta conciergerie.</div>
 
     <form id="loginForm" novalidate>
       <div class="field">
@@ -140,6 +153,7 @@
       doc,
       getDoc,
       setDoc,
+      updateDoc,
       serverTimestamp
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
@@ -156,6 +170,7 @@
     const titleH1 = document.getElementById("titleH1");
     const subtitleP = document.getElementById("subtitleP");
     const signupLine = document.getElementById("signupLine");
+    const tokenInfo = document.getElementById("tokenInfo");
 
     function normalizeEmail(e){ return String(e||"").trim().toLowerCase(); }
 
@@ -164,6 +179,11 @@
       msgBox.style.borderLeftColor = (kind==="ok") ? "#1b8f4d" : "#b3261e";
       msgBox.style.color = (kind==="ok") ? "#1b8f4d" : "#7a1d16";
       msgBox.textContent = text;
+    }
+
+    function clearMsg(){
+      msgBox.style.display = "none";
+      msgBox.textContent = "";
     }
 
     function lockUI(locked){
@@ -189,18 +209,24 @@
       if(next === "abonnement"){
         return "abonnement.html?plan=" + encodeURIComponent(plan);
       }
-
       if(roleMode === "proprietaire") return "proprietaire.html";
       return "conciergerie.html";
     }
 
     const roleMode = getRoleFromUrl();
+    const token = getParam("token"); // ✅ token optionnel (invitation)
 
     // UI
     if(roleMode === "proprietaire"){
       titleH1.textContent = "Connexion propriétaire";
-      subtitleP.textContent = "Connecte-toi pour accéder à ton espace propriétaire.";
+      subtitleP.textContent = token
+        ? "Connecte-toi : on va finaliser ton rattachement à la conciergerie."
+        : "Connecte-toi pour accéder à ton espace propriétaire.";
       signupLine.innerHTML = 'Pas d’accès ? <a class="link" href="index.html">Demande une invitation</a>';
+
+      if(token){
+        tokenInfo.style.display = "block";
+      }
     }else{
       titleH1.textContent = "Connexion conciergerie";
       subtitleP.textContent = "Connecte-toi pour accéder à ton espace conciergerie.";
@@ -210,8 +236,7 @@
     // Reset password
     resetLink.addEventListener("click", async (e)=>{
       e.preventDefault();
-      msgBox.style.display = "none";
-      msgBox.textContent = "";
+      clearMsg();
 
       const email = normalizeEmail(document.getElementById("email").value);
       if(!email) return showMsg("Tape ton email d’abord, puis clique ici.");
@@ -229,7 +254,6 @@
     let isSubmitting = false;
 
     async function ensureFreeAdminProfile(uid, email){
-      // On force un profil "actif" pour tes emails admin (merge, sans casser le reste)
       await setDoc(doc(db, "users", uid), {
         uid,
         email,
@@ -240,13 +264,78 @@
       }, { merge: true });
     }
 
+    async function attachOwnerFromTokenOrFail(user){
+      // On rattache owner à la conciergerie à partir de invites/{token}
+      // Règles strictes:
+      // - invite doit exister
+      // - email du compte doit matcher invite.email
+      // - invite ne doit pas être "accepted" par quelqu'un d'autre
+      if(!token){
+        return { ok:true, conciergerieUid:null };
+      }
+
+      const tokenRef = doc(db, "invites", token);
+      const snap = await getDoc(tokenRef);
+      if(!snap.exists()){
+        return { ok:false, msg:"Invitation introuvable. Demande un nouveau lien à la conciergerie." };
+      }
+
+      const inv = snap.data() || {};
+      const invEmail = normalizeEmail(inv.email);
+      const userEmail = normalizeEmail(user.email);
+
+      if(invEmail && userEmail !== invEmail){
+        return { ok:false, msg:"Cet email ne correspond pas à l’invitation. Connecte-toi avec le bon email." };
+      }
+
+      // Si déjà utilisée par un autre uid -> stop
+      if(inv.usedOwnerUid && inv.usedOwnerUid !== user.uid){
+        return { ok:false, msg:"Cette invitation a déjà été utilisée. Demande un nouveau lien." };
+      }
+
+      const conciergerieUid = inv.conciergerieUid || null;
+      if(!conciergerieUid){
+        return { ok:false, msg:"Invitation invalide (conciergerie manquante). Demande un nouveau lien." };
+      }
+
+      // 1) owners/{uid} merge (création si absent)
+      await setDoc(doc(db, "owners", user.uid), {
+        uid: user.uid,
+        email: userEmail,
+        role: "proprietaire",
+        conciergerieUid,
+        inviteToken: token,
+        invitedBy: inv.by || "",
+        updatedAt: serverTimestamp(),
+        // si pas déjà créé:
+        createdAt: serverTimestamp()
+      }, { merge: true });
+
+      // 2) Optionnel: users/{uid} aussi (si tu veux une vue unifiée)
+      await setDoc(doc(db, "users", user.uid), {
+        uid: user.uid,
+        email: userEmail,
+        role: "proprietaire",
+        conciergerieUid,
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+
+      // 3) Mark invite accepted
+      await updateDoc(tokenRef, {
+        status: "accepted",
+        usedAt: serverTimestamp(),
+        usedOwnerUid: user.uid
+      });
+
+      return { ok:true, conciergerieUid };
+    }
+
     form.addEventListener("submit", async (e)=>{
       e.preventDefault();
       if(isSubmitting) return;
       isSubmitting = true;
 
-      msgBox.style.display = "none";
-      msgBox.textContent = "";
+      clearMsg();
       lockUI(true);
 
       const email = normalizeEmail(document.getElementById("email").value);
@@ -257,22 +346,32 @@
 
       try{
         const cred = await signInWithEmailAndPassword(auth, email, password);
-        const uid = cred.user.uid;
+        const user = cred.user;
+        const uid = user.uid;
 
-        // Propriétaire : redirection directe (on ne dépend pas de Firestore)
+        // ===== PROPRIÉTAIRE =====
         if(roleMode === "proprietaire"){
+          // Si token présent, on rattache (sinon on laisse juste entrer)
+          if(token){
+            const res = await attachOwnerFromTokenOrFail(user);
+            if(!res.ok){
+              showMsg(res.msg || "Invitation invalide.", "bad");
+              lockUI(false);
+              isSubmitting = false;
+              return;
+            }
+          }
           location.replace(desiredPostLoginRedirect(roleMode));
           return;
         }
 
+        // ===== CONCIERGERIE =====
         const isFree = FREE_EMAILS.has(email);
 
-        // Conciergerie : on lit le profil Firestore
         let role = "conciergerie";
         let planActive = false;
 
         if(isFree){
-          // Force active + plan free-admin
           try{ await ensureFreeAdminProfile(uid, email); }catch(_){}
           planActive = true;
         }else{
@@ -283,7 +382,6 @@
               role = data.role || role;
               planActive = (data.subscriptionStatus === "active");
             }else{
-              // Profil absent => on crée un minimum pour éviter le vide
               await setDoc(doc(db, "users", uid), {
                 uid,
                 email,
@@ -295,7 +393,6 @@
               planActive = false;
             }
           }catch(err){
-            // Si Firestore plante, on reste safe: renvoi abonnement (pas accès)
             console.warn("Firestore read failed:", err);
             planActive = false;
           }
@@ -308,7 +405,6 @@
           return;
         }
 
-        // Sinon : accès si actif, sinon abonnement
         if(role === "conciergerie" && planActive){
           location.replace("conciergerie.html");
         }else{
