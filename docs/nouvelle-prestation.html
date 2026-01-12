@@ -318,6 +318,12 @@
           </div>
 
           <button class="btn primary" type="submit" id="createBtn">Créer la prestation</button>
+
+          <!-- ✅ AJOUT : 2 boutons statut -->
+          <div style="display:flex; gap:10px; margin-top:6px;">
+            <button class="btn ghost" type="button" id="sendQuoteBtn" disabled>Envoyer le devis</button>
+            <button class="btn ghost" type="button" id="confirmBtn" disabled>Confirmer</button>
+          </div>
         </form>
 
         <!-- ✅ supprimé : bloc "Astuce..." -->
@@ -339,13 +345,16 @@
     import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
       collection, query, where, onSnapshot, getDoc, doc,
-      addDoc, serverTimestamp
+      addDoc, serverTimestamp, updateDoc
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const emailLine = document.getElementById("emailLine");
     const logoutBtn = document.getElementById("logoutBtn");
     const alertBox = document.getElementById("alertBox");
     const backBtn = document.getElementById("backBtn");
+
+    const sendQuoteBtn = document.getElementById("sendQuoteBtn");
+    const confirmBtn = document.getElementById("confirmBtn");
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -398,6 +407,10 @@
     let currentUser = null;
     let currentHome = null;
     let services = [];
+
+    // ✅ AJOUT : on garde l'event créé
+    let createdEventId = null;
+    let createdEventRef = null;
 
     logoutBtn.addEventListener("click", async ()=>{
       await signOut(auth);
@@ -465,6 +478,30 @@
       createBtn.style.opacity = locked ? "0.75" : "1";
     }
 
+    function setStatusButtonsEnabled(enabled){
+      sendQuoteBtn.disabled = !enabled;
+      confirmBtn.disabled = !enabled;
+      sendQuoteBtn.style.opacity = enabled ? "1" : "0.65";
+      confirmBtn.style.opacity = enabled ? "1" : "0.65";
+    }
+
+    async function setEventStatus(newStatus){
+      if(!createdEventRef) return showAlert("Crée d'abord la prestation (pas d'event à mettre à jour).");
+      try{
+        await updateDoc(createdEventRef, {
+          status: newStatus,
+          statusUpdatedAt: serverTimestamp()
+        });
+        showAlert(`✅ Statut mis à jour : ${newStatus}`, true);
+      }catch(err){
+        console.error(err);
+        showAlert("Erreur MAJ statut : " + (err?.message || "inconnue"));
+      }
+    }
+
+    sendQuoteBtn.addEventListener("click", ()=> setEventStatus("envoye"));
+    confirmBtn.addEventListener("click", ()=> setEventStatus("confirme"));
+
     formEl.addEventListener("submit", async (e)=>{
       e.preventDefault();
       hideAlert();
@@ -503,6 +540,9 @@
         team: team || "",
         meta: meta || "",
 
+        // ✅ AJOUT : statut devis
+        status: "devis",
+
         // source
         source: (from === "ical") ? "ical" : "manuel",
         icalEventId: icalEventId || null,
@@ -517,10 +557,24 @@
       };
 
       lockUI(true);
+      setStatusButtonsEnabled(false);
+      createdEventId = null;
+      createdEventRef = null;
+
       try{
-        await addDoc(collection(db,"events"), payload);
-        showAlert("✅ Prestation créée. Retour planning…", true);
-        setTimeout(()=> location.href = "planning.html", 500);
+        const ref = await addDoc(collection(db,"events"), payload);
+
+        createdEventId = ref.id;
+        createdEventRef = doc(db, "events", createdEventId);
+
+        // ✅ maintenant on peut cliquer sur Envoyer/Confirmer
+        setStatusButtonsEnabled(true);
+
+        showAlert("✅ Prestation créée (statut: devis). Tu peux maintenant envoyer le devis ou confirmer.", true);
+
+        // (on ne redirige plus automatiquement, sinon tu ne peux pas cliquer sur les boutons)
+        // setTimeout(()=> location.href = "planning.html", 500);
+
       }catch(err){
         console.error(err);
         showAlert("Erreur création : " + (err?.message || "inconnue"));
@@ -558,6 +612,9 @@
 
       startServicesListener();
       renderContext();
+
+      // ✅ au chargement : boutons statut off tant qu'on n'a pas créé
+      setStatusButtonsEnabled(false);
     });
 
     timeEl.addEventListener("input", renderContext);
