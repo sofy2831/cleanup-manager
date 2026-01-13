@@ -1,4 +1,4 @@
-<!-- docs/planning.html -->
+<!-- docs/planning.html (optimisé + Modifier/Supprimer réservation) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -119,7 +119,7 @@
     }
     .alert.ok{ border-left-color: var(--ok); }
 
-    /* KPIs compact */
+    /* ===== KPIs (compact) ===== */
     .kpis{
       width:100%;
       max-width:980px;
@@ -144,6 +144,7 @@
     .kpi .v{ font-size:20px; font-weight:800; margin-top:4px; color:#111; line-height:1; }
     .kpi .n{ font-size:10px; color:#777; margin-top:3px; font-weight:800; }
 
+    /* ===== Layout ===== */
     .layout{
       width:100%;
       max-width:980px;
@@ -157,6 +158,7 @@
       .layout{ grid-template-columns: 1.2fr .95fr; }
     }
 
+    /* ===== Card ===== */
     .card{
       background: rgba(255,255,255,0.86);
       border: 1px solid var(--border);
@@ -205,7 +207,7 @@
     .dot.job{ background: #5B2CFF; }
     .dot.ical{ background: #00A3FF; }
 
-    /* Calendar compact */
+    /* ===== Calendar (compact) ===== */
     .cal-nav{
       display:flex;
       justify-content:space-between;
@@ -285,12 +287,11 @@
       display:inline-block;
       box-shadow:0 2px 6px rgba(0,0,0,.12);
       border:2px solid #fff;
-      border-radius:50%;
     }
     .mini.job{ background:#5B2CFF; }
     .mini.ical{ background:#00A3FF; }
 
-    /* Agenda */
+    /* ===== Agenda ===== */
     .agenda-head{
       display:flex;
       justify-content:space-between;
@@ -414,13 +415,16 @@
       box-shadow:0 10px 22px rgba(0,0,0,0.10);
       white-space:nowrap;
     }
-    .mini-cta.danger{
-      background: linear-gradient(90deg,#d22,#a00);
-    }
-    .mini-cta.soft{
+    .mini-cta.ghost{
       background:#fff;
       color:var(--violet-main);
       border:2px solid var(--violet-main);
+      box-shadow:0 3px 10px rgba(0,0,0,.06);
+    }
+    .mini-cta.red{
+      background:#ffe3ec;
+      color:var(--bad);
+      border:2px solid rgba(179,38,30,.35);
       box-shadow:0 3px 10px rgba(0,0,0,.06);
     }
 
@@ -432,7 +436,7 @@
       margin-top:2px;
     }
 
-    /* Bottom nav */
+    /* ===== Bottom nav ===== */
     .bottom-nav{
       position: fixed;
       left: 0;
@@ -487,7 +491,7 @@
       html, body{ overflow-x:hidden; }
     }
 
-    /* Modals */
+    /* ===== Modals ===== */
     .modal-backdrop{
       position:fixed; inset:0;
       background:rgba(0,0,0,.25);
@@ -597,9 +601,12 @@
     </div>
 
     <div class="layout">
+      <!-- CALENDAR -->
       <section class="card">
         <div class="card-head">
-          <div><div class="card-title">Calendrier</div></div>
+          <div>
+            <div class="card-title">Calendrier</div>
+          </div>
           <div class="legend">
             <span><i class="dot job"></i>prestations</span>
             <span><i class="dot ical"></i>réservations</span>
@@ -618,6 +625,7 @@
         <div id="monthGrid"></div>
       </section>
 
+      <!-- AGENDA -->
       <section class="card">
         <div class="agenda-head">
           <div class="card-title">Agenda</div>
@@ -635,6 +643,7 @@
     </div>
   </div>
 
+  <!-- BANDEAU BAS -->
   <nav class="bottom-nav" aria-label="Navigation">
     <a href="planning.html" class="active">Planning</a>
     <a href="import-ical.html">iCal</a>
@@ -643,11 +652,11 @@
     <a href="logements.html">Logements</a>
   </nav>
 
-  <!-- MODALE RÉSERVATION -->
+  <!-- MODALE RÉSERVATION (create/edit) -->
   <div class="modal-backdrop" id="resaBackdrop" aria-hidden="true">
     <div class="modal" role="dialog" aria-modal="true">
       <h2 id="resaTitleH2">Créer une réservation</h2>
-      <!-- phrase supprimée volontairement -->
+      <p class="sub" id="resaSub">Réservation manuelle (interne). Elle active le planning du logement.</p>
 
       <form id="resaForm">
         <label for="resaHome">Logement</label>
@@ -700,7 +709,7 @@
     </div>
   </div>
 
-  <!-- MODALE PRESTATION -->
+  <!-- MODALE PRESTATION (quick) -->
   <div class="modal-backdrop" id="jobBackdrop" aria-hidden="true">
     <div class="modal" role="dialog" aria-modal="true">
       <h2>Créer une prestation</h2>
@@ -746,9 +755,8 @@
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
-      collection, query, where, getDocs,
-      addDoc, serverTimestamp,
-      doc, updateDoc, deleteDoc
+      collection, query, where, getDocs, orderBy,
+      addDoc, updateDoc, deleteDoc, doc, serverTimestamp
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     // ===== UI =====
@@ -771,9 +779,8 @@
     const openResaBtn = document.getElementById("openResaBtn");
     const openJobBtn  = document.getElementById("openJobBtn");
 
-    // Modals
+    // Modals elements
     const resaBackdrop = document.getElementById("resaBackdrop");
-    const resaTitleH2 = document.getElementById("resaTitleH2");
     const resaForm = document.getElementById("resaForm");
     const resaHome = document.getElementById("resaHome");
     const resaStart = document.getElementById("resaStart");
@@ -786,6 +793,7 @@
     const resaNote = document.getElementById("resaNote");
     const resaCancel = document.getElementById("resaCancel");
     const resaSave = document.getElementById("resaSave");
+    const resaTitleH2 = document.getElementById("resaTitleH2");
 
     const jobBackdrop = document.getElementById("jobBackdrop");
     const jobFormQuick = document.getElementById("jobFormQuick");
@@ -840,23 +848,77 @@
     }
     function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
 
-    // ===== Data =====
+    // ===== Data (optimisation) =====
     let currentUser = null;
 
-    let homesById = new Map(); // id -> {id,name,city,ownerName,ownerEmail}
-    let icalEvents = [];
-    let jobs = [];
-    let allMerged = [];
+    // homesById: id -> {id,name,city,ownerName,ownerEmail}
+    let homesById = new Map();
 
+    // Stores full objects loaded for window
+    let icalById = new Map(); // id -> ev
+    let jobById  = new Map(); // id -> ev
+
+    // Index by day for O(1) agenda/calendar
+    let dayIndex = new Map(); // dateKey -> { list:[], icalCount, jobCount }
+    let dayCounts = new Map(); // dateKey -> {icalCount, jobCount}
+
+    // view state
     let viewYear = new Date().getFullYear();
     let viewMonth = new Date().getMonth();
     let selectedDateKey = dateKeyFromDate(new Date());
 
-    // mode edit réservation
-    let editingResaId = null;
+    // modals state
+    let resaEditId = null; // null=create, else edit existing icalEvents/{id}
 
     function normDateKeyFromEvent(ev){
       return ev.dateKey || ev.date || "";
+    }
+
+    function getMonthWindowKeys(y, m){
+      // Buffer = 35 jours autour du mois (évite "je clique mois => plus rien")
+      const start = new Date(y, m, 1, 12, 0, 0);
+      const end   = new Date(y, m+1, 0, 12, 0, 0);
+
+      const startBuf = addDays(start, -35);
+      const endBuf   = addDays(end, +35);
+
+      return { startKey: dateKeyFromDate(startBuf), endKey: dateKeyFromDate(endBuf) };
+    }
+
+    function rebuildIndex(){
+      dayIndex = new Map();
+      dayCounts = new Map();
+
+      const push = (dateKey, ev) => {
+        if(!dateKey) return;
+        let entry = dayIndex.get(dateKey);
+        if(!entry){
+          entry = { list: [], icalCount: 0, jobCount: 0 };
+          dayIndex.set(dateKey, entry);
+        }
+        entry.list.push(ev);
+        if(ev.kind === "ical") entry.icalCount++;
+        if(ev.kind === "job")  entry.jobCount++;
+      };
+
+      // merge
+      const all = [];
+      icalById.forEach(v => all.push(v));
+      jobById.forEach(v => all.push(v));
+
+      // sort once
+      all.sort((a,b)=>{
+        if(a.dateKey !== b.dateKey) return a.dateKey.localeCompare(b.dateKey);
+        return String(a.time||"").localeCompare(String(b.time||""));
+      });
+
+      for(const ev of all){
+        push(ev.dateKey, ev);
+      }
+      // counts map
+      dayIndex.forEach((v,k)=>{
+        dayCounts.set(k, { icalCount: v.icalCount, jobCount: v.jobCount });
+      });
     }
 
     // ===== Load =====
@@ -866,6 +928,7 @@
 
       homesById = new Map();
 
+      // Reset selects
       resaHome.innerHTML = `<option value="">— Choisir un logement —</option>`;
       jobHome.innerHTML  = `<option value="">— Choisir un logement —</option>`;
 
@@ -896,13 +959,32 @@
       kpiHomes.textContent = String(homesById.size);
     }
 
-    async function loadIcal(){
-      const q = query(collection(db,"icalEvents"), where("conciergerieUid","==", currentUser.uid));
-      const snap = await getDocs(q);
+    async function loadIcalWindow(startKey, endKey){
+      // Optimisation : on charge une fenêtre (mois+buffer) au lieu de tout Firestore
+      // Si Firestore réclame un index, on fallback en full scan (pas sexy, mais ça évite blocage).
+      const base = collection(db,"icalEvents");
 
-      icalEvents = snap.docs.map(d=>{
+      let snap;
+      try{
+        const q = query(
+          base,
+          where("conciergerieUid","==", currentUser.uid),
+          where("dateKey", ">=", startKey),
+          where("dateKey", "<=", endKey),
+          orderBy("dateKey")
+        );
+        snap = await getDocs(q);
+      }catch(e){
+        // fallback
+        console.warn("Index Firestore manquant pour icalEvents window query. Fallback full load.", e);
+        const q2 = query(base, where("conciergerieUid","==", currentUser.uid));
+        snap = await getDocs(q2);
+      }
+
+      icalById = new Map();
+      snap.docs.forEach(d=>{
         const x = d.data() || {};
-        return {
+        const ev = {
           id: d.id,
           kind: "ical",
           source: x.source || "ical",
@@ -918,16 +1000,33 @@
           note: x.note || "",
           location: x.location || ""
         };
-      }).filter(x=>!!x.dateKey);
+        if(ev.dateKey) icalById.set(ev.id, ev);
+      });
     }
 
-    async function loadJobs(){
-      const q = query(collection(db,"events"), where("conciergerieUid","==", currentUser.uid));
-      const snap = await getDocs(q);
+    async function loadJobsWindow(startKey, endKey){
+      const base = collection(db,"events");
 
-      jobs = snap.docs.map(d=>{
+      let snap;
+      try{
+        const q = query(
+          base,
+          where("conciergerieUid","==", currentUser.uid),
+          where("dateKey", ">=", startKey),
+          where("dateKey", "<=", endKey),
+          orderBy("dateKey")
+        );
+        snap = await getDocs(q);
+      }catch(e){
+        console.warn("Index Firestore manquant pour events window query. Fallback full load.", e);
+        const q2 = query(base, where("conciergerieUid","==", currentUser.uid));
+        snap = await getDocs(q2);
+      }
+
+      jobById = new Map();
+      snap.docs.forEach(d=>{
         const x = d.data() || {};
-        return {
+        const ev = {
           id: d.id,
           kind: "job",
           dateKey: normDateKeyFromEvent(x),
@@ -942,44 +1041,53 @@
           source: x.source || "manuel",
           icalEventId: x.icalEventId || ""
         };
-      }).filter(x=>!!x.dateKey);
+        if(ev.dateKey) jobById.set(ev.id, ev);
+      });
     }
 
-    function mergeAll(){
-      allMerged = [...icalEvents, ...jobs];
-      allMerged.sort((a,b)=>{
-        if(a.dateKey !== b.dateKey) return a.dateKey.localeCompare(b.dateKey);
-        return String(a.time||"").localeCompare(String(b.time||""));
-      });
+    async function refreshWindow(){
+      const { startKey, endKey } = getMonthWindowKeys(viewYear, viewMonth);
+
+      await loadHomes(); // cheap + needed for owner fill
+      await loadIcalWindow(startKey, endKey);
+      await loadJobsWindow(startKey, endKey);
+
+      rebuildIndex();
+      computeKpis();
+      renderCalendar();
+      setAgendaFor(selectedDateKey);
     }
 
     // ===== KPIs =====
     function computeKpis(){
       const today = new Date();
       const todayKey = dateKeyFromDate(today);
+
       const startWeek = startOfWeekMonday(today);
       const weekKeys = new Set(Array.from({length:7}, (_,i)=>dateKeyFromDate(addDays(startWeek,i))));
 
       const monthKeyPrefix = viewYear + "-" + pad2(viewMonth+1) + "-";
 
-      const cntToday = allMerged.filter(x=>x.dateKey === todayKey).length;
-      const cntWeek = allMerged.filter(x=>weekKeys.has(x.dateKey)).length;
-      const cntMonth = allMerged.filter(x=>String(x.dateKey).startsWith(monthKeyPrefix)).length;
+      let cntToday = 0, cntWeek = 0, cntMonth = 0;
+
+      // On itère uniquement sur les clés réellement présentes
+      dayIndex.forEach((entry, key)=>{
+        const len = entry.list.length;
+        if(key === todayKey) cntToday += len;
+        if(weekKeys.has(key)) cntWeek += len;
+        if(String(key).startsWith(monthKeyPrefix)) cntMonth += len;
+      });
 
       kpiToday.textContent = String(cntToday);
       kpiWeek.textContent = String(cntWeek);
       kpiMonth.textContent = String(cntMonth);
     }
 
-    // ===== Calendar dots (1..4) =====
+    // ===== Calendar =====
     function dotsCountByDay(dateKey){
-      const dayEvents = allMerged.filter(x=>x.dateKey === dateKey);
-      let icalCount = 0, jobCount = 0;
-      for(const e of dayEvents){
-        if(e.kind === "ical") icalCount++;
-        if(e.kind === "job") jobCount++;
-      }
-      return { icalCount, jobCount };
+      const c = dayCounts.get(dateKey);
+      if(!c) return { icalCount:0, jobCount:0 };
+      return c;
     }
 
     function setAgendaFor(dateKey){
@@ -987,7 +1095,8 @@
       const d = parseDateKey(dateKey);
       agendaDate.textContent = d ? (d.getDate()+" "+MONTHS[d.getMonth()]+" "+d.getFullYear()) : dateKey;
 
-      const list = allMerged.filter(x=>x.dateKey === dateKey);
+      const entry = dayIndex.get(dateKey);
+      const list = entry ? entry.list : [];
 
       agendaList.innerHTML = "";
       if(!list.length){
@@ -1004,16 +1113,28 @@
         return;
       }
 
-      list.forEach(ev=>{
+      const frag = document.createDocumentFragment();
+
+      for(const ev of list){
         const home = homesById.get(ev.homeId);
         const homeLine = home ? `${home.name} — ${home.city}` : (ev.homeName || "Logement");
 
         const item = document.createElement("div");
         item.className = "agenda-item " + (ev.kind === "ical" ? "ical" : "job");
+        item.dataset.kind = ev.kind;
+        item.dataset.id = ev.id;
 
         const sub = (ev.kind === "ical")
           ? (ev.summary ? ev.summary : (ev.source === "manuel" ? "Réservation manuelle" : "Réservation iCal"))
           : (ev.meta ? ev.meta : ev.type || "Prestation");
+
+        const actions = (ev.kind === "ical")
+          ? `
+              <button class="mini-cta" type="button" data-action="add" data-id="${esc(ev.id)}">+ Ajouter prestation</button>
+              <button class="mini-cta ghost" type="button" data-action="edit" data-id="${esc(ev.id)}">Modifier</button>
+              <button class="mini-cta red" type="button" data-action="del" data-id="${esc(ev.id)}">Supprimer</button>
+            `
+          : ``;
 
         item.innerHTML = `
           <div class="ai-main">
@@ -1023,133 +1144,28 @@
           </div>
           <div class="ai-actions">
             <span class="tag ${ev.kind === "ical" ? "ical" : ""}">${ev.kind === "ical" ? "Réservation" : "Prestation"}</span>
-            ${
-              ev.kind === "ical"
-                ? `
-                  <button class="mini-cta" type="button" data-add="${esc(ev.id)}">+ Ajouter prestation</button>
-                  <button class="mini-cta soft" type="button" data-edit="${esc(ev.id)}">Modifier</button>
-                  <button class="mini-cta danger" type="button" data-del="${esc(ev.id)}">Supprimer</button>
-                `
-                : ``
-            }
+            ${actions}
           </div>
         `;
-        agendaList.appendChild(item);
 
-        item.addEventListener("click", (e)=>{
-          // si clic sur un bouton, on ne fait pas l'alerte
-          if(e.target && (e.target.matches("button[data-add]") || e.target.matches("button[data-edit]") || e.target.matches("button[data-del]"))) return;
+        frag.appendChild(item);
+      }
 
-          if(ev.kind === "ical"){
-            const dd = parseDateKey(ev.dateKey);
-            const dateLabel = dd ? (dd.getDate()+" "+MONTHS[dd.getMonth()]+" "+dd.getFullYear()) : (ev.dateKey || "—");
-
-            alert(
-              [
-                `${dateLabel} • ${ev.time || "—"} • Réservation`,
-                homeLine,
-                ev.ownerName ? `Propriétaire: ${ev.ownerName}` : null,
-                ev.ownerEmail ? `Email: ${ev.ownerEmail}` : null,
-                ev.summary ? `Nom: ${ev.summary}` : null,
-                ev.note ? `Note: ${ev.note}` : null
-              ].filter(Boolean).join("\n")
-            );
-          }else{
-            alert(
-              [
-                `${ev.time || "—"} • ${ev.type || "Prestation"}`,
-                homeLine,
-                ev.meta ? `Détail: ${ev.meta}` : null,
-                ev.team ? `Agent: ${ev.team}` : null,
-                ev.isBlocked ? `🔒 BLOQUÉ : ${ev.blockReason || "paiement requis"}` : null
-              ].filter(Boolean).join("\n")
-            );
-          }
-        });
-      });
-
-      // ===== Handlers boutons réservation =====
-
-      // + Ajouter prestation (redir vers nouvelle-prestation)
-      agendaList.querySelectorAll("button[data-add]").forEach(btn=>{
-        btn.addEventListener("click", ()=>{
-          const icalId = btn.getAttribute("data-add");
-          const ev = icalEvents.find(x=>x.id === icalId);
-          if(!ev) return;
-
-          if(!ev.homeId){
-            alert("Réservation détectée mais homeId manquant.\n➡️ Vérifie que tes icalEvents ont bien homeId.");
-            return;
-          }
-
-          const h = homesById.get(ev.homeId);
-
-          const params = new URLSearchParams();
-          params.set("homeId", ev.homeId);
-          params.set("dateKey", ev.dateKey);
-          if(ev.time) params.set("time", ev.time);
-          if(ev.summary) params.set("summary", ev.summary);
-          params.set("icalEventId", ev.id);
-          params.set("from", ev.source || "ical");
-
-          const ownerName = ev.ownerName || (h?.ownerName || "");
-          const ownerEmail = ev.ownerEmail || (h?.ownerEmail || "");
-          if(ownerName) params.set("ownerName", ownerName);
-          if(ownerEmail) params.set("ownerEmail", ownerEmail);
-
-          location.href = "nouvelle-prestation.html?" + params.toString();
-        });
-      });
-
-      // Modifier -> ouvre la modale pré-remplie + passe en updateDoc
-      agendaList.querySelectorAll("button[data-edit]").forEach(btn=>{
-        btn.addEventListener("click", ()=>{
-          const id = btn.getAttribute("data-edit");
-          const ev = icalEvents.find(x=>x.id === id);
-          if(!ev) return;
-
-          openResaModal(ev); // mode edition
-        });
-      });
-
-      // Supprimer -> deleteDoc
-      agendaList.querySelectorAll("button[data-del]").forEach(btn=>{
-        btn.addEventListener("click", async ()=>{
-          const id = btn.getAttribute("data-del");
-          const ev = icalEvents.find(x=>x.id === id);
-          if(!ev) return;
-
-          const ok = confirm("Supprimer cette réservation ? (définitif)");
-          if(!ok) return;
-
-          try{
-            await deleteDoc(doc(db,"icalEvents", id));
-            showAlert("✅ Réservation supprimée.", true);
-
-            await loadIcal();
-            mergeAll();
-            computeKpis();
-            renderCalendar();
-            setAgendaFor(selectedDateKey);
-
-          }catch(err){
-            console.error(err);
-            showAlert("Erreur suppression réservation : " + (err?.message || "inconnue"));
-          }
-        });
-      });
+      agendaList.appendChild(frag);
     }
 
     function renderCalendar(){
       monthGrid.innerHTML = "";
 
       const first = new Date(viewYear, viewMonth, 1, 12, 0, 0);
-      const last = new Date(viewYear, viewMonth+1, 0, 12, 0, 0);
+      const last  = new Date(viewYear, viewMonth+1, 0, 12, 0, 0);
 
       monthLabel.textContent = `${MONTHS[viewMonth]} ${viewYear}`;
 
-      const startDow = (first.getDay()+6)%7;
+      const startDow = (first.getDay()+6)%7; // lundi=0
       const daysInMonth = last.getDate();
+
+      const frag = document.createDocumentFragment();
 
       for(let i=0; i<42; i++){
         const dayNum = i - startDow + 1;
@@ -1158,7 +1174,7 @@
         if(dayNum < 1 || dayNum > daysInMonth){
           cell.className = "day muted";
           cell.innerHTML = `<div class="num"> </div><div class="dots"></div>`;
-          monthGrid.appendChild(cell);
+          frag.appendChild(cell);
           continue;
         }
 
@@ -1166,65 +1182,64 @@
         const key = dateKeyFromDate(d);
         const { icalCount, jobCount } = dotsCountByDay(key);
 
+        // max 4 points visibles
         const dots = [];
-        for(let j=0; j<Math.min(4, jobCount); j++) dots.push(`<span class="mini job" title="prestations"></span>`);
-        for(let j=0; j<Math.min(4 - dots.length, icalCount); j++) dots.push(`<span class="mini ical" title="réservations"></span>`);
+        for(let k=0; k<Math.min(4, jobCount); k++) dots.push(`<span class="mini job" title="prestations"></span>`);
+        for(let k=0; k<Math.min(4 - dots.length, icalCount); k++) dots.push(`<span class="mini ical" title="réservations"></span>`);
 
         cell.className = "day" + (key === selectedDateKey ? " selected" : "");
+        cell.dataset.key = key;
         cell.innerHTML = `
           <div class="num">${dayNum}</div>
           <div class="dots">${dots.join("")}</div>
         `;
 
-        cell.addEventListener("click", ()=>{
-          selectedDateKey = key;
-          renderCalendar();
-          setAgendaFor(key);
-        });
-
-        monthGrid.appendChild(cell);
+        frag.appendChild(cell);
       }
+
+      monthGrid.appendChild(frag);
     }
 
     // ===== Modals open/close =====
-    function openResaModal(ev=null){
+    function openResaModalCreate(){
+      resaEditId = null;
+      resaTitleH2.textContent = "Créer une réservation";
       resaBackdrop.style.display = "flex";
+
+      resaStart.value = selectedDateKey;
+      resaEnd.value = selectedDateKey;
+      resaTime.value = "";
+      resaTitle.value = "";
+      resaNote.value = "";
+      resaOwnerName.value = "";
+      resaOwnerEmail.value = "";
+      resaHome.value = "";
+
       resaDateErr.style.display = "none";
       resaSave.disabled = false;
 
-      if(ev){
-        // EDIT
-        editingResaId = ev.id;
-        resaTitleH2.textContent = "Modifier une réservation";
+      setTimeout(()=> resaHome.focus(), 0);
+    }
 
-        resaHome.value = ev.homeId || "";
-        resaStart.value = ev.startDate || ev.dateKey || selectedDateKey;
-        resaEnd.value = ev.endDate || ev.startDate || ev.dateKey || selectedDateKey;
-        resaTime.value = ev.time || "";
-        resaOwnerName.value = ev.ownerName || "";
-        resaOwnerEmail.value = ev.ownerEmail || "";
-        resaTitle.value = ev.summary || "";
-        resaNote.value = ev.note || "";
+    function openResaModalEdit(ev){
+      resaEditId = ev.id;
+      resaTitleH2.textContent = "Modifier la réservation";
+      resaBackdrop.style.display = "flex";
 
-        refreshResaValidity();
-        setTimeout(()=> resaStart.focus(), 0);
-      }else{
-        // CREATE
-        editingResaId = null;
-        resaTitleH2.textContent = "Créer une réservation";
+      resaHome.value = ev.homeId || "";
+      resaStart.value = ev.startDate || ev.dateKey || selectedDateKey;
+      resaEnd.value   = ev.endDate || ev.startDate || ev.dateKey || selectedDateKey;
+      resaTime.value  = ev.time || "";
+      resaOwnerName.value = ev.ownerName || "";
+      resaOwnerEmail.value = ev.ownerEmail || "";
+      resaTitle.value = ev.summary || "";
+      resaNote.value  = ev.note || "";
 
-        resaHome.value = "";
-        resaStart.value = selectedDateKey;
-        resaEnd.value = selectedDateKey;
-        resaTime.value = "";
-        resaOwnerName.value = "";
-        resaOwnerEmail.value = "";
-        resaTitle.value = "";
-        resaNote.value = "";
+      resaDateErr.style.display = "none";
+      resaSave.disabled = false;
 
-        refreshResaValidity();
-        setTimeout(()=> resaHome.focus(), 0);
-      }
+      setTimeout(()=> resaStart.focus(), 0);
+      refreshResaValidity();
     }
 
     function closeResaModal(){
@@ -1232,8 +1247,7 @@
       resaForm.reset();
       resaDateErr.style.display = "none";
       resaSave.disabled = false;
-      editingResaId = null;
-      resaTitleH2.textContent = "Créer une réservation";
+      resaEditId = null;
     }
 
     function openJobModal(){
@@ -1242,6 +1256,7 @@
       jobTime.value = "";
       jobAgent.value = "";
       jobNote.value = "";
+      jobHome.value = "";
       setTimeout(()=> jobHome.focus(), 0);
     }
     function closeJobModal(){
@@ -1268,22 +1283,152 @@
       resaSave.disabled = !ok;
     }
 
+    // ===== Agenda actions (event delegation) =====
+    agendaList.addEventListener("click", async (e)=>{
+      const btn = e.target?.closest?.("button[data-action]");
+      if(btn){
+        e.preventDefault();
+        e.stopPropagation();
+
+        const action = btn.getAttribute("data-action");
+        const id = btn.getAttribute("data-id");
+        if(!id) return;
+
+        if(action === "add"){
+          const ev = icalById.get(id);
+          if(!ev) return;
+
+          if(!ev.homeId){
+            alert("Réservation détectée mais homeId manquant.\n➡️ Vérifie que tes icalEvents ont bien homeId.");
+            return;
+          }
+
+          const h = homesById.get(ev.homeId);
+
+          const params = new URLSearchParams();
+          params.set("homeId", ev.homeId);
+          params.set("dateKey", ev.dateKey);
+          if(ev.time) params.set("time", ev.time);
+          if(ev.summary) params.set("summary", ev.summary);
+          params.set("icalEventId", ev.id);
+          params.set("from", ev.source || "ical");
+
+          const ownerName = ev.ownerName || (h?.ownerName || "");
+          const ownerEmail = ev.ownerEmail || (h?.ownerEmail || "");
+          if(ownerName) params.set("ownerName", ownerName);
+          if(ownerEmail) params.set("ownerEmail", ownerEmail);
+
+          location.href = "nouvelle-prestation.html?" + params.toString();
+          return;
+        }
+
+        if(action === "edit"){
+          const ev = icalById.get(id);
+          if(!ev) return;
+          openResaModalEdit(ev);
+          return;
+        }
+
+        if(action === "del"){
+          const ok = confirm("Supprimer cette réservation ? (irréversible)");
+          if(!ok) return;
+
+          try{
+            await deleteDoc(doc(db, "icalEvents", id));
+
+            // update local maps fast (no full reload)
+            icalById.delete(id);
+            rebuildIndex();
+            computeKpis();
+            renderCalendar();
+            setAgendaFor(selectedDateKey);
+
+            showAlert("✅ Réservation supprimée.", true);
+          }catch(err){
+            console.error(err);
+            showAlert("Erreur suppression réservation : " + (err?.message || "inconnue"));
+          }
+          return;
+        }
+
+        return;
+      }
+
+      // click on item (details)
+      const item = e.target?.closest?.(".agenda-item");
+      if(!item) return;
+
+      const kind = item.dataset.kind;
+      const id = item.dataset.id;
+      if(!kind || !id) return;
+
+      if(kind === "ical"){
+        const ev = icalById.get(id);
+        if(!ev) return;
+
+        const d = parseDateKey(ev.dateKey);
+        const dateLabel = d ? (d.getDate()+" "+MONTHS[d.getMonth()]+" "+d.getFullYear()) : (ev.dateKey || "—");
+
+        const home = homesById.get(ev.homeId);
+        const homeLine = home ? `${home.name} — ${home.city}` : (ev.homeName || "Logement");
+
+        alert(
+          [
+            `${dateLabel} • ${ev.time || "—"} • Réservation`,
+            homeLine,
+            ev.ownerName ? `Propriétaire: ${ev.ownerName}` : null,
+            ev.ownerEmail ? `Email: ${ev.ownerEmail}` : null,
+            ev.summary ? `Nom: ${ev.summary}` : null,
+            ev.note ? `Note: ${ev.note}` : null
+          ].filter(Boolean).join("\n")
+        );
+      }else{
+        const ev = jobById.get(id);
+        if(!ev) return;
+
+        const d = parseDateKey(ev.dateKey);
+        const dateLabel = d ? (d.getDate()+" "+MONTHS[d.getMonth()]+" "+d.getFullYear()) : (ev.dateKey || "—");
+
+        const home = homesById.get(ev.homeId);
+        const homeLine = home ? `${home.name} — ${home.city}` : (ev.homeName || "Logement");
+
+        alert(
+          [
+            `${dateLabel} • ${ev.time || "—"} • ${ev.type || "Prestation"}`,
+            homeLine,
+            ev.meta ? `Détail: ${ev.meta}` : null,
+            ev.team ? `Agent: ${ev.team}` : null,
+            ev.isBlocked ? `🔒 BLOQUÉ : ${ev.blockReason || "paiement requis"}` : null
+          ].filter(Boolean).join("\n")
+        );
+      }
+    });
+
+    // ===== Month grid click (delegation) =====
+    monthGrid.addEventListener("click", (e)=>{
+      const cell = e.target?.closest?.(".day");
+      if(!cell || cell.classList.contains("muted")) return;
+      const key = cell.dataset.key;
+      if(!key) return;
+      selectedDateKey = key;
+      renderCalendar();
+      setAgendaFor(key);
+    });
+
     // ===== Events =====
-    prevBtn.addEventListener("click", ()=>{
+    prevBtn.addEventListener("click", async ()=>{
       viewMonth--;
       if(viewMonth < 0){ viewMonth = 11; viewYear--; }
-      computeKpis();
-      renderCalendar();
+      await refreshWindow();
     });
 
-    nextBtn.addEventListener("click", ()=>{
+    nextBtn.addEventListener("click", async ()=>{
       viewMonth++;
       if(viewMonth > 11){ viewMonth = 0; viewYear++; }
-      computeKpis();
-      renderCalendar();
+      await refreshWindow();
     });
 
-    openResaBtn.addEventListener("click", ()=>openResaModal(null));
+    openResaBtn.addEventListener("click", openResaModalCreate);
     openJobBtn.addEventListener("click", openJobModal);
 
     resaCancel.addEventListener("click", closeResaModal);
@@ -1296,7 +1441,7 @@
     resaStart.addEventListener("input", refreshResaValidity);
     resaEnd.addEventListener("input", refreshResaValidity);
 
-    // Create/Update réservation (icalEvents)
+    // Create / Update reservation
     resaForm.addEventListener("submit", async (e)=>{
       e.preventDefault();
       hideAlert();
@@ -1323,9 +1468,11 @@
       const homeName = h?.name || "";
       const homeCity = h?.city || "";
 
-      const dateKey = startDate; // clé agenda = arrivée
+      // Agenda key = arrivée
+      const dateKey = startDate;
 
       resaSave.disabled = true;
+
       try{
         const payload = {
           conciergerieUid: currentUser.uid,
@@ -1346,24 +1493,36 @@
           ownerEmail,
 
           summary: title || "",
-          note: note || "",
-
-          updatedAt: serverTimestamp()
+          note: note || ""
         };
 
-        if(editingResaId){
-          await updateDoc(doc(db,"icalEvents", editingResaId), payload);
+        if(resaEditId){
+          await updateDoc(doc(db,"icalEvents", resaEditId), {
+            ...payload,
+            updatedAt: serverTimestamp()
+          });
+
+          // local update
+          const updated = { id: resaEditId, kind:"ical", ...payload };
+          icalById.set(resaEditId, updated);
+
+          closeResaModal();
           showAlert("✅ Réservation modifiée.", true);
         }else{
-          payload.createdAt = serverTimestamp();
-          await addDoc(collection(db,"icalEvents"), payload);
+          const ref = await addDoc(collection(db,"icalEvents"), {
+            ...payload,
+            createdAt: serverTimestamp()
+          });
+
+          // local add
+          const created = { id: ref.id, kind:"ical", ...payload };
+          icalById.set(ref.id, created);
+
+          closeResaModal();
           showAlert("✅ Réservation créée.", true);
         }
 
-        closeResaModal();
-
-        await loadIcal();
-        mergeAll();
+        rebuildIndex();
         computeKpis();
         renderCalendar();
         setAgendaFor(selectedDateKey);
@@ -1376,7 +1535,7 @@
       }
     });
 
-    // Create prestation quick -> redirect nouvelle-prestation.html
+    // Create prestation (quick) -> redirect nouvelle-prestation.html
     jobFormQuick.addEventListener("submit", (e)=>{
       e.preventDefault();
       hideAlert();
@@ -1423,19 +1582,13 @@
 
       try{
         hideAlert();
-        await loadHomes();
-        await loadIcal();
-        await loadJobs();
-        mergeAll();
 
+        // caler la vue sur selectedDateKey au démarrage
         const sel = parseDateKey(selectedDateKey) || new Date();
         viewYear = sel.getFullYear();
         viewMonth = sel.getMonth();
 
-        computeKpis();
-        renderCalendar();
-        setAgendaFor(selectedDateKey);
-
+        await refreshWindow();
       }catch(err){
         console.error(err);
         showAlert("Erreur planning : " + (err?.message || "inconnue"));
