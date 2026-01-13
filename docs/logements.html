@@ -207,6 +207,8 @@
       border-left:5px solid var(--violet-main);
       text-align:left;
     }
+    .item.clickable{ cursor:pointer; }
+
     .item-top{
       display:flex;
       justify-content:space-between;
@@ -244,6 +246,11 @@
       justify-content:center;
     }
     .mini-btn.red{ background:#ffe3ec; color:var(--bad); }
+    .mini-btn.disabled{
+      opacity:.45;
+      pointer-events:none;
+      filter: grayscale(1);
+    }
 
     .empty{
       background:#fff;
@@ -379,7 +386,7 @@
 
   <div class="modal-backdrop" id="modalBackdrop" aria-hidden="true">
     <div class="modal" role="dialog" aria-modal="true">
-      <h2>Ajouter un logement</h2>
+      <h2 id="modalTitle">Ajouter un logement</h2>
 
       <form id="homeForm">
         <div style="display:flex; gap:8px; flex-wrap:wrap;">
@@ -438,6 +445,7 @@
     const badgeLine = document.getElementById("badgeLine");
 
     const modalBackdrop = document.getElementById("modalBackdrop");
+    const modalTitle = document.getElementById("modalTitle");
     const addBtn = document.getElementById("addBtn");
     const cancelBtn = document.getElementById("cancelBtn");
     const toggleArchivedBtn = document.getElementById("toggleArchivedBtn");
@@ -462,19 +470,8 @@
       alertBox.textContent = "";
     }
 
-    function openModal(){
-      modalBackdrop.style.display = "flex";
-      setTimeout(()=>homeName.focus(), 0);
-    }
-    function closeModal(){
-      modalBackdrop.style.display = "none";
-      homeForm.reset();
-      homeType.value = "Studio";
-      homeTeam.value = "";
-    }
-
-    function norm(s){ return (s||"").toString().toLowerCase().trim(); }
     function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
+    function norm(s){ return (s||"").toString().toLowerCase().trim(); }
 
     function escapeHtml(str){
       return String(str ?? "")
@@ -510,8 +507,42 @@
     let allHomes = [];
     let showArchived = false;
 
+    let planningOkByHome = {}; // homeId -> boolean
+    let editingHomeId = null;
+
     function isArchived(h){
       return h?.status === "archived";
+    }
+
+    async function computePlanningOk(homeIds){
+      const result = {};
+      await Promise.all(homeIds.map(async (hid)=>{
+        try{
+          // events ?
+          const qEv = query(
+            collection(db,"events"),
+            where("conciergerieUid","==", currentUid),
+            where("homeId","==", hid),
+            limit(1)
+          );
+          const sEv = await getDocs(qEv);
+          if(!sEv.empty){ result[hid] = true; return; }
+
+          // icalEvents ?
+          const qIc = query(
+            collection(db,"icalEvents"),
+            where("conciergerieUid","==", currentUid),
+            where("homeId","==", hid),
+            limit(1)
+          );
+          const sIc = await getDocs(qIc);
+          result[hid] = !sIc.empty;
+        }catch(e){
+          // fail-open
+          result[hid] = true;
+        }
+      }));
+      return result;
     }
 
     async function loadHomes(){
@@ -539,11 +570,42 @@
           return tb - ta;
         });
 
+        planningOkByHome = await computePlanningOk(allHomes.map(h=>h.id));
         render();
       }catch(err){
         console.error("Erreur lecture homes:", err);
         showAlert("Erreur lecture homes : " + (err?.message || "inconnue"));
       }
+    }
+
+    function openModalCreate(){
+      editingHomeId = null;
+      modalTitle.textContent = "Ajouter un logement";
+      modalBackdrop.style.display = "flex";
+      setTimeout(()=>homeName.focus(), 0);
+    }
+
+    function openModalEdit(home){
+      editingHomeId = home.id;
+      modalTitle.textContent = "Modifier le logement";
+      modalBackdrop.style.display = "flex";
+
+      homeName.value = home.name || "";
+      homeCity.value = home.city || "";
+      ownerEmailEl.value = home.ownerEmail || "";
+      homeOwner.value = home.ownerName || "";
+      homeType.value = home.type || "Studio";
+      homeTeam.value = home.team || "";
+
+      setTimeout(()=>homeName.focus(), 0);
+    }
+
+    function closeModal(){
+      modalBackdrop.style.display = "none";
+      homeForm.reset();
+      homeType.value = "Studio";
+      homeTeam.value = "";
+      editingHomeId = null;
     }
 
     function render(){
@@ -574,10 +636,15 @@
 
       filtered.forEach(h=>{
         const item = document.createElement("div");
-        item.className = "item";
+        item.className = "item clickable";
 
         const ownerLabel = h.ownerName || h.ownerEmail || "—";
         const statusChip = isArchived(h) ? `<span class="chip">Archivé</span>` : "";
+
+        const canPlan = !!planningOkByHome[h.id];
+        const planningBtn = canPlan
+          ? `<a class="mini-btn" href="planning.html?homeId=${encodeURIComponent(h.id)}">Planning</a>`
+          : `<span class="mini-btn disabled">Planning</span>`;
 
         item.innerHTML = `
           <div class="item-top">
@@ -591,7 +658,7 @@
               </div>
             </div>
             <div class="item-actions">
-              <a class="mini-btn" href="planning.html?homeId=${encodeURIComponent(h.id)}">Planning</a>
+              ${planningBtn}
               <button class="mini-btn red" type="button" data-delete="${h.id}">Supprimer</button>
               ${
                 isArchived(h)
@@ -601,7 +668,18 @@
             </div>
           </div>
         `;
+
         homesListEl.appendChild(item);
+
+        // clic item -> edit
+        item.addEventListener("click", ()=>{
+          openModalEdit(h);
+        });
+
+        // éviter que clic sur boutons déclenche edit
+        item.querySelectorAll(".item-actions a, .item-actions button, .item-actions span").forEach(el=>{
+          el.addEventListener("click", (e)=> e.stopPropagation());
+        });
       });
 
       // Archiver
@@ -647,7 +725,7 @@
         });
       });
 
-      // Supprimer (définitif, seulement si aucun event rattaché)
+      // Supprimer (définitif seulement si aucun event/icalEvent)
       homesListEl.querySelectorAll("button[data-delete]").forEach(btn=>{
         btn.addEventListener("click", async ()=>{
           hideAlert();
@@ -655,7 +733,7 @@
           const home = allHomes.find(x=>x.id===id);
           const label = home ? `${home.name || "Logement"} (${home.city || "—"})` : "ce logement";
 
-          // check events liés
+          // check events + icalEvents liés
           try{
             const qEv = query(
               collection(db,"events"),
@@ -663,15 +741,27 @@
               where("homeId","==", id),
               limit(1)
             );
-            const snapEv = await getDocs(qEv);
-
-            if(!snapEv.empty){
+            const sEv = await getDocs(qEv);
+            if(!sEv.empty){
               showAlert("⛔ Suppression bloquée : ce logement a déjà des prestations rattachées. Utilise “Archiver” pour le masquer tout en gardant l’historique.");
               return;
             }
+
+            const qIc = query(
+              collection(db,"icalEvents"),
+              where("conciergerieUid","==", currentUid),
+              where("homeId","==", id),
+              limit(1)
+            );
+            const sIc = await getDocs(qIc);
+            if(!sIc.empty){
+              showAlert("⛔ Suppression bloquée : ce logement a des réservations iCal rattachées. Utilise “Archiver” pour le masquer tout en gardant l’historique.");
+              return;
+            }
+
           }catch(err){
             console.error(err);
-            showAlert("Erreur vérification prestations : " + (err?.message || "inconnue"));
+            showAlert("Erreur vérification historique : " + (err?.message || "inconnue"));
             return;
           }
 
@@ -681,6 +771,7 @@
           try{
             await deleteDoc(doc(db,"homes", id));
             allHomes = allHomes.filter(x=>x.id !== id);
+            delete planningOkByHome[id];
             render();
             showAlert("✅ Logement supprimé définitivement.", true);
           }catch(err){
@@ -691,7 +782,7 @@
       });
     }
 
-    // ===== Add home =====
+    // ===== Create / Update home =====
     homeForm.addEventListener("submit", async (e)=>{
       e.preventDefault();
       hideAlert();
@@ -713,32 +804,39 @@
       }
 
       try{
-        const payload = {
-          conciergerieUid: auth.currentUser.uid,
-          name,
-          city,
-          ownerName,
-          ownerEmail,
-          type,
-          team,
-          status: "active",
-          createdAt: serverTimestamp()
-        };
-
-        await addDoc(collection(db,"homes"), payload);
-
-        closeModal();
-        await loadHomes();
-        showAlert("✅ Logement créé.", true);
-
+        if(editingHomeId){
+          await updateDoc(doc(db,"homes", editingHomeId), {
+            name, city, ownerName, ownerEmail, type, team,
+            updatedAt: serverTimestamp()
+          });
+          closeModal();
+          await loadHomes();
+          showAlert("✅ Logement modifié.", true);
+        }else{
+          const payload = {
+            conciergerieUid: auth.currentUser.uid,
+            name,
+            city,
+            ownerName,
+            ownerEmail,
+            type,
+            team,
+            status: "active",
+            createdAt: serverTimestamp()
+          };
+          await addDoc(collection(db,"homes"), payload);
+          closeModal();
+          await loadHomes();
+          showAlert("✅ Logement créé.", true);
+        }
       }catch(err){
         console.error(err);
-        showAlert("Erreur création home : " + (err?.message || "inconnue"));
+        showAlert("Erreur enregistrement : " + (err?.message || "inconnue"));
       }
     });
 
     // ===== Events =====
-    addBtn.addEventListener("click", openModal);
+    addBtn.addEventListener("click", openModalCreate);
     cancelBtn.addEventListener("click", closeModal);
     modalBackdrop.addEventListener("click", (e)=>{ if(e.target === modalBackdrop) closeModal(); });
     searchInputEl.addEventListener("input", render);
