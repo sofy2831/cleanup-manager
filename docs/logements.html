@@ -36,7 +36,7 @@
       align-items:center;
       padding:16px 16px 32px;
       box-sizing:border-box;
-      padding-bottom: 96px; /* place pour le bandeau */
+      padding-bottom: 96px;
     }
 
     .topbar{
@@ -183,10 +183,6 @@
       color:#fff;
       box-shadow:0 4px 12px rgba(0,0,0,.15);
     }
-    .btn.danger{
-      border-color:var(--bad);
-      color:var(--bad);
-    }
 
     .alert{
       display:none;
@@ -329,7 +325,6 @@
       box-shadow: 0 10px 22px rgba(0,0,0,0.10);
     }
 
-    /* Bandeau EN BAS partout (mobile + PC) */
     .page{ padding-bottom: 90px; }
   </style>
 </head>
@@ -385,9 +380,7 @@
   <div class="modal-backdrop" id="modalBackdrop" aria-hidden="true">
     <div class="modal" role="dialog" aria-modal="true">
       <h2>Ajouter un logement</h2>
-      
 
-      <!-- ✅ UN SEUL FORM -->
       <form id="homeForm">
         <div style="display:flex; gap:8px; flex-wrap:wrap;">
           <div style="flex:1; min-width:180px;">
@@ -403,7 +396,7 @@
         <label for="ownerEmail">Email du propriétaire</label>
         <input id="ownerEmail" type="email" placeholder="ex. proprietaire@email.com" required />
 
-        <label for="homeOwner">Nom du propriétaire </label>
+        <label for="homeOwner">Nom du propriétaire</label>
         <input id="homeOwner" type="text" placeholder="Ex. Mme Marie Dupont" required />
 
         <div style="display:flex; gap:8px; flex-wrap:wrap;">
@@ -416,13 +409,11 @@
           </div>
           <div style="flex:1; min-width:180px;">
             <label for="homeTeam">Agent / Équipe</label>
-<input id="homeTeam" type="text" placeholder="Ex. Sarah / Équipe A / Prestataire X" />
-
+            <input id="homeTeam" type="text" placeholder="Ex. Sarah / Prestataire X" />
           </div>
         </div>
 
-        
-               <div class="modal-actions">
+        <div class="modal-actions">
           <button class="btn" type="button" id="cancelBtn">Annuler</button>
           <button class="btn primary" type="submit">Enregistrer</button>
         </div>
@@ -435,8 +426,8 @@
     import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
       collection, query, where, getDocs,
-      addDoc, updateDoc, doc, getDoc,
-      serverTimestamp
+      addDoc, updateDoc, deleteDoc, doc, getDoc,
+      serverTimestamp, limit
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     // ===== UI =====
@@ -459,7 +450,6 @@
     const homeOwner = document.getElementById("homeOwner");
     const homeType = document.getElementById("homeType");
     const homeTeam = document.getElementById("homeTeam");
-    const homeOwnerUid = document.getElementById("homeOwnerUid");
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -481,7 +471,6 @@
       homeForm.reset();
       homeType.value = "Studio";
       homeTeam.value = "";
-      homeOwnerUid.value = "";
     }
 
     function norm(s){ return (s||"").toString().toLowerCase().trim(); }
@@ -597,16 +586,17 @@
               <div class="item-meta">${escapeHtml(h.city || "—")} • Propriétaire : <b>${escapeHtml(ownerLabel)}</b></div>
               <div class="chips">
                 <span class="chip">${escapeHtml(h.type || "Type")}</span>
-                <span class="chip">${escapeHtml(h.team || "Équipe")}</span>
+                <span class="chip">${escapeHtml(h.team || "—")}</span>
                 ${statusChip}
               </div>
             </div>
             <div class="item-actions">
               <a class="mini-btn" href="planning.html?homeId=${encodeURIComponent(h.id)}">Planning</a>
+              <button class="mini-btn red" type="button" data-delete="${h.id}">Supprimer</button>
               ${
                 isArchived(h)
                   ? `<button class="mini-btn" type="button" data-unarchive="${h.id}">Restaurer</button>`
-                  : `<button class="mini-btn red" type="button" data-archive="${h.id}">Archiver</button>`
+                  : `<button class="mini-btn" type="button" data-archive="${h.id}">Archiver</button>`
               }
             </div>
           </div>
@@ -614,8 +604,10 @@
         homesListEl.appendChild(item);
       });
 
+      // Archiver
       homesListEl.querySelectorAll("button[data-archive]").forEach(btn=>{
         btn.addEventListener("click", async ()=>{
+          hideAlert();
           const id = btn.getAttribute("data-archive");
           const ok = confirm("Archiver ce logement ? (il n’apparaîtra plus par défaut)");
           if(!ok) return;
@@ -635,8 +627,10 @@
         });
       });
 
+      // Restaurer
       homesListEl.querySelectorAll("button[data-unarchive]").forEach(btn=>{
         btn.addEventListener("click", async ()=>{
+          hideAlert();
           const id = btn.getAttribute("data-unarchive");
           try{
             await updateDoc(doc(db,"homes",id), {
@@ -649,6 +643,49 @@
           }catch(err){
             console.error(err);
             showAlert("Erreur restauration : " + (err?.message || "inconnue"));
+          }
+        });
+      });
+
+      // Supprimer (définitif, seulement si aucun event rattaché)
+      homesListEl.querySelectorAll("button[data-delete]").forEach(btn=>{
+        btn.addEventListener("click", async ()=>{
+          hideAlert();
+          const id = btn.getAttribute("data-delete");
+          const home = allHomes.find(x=>x.id===id);
+          const label = home ? `${home.name || "Logement"} (${home.city || "—"})` : "ce logement";
+
+          // check events liés
+          try{
+            const qEv = query(
+              collection(db,"events"),
+              where("conciergerieUid","==", currentUid),
+              where("homeId","==", id),
+              limit(1)
+            );
+            const snapEv = await getDocs(qEv);
+
+            if(!snapEv.empty){
+              showAlert("⛔ Suppression bloquée : ce logement a déjà des prestations rattachées. Utilise “Archiver” pour le masquer tout en gardant l’historique.");
+              return;
+            }
+          }catch(err){
+            console.error(err);
+            showAlert("Erreur vérification prestations : " + (err?.message || "inconnue"));
+            return;
+          }
+
+          const ok = confirm(`Supprimer définitivement ${label} ?\nCette action est irréversible.`);
+          if(!ok) return;
+
+          try{
+            await deleteDoc(doc(db,"homes", id));
+            allHomes = allHomes.filter(x=>x.id !== id);
+            render();
+            showAlert("✅ Logement supprimé définitivement.", true);
+          }catch(err){
+            console.error(err);
+            showAlert("Erreur suppression : " + (err?.message || "inconnue"));
           }
         });
       });
@@ -665,7 +702,6 @@
       const ownerEmail = normalizeEmail(ownerEmailEl.value);
       const type = homeType.value;
       const team = (homeTeam.value || "").trim();
-    
 
       if(!name || !city || !ownerName || !ownerEmail){
         showAlert("Champs manquants : nom + ville + email propriétaire + nom propriétaire.");
@@ -689,14 +725,11 @@
           createdAt: serverTimestamp()
         };
 
-       
-
-        const ref = await addDoc(collection(db,"homes"), payload);
+        await addDoc(collection(db,"homes"), payload);
 
         closeModal();
         await loadHomes();
         showAlert("✅ Logement créé.", true);
-        console.log("homes/" + ref.id);
 
       }catch(err){
         console.error(err);
@@ -742,7 +775,3 @@
   </script>
 </body>
 </html>
-
-
-
-
