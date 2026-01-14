@@ -75,7 +75,7 @@
       width:44px;height:44px;border-radius:50%;
       background:#fff;border:2px solid var(--violet-main);
       display:flex;align-items:center;justify-content:center;
-      color:var(--violet-main);font-size:22px;font-weight:800;
+      color:#violet-main;font-size:22px;font-weight:800;
       position:relative;flex-shrink:0;
     }
     .logo-icon::after{ content:"✦"; position:absolute; top:-6px; right:-5px; font-size:12px; color:var(--violet-main); }
@@ -477,9 +477,7 @@
             <button class="btn ghost" type="button" id="goInvoiceBtn" disabled>Facture directe</button>
           </div>
 
-          <div class="hintline" id="billingHint" style="display:none;">
-            <!-- rempli JS selon règle 1ère fois -->
-          </div>
+          <div class="hintline" id="billingHint" style="display:none;"></div>
         </form>
       </div>
     </div>
@@ -575,46 +573,40 @@
       const p = new URLSearchParams(location.search);
       return (p.get(name) || "").trim();
     }
-    const homeId = getParam("homeId");
-    const from = getParam("from") || "manuel";
-    const icalEventId = getParam("icalEventId");
-    const summary = getParam("summary");
-    const timeParam = getParam("time");
-    const dateKeyParam = getParam("dateKey");
-    const ownerNameParam = getParam("ownerName");
-    const ownerEmailParam = getParam("ownerEmail");
-    const noteParam = getParam("note");
+    const homeId        = getParam("homeId");
+    const from          = getParam("from") || "manuel";
+    const icalEventId   = getParam("icalEventId");
+    const summary       = getParam("summary");
+    const timeParam     = getParam("time");
+    const dateKeyParam  = getParam("dateKey");
+    const ownerNameParam= getParam("ownerName");
+    const ownerEmailParam=getParam("ownerEmail");
+    const noteParam     = getParam("note");
+    const homeTypeParam = getParam("homeType");      // <-- NOUVEAU
 
     // ========= Produits (suggestions) =========
-    // Important : suggested = indicatif (affichage), PAS imposé.
     const PRODUCT_TEMPLATES = [
-      // Ménage & entretien
       { key:"MENAGE_STANDARD", label:"Ménage standard (inter-séjour)", category:"Ménage", suggested:"Ex. 45€ (studio/1ch) • 60€ (2ch) • 75€ (3ch) • 90€ (4ch)", unit:"unité" },
       { key:"MENAGE_INTERMEDIAIRE", label:"Ménage intermédiaire (long séjour)", category:"Ménage", suggested:"Ex. +15€ supplément Long séjour", unit:"supplément" },
       { key:"BACK_TO_BACK", label:"Back-to-back (ménage en urgence)", category:"Ménage", suggested:"Ex. +20€ supplément Urgence", unit:"supplément" },
       { key:"REMISE_EN_ETAT", label:"Remise en état (logement non conforme)", category:"Ménage", suggested:"Ex. +25€ supplément Non conforme", unit:"supplément" },
 
-      // Linge
       { key:"RECHANGE_LINGE", label:"Rechange linge (rotation complète)", category:"Linge", suggested:"Ex. 15€ par passage Rotation", unit:"passage" },
       { key:"LAVAGE_SECHAGE", label:"Collecte + lavage + séchage", category:"Linge", suggested:"Ex. 25€ par rotation", unit:"unité" },
       { key:"BLANCHISSERIE", label:"Dépose / reprise blanchisserie", category:"Linge", suggested:"Ex. 20€ par rotation", unit:"unité" },
 
-      // Check-in/out & clés
       { key:"CHECKIN_AUTONOME", label:"Check-in autonome (boîte à clés)", category:"Check-in/out", suggested:"Ex. 0€ inclus", unit:"passage" },
       { key:"CHECKIN_PHYSIQUE", label:"Check-in physique", category:"Check-in/out", suggested:"Ex. 20€ par passage", unit:"passage" },
       { key:"CHECKOUT", label:"Check-out", category:"Check-in/out", suggested:"Ex. 15€ par passage", unit:"passage" },
       { key:"GESTION_CLES", label:"Gestion clés / badges", category:"Check-in/out", suggested:"Ex. 10€ par intervention", unit:"unité" },
       { key:"RECUP_CLES", label:"Récupération clés après sortie", category:"Check-in/out", suggested:"Ex. 10€ par passage", unit:"passage" },
 
-      // Maintenance
       { key:"PETITE_MAINTENANCE", label:"Petite maintenance (ampoule, joint…)", category:"Maintenance", suggested:"Ex. 15€ par intervention", unit:"unité" },
       { key:"URGENCE", label:"Intervention d’urgence (fuite, serrure)", category:"Maintenance", suggested:"Ex. 40€ par intervention", unit:"unité" },
       { key:"COORD_ARTISANS", label:"Coordination artisans", category:"Maintenance", suggested:"Ex. 30€ par coordination (hors coût artisan)", unit:"unité" },
 
-      // Messages
       { key:"MESSAGES", label:"Réponses messages voyageurs", category:"Messages voyageurs", suggested:"Ex. 19€/logement/mois (20 mess) + 1,20€/mess supp", unit:"mois" },
 
-      // Kits & consommables
       { key:"KIT_ESSENTIEL", label:"Kit essentiel", category:"Kits & consommables", suggested:"Ex. 5€ par kit", unit:"kit" },
       { key:"KIT_CUISINE", label:"Kit cuisine", category:"Kits & consommables", suggested:"Ex. 7€ par kit", unit:"kit" },
       { key:"KIT_BAIN", label:"Kit bain", category:"Kits & consommables", suggested:"Ex. 4€ par kit", unit:"kit" },
@@ -624,7 +616,6 @@
       { key:"KIT_SEJOUR_8", label:"Kit séjour (Pack 8 pers)", category:"Kits & consommables", suggested:"Ex. 56€ par kit", unit:"kit" },
       { key:"REASSORT", label:"Réassort produit unitaire (papier, café…)", category:"Kits & consommables", suggested:"Ex. 1,20€ par unité", unit:"unité" },
 
-      // Autre
       { key:"__OTHER__", label:"Autre (texte libre)", category:"Autre", suggested:"", unit:"unité" }
     ];
 
@@ -632,7 +623,7 @@
     let currentUser = null;
     let currentHome = null;
 
-    // Event draft in memory (before save)
+    // Event draft
     let lines = [];
     let editingIndex = -1;
 
@@ -660,19 +651,22 @@
       if(!homeId) throw new Error("homeId manquant.");
       const snap = await getDoc(doc(db, "homes", homeId));
       if(!snap.exists()) throw new Error("Logement introuvable (homeId).");
-      currentHome = { id: snap.id, ...snap.data() };
+      const d = snap.data() || {};
+      currentHome = {
+        id: snap.id,
+        ...d,
+        // fallback pour le type
+        homeType: (d.homeType || d.type || d.kind || homeTypeParam || "").toString().trim()
+      };
     }
 
     function buildProductSelect(){
-      // group by category (simple)
       const byCat = new Map();
       for(const p of PRODUCT_TEMPLATES){
         const cat = p.category || "Autre";
         if(!byCat.has(cat)) byCat.set(cat, []);
         byCat.get(cat).push(p);
       }
-
-      // order categories
       const catOrder = ["Ménage","Linge","Check-in/out","Maintenance","Messages voyageurs","Kits & consommables","Essentiel","Autre"];
       const cats = Array.from(byCat.keys()).sort((a,b)=>{
         const ia = catOrder.indexOf(a); const ib = catOrder.indexOf(b);
@@ -681,7 +675,6 @@
         if(ib === -1) return -1;
         return ia - ib;
       });
-
       productSelect.innerHTML = `<option value="">— Choisir —</option>` + cats.map(cat=>{
         const opts = (byCat.get(cat) || []).map(p=>{
           return `<option value="${escapeHtml(p.key)}">${escapeHtml(p.label)}</option>`;
@@ -701,20 +694,14 @@
         suggestLine.style.display = "none";
         return;
       }
-
-      // toggle "Autre"
       if(key === "__OTHER__"){
         otherNameWrap.style.display = "block";
       }else{
         otherNameWrap.style.display = "none";
         otherNameEl.value = "";
       }
-
-      // default category/unit
       if(t.category && t.category !== "Autre") categoryEl.value = t.category;
       if(t.unit) unitEl.value = t.unit;
-
-      // suggested display
       if(t.suggested){
         suggestText.textContent = t.suggested;
         suggestLine.style.display = "block";
@@ -729,7 +716,6 @@
 
     function renderLines(){
       linesList.innerHTML = "";
-
       if(!lines.length){
         const empty = document.createElement("div");
         empty.style.background = "#fff";
@@ -780,29 +766,21 @@
             const i = Number(btn.getAttribute("data-edit"));
             const l = lines[i];
             if(!l) return;
-
             editingIndex = i;
-
-            // restore UI
-            // Try match template key by label (best effort)
             const found = PRODUCT_TEMPLATES.find(p=>p.label === l.label);
             productSelect.value = found ? found.key : "__OTHER__";
             refreshSuggest();
-
             if(productSelect.value === "__OTHER__") otherNameEl.value = l.label || "";
-
             qtyEl.value = String(l.qty ?? 1);
             unitEl.value = l.unit || "unité";
             unitPriceEl.value = String(l.unitPrice ?? "");
             lineNoteEl.value = l.note || "";
             categoryEl.value = l.category || "Autre";
-
             addLineBtn.textContent = "Mettre à jour la ligne";
             showAlert("Mode édition : modifie puis clique “Mettre à jour la ligne”.", true);
           });
         });
       }
-
       linesCount.textContent = lines.length + (lines.length > 1 ? " lignes" : " ligne");
     }
 
@@ -827,7 +805,6 @@
     function validateLineInputs(){
       const key = (productSelect.value || "").trim();
       if(!key) return { ok:false, msg:"Choisis une prestation." };
-
       let label = "";
       if(key === "__OTHER__"){
         label = (otherNameEl.value || "").trim();
@@ -837,21 +814,15 @@
         label = t?.label || "";
         if(!label) return { ok:false, msg:"Prestation invalide." };
       }
-
       const qty = Number(qtyEl.value);
       if(!(qty > 0)) return { ok:false, msg:"Quantité invalide." };
-
       const unit = (unitEl.value || "").trim() || "unité";
-
       const unitPrice = Number(unitPriceEl.value);
       if(!(unitPrice >= 0)) return { ok:false, msg:"Prix unitaire invalide." };
-
       const category = (categoryEl.value || "").trim();
       const note = (lineNoteEl.value || "").trim();
-
       const tpl = getTemplateByKey(key);
       const suggested = tpl?.suggested || "";
-
       return {
         ok:true,
         line: {
@@ -869,25 +840,30 @@
     function renderContext(){
       contextTag.textContent = (from === "ical") ? "Réservation" : "Création manuelle";
 
-      const rows = [];
-      const homeText = currentHome ? (currentHome.name + (currentHome.city ? " — " + currentHome.city : "")) : "—";
-      const ownerEmail = ownerEmailEl.value ? escapeHtml(ownerEmailEl.value) : escapeHtml(currentHome?.ownerEmail || "—");
-      const ownerName = ownerNameEl.value ? escapeHtml(ownerNameEl.value) : escapeHtml(currentHome?.ownerName || "—");
+      const ht = (currentHome?.homeType || "").trim();           // <-- type
+      const homeText = currentHome
+        ? (currentHome.name
+           + (currentHome.city ? " — " + currentHome.city : "")
+           + (ht ? ` (${ht})` : ""))                             // <-- affichage dans le nom
+        : "—";
 
+      const ownerEmail = ownerEmailEl.value ? escapeHtml(ownerEmailEl.value) : escapeHtml(currentHome?.ownerEmail || "—");
+      const ownerName  = ownerNameEl.value  ? escapeHtml(ownerNameEl.value)  : escapeHtml(currentHome?.ownerName  || "—");
+
+      const rows = [];
       rows.push(`<div><b>Logement</b> : ${escapeHtml(homeText)}</div>`);
+      if(ht) rows.push(`<div><b>Type</b> : ${escapeHtml(ht)}</div>`);   // <-- ligne dédiée
       rows.push(`<div><b>Propriétaire</b> : ${ownerName} • ${ownerEmail}</div>`);
       rows.push(`<div><b>Date</b> : ${escapeHtml(dateKeyInput.value || "—")}</div>`);
       rows.push(`<div><b>Heure</b> : ${escapeHtml(timeEl.value || "—")}</div>`);
-      if(summary) rows.push(`<div><b>Réservation</b> : ${escapeHtml(summary)}</div>`);
-      if(noteParam) rows.push(`<div><b>Note</b> : ${escapeHtml(noteParam)}</div>`);
+      if(summary)  rows.push(`<div><b>Réservation</b> : ${escapeHtml(summary)}</div>`);
+      if(noteParam)rows.push(`<div><b>Note</b> : ${escapeHtml(noteParam)}</div>`);
       contextKv.innerHTML = rows.join("");
 
-      homeLabel.textContent = currentHome ? (currentHome.name + (currentHome.city ? " — " + currentHome.city : "")) : "—";
+      homeLabel.textContent = homeText;                            // <-- aussi en en-tête
     }
 
     function setBillingButtonsAvailability(){
-      // règle simple basée sur le logement
-      // Si billingMode === "facture_directe" OU firstQuoteDone/hasFirstApproval/firstApprovalDone => facture directe autorisée
       const billingMode = currentHome?.billingMode || "";
       const firstDone = !!(currentHome?.firstQuoteDone || currentHome?.hasFirstApproval || currentHome?.firstApprovalDone);
       const canDirect = (billingMode === "facture_directe") || firstDone;
@@ -900,8 +876,6 @@
         billingHint.textContent = "Enregistre d’abord la prestation (EN_COURS).";
         return;
       }
-
-      // devis toujours possible (utile en cas de nouveau contexte), mais on peut “recommander” si 1ère fois
       goQuoteBtn.disabled = false;
 
       if(canDirect){
@@ -909,7 +883,7 @@
         billingHint.textContent = "Facture directe autorisée (logement déjà validé au moins une fois).";
       }else{
         goInvoiceBtn.disabled = true;
-        billingHint.textContent = "1ère fois sur ce logement : devis recommandé (et généralement obligatoire).";
+        billingHint.textContent = "1ère fois sur ce logement : devis recommandé (généralement obligatoire).";
       }
     }
 
@@ -928,10 +902,8 @@
 
     addLineBtn.addEventListener("click", ()=>{
       hideAlert();
-
       const v = validateLineInputs();
       if(!v.ok) return showAlert(v.msg);
-
       if(editingIndex >= 0){
         lines[editingIndex] = v.line;
         showAlert("✅ Ligne mise à jour.", true);
@@ -939,7 +911,6 @@
         lines.push(v.line);
         showAlert("✅ Ligne ajoutée.", true);
       }
-
       renderLines();
       refreshTotals();
       resetLineBuilder();
@@ -950,7 +921,6 @@
       try{
         await updateDoc(createdEventRef, { status: "DEVIS", statusUpdatedAt: serverTimestamp() });
         showAlert("✅ Statut : DEVIS", true);
-        // si tu as devis.html, on y va. Sinon, tu peux commenter la ligne.
         location.href = "devis.html?eventId=" + encodeURIComponent(createdEventId);
       }catch(err){
         console.error(err);
@@ -961,11 +931,9 @@
     goInvoiceBtn.addEventListener("click", async ()=>{
       if(!createdEventRef) return showAlert("Enregistre d’abord la prestation.");
       if(goInvoiceBtn.disabled) return;
-
       try{
         await updateDoc(createdEventRef, { status: "FACTURE", statusUpdatedAt: serverTimestamp() });
         showAlert("✅ Statut : FACTURE", true);
-        // si tu as facture.html, on y va. Sinon, tu peux commenter la ligne.
         location.href = "facture.html?eventId=" + encodeURIComponent(createdEventId);
       }catch(err){
         console.error(err);
@@ -983,8 +951,7 @@
       if(!lines.length) return showAlert("Ajoute au moins une ligne.");
 
       const ownerEmail = normalizeEmail(ownerEmailEl.value || currentHome.ownerEmail || "");
-      const ownerName = (ownerNameEl.value || currentHome.ownerName || "").trim();
-
+      const ownerName  = (ownerNameEl.value || currentHome.ownerName || "").trim();
       if(ownerEmail && !/^\S+@\S+\.\S+$/.test(ownerEmail)){
         return showAlert("Email propriétaire invalide.");
       }
@@ -993,19 +960,20 @@
         conciergerieUid: currentUser.uid,
 
         // logement
-        homeId: currentHome.id,
+        homeId:   currentHome.id,
         homeName: currentHome.name || "",
         homeCity: currentHome.city || "",
+        homeType: (currentHome.homeType || ""),           // <-- on stocke le type
 
         // date
         dateKey: dateKeyInput.value,
-        date: dateKeyInput.value,
-        time: (timeEl.value || "").trim(),
+        date:    dateKeyInput.value,
+        time:    (timeEl.value || "").trim(),
 
         // owner
-        ownerUid: currentHome.ownerUid || null,
+        ownerUid:  currentHome.ownerUid || null,
         ownerName: ownerName || "",
-        ownerEmail: ownerEmail || "",
+        ownerEmail:ownerEmail || "",
 
         // prestation
         team: (teamEl.value || "").trim(),
@@ -1046,12 +1014,7 @@
           await updateDoc(createdEventRef, payload);
           showAlert("✅ Prestation mise à jour (EN_COURS).", true);
         }
-
         setBillingButtonsAvailability();
-
-        // petit bonus UX : tu peux rediriger vers planning si tu préfères
-        // setTimeout(()=> location.href = "planning.html", 450);
-
       }catch(err){
         console.error(err);
         showAlert("Erreur enregistrement : " + (err?.message || "inconnue"));
@@ -1066,13 +1029,11 @@
         location.href = "login.html?role=conciergerie";
         return;
       }
-
       const ok = await guardConciergerie(user);
       if(!ok){
         location.href = "abonnement.html?plan=starter";
         return;
       }
-
       currentUser = user;
       emailLine.textContent = user.email || user.uid;
 
@@ -1083,18 +1044,15 @@
         return;
       }
 
-      // Prefill champs
+      // Prefill
       dateKeyInput.value = dateKeyParam || "";
       if(!dateKeyInput.value){
-        // fallback : aujourd'hui
         const d = new Date();
         const pad2 = (n)=> String(n).padStart(2,"0");
         dateKeyInput.value = `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
       }
-
       timeEl.value = timeParam || "";
-
-      ownerNameEl.value = ownerNameParam || currentHome.ownerName || "";
+      ownerNameEl.value  = ownerNameParam  || currentHome.ownerName  || "";
       ownerEmailEl.value = ownerEmailParam || currentHome.ownerEmail || "";
       if(noteParam) jobNoteEl.value = noteParam;
 
@@ -1105,7 +1063,7 @@
       // Context
       renderContext();
 
-      // Empty lines render
+      // Lines/init
       renderLines();
       refreshTotals();
 
@@ -1115,5 +1073,3 @@
   </script>
 </body>
 </html>
-
-
