@@ -66,12 +66,6 @@
       cursor:pointer;
       box-shadow:0 3px 10px rgba(0,0,0,.06);
     }
-    .pill.primary{
-      background:linear-gradient(90deg,var(--violet-main),var(--violet-dark));
-      border-color:transparent;
-      color:#fff;
-      box-shadow:0 4px 12px rgba(0,0,0,.15);
-    }
 
     .logo-title{
       display:flex; justify-content:center; align-items:center;
@@ -159,7 +153,7 @@
 
     form{ display:flex; flex-direction:column; gap:10px; }
     label{ font-size:12px; font-weight:800; color:#333; text-align:left; }
-    input, select, textarea{
+    input, textarea{
       width:100%;
       padding:10px 10px;
       border-radius:12px;
@@ -168,12 +162,10 @@
       font-size:13px;
       background:#fff;
     }
-    input:focus, select:focus, textarea:focus{
+    input:focus, textarea:focus{
       border-color:var(--violet-main);
       box-shadow:0 0 0 3px rgba(122,92,255,.12);
     }
-    .inline{ display:flex; gap:10px; }
-    .inline > div{ flex:1; }
 
     .btn{
       width:100%;
@@ -195,6 +187,13 @@
       color:var(--violet-main);
       box-shadow:0 3px 10px rgba(0,0,0,.06);
     }
+
+    .btn-row{
+      display:flex;
+      gap:10px;
+      margin-top:6px;
+    }
+    .btn-row .btn{ width:100%; }
 
     .bottom-nav{
       position: fixed;
@@ -240,7 +239,6 @@
       }
       .page{ padding-bottom: 32px; }
     }
-
     @media (max-width: 520px){
       .page{ padding-left:12px; padding-right:12px; }
       html, body{ overflow-x:hidden; }
@@ -252,9 +250,7 @@
   <div class="page">
     <div class="topbar">
       <a class="pill" href="planning.html">← Retour planning</a>
-      <div style="display:flex; gap:8px; align-items:center;">
-        <button class="pill" id="logoutBtn" type="button">Déconnexion</button>
-      </div>
+      <button class="pill" id="logoutBtn" type="button">Déconnexion</button>
     </div>
 
     <div class="logo-title">
@@ -284,31 +280,18 @@
 
         <form id="jobForm">
           <div>
-            <label for="serviceId">Prestation (catalogue)</label>
-            <select id="serviceId" required>
-              <option value="">— Choisir une prestation —</option>
-            </select>
-          </div>
-
-          <div class="inline">
-            <div>
-              <label for="time">Heure</label>
-              <input id="time" placeholder="Ex. 10:00" />
-            </div>
-            <div>
-              <label for="team">Agent (optionnel)</label>
-              <input id="team" placeholder="Ex. Sarah / Équipe A" />
-            </div>
+            <label for="team">Agent / Équipe (optionnel)</label>
+            <input id="team" placeholder="Ex. Sarah / Équipe A" />
           </div>
 
           <div>
             <label for="meta">Détail (optionnel)</label>
-            <textarea id="meta" rows="3" placeholder="Détails..."></textarea>
+            <textarea id="meta" rows="4" placeholder="Ex. check-in, urgence, remarques..."></textarea>
           </div>
 
-          <button class="btn primary" type="submit" id="createBtn">Créer la prestation</button>
+          <button class="btn primary" type="submit" id="createBtn">Continuer vers le catalogue</button>
 
-          <div style="display:flex; gap:10px; margin-top:6px;">
+          <div class="btn-row">
             <button class="btn ghost" type="button" id="sendQuoteBtn" disabled>Envoyer le devis</button>
             <button class="btn ghost" type="button" id="confirmBtn" disabled>Confirmer</button>
           </div>
@@ -321,7 +304,7 @@
     <a href="planning.html">Planning</a>
     <a href="import-ical.html">iCal</a>
     <a href="messagerie.html">Messages</a>
-    <a href="nouvelle-prestation.html" class="active">Catalogue</a>
+    <a href="catalogue.html" class="active">Catalogue</a>
     <a href="logements.html">Logements</a>
   </nav>
 
@@ -329,16 +312,30 @@
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
-      collection, query, where, onSnapshot, getDoc, doc,
-      addDoc, serverTimestamp, updateDoc
+      addDoc, collection, doc, getDoc, serverTimestamp, updateDoc
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const emailLine = document.getElementById("emailLine");
     const logoutBtn = document.getElementById("logoutBtn");
     const alertBox = document.getElementById("alertBox");
 
+    const contextTag = document.getElementById("contextTag");
+    const contextKv = document.getElementById("contextKv");
+    const homeLabel = document.getElementById("homeLabel");
+
+    const teamEl = document.getElementById("team");
+    const metaEl = document.getElementById("meta");
+    const formEl = document.getElementById("jobForm");
+    const createBtn = document.getElementById("createBtn");
+
     const sendQuoteBtn = document.getElementById("sendQuoteBtn");
     const confirmBtn = document.getElementById("confirmBtn");
+
+    let currentUser = null;
+    let currentHome = null;
+
+    let createdEventId = null;
+    let createdEventRef = null;
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -351,53 +348,6 @@
       alertBox.textContent = "";
     }
 
-    const FREE_EMAILS = new Set(["mathilde.debout31@gmail.com","s.dumas974@gmail.com"]);
-    async function guardConciergerie(user){
-      const email = (user.email || "").toLowerCase();
-      if(FREE_EMAILS.has(email)) return true;
-      try{
-        const snap = await getDoc(doc(db,"users",user.uid));
-        if(!snap.exists()) return false;
-        const d = snap.data() || {};
-        return (d.role === "conciergerie" || d.role === "admin") && d.subscriptionStatus === "active";
-      }catch(e){ return false; }
-    }
-
-    function getParam(name){
-      const p = new URLSearchParams(location.search);
-      return (p.get(name) || "").trim();
-    }
-
-    // Params depuis planning
-    const homeId = getParam("homeId");
-    const dateKey = getParam("dateKey");
-    const timeParam = getParam("time");
-    const summary = getParam("summary");
-    const icalEventId = getParam("icalEventId");
-    const from = getParam("from") || (icalEventId ? "ical" : "manuel");
-
-    // ✅ bonus params (si planning les envoie)
-    const homeTypeParam = getParam("homeType");
-    const teamParam = getParam("team");
-
-    const contextTag = document.getElementById("contextTag");
-    const contextKv = document.getElementById("contextKv");
-    const homeLabel = document.getElementById("homeLabel");
-
-    const serviceIdEl = document.getElementById("serviceId");
-    const timeEl = document.getElementById("time");
-    const teamEl = document.getElementById("team");
-    const metaEl = document.getElementById("meta");
-    const formEl = document.getElementById("jobForm");
-    const createBtn = document.getElementById("createBtn");
-
-    let currentUser = null;
-    let currentHome = null;
-    let services = [];
-
-    let createdEventId = null;
-    let createdEventRef = null;
-
     function escapeHtml(s){
       return String(s||"")
         .replaceAll("&","&amp;")
@@ -407,72 +357,73 @@
         .replaceAll("'","&#039;");
     }
 
+    function getParam(name){
+      const p = new URLSearchParams(location.search);
+      return (p.get(name) || "").trim();
+    }
+
+    // Params depuis planning
+    const homeId = getParam("homeId");                 // requis
+    const dateKey = getParam("dateKey");               // requis
+    const timeParam = getParam("time");                // optionnel
+    const summary = getParam("summary");               // optionnel
+    const icalEventId = getParam("icalEventId");       // optionnel
+    const from = getParam("from") || (icalEventId ? "ical" : "manuel");
+
+    // extras passés par planning si dispo
+    const homeTypeParam = getParam("homeType");
+    const teamParam = getParam("team");
+    const ownerNameParam = getParam("ownerName");
+    const ownerEmailParam = getParam("ownerEmail");
+
     logoutBtn.addEventListener("click", async ()=>{
       await signOut(auth);
       localStorage.removeItem("cm_auth");
       location.href = "index.html";
     });
 
+    async function loadHome(){
+      if(!homeId) throw new Error("homeId manquant.");
+      const snap = await getDoc(doc(db, "homes", homeId));
+      if(!snap.exists()) throw new Error("Logement introuvable (homeId).");
+
+      const d = snap.data() || {};
+      currentHome = {
+        id: snap.id,
+        name: d.name || "Logement",
+        city: d.city || "",
+        homeType: d.homeType || d.type || d.kind || homeTypeParam || "",
+        defaultAgent: d.defaultAgent || d.agent || d.teamDefault || "",
+        ownerUid: d.ownerUid || null,
+        ownerName: d.ownerName || ownerNameParam || "",
+        ownerEmail: d.ownerEmail || ownerEmailParam || ""
+      };
+    }
+
     function renderContext(){
       contextTag.textContent = (from === "ical") ? "Réservation iCal" : "Création manuelle";
 
-      const rows = [];
-
       const ht = (currentHome?.homeType || "").trim();
       const homeText = currentHome
-        ? (currentHome.name + (ht ? ` (${ht})` : "") + (currentHome.city ? " — " + (currentHome.city||"") : ""))
+        ? (currentHome.name + (ht ? ` (${ht})` : "") + (currentHome.city ? ` — ${currentHome.city}` : ""))
         : "—";
 
+      const rows = [];
       rows.push(`<div><b>Logement</b> : ${escapeHtml(homeText)}</div>`);
-      rows.push(`<div><b>Propriétaire</b> : ${currentHome ? escapeHtml(currentHome.ownerEmail || "—") : "—"}</div>`);
-      rows.push(`<div><b>Date</b> : ${dateKey || "—"}</div>`);
-      rows.push(`<div><b>Heure</b> : ${escapeHtml(timeEl.value || "—")}</div>`);
-      rows.push(`<div><b>Agent</b> : ${escapeHtml(teamEl.value || (currentHome?.defaultAgent || "—"))}</div>`);
+      rows.push(`<div><b>Propriétaire</b> : ${escapeHtml(currentHome?.ownerEmail || "—")}</div>`);
+      rows.push(`<div><b>Date</b> : ${escapeHtml(dateKey || "—")}</div>`);
+      rows.push(`<div><b>Heure</b> : ${escapeHtml(timeParam || "—")}</div>`);
+      rows.push(`<div><b>Agent</b> : ${escapeHtml(teamEl.value || currentHome?.defaultAgent || "—")}</div>`);
       if(summary) rows.push(`<div><b>Réservation</b> : ${escapeHtml(summary)}</div>`);
-
       contextKv.innerHTML = rows.join("");
-      homeLabel.textContent = currentHome ? (currentHome.name + (ht ? ` (${ht})` : "") + " — " + (currentHome.city||"")) : "—";
-    }
 
-    async function loadHome(){
-      if(!homeId) throw new Error("homeId manquant.");
-      const snap = await getDoc(doc(db,"homes", homeId));
-      if(!snap.exists()) throw new Error("Logement introuvable (homeId).");
-
-      currentHome = { id: snap.id, ...snap.data() };
-
-      // ✅ normalisation champs (au cas où)
-      currentHome.homeType = currentHome.homeType || currentHome.type || currentHome.kind || homeTypeParam || "";
-      currentHome.defaultAgent = currentHome.defaultAgent || currentHome.agent || currentHome.teamDefault || "";
-    }
-
-    function startServicesListener(){
-      const q = query(collection(db,"services"), where("conciergerieUid","==", currentUser.uid));
-      onSnapshot(q, (snap)=>{
-        services = snap.docs.map(d=>({ id:d.id, ...d.data() }));
-        services.sort((a,b)=>{
-          const ta = a.createdAt?.seconds ? a.createdAt.seconds : 0;
-          const tb = b.createdAt?.seconds ? b.createdAt.seconds : 0;
-          return tb - ta;
-        });
-
-        const keep = serviceIdEl.value;
-        serviceIdEl.innerHTML = `<option value="">— Choisir une prestation —</option>` + services.map(s=>{
-          const label = s.name || "(sans nom)";
-          return `<option value="${escapeHtml(s.id)}">${escapeHtml(label)}</option>`;
-        }).join("");
-        if(keep) serviceIdEl.value = keep;
-      }, (err)=>{
-        console.error(err);
-        showAlert("Erreur lecture catalogue : " + (err?.message || "inconnue"));
-      });
+      homeLabel.textContent = currentHome ? (currentHome.name + (ht ? ` (${ht})` : "") + (currentHome.city ? ` — ${currentHome.city}` : "")) : "—";
     }
 
     function lockUI(locked){
       createBtn.disabled = !!locked;
       createBtn.style.opacity = locked ? "0.75" : "1";
     }
-
     function setStatusButtonsEnabled(enabled){
       sendQuoteBtn.disabled = !enabled;
       confirmBtn.disabled = !enabled;
@@ -495,14 +446,12 @@
     }
 
     sendQuoteBtn.addEventListener("click", ()=>{
-      if(!createdEventId){
-        showAlert("Crée d’abord la prestation.");
-        return;
-      }
+      if(!createdEventId) return showAlert("Crée d’abord la prestation.");
+      // Le devis récupèrera ownerEmail dans l’event, donc pré-rempli côté devis.
       location.href = `devis.html?eventId=${createdEventId}`;
     });
 
-    confirmBtn.addEventListener("click", ()=> setEventStatus("confirme"));
+    confirmBtn.addEventListener("click", ()=> setEventStatus("CONFIRME"));
 
     formEl.addEventListener("submit", async (e)=>{
       e.preventDefault();
@@ -512,15 +461,9 @@
       if(!currentHome) return showAlert("Logement non chargé.");
       if(!dateKey) return showAlert("dateKey manquant (YYYY-MM-DD).");
 
-      const serviceId = serviceIdEl.value.trim();
-      if(!serviceId) return showAlert("Choisis une prestation du catalogue.");
-
-      const svc = services.find(s=>s.id === serviceId);
-      if(!svc) return showAlert("Prestation introuvable (catalogue).");
-
-      const time = (timeEl.value || "").trim() || (timeParam || "").trim() || "10:00";
       const team = (teamEl.value || "").trim() || (teamParam || "").trim() || (currentHome.defaultAgent || "").trim();
       const meta = (metaEl.value || "").trim();
+      const time = (timeParam || "").trim() || "10:00";
 
       const payload = {
         conciergerieUid: currentUser.uid,
@@ -533,24 +476,22 @@
         dateKey: dateKey,
         date: dateKey,
 
-        ownerUid: currentHome.ownerUid || null,
-        ownerEmail: currentHome.ownerEmail || "",
-
-        serviceId: svc.id,
-        serviceName: svc.name || "",
-        type: svc.name || "Prestation",
-
         time,
         team: team || "",
         agent: team || "",
 
         meta: meta || "",
 
-        status: "devis",
+        // ✅ workflow : on commence en brouillon interne
+        status: "EN_COURS",
 
         source: (from === "ical") ? "ical" : "manuel",
         icalEventId: icalEventId || null,
         summary: summary || "",
+
+        ownerUid: currentHome.ownerUid || null,
+        ownerName: currentHome.ownerName || "",
+        ownerEmail: currentHome.ownerEmail || "",
 
         createdAt: serverTimestamp()
       };
@@ -561,14 +502,19 @@
       createdEventRef = null;
 
       try{
-        const ref = await addDoc(collection(db,"events"), payload);
-
+        const ref = await addDoc(collection(db, "events"), payload);
         createdEventId = ref.id;
         createdEventRef = doc(db, "events", createdEventId);
 
         setStatusButtonsEnabled(true);
+        showAlert("✅ Prestation créée (EN_COURS). Ajoute maintenant les lignes dans le catalogue.", true);
 
-        showAlert("✅ Prestation créée (statut: devis). Tu peux maintenant envoyer le devis ou confirmer.", true);
+        // ✅ redirection vers catalogue pour ajouter les lignes
+        const params = new URLSearchParams();
+        params.set("eventId", createdEventId);
+        params.set("homeId", currentHome.id);
+        params.set("dateKey", dateKey);
+        location.href = "catalogue.html?" + params.toString();
 
       }catch(err){
         console.error(err);
@@ -583,40 +529,27 @@
         location.href = "login.html?role=conciergerie";
         return;
       }
-
-      const ok = await guardConciergerie(user);
-      if(!ok){
-        location.href = "abonnement.html?plan=starter";
-        return;
-      }
-
       currentUser = user;
       emailLine.textContent = user.email || user.uid;
-
-      timeEl.value = timeParam || "10:00";
-      if(summary){
-        metaEl.value = "Suite réservation : " + summary;
-      }
 
       try{
         await loadHome();
 
-        // ✅ auto-fill agent depuis logement (ou param)
+        // ✅ agent auto (logement > param)
         if(!teamEl.value){
           if(teamParam) teamEl.value = teamParam;
           else if(currentHome.defaultAgent) teamEl.value = currentHome.defaultAgent;
         }
 
-      }catch(e){
-        showAlert("⛔ " + (e.message || "Erreur logement"), false);
-      }
+        renderContext();
+        setStatusButtonsEnabled(false);
 
-      startServicesListener();
-      renderContext();
-      setStatusButtonsEnabled(false);
+      }catch(err){
+        console.error(err);
+        showAlert("⛔ " + (err?.message || "Erreur chargement"), false);
+      }
     });
 
-    timeEl.addEventListener("input", renderContext);
     teamEl.addEventListener("input", renderContext);
   </script>
 </body>
