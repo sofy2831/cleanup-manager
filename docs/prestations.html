@@ -205,7 +205,7 @@
       box-shadow:0 0 0 3px rgba(122,92,255,.12);
     }
     .searchRow .grow{ flex:1; min-width:220px; }
-    .searchRow .small{ width:160px; }
+    .searchRow .small{ width:180px; }
 
     .btn{
       border:none;
@@ -247,7 +247,6 @@
       display:flex;
       justify-content:space-between;
       gap:10px;
-      cursor:pointer;
       align-items:flex-start;
     }
     .i-main{ min-width:0; }
@@ -266,12 +265,17 @@
       color:#5b45c8;
       white-space:nowrap;
     }
-    .badge.status-EN_COURS{ background: rgba(122,92,255,0.12); color:#5b45c8; }
+
+    /* status colors */
+    .badge.status-DRAFT, .badge.status-EN_COURS{ background: rgba(122,92,255,0.12); color:#5b45c8; }
+    .badge.status-DONE{ background: rgba(0,163,255,0.14); color:#0067a6; }
+    .badge.status-READY_TO_BILL{ background: rgba(255,153,0,0.16); color:#8a5600; }
     .badge.status-DEVIS{ background: rgba(0,163,255,0.14); color:#0067a6; }
     .badge.status-FACTURE{ background: rgba(255,153,0,0.16); color:#8a5600; }
     .badge.status-PAYEE{ background: rgba(27,143,77,0.16); color:#1b8f4d; }
     .badge.status-REFUSEE{ background: rgba(179,38,30,0.14); color:#b3261e; }
     .badge.status-ANNULEE{ background: rgba(0,0,0,0.08); color:#444; }
+    .badge.status-CANCELLED{ background: rgba(0,0,0,0.08); color:#444; }
 
     .i-title{
       font-size:13px;
@@ -411,7 +415,7 @@
         border-top: none;
         border: 1px solid rgba(122,92,255,0.18);
         border-radius: 999px;
-        box-shadow: 0 4px 12px rgba(0,0,0,.08);
+        box-shadow:0 4px 12px rgba(0,0,0,.08);
       }
       .page{ padding-bottom: 32px; }
     }
@@ -420,6 +424,55 @@
       .page{ padding-left:12px; padding-right:12px; }
       .i-title, .i-sub{ max-width: 220px; }
       html, body{ overflow-x:hidden; }
+    }
+
+    /* ===== Modals ===== */
+    .modal-backdrop{
+      position:fixed;
+      inset:0;
+      background:rgba(0,0,0,.28);
+      display:none;
+      align-items:center;
+      justify-content:center;
+      z-index:200;
+      padding:16px;
+    }
+    .modal{
+      width:100%;
+      max-width:520px;
+      background:#fff;
+      border-radius:18px;
+      border:1px solid rgba(122,92,255,0.18);
+      box-shadow:0 20px 60px rgba(0,0,0,.18);
+      padding:14px;
+    }
+    .modal h3{
+      margin:0 0 8px;
+      font-size:16px;
+      font-weight:900;
+    }
+    .modal p{
+      margin:0 0 10px;
+      color:#666;
+      font-size:12px;
+      font-weight:800;
+      line-height:1.35;
+    }
+    .modal .row{
+      display:flex;
+      gap:10px;
+      flex-wrap:wrap;
+    }
+    .modal .row > div{
+      flex:1;
+      min-width:200px;
+    }
+    .modal .actions{
+      display:flex;
+      gap:8px;
+      justify-content:flex-end;
+      flex-wrap:wrap;
+      margin-top:10px;
     }
   </style>
 </head>
@@ -453,7 +506,9 @@
 
         <div class="filters" id="chips">
           <button class="chip active" data-status="">Tout</button>
-          <button class="chip" data-status="EN_COURS">EN_COURS</button>
+          <button class="chip" data-status="DRAFT">DRAFT</button>
+          <button class="chip" data-status="DONE">DONE</button>
+          <button class="chip" data-status="READY_TO_BILL">READY_TO_BILL</button>
           <button class="chip" data-status="DEVIS">DEVIS</button>
           <button class="chip" data-status="FACTURE">FACTURE</button>
           <button class="chip" data-status="PAYEE">PAYEE</button>
@@ -462,11 +517,12 @@
         </div>
 
         <div class="searchRow">
-          <input class="grow" id="searchInput" placeholder="Recherche : logement / ville / propriétaire / note…" />
+          <input class="grow" id="searchInput" placeholder="Recherche : logement / ville / propriétaire / note / agent…" />
           <select class="small" id="sortSelect">
+            <option value="created_desc">Création ↓ (stable)</option>
             <option value="date_desc">Date ↓</option>
             <option value="date_asc">Date ↑</option>
-            <option value="created_desc">Création ↓</option>
+            <option value="total_desc">Total ↓</option>
           </select>
           <button class="btn" id="refreshBtn" type="button">Rafraîchir</button>
         </div>
@@ -478,7 +534,7 @@
         </div>
 
         <div class="tiny" id="perfHint">
-          Astuce perf : on charge par pages (limit). Pas de onSnapshot sur 10 000 docs. Oui, je protège ton PC.
+          Perf : on charge par pages (createdAt desc). Filtres/tri = côté navigateur (donc 0 index composite, 0 drama).
         </div>
       </section>
 
@@ -494,11 +550,18 @@
         <div class="lines" id="detailLines"></div>
 
         <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end; margin-top:6px;">
+          <button class="btn" id="editQuickBtn" type="button" disabled>Modifier (rapide)</button>
+          <button class="btn" id="assignBtn" type="button" disabled>Assigner</button>
+
           <button class="btn" id="openDevisBtn" type="button" disabled>Ouvrir devis</button>
           <button class="btn" id="openFactureBtn" type="button" disabled>Ouvrir facture</button>
+
+          <button class="btn primary" id="toDoneBtn" type="button" disabled>Marquer DONE</button>
+          <button class="btn primary" id="toReadyBtn" type="button" disabled>Bon à facturer</button>
           <button class="btn primary" id="toDevisBtn" type="button" disabled>Passer en DEVIS</button>
           <button class="btn primary" id="toFactureBtn" type="button" disabled>Passer en FACTURE</button>
           <button class="btn primary" id="toPayeeBtn" type="button" disabled>Marquer PAYEE</button>
+
           <button class="btn danger" id="deleteBtn" type="button" disabled>Supprimer</button>
         </div>
 
@@ -514,6 +577,70 @@
     <a href="catalogue.html">Catalogue</a>
     <a href="logements.html">Logements</a>
   </nav>
+
+  <!-- MODAL ASSIGN -->
+  <div class="modal-backdrop" id="assignBackdrop" aria-hidden="true">
+    <div class="modal" role="dialog" aria-modal="true">
+      <h3>Assigner un agent</h3>
+      <p>V1 : on stocke juste un nom (et optionnellement un email). Pas de compte agent obligatoire.</p>
+
+      <div class="row">
+        <div>
+          <label for="agentName">Nom agent</label>
+          <input id="agentName" placeholder="Ex. Sarah / Équipe A" />
+        </div>
+        <div>
+          <label for="agentEmail">Email agent (optionnel)</label>
+          <input id="agentEmail" type="email" placeholder="agent@email.com" />
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="btn" id="assignCancelBtn" type="button">Annuler</button>
+        <button class="btn primary" id="assignSaveBtn" type="button">Enregistrer</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL EDIT QUICK -->
+  <div class="modal-backdrop" id="editBackdrop" aria-hidden="true">
+    <div class="modal" role="dialog" aria-modal="true">
+      <h3>Modifier (rapide)</h3>
+      <p>On modifie les champs “safe” : date/heure/agent/note. Les lignes restent inchangées (V1).</p>
+
+      <div class="row">
+        <div>
+          <label for="editDate">Date</label>
+          <input id="editDate" type="date" />
+        </div>
+        <div>
+          <label for="editTime">Heure</label>
+          <input id="editTime" type="time" />
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <label for="editAgent">Agent</label>
+          <input id="editAgent" placeholder="Ex. Sarah / Équipe A" />
+        </div>
+        <div>
+          <label for="editAgentEmail">Email agent (optionnel)</label>
+          <input id="editAgentEmail" type="email" placeholder="agent@email.com" />
+        </div>
+      </div>
+      <div class="row">
+        <div style="flex:1; min-width:100%;">
+          <label for="editNote">Note</label>
+          <input id="editNote" placeholder="Ex. urgence, voyageurs exigeants…" />
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="btn" id="editCancelBtn" type="button">Annuler</button>
+        <button class="btn primary" id="editSaveBtn" type="button">Enregistrer</button>
+      </div>
+    </div>
+  </div>
 
   <script type="module">
     import { auth, db } from "./firebase-init.js";
@@ -541,12 +668,34 @@
     const detailLines = document.getElementById("detailLines");
     const rulesHint = document.getElementById("rulesHint");
 
+    const editQuickBtn = document.getElementById("editQuickBtn");
+    const assignBtn = document.getElementById("assignBtn");
+
     const openDevisBtn = document.getElementById("openDevisBtn");
     const openFactureBtn = document.getElementById("openFactureBtn");
+
+    const toDoneBtn = document.getElementById("toDoneBtn");
+    const toReadyBtn = document.getElementById("toReadyBtn");
     const toDevisBtn = document.getElementById("toDevisBtn");
     const toFactureBtn = document.getElementById("toFactureBtn");
     const toPayeeBtn = document.getElementById("toPayeeBtn");
     const deleteBtn = document.getElementById("deleteBtn");
+
+    // modals
+    const assignBackdrop = document.getElementById("assignBackdrop");
+    const agentName = document.getElementById("agentName");
+    const agentEmail = document.getElementById("agentEmail");
+    const assignCancelBtn = document.getElementById("assignCancelBtn");
+    const assignSaveBtn = document.getElementById("assignSaveBtn");
+
+    const editBackdrop = document.getElementById("editBackdrop");
+    const editDate = document.getElementById("editDate");
+    const editTime = document.getElementById("editTime");
+    const editAgent = document.getElementById("editAgent");
+    const editAgentEmail = document.getElementById("editAgentEmail");
+    const editNote = document.getElementById("editNote");
+    const editCancelBtn = document.getElementById("editCancelBtn");
+    const editSaveBtn = document.getElementById("editSaveBtn");
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -573,16 +722,26 @@
       return x.toLocaleString("fr-FR", { minimumFractionDigits:2, maximumFractionDigits:2 }) + " €";
     }
 
+    function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
+
     function asStatus(s){
       const x = String(s || "").toUpperCase().trim();
-      // normalise tes anciens statuts si besoin
+
+      // compat ancien
+      if(x === "EN_COURS" || x === "BROUILLON") return "DRAFT";
+
+      if(x === "DONE" || x === "REALISEE" || x === "RÉALISÉE") return "DONE";
+      if(x === "READY_TO_BILL" || x === "BON_A_FACTURER" || x === "BON À FACTURER") return "READY_TO_BILL";
+
       if(x === "DEVIS") return "DEVIS";
       if(x === "FACTURE") return "FACTURE";
       if(x === "PAYEE" || x === "PAYÉE") return "PAYEE";
       if(x === "REFUSE" || x === "REFUSÉ" || x === "REFUSEE" || x === "REFUSÉE") return "REFUSEE";
       if(x === "ANNULEE" || x === "ANNULÉE") return "ANNULEE";
-      if(x === "EN_COURS" || x === "BROUILLON") return "EN_COURS";
-      return x || "EN_COURS";
+      if(x === "CANCELLED") return "CANCELLED";
+
+      // si inconnu, on le traite comme DRAFT pour éviter de bloquer l’UX
+      return x || "DRAFT";
     }
 
     // ===== Guard =====
@@ -590,8 +749,7 @@
     async function guardConciergerie(user){
       const email = (user.email || "").toLowerCase();
       if(FREE_EMAILS.has(email)) return true;
-      // si tu veux rebrancher la vérif users/subscription, tu peux (comme dans tes autres pages)
-      return true;
+      return true; // comme ton fichier initial (tu peux rebrancher users/subscription plus tard)
     }
 
     logoutBtn.addEventListener("click", async ()=>{
@@ -607,59 +765,84 @@
     let lastDoc = null;
     let hasMore = false;
 
-    const PAGE_SIZE = 20;
+    const PAGE_SIZE = 25;
 
-    let items = [];              // cache page
-    let selected = null;         // selected event {id, ...}
+    let items = [];
+    let selected = null;
 
-    // ===== Query builder =====
+    // ===== Firestore query (NO composite index) =====
+    // On charge UNIQUEMENT : where(conciergerieUid==uid) + orderBy(createdAt desc)
+    // Puis filtrage/tri côté navigateur.
     function buildQueryPage(isNextPage){
-      const base = [ where("conciergerieUid","==", currentUser.uid) ];
-      if(statusFilter){
-        base.push(where("status","==", statusFilter));
-      }
-
-      // tri
-      const sort = sortSelect.value;
-      let qArgs = [ collection(db,"events"), ...base ];
-
-      // Attention index : where(conciergerieUid) + where(status) + orderBy(dateKey)
-      // => il te faudra un composite index si statusFilter activé (tu l’as déjà fait visiblement).
-      if(sort === "date_desc"){
-        qArgs.push(orderBy("dateKey","desc"));
-        qArgs.push(orderBy("createdAt","desc"));
-      }else if(sort === "date_asc"){
-        qArgs.push(orderBy("dateKey","asc"));
-        qArgs.push(orderBy("createdAt","desc"));
-      }else{
-        qArgs.push(orderBy("createdAt","desc"));
-      }
-
+      const qArgs = [
+        collection(db,"events"),
+        where("conciergerieUid","==", currentUser.uid),
+        orderBy("createdAt","desc"),
+      ];
       if(isNextPage && lastDoc){
         qArgs.push(startAfter(lastDoc));
       }
       qArgs.push(limit(PAGE_SIZE));
-
       return query(...qArgs);
+    }
+
+    function computeTotalFromLines(lines){
+      if(!Array.isArray(lines)) return 0;
+      return lines.reduce((s,l)=> s + (Number(l?.qty)||0)*(Number(l?.unitPrice)||0), 0);
     }
 
     function normalizeForSearch(d){
       const parts = [
         d.homeName, d.homeCity, d.ownerName, d.ownerEmail,
-        d.meta, d.summary, d.team,
+        d.meta, d.summary,
+        d.assignedToName, d.assignedToEmail,
+        d.team, // compat champ ancien
         (Array.isArray(d.lines) ? d.lines.map(l=>l?.label).join(" ") : "")
       ];
       return parts.filter(Boolean).join(" ").toLowerCase();
     }
 
+    function getFilteredSorted(){
+      const q = (searchInput.value || "").trim().toLowerCase();
+
+      let arr = items.slice();
+
+      // filter status
+      if(statusFilter){
+        arr = arr.filter(x => asStatus(x.status) === statusFilter);
+      }
+
+      // search
+      if(q){
+        arr = arr.filter(x => (x._search || "").includes(q));
+      }
+
+      // sort (client)
+      const sort = sortSelect.value;
+
+      const safeDateKey = (x)=> (x.dateKey || "").toString(); // YYYY-MM-DD
+      const safeCreated = (x)=> (x.createdAt?.seconds ? x.createdAt.seconds : 0);
+      const safeTotal = (x)=> Number(x.total || 0);
+
+      if(sort === "created_desc"){
+        arr.sort((a,b)=> safeCreated(b)-safeCreated(a));
+      }else if(sort === "date_desc"){
+        arr.sort((a,b)=> safeDateKey(b).localeCompare(safeDateKey(a)) || (safeCreated(b)-safeCreated(a)));
+      }else if(sort === "date_asc"){
+        arr.sort((a,b)=> safeDateKey(a).localeCompare(safeDateKey(b)) || (safeCreated(b)-safeCreated(a)));
+      }else if(sort === "total_desc"){
+        arr.sort((a,b)=> safeTotal(b)-safeTotal(a) || (safeCreated(b)-safeCreated(a)));
+      }else{
+        arr.sort((a,b)=> safeCreated(b)-safeCreated(a));
+      }
+
+      return arr;
+    }
+
     function renderList(){
       listEl.innerHTML = "";
 
-      const q = (searchInput.value || "").trim().toLowerCase();
-      const filtered = q
-        ? items.filter(x => (x._search || "").includes(q))
-        : items;
-
+      const filtered = getFilteredSorted();
       countLabel.textContent = `${filtered.length} affiché(s)`;
 
       if(!filtered.length){
@@ -673,14 +856,16 @@
       for(const it of filtered){
         const st = asStatus(it.status);
         const title = `${it.homeName || "Logement"}${it.homeCity ? " — " + it.homeCity : ""}`;
+
+        const agent = it.assignedToName || it.team || "";
         const sub = [
           it.dateKey ? `Date: ${it.dateKey}` : null,
           it.time ? `Heure: ${it.time}` : null,
           it.ownerEmail ? `Proprio: ${it.ownerEmail}` : null,
-          it.team ? `Agent: ${it.team}` : null,
+          agent ? `Agent: ${agent}` : null,
         ].filter(Boolean).join(" • ");
 
-        const total = (it.total != null) ? money(it.total) : (Array.isArray(it.lines) ? money(it.lines.reduce((s,l)=>s+(Number(l.qty)||0)*(Number(l.unitPrice)||0),0)) : "—");
+        const total = money(Number(it.total || 0));
 
         const div = document.createElement("div");
         div.className = "item";
@@ -695,19 +880,34 @@
           </div>
           <div class="i-actions">
             <button class="mini ghost" type="button" data-open="${esc(it.id)}">Détail</button>
+            <button class="mini ghost" type="button" data-assign="${esc(it.id)}">Assigner</button>
+            ${ (asStatus(it.status) === "DRAFT")
+              ? `<button class="mini danger" type="button" data-del="${esc(it.id)}">Supprimer</button>`
+              : ``
+            }
           </div>
         `;
         listEl.appendChild(div);
 
-        div.querySelector("button[data-open]")?.addEventListener("click", ()=>{
+        div.querySelector("button[data-open]")?.addEventListener("click", (e)=>{
+          e.stopPropagation();
           selectItem(it.id);
         });
 
-        // click global aussi
-        div.addEventListener("click", (e)=>{
-          if(e.target?.tagName === "BUTTON") return;
+        div.querySelector("button[data-assign]")?.addEventListener("click", (e)=>{
+          e.stopPropagation();
           selectItem(it.id);
+          openAssignModal();
         });
+
+        div.querySelector("button[data-del]")?.addEventListener("click", (e)=>{
+          e.stopPropagation();
+          selectItem(it.id);
+          deleteSelected();
+        });
+
+        // click global => détail
+        div.addEventListener("click", ()=> selectItem(it.id));
       }
     }
 
@@ -719,9 +919,12 @@
       rulesHint.style.display = "none";
       rulesHint.textContent = "";
 
-      [openDevisBtn, openFactureBtn, toDevisBtn, toFactureBtn, toPayeeBtn, deleteBtn].forEach(b=>{
-        b.disabled = true;
-      });
+      [
+        editQuickBtn, assignBtn,
+        openDevisBtn, openFactureBtn,
+        toDoneBtn, toReadyBtn, toDevisBtn, toFactureBtn, toPayeeBtn,
+        deleteBtn
+      ].forEach(b=> b.disabled = true);
     }
 
     function renderDetail(){
@@ -736,19 +939,21 @@
       const title = `${selected.homeName || "Logement"}${selected.homeCity ? " — " + selected.homeCity : ""}`;
       const owner = `${selected.ownerName || "—"} • ${selected.ownerEmail || "—"}`;
 
-      const total = (selected.total != null)
-        ? Number(selected.total)
-        : (Array.isArray(selected.lines) ? selected.lines.reduce((s,l)=>s+(Number(l.qty)||0)*(Number(l.unitPrice)||0),0) : 0);
+      const agent = selected.assignedToName || selected.team || "—";
+      const agentMail = selected.assignedToEmail || "";
+
+      const total = Number(selected.total || 0);
 
       detailKv.innerHTML = [
         `<div><b>Logement</b> : ${esc(title)}</div>`,
         `<div><b>Propriétaire</b> : ${esc(owner)}</div>`,
         `<div><b>Date</b> : ${esc(selected.dateKey || "—")} • <b>Heure</b> : ${esc(selected.time || "—")}</div>`,
-        `<div><b>Agent</b> : ${esc(selected.team || "—")}</div>`,
+        `<div><b>Agent</b> : ${esc(agent)}${agentMail ? " • " + esc(agentMail) : ""}</div>`,
         `<div><b>Note</b> : ${esc(selected.meta || "—")}</div>`,
         `<div><b>Total</b> : ${esc(money(total))}</div>`
       ].join("");
 
+      // lignes
       detailLines.innerHTML = "";
       const lines = Array.isArray(selected.lines) ? selected.lines : [];
       if(!lines.length){
@@ -772,26 +977,36 @@
         }
       }
 
-      // buttons
+      // enable buttons
+      editQuickBtn.disabled = false;
+      assignBtn.disabled = false;
+
       openDevisBtn.disabled = !(st === "DEVIS" || st === "FACTURE" || st === "PAYEE");
       openFactureBtn.disabled = !(st === "FACTURE" || st === "PAYEE");
-      toDevisBtn.disabled = !(st === "EN_COURS");
-      toFactureBtn.disabled = !(st === "DEVIS" || st === "EN_COURS"); // tu peux durcir si tu veux
-      toPayeeBtn.disabled = !(st === "FACTURE");
-      deleteBtn.disabled = !(st === "EN_COURS" || st === "REFUSEE" || st === "ANNULEE");
 
-      // rule hint (business)
+      // transitions
+      toDoneBtn.disabled = !(st === "DRAFT");
+      toReadyBtn.disabled = !(st === "DONE");
+      toDevisBtn.disabled = !(st === "DRAFT" || st === "DONE");
+      toFactureBtn.disabled = !(st === "READY_TO_BILL" || st === "DEVIS");
+      toPayeeBtn.disabled = !(st === "FACTURE");
+
+      // suppression : seulement brouillon
+      deleteBtn.disabled = !(st === "DRAFT");
+
+      // rules hint
       rulesHint.style.display = "block";
       rulesHint.textContent =
-        (st === "EN_COURS") ? "EN_COURS : modifiable (plus tard) et supprimable." :
-        (st === "DEVIS") ? "DEVIS : envoyable au propriétaire, puis accepté/refusé." :
-        (st === "FACTURE") ? "FACTURE : tu peux la marquer PAYEE (paiement hors CleanUp)." :
-        (st === "PAYEE") ? "PAYEE : verrouillé (en V1, on évite de modifier après paiement)." :
-        (st === "REFUSEE") ? "REFUSEE : soit tu ajustes et refais un devis, soit tu annules." :
-        (st === "ANNULEE") ? "ANNULEE : archivée." :
+        (st === "DRAFT") ? "DRAFT : modifiable/supprimable. Tu peux l’assigner, ou la marquer DONE quand l’agent a fini." :
+        (st === "DONE") ? "DONE : réalisé terrain. Tu peux valider 'Bon à facturer' (READY_TO_BILL)." :
+        (st === "READY_TO_BILL") ? "READY_TO_BILL : validé conciergerie. Tu peux sortir une FACTURE. Plus de modification en V1." :
+        (st === "DEVIS") ? "DEVIS : envoyable/accepté/refusé. Ensuite facture." :
+        (st === "FACTURE") ? "FACTURE : non modifiable. Paiement hors CleanUp → marque PAYEE." :
+        (st === "PAYEE") ? "PAYEE : verrouillé." :
+        (st === "REFUSEE") ? "REFUSEE : tu ajustes et renvoies, ou tu annules." :
+        (st === "ANNULEE") ? "ANNULEE : archivé." :
         "Statut inconnu.";
 
-      // links
       openDevisBtn.onclick = ()=> location.href = "devis.html?eventId=" + encodeURIComponent(selected.id);
       openFactureBtn.onclick = ()=> location.href = "facture.html?eventId=" + encodeURIComponent(selected.id);
     }
@@ -801,35 +1016,62 @@
       renderDetail();
     }
 
-    async function setStatus(newStatus){
+    async function patchSelected(data){
       if(!selected) return;
       hideAlert();
 
       const ref = doc(db,"events", selected.id);
       try{
         await updateDoc(ref, {
-          status: newStatus,
-          statusUpdatedAt: serverTimestamp(),
+          ...data,
           updatedAt: serverTimestamp()
         });
-        showAlert(`✅ Statut mis à jour : ${newStatus}`, true);
 
         // update local
-        selected.status = newStatus;
         const i = items.findIndex(x=>x.id === selected.id);
-        if(i >= 0) items[i].status = newStatus;
+        if(i >= 0){
+          items[i] = { ...items[i], ...data };
+          items[i]._search = normalizeForSearch(items[i]);
+        }
+        selected = items[i] || selected;
 
+        showAlert("✅ Mise à jour enregistrée.", true);
         renderList();
         renderDetail();
       }catch(err){
         console.error(err);
-        showAlert("Erreur MAJ statut : " + (err?.message || "inconnue"));
+        showAlert("Erreur mise à jour : " + (err?.message || "inconnue"));
       }
+    }
+
+    async function setStatus(newStatus){
+      if(!selected) return;
+      const now = serverTimestamp();
+
+      const extra = {
+        status: newStatus,
+        statusUpdatedAt: now,
+      };
+
+      // timestamps métiers
+      if(newStatus === "DONE") extra.doneAt = now;
+      if(newStatus === "READY_TO_BILL") extra.readyToBillAt = now;
+      if(newStatus === "FACTURE") extra.invoiceIssuedAt = now;
+      if(newStatus === "PAYEE") extra.paidAt = now;
+
+      await patchSelected(extra);
+      showAlert(`✅ Statut : ${newStatus}`, true);
     }
 
     async function deleteSelected(){
       if(!selected) return;
       hideAlert();
+
+      const st = asStatus(selected.status);
+      if(st !== "DRAFT"){
+        showAlert("⛔ Suppression refusée : on ne supprime que les brouillons (DRAFT).");
+        return;
+      }
 
       const ok = confirm("Supprimer cette prestation ? (action irréversible)");
       if(!ok) return;
@@ -847,6 +1089,106 @@
       }
     }
 
+    // ===== Modals helpers =====
+    function openAssignModal(){
+      if(!selected) return;
+      agentName.value = selected.assignedToName || selected.team || "";
+      agentEmail.value = selected.assignedToEmail || "";
+      assignBackdrop.style.display = "flex";
+      agentName.focus();
+    }
+    function closeAssignModal(){
+      assignBackdrop.style.display = "none";
+    }
+
+    function openEditModal(){
+      if(!selected) return;
+      editDate.value = selected.dateKey || "";
+      editTime.value = selected.time || "";
+      editAgent.value = selected.assignedToName || selected.team || "";
+      editAgentEmail.value = selected.assignedToEmail || "";
+      editNote.value = selected.meta || "";
+      editBackdrop.style.display = "flex";
+      editDate.focus();
+    }
+    function closeEditModal(){
+      editBackdrop.style.display = "none";
+    }
+
+    // close modal on backdrop click
+    assignBackdrop.addEventListener("click", (e)=>{ if(e.target === assignBackdrop) closeAssignModal(); });
+    editBackdrop.addEventListener("click", (e)=>{ if(e.target === editBackdrop) closeEditModal(); });
+
+    assignCancelBtn.addEventListener("click", closeAssignModal);
+    editCancelBtn.addEventListener("click", closeEditModal);
+
+    assignSaveBtn.addEventListener("click", async ()=>{
+      if(!selected) return;
+
+      const name = (agentName.value || "").trim();
+      const mail = normalizeEmail(agentEmail.value || "");
+
+      // email optional, but if filled check basic format
+      if(mail && !/^\S+@\S+\.\S+$/.test(mail)){
+        showAlert("Email agent invalide.");
+        return;
+      }
+
+      await patchSelected({
+        assignedToName: name || "",
+        assignedToEmail: mail || "",
+        assignedAt: serverTimestamp(),
+        // compat ancien champ
+        team: name || ""
+      });
+
+      closeAssignModal();
+    });
+
+    editSaveBtn.addEventListener("click", async ()=>{
+      if(!selected) return;
+
+      const st = asStatus(selected.status);
+      if(st !== "DRAFT"){
+        showAlert("⛔ Modification refusée : en V1 on ne modifie que DRAFT.");
+        closeEditModal();
+        return;
+      }
+
+      const dk = (editDate.value || "").trim();
+      const tm = (editTime.value || "").trim();
+      const ag = (editAgent.value || "").trim();
+      const agm = normalizeEmail(editAgentEmail.value || "");
+      const note = (editNote.value || "").trim();
+
+      if(!dk){
+        showAlert("Date obligatoire.");
+        return;
+      }
+      if(agm && !/^\S+@\S+\.\S+$/.test(agm)){
+        showAlert("Email agent invalide.");
+        return;
+      }
+
+      await patchSelected({
+        dateKey: dk,
+        date: dk, // compat
+        time: tm,
+        assignedToName: ag || "",
+        assignedToEmail: agm || "",
+        team: ag || "",
+        meta: note,
+      });
+
+      closeEditModal();
+    });
+
+    // ===== Detail button wiring =====
+    editQuickBtn.addEventListener("click", openEditModal);
+    assignBtn.addEventListener("click", openAssignModal);
+
+    toDoneBtn.addEventListener("click", ()=> setStatus("DONE"));
+    toReadyBtn.addEventListener("click", ()=> setStatus("READY_TO_BILL"));
     toDevisBtn.addEventListener("click", ()=> setStatus("DEVIS"));
     toFactureBtn.addEventListener("click", ()=> setStatus("FACTURE"));
     toPayeeBtn.addEventListener("click", ()=> setStatus("PAYEE"));
@@ -863,22 +1205,30 @@
 
       const got = snap.docs.map(d=>{
         const x = d.data() || {};
+
+        const lines = Array.isArray(x.lines) ? x.lines : [];
+        const total = (x.total != null) ? Number(x.total) : computeTotalFromLines(lines);
+
         const obj = {
           id: d.id,
-          status: asStatus(x.status || "EN_COURS"),
+          status: asStatus(x.status || "DRAFT"),
           dateKey: x.dateKey || x.date || "",
           time: x.time || "",
           homeId: x.homeId || "",
           homeName: x.homeName || "",
           homeCity: x.homeCity || x.city || "",
           ownerName: x.ownerName || "",
-          ownerEmail: x.ownerEmail || x.ownerEmail || "",
-          team: x.team || "",
+          ownerEmail: x.ownerEmail || "",
           meta: x.meta || "",
           summary: x.summary || "",
-          total: x.total,
-          lines: Array.isArray(x.lines) ? x.lines : [],
-          createdAt: x.createdAt || null
+          lines,
+          total,
+          createdAt: x.createdAt || null,
+
+          // assignment (new + compat)
+          assignedToName: x.assignedToName || "",
+          assignedToEmail: x.assignedToEmail || "",
+          team: x.team || "",
         };
         obj._search = normalizeForSearch(obj);
         return obj;
@@ -895,10 +1245,8 @@
       hasMore = snap.docs.length === PAGE_SIZE;
       moreBtn.disabled = !hasMore;
 
-      // reset selection if deleted by filter
-      if(selected && !items.some(x=>x.id === selected.id)){
-        resetDetail();
-      }
+      // if selected not in list anymore, keep it (list is client filtered anyway)
+      // but if deleted, it will be removed by deleteSelected()
 
       renderList();
       renderDetail();
@@ -906,14 +1254,9 @@
 
     function setStatusFilter(next){
       statusFilter = next || "";
-      // reset paging
-      lastDoc = null;
-      hasMore = false;
       resetDetail();
-      loadPage(false).catch(err=>{
-        console.error(err);
-        showAlert("Erreur chargement : " + (err?.message || "inconnue"));
-      });
+      renderList();
+      renderDetail();
     }
 
     // ===== UI events =====
@@ -936,16 +1279,13 @@
     });
 
     sortSelect.addEventListener("change", ()=>{
-      lastDoc = null;
-      resetDetail();
-      loadPage(false).catch(err=>{
-        console.error(err);
-        showAlert("Erreur tri : " + (err?.message || "inconnue"));
-      });
+      renderList();
+      renderDetail();
     });
 
     searchInput.addEventListener("input", ()=>{
       renderList();
+      renderDetail();
     });
 
     moreBtn.addEventListener("click", ()=>{
@@ -974,6 +1314,7 @@
       try{
         hideAlert();
         resetDetail();
+        lastDoc = null;
         await loadPage(false);
       }catch(err){
         console.error(err);
