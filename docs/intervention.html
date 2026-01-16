@@ -173,10 +173,6 @@
       color:#fff;
       box-shadow:0 12px 24px rgba(0,0,0,0.10);
     }
-    .btn.danger{
-      border-color:#ffb7cc;
-      color:var(--bad);
-    }
     .btn:disabled{ opacity:.6; cursor:not-allowed; }
 
     .row{
@@ -218,7 +214,6 @@
       margin:4px 0;
     }
 
-    /* Missions */
     .mission{
       background:#fff;
       border-radius:16px;
@@ -245,6 +240,7 @@
       font-size:12px;
       font-weight:800;
       color:#666;
+      white-space:pre-wrap;
     }
     .badge{
       font-size:11px;
@@ -274,10 +270,6 @@
       color:#666;
       font-weight:900;
       font-size:12px;
-    }
-
-    @media (max-width: 520px){
-      .page{ padding-left:12px; padding-right:12px; }
     }
   </style>
 </head>
@@ -321,13 +313,21 @@
 
         <div class="row">
           <div>
+            <label>Adresse (si dispo)</label>
+            <input id="addrLine" disabled value="—" />
+          </div>
+          <div>
             <label>Créer / régénérer missions (si vide)</label>
             <button class="btn" id="createMissionsBtn" type="button">Créer missions (check-in / ménage / check-out)</button>
           </div>
+        </div>
+
+        <div class="row">
           <div>
             <label>Agents connus (pour dropdown)</label>
             <button class="btn" id="refreshAgentsBtn" type="button">Rafraîchir agents</button>
           </div>
+          <div></div>
         </div>
 
         <div class="divider"></div>
@@ -381,6 +381,7 @@
     const prestaHint = document.getElementById("prestaHint");
     const homeLine = document.getElementById("homeLine");
     const dtLine = document.getElementById("dtLine");
+    const addrLine = document.getElementById("addrLine");
 
     const createMissionsBtn = document.getElementById("createMissionsBtn");
     const refreshAgentsBtn = document.getElementById("refreshAgentsBtn");
@@ -443,8 +444,8 @@
     const prestationId = qs("prestationId") || qs("eventId") || "";
 
     let prestation = null;
-    let missions = []; // {id, type, status, assignedToName, assignedToEmail, ...}
-    let agents = [];   // {name,email}
+    let missions = [];
+    let agents = [];
 
     // ===== Auth =====
     logoutBtn.addEventListener("click", async ()=>{
@@ -454,8 +455,6 @@
     });
 
     // ===== Data model =====
-    // On stocke les missions dans : events/{prestationId}/missions/{missionId}
-    // Et les tokens journée dans : dayTokens/{token}
     function missionsColRef(){
       return collection(db, "events", prestationId, "missions");
     }
@@ -474,19 +473,21 @@
       }
 
       const x = snap.data() || {};
-      // sécurité conciergerie
       if(x.conciergerieUid && x.conciergerieUid !== currentUser.uid){
         showAlert("⛔ Accès refusé : cette prestation n'est pas à cette conciergerie.");
         return false;
       }
 
       prestation = { id: snap.id, ...x };
+
       const title = `${x.homeName || "Logement"}${x.homeCity ? " — " + x.homeCity : ""}`;
       const dt = `${x.dateKey || x.date || "—"}${x.time ? " à " + x.time : ""}`;
+      const addr = (x.homeAddress || x.address || "").trim() || "—";
 
       prestaHint.textContent = "#" + prestationId.slice(0,6);
       homeLine.value = title;
       dtLine.value = dt;
+      addrLine.value = addr;
 
       return true;
     }
@@ -504,7 +505,6 @@
           id: d.id,
           type: (x.type || "").toUpperCase(),
           status: (x.status || "A_PLANIFIER").toUpperCase(),
-          plannedAt: x.plannedAt || null,
           assignedToName: x.assignedToName || "",
           assignedToEmail: x.assignedToEmail || "",
           sentAt: x.sentAt || null
@@ -568,17 +568,12 @@
             </div>
           </div>
 
-          <div class="m-actions">
-            <button class="btn" type="button" data-open-agent="${esc(m.id)}">Ouvrir agent.html (test)</button>
-          </div>
-
           <div class="tiny" style="color:#666;">
-            Astuce : “Assigner” met la mission en <b>ASSIGNÉE</b>. “Envoyer lien journée” met <b>ENVOYÉE</b>.
+            “Assigner” → <b>ASSIGNÉE</b>. “Envoyer lien journée” → <b>ENVOYÉE</b>.
           </div>
         `;
         missionsList.appendChild(box);
 
-        // assign
         box.querySelector(`[data-assign="${m.id}"]`)?.addEventListener("click", async ()=>{
           hideAlert();
 
@@ -604,18 +599,11 @@
             });
             showAlert("✅ Mission assignée.", true);
             await loadMissions();
-            await loadAgentsAndFillSelects(); // keep dropdown day link in sync
+            await loadAgentsAndFillSelects();
           }catch(err){
             console.error(err);
             showAlert("Erreur assignation : " + (err?.message || "inconnue"));
           }
-        });
-
-        // open agent test
-        box.querySelector(`[data-open-agent="${m.id}"]`)?.addEventListener("click", ()=>{
-          // Pour l’instant agent.html attend un token (journée).
-          // Donc on ouvre juste la page pour tester l’UI si besoin.
-          window.open("agent.html", "_blank");
         });
       }
     }
@@ -624,8 +612,6 @@
     async function loadAgents(){
       agents = [];
 
-      // on récupère des agents “connus” depuis events
-      // (c’est simple, pas parfait, mais efficace pour v1)
       const q = query(
         collection(db,"events"),
         where("conciergerieUid","==", currentUser.uid),
@@ -664,7 +650,6 @@
     async function loadAgentsAndFillSelects(){
       await loadAgents();
       fillDayAgentSelect();
-      // re-render missions to rebuild dropdowns
       renderMissions();
     }
 
@@ -709,7 +694,6 @@
       hideAlert();
       if(!prestationId || !prestation) return;
 
-      // reload count quickly
       const existing = await getDocs(query(missionsColRef(), orderBy("createdAt","asc")));
       if(existing.size > 0){
         showAlert("⛔ Missions déjà présentes. (Je ne régénère pas automatiquement.)");
@@ -719,8 +703,8 @@
       const batch = writeBatch(db);
 
       const types = ["CHECKIN","MENAGE","CHECKOUT"];
-      types.forEach((type, idx)=>{
-        const id = type; // ids stables (CHECKIN/MENAGE/CHECKOUT)
+      types.forEach((type)=>{
+        const id = type; // ids stables
         const ref = doc(db, "events", prestationId, "missions", id);
 
         batch.set(ref, {
@@ -728,14 +712,27 @@
           prestationId,
           type,
           status: "A_PLANIFIER",
-          plannedAt: prestation.dateKey || prestation.date || null,
+
+          // ✅ copie infos prestation (agent doit voir)
+          homeId: prestation.homeId || "",
+          homeName: prestation.homeName || "",
+          homeCity: prestation.homeCity || prestation.city || "",
+          homeAddress: prestation.homeAddress || prestation.address || "",
+          dateKey: prestation.dateKey || prestation.date || "",
+          time: prestation.time || "",
+
           checklist: defaultChecklist(type),
           photos: [],
           comment: "",
           incident: { isIncident:false, label:"" },
+
           assignedToName: "",
           assignedToEmail: "",
+
+          // sécurité
+          dayToken: "",          // rempli à l’envoi
           locked: false,
+
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp()
         }, { merge: true });
@@ -758,6 +755,7 @@
 
       const home = homeLine.value || "Logement";
       const dt = dtLine.value || "—";
+      const addr = addrLine.value || "—";
 
       const subject = `Lien interventions (24h) — ${agentName} — ${home}`;
       const body =
@@ -766,7 +764,8 @@
 Voici votre lien d’accès (valable 24h) pour vos interventions :
 ${link}
 
-Logement / contexte : ${home}
+Logement : ${home}
+Adresse : ${addr}
 Date / heure : ${dt}
 
 Token : ${token}
@@ -793,30 +792,33 @@ CleanUp Manager`;
         return;
       }
 
-      // Il faut au moins une mission ASSIGNEE pour cet agent (sinon ça n’a aucun sens)
-      const assigned = missions.filter(m => normalizeEmail(m.assignedToEmail) === agentEmail && (m.status === "ASSIGNEE" || m.status === "ENVOYEE"));
+      const assigned = missions.filter(m =>
+        normalizeEmail(m.assignedToEmail) === agentEmail &&
+        (m.status === "ASSIGNEE" || m.status === "ENVOYEE")
+      );
       if(!assigned.length){
-        showAlert("⛔ Aucune mission assignée à cet agent sur cette prestation. Assigne d’abord.");
+        showAlert("⛔ Aucune mission assignée à cet agent. Assigne d’abord.");
         return;
       }
 
       const token = makeToken(14);
       const expiresAtMs = addHoursMs(nowMs(), 24);
-      const expiresAt = new Date(expiresAtMs); // on stocke en string ISO (simple) ou Timestamp via firebase-init (ici simple)
+      const expiresAtIso = new Date(expiresAtMs).toISOString();
 
       try{
-        // 1) enregistrer le token
+        // 1) enregistrer token
         await setDoc(doc(db, "dayTokens", token), {
           conciergerieUid: currentUser.uid,
           prestationId,
           agentName,
           agentEmail,
           active: true,
-          expiresAtIso: expiresAt.toISOString(),
+          agentUid: "",               // sera “claim” par l’agent en anonymous auth
+          expiresAtIso,
           createdAt: serverTimestamp()
         });
 
-        // 2) marquer les missions ENVOYEE (celles de cet agent)
+        // 2) marquer missions ENVOYEE + dayToken
         const batch = writeBatch(db);
         for(const m of missions){
           if(normalizeEmail(m.assignedToEmail) === agentEmail){
@@ -880,7 +882,6 @@ CleanUp Manager`;
         await loadAgentsAndFillSelects();
         await loadMissions();
 
-        // enable send button when selection exists
         sendDayLinkBtn.disabled = !(dayAgentSelect.value);
       }catch(err){
         console.error(err);
