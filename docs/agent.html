@@ -176,7 +176,12 @@
     .badge.st-A_PLANIFIER{ background: rgba(0,0,0,0.08); color:#444; }
     .badge.st-ASSIGNEE{ background: rgba(0,163,255,0.14); color:#0067a6; }
     .badge.st-ENVOYEE{ background: rgba(255,153,0,0.16); color:#8a5600; }
-    .badge.st-TERMINEE{ background: rgba(27,143,77,0.16); color:#1b8f4d; }
+    .badge.st-EN_COURS{ background: rgba(0,163,255,0.14); color:#0067a6; }
+    .badge.st-A_VALIDER{ background: rgba(255,153,0,0.16); color:#8a5600; }
+    .badge.st-TERMINEE_AGENT{ background: rgba(255,153,0,0.16); color:#8a5600; }
+    .badge.st-VALIDEE{ background: rgba(27,143,77,0.16); color:#1b8f4d; }
+    .badge.st-INCIDENT{ background: rgba(179,38,30,0.14); color:#b3261e; }
+    .badge.st-A_REPRENDRE{ background: rgba(179,38,30,0.14); color:#b3261e; }
 
     .i-title{
       font-size:13px;
@@ -283,11 +288,7 @@
 
   <script type="module">
     import { auth, db } from "./firebase-init.js";
-    import {
-      onAuthStateChanged,
-      signInAnonymously
-    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-
+    import { onAuthStateChanged, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
       doc, getDoc, updateDoc, serverTimestamp,
       collection, getDocs, query, orderBy
@@ -334,7 +335,12 @@
       if(x === "A_PLANIFIER") return "À PLANIFIER";
       if(x === "ASSIGNEE") return "ASSIGNÉE";
       if(x === "ENVOYEE") return "ENVOYÉE";
-      if(x === "TERMINEE") return "TERMINÉE";
+      if(x === "EN_COURS") return "EN COURS";
+      if(x === "A_VALIDER") return "À VALIDER";
+      if(x === "TERMINEE_AGENT") return "TERMINÉE (AGENT)";
+      if(x === "VALIDEE") return "VALIDÉE";
+      if(x === "INCIDENT") return "INCIDENT";
+      if(x === "A_REPRENDRE") return "À REPRENDRE";
       return x || "—";
     }
 
@@ -402,14 +408,14 @@
         `;
         listEl.appendChild(div);
 
-        div.querySelector("button[data-open]")?.addEventListener("click", ()=>{
+        div.querySelector("button[data-open]")?.addEventListener("click", ()=> {
           window.location.href = div.querySelector("button[data-open]").getAttribute("data-open");
         });
       }
     }
 
     async function claimTokenIfNeeded(tokenId, td){
-      // ✅ 1er agent qui ouvre “claim” le token => sécurise ensuite les rules
+      // 1er agent qui ouvre “claim” le token (utile pour rules)
       if(!currentUser) return;
       if(td.agentUid && td.agentUid.length > 0) return;
 
@@ -419,7 +425,6 @@
           agentClaimedAt: serverTimestamp()
         });
       }catch(e){
-        // si ça échoue, ce n’est pas fatal pour l’affichage, mais ça cassera la sécurité en rules
         console.warn("Claim token failed:", e);
       }
     }
@@ -441,7 +446,7 @@
       accessBtn.textContent = "Chargement…";
 
       try{
-        // 1) read token
+        // 1) token
         const tRef = doc(db, "dayTokens", t);
         const tSnap = await getDoc(tRef);
         if(!tSnap.exists()){
@@ -478,7 +483,6 @@
           return;
         }
 
-        // ✅ claim token (sécurité rules)
         await claimTokenIfNeeded(t, td);
 
         token = t;
@@ -497,7 +501,7 @@
           return;
         }
 
-        // 2) lire la prestation 1 fois (adresse + contexte global)
+        // 2) prestation (contexte global)
         let presta = null;
         try{
           const pSnap = await getDoc(doc(db, "events", prestationId));
@@ -514,7 +518,7 @@
           prestaLine.textContent = "Prestation : lecture impossible.";
         }
 
-        // 3) missions : events/{prestationId}/missions
+        // 3) missions
         const col = collection(db, "events", prestationId, "missions");
         const q = query(col, orderBy("createdAt","asc"));
         const snap = await getDocs(q);
@@ -531,18 +535,16 @@
             assignedToEmail: normalizeEmail(x.assignedToEmail || ""),
             assignedToName: x.assignedToName || "",
 
-            // ✅ mission OU fallback prestation
+            // mission OU fallback prestation
             dateKey: x.dateKey || presta?.dateKey || presta?.date || "",
             time: x.time || presta?.time || "",
             homeName: x.homeName || presta?.homeName || "",
             homeCity: x.homeCity || presta?.homeCity || presta?.city || "",
             homeAddress: x.homeAddress || presta?.homeAddress || presta?.address || ""
           };
-        }).filter(m =>
-          m.assignedToEmail === agentEmail
-        );
+        }).filter(m => m.assignedToEmail === agentEmail);
 
-        // tri heure (HH:MM) puis type
+        // tri (heure puis type)
         missions.sort((a,b)=> (a.time||"").localeCompare(b.time||"") || (a.type||"").localeCompare(b.type||""));
 
         showMissionsUI();
