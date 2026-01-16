@@ -193,9 +193,7 @@
       font-size:12px;
       font-weight:800;
       color:#666;
-      white-space:nowrap;
-      overflow:hidden;
-      text-overflow:ellipsis;
+      white-space:pre-wrap;
       max-width: 560px;
     }
     .i-actions{
@@ -218,12 +216,6 @@
       white-space:nowrap;
     }
     .mini:disabled{ opacity:.6; cursor:not-allowed; }
-    .mini.ghost{
-      background:#fff;
-      color:var(--violet-main);
-      border:2px solid var(--violet-main);
-      box-shadow:0 3px 10px rgba(0,0,0,.06);
-    }
 
     .empty{
       padding:12px;
@@ -258,7 +250,6 @@
 
     <div class="alert" id="alertBox"></div>
 
-    <!-- Token input (fallback) -->
     <section class="card" id="tokenCard">
       <div style="text-align:center;">
         <div style="font-size:16px; font-weight:900;">Accès agent</div>
@@ -278,12 +269,13 @@
       </div>
     </section>
 
-    <!-- Missions -->
     <section class="card" id="missionsCard" style="display:none;">
       <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
         <div style="font-size:15px; font-weight:900;">Planning (24h)</div>
         <div style="font-size:12px; font-weight:900; color:#666;" id="agentLine">—</div>
       </div>
+      <div style="font-size:12px; font-weight:900; color:#666;" id="prestaLine">—</div>
+
       <div class="divider"></div>
       <div class="list" id="list"></div>
     </section>
@@ -297,8 +289,8 @@
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
 
     import {
-      doc, getDoc,
-      collection, getDocs, query, where, orderBy
+      doc, getDoc, updateDoc, serverTimestamp,
+      collection, getDocs, query, orderBy
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     // ===== UI =====
@@ -312,6 +304,7 @@
     const missionsCard = document.getElementById("missionsCard");
     const listEl = document.getElementById("list");
     const agentLine = document.getElementById("agentLine");
+    const prestaLine = document.getElementById("prestaLine");
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -335,11 +328,6 @@
       return (raw || "").toString().trim().replace(/\s+/g,"");
     }
     function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
-
-    function basePath(){
-      // same folder where this file is hosted
-      return location.origin + location.pathname.replace(/\/[^\/]*$/, "/");
-    }
 
     function statusLabel(s){
       const x = (s||"").toUpperCase();
@@ -365,7 +353,7 @@
     // ===== state =====
     let currentUser = null;
     let token = "";
-    let tokenDoc = null; // {prestationId, agentEmail, expiresAtIso, active, ...}
+    let tokenDoc = null;
     let missions = [];
 
     function showMissionsUI(){
@@ -391,10 +379,10 @@
       for(const m of missions){
         const st = (m.status || "").toUpperCase();
         const tl = typeLabel(m.type);
-        const home = `${m.homeName || "Logement"}${m.homeCity ? " — " + m.homeCity : ""}`;
-        const when = `${m.dateKey || "—"}${m.time ? " à " + m.time : ""}`;
 
-        const disabledOpen = false; // on laisse ouvrir la mission même si "ASSIGNEE" (utile)
+        const home = `${m.homeName || "Logement"}${m.homeCity ? " — " + m.homeCity : ""}`;
+        const when = `${m.dateKey || "—"}${m.time ? " à " + m.time : ""}${m.homeAddress ? " • " + m.homeAddress : ""}`;
+
         const link = `mission.html?token=${encodeURIComponent(token)}&prestationId=${encodeURIComponent(m.prestationId)}&missionId=${encodeURIComponent(m.id)}`;
 
         const div = document.createElement("div");
@@ -409,7 +397,7 @@
             <div class="i-sub">${esc(when)}</div>
           </div>
           <div class="i-actions">
-            <button class="mini" type="button" data-open="${esc(link)}" ${disabledOpen ? "disabled" : ""}>Ouvrir</button>
+            <button class="mini" type="button" data-open="${esc(link)}">Ouvrir</button>
           </div>
         `;
         listEl.appendChild(div);
@@ -417,6 +405,22 @@
         div.querySelector("button[data-open]")?.addEventListener("click", ()=>{
           window.location.href = div.querySelector("button[data-open]").getAttribute("data-open");
         });
+      }
+    }
+
+    async function claimTokenIfNeeded(tokenId, td){
+      // ✅ 1er agent qui ouvre “claim” le token => sécurise ensuite les rules
+      if(!currentUser) return;
+      if(td.agentUid && td.agentUid.length > 0) return;
+
+      try{
+        await updateDoc(doc(db, "dayTokens", tokenId), {
+          agentUid: currentUser.uid,
+          agentClaimedAt: serverTimestamp()
+        });
+      }catch(e){
+        // si ça échoue, ce n’est pas fatal pour l’affichage, mais ça cassera la sécurité en rules
+        console.warn("Claim token failed:", e);
       }
     }
 
@@ -448,6 +452,7 @@
           return;
         }
         const td = tSnap.data() || {};
+
         if(td.active === false){
           showAlert("Token désactivé.");
           tokenPill.textContent = "Token OFF";
@@ -473,15 +478,17 @@
           return;
         }
 
+        // ✅ claim token (sécurité rules)
+        await claimTokenIfNeeded(t, td);
+
         token = t;
         tokenDoc = { id: tSnap.id, ...td };
 
         tokenPill.textContent = "Token OK";
         tokenPill.className = "pill ok";
 
-        agentLine.textContent = `${tokenDoc.agentName || "Agent"} • ${tokenDoc.agentEmail || ""}`.trim();
+        agentLine.textContent = `${tokenDoc.agentName || "Agent"}${tokenDoc.agentEmail ? " • " + tokenDoc.agentEmail : ""}`.trim();
 
-        // 2) load missions of that prestation for this agent (only)
         const prestationId = tokenDoc.prestationId;
         const agentEmail = normalizeEmail(tokenDoc.agentEmail || "");
         if(!agentEmail){
@@ -490,14 +497,28 @@
           return;
         }
 
-        // Missions are stored in events/{prestationId}/missions
+        // 2) lire la prestation 1 fois (adresse + contexte global)
+        let presta = null;
+        try{
+          const pSnap = await getDoc(doc(db, "events", prestationId));
+          if(pSnap.exists()){
+            presta = { id: pSnap.id, ...(pSnap.data()||{}) };
+            const home = `${presta.homeName || "Logement"}${presta.homeCity ? " — " + presta.homeCity : ""}`;
+            const addr = (presta.homeAddress || presta.address || "").trim();
+            const dt = `${presta.dateKey || presta.date || "—"}${presta.time ? " à " + presta.time : ""}`;
+            prestaLine.textContent = addr ? `${home} • ${addr} • ${dt}` : `${home} • ${dt}`;
+          }else{
+            prestaLine.textContent = "Prestation introuvable.";
+          }
+        }catch{
+          prestaLine.textContent = "Prestation : lecture impossible.";
+        }
+
+        // 3) missions : events/{prestationId}/missions
         const col = collection(db, "events", prestationId, "missions");
-        // NOTE: Firestore requires composite index for where + orderBy in subcollections sometimes.
-        // To avoid composite index, we orderBy createdAt and filter in JS.
         const q = query(col, orderBy("createdAt","asc"));
         const snap = await getDocs(q);
 
-        // Build list + filter
         missions = snap.docs.map(d=>{
           const x = d.data() || {};
           return {
@@ -505,18 +526,24 @@
             prestationId,
             type: (x.type || "").toUpperCase(),
             status: (x.status || "").toUpperCase(),
+            dayToken: x.dayToken || "",
+
             assignedToEmail: normalizeEmail(x.assignedToEmail || ""),
             assignedToName: x.assignedToName || "",
-            // display helpers: reuse prestation's date/time if mission doesn't have its own hour
-            dateKey: x.dateKey || tokenDoc.dateKey || "",
-            time: x.time || "",
-            homeName: x.homeName || "",  // optional (if you copy it later)
-            homeCity: x.homeCity || ""
-          };
-        }).filter(m => m.assignedToEmail === agentEmail);
 
-        // optional: sort by time string if available
-        missions.sort((a,b)=> (a.time||"").localeCompare(b.time||"") || a.type.localeCompare(b.type));
+            // ✅ mission OU fallback prestation
+            dateKey: x.dateKey || presta?.dateKey || presta?.date || "",
+            time: x.time || presta?.time || "",
+            homeName: x.homeName || presta?.homeName || "",
+            homeCity: x.homeCity || presta?.homeCity || presta?.city || "",
+            homeAddress: x.homeAddress || presta?.homeAddress || presta?.address || ""
+          };
+        }).filter(m =>
+          m.assignedToEmail === agentEmail
+        );
+
+        // tri heure (HH:MM) puis type
+        missions.sort((a,b)=> (a.time||"").localeCompare(b.time||"") || (a.type||"").localeCompare(b.type||""));
 
         showMissionsUI();
         renderList();
@@ -554,7 +581,6 @@
         }
         currentUser = user;
 
-        // token from URL first
         const url = new URL(location.href);
         const t = normalizeToken(url.searchParams.get("token") || "");
         if(t){
