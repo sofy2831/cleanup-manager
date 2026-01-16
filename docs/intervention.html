@@ -255,13 +255,6 @@
     .badge.st-ASSIGNEE{ background: rgba(0,163,255,0.14); color:#0067a6; }
     .badge.st-ENVOYEE{ background: rgba(255,153,0,0.16); color:#8a5600; }
 
-    .m-actions{
-      display:flex;
-      gap:8px;
-      flex-wrap:wrap;
-      justify-content:flex-end;
-    }
-
     .empty{
       padding:12px;
       border-radius:14px;
@@ -270,6 +263,60 @@
       color:#666;
       font-weight:900;
       font-size:12px;
+    }
+
+    /* ✅ lignes prestation */
+    .lines{
+      background:#fff;
+      border-radius:16px;
+      border:1px solid rgba(0,0,0,0.03);
+      box-shadow:0 3px 10px rgba(0,0,0,.06);
+      padding:10px;
+      display:flex;
+      flex-direction:column;
+      gap:8px;
+    }
+    .line{
+      display:flex;
+      justify-content:space-between;
+      gap:10px;
+      border-top:1px solid rgba(122,92,255,0.12);
+      padding-top:8px;
+    }
+    .line:first-child{ border-top:none; padding-top:0; }
+    .line .l{
+      min-width:0;
+    }
+    .line .t{
+      font-weight:900;
+      font-size:13px;
+      color:#222;
+      white-space:nowrap;
+      overflow:hidden;
+      text-overflow:ellipsis;
+      max-width:560px;
+    }
+    .line .s{
+      margin-top:2px;
+      font-size:12px;
+      font-weight:800;
+      color:#666;
+      white-space:pre-wrap;
+    }
+    .line .r{
+      text-align:right;
+      font-weight:900;
+      font-size:13px;
+      color:#222;
+      white-space:nowrap;
+    }
+    .tot{
+      display:flex;
+      justify-content:space-between;
+      gap:10px;
+      padding-top:8px;
+      border-top:1px solid rgba(122,92,255,0.18);
+      font-weight:900;
     }
   </style>
 </head>
@@ -321,6 +368,13 @@
             <button class="btn" id="createMissionsBtn" type="button">Créer missions (check-in / ménage / check-out)</button>
           </div>
         </div>
+
+        <!-- ✅ DÉTAIL LIGNES -->
+        <div class="card-title" style="margin-top:4px;">
+          <span>Détail des prestations</span>
+          <span class="tiny">repris depuis events.lines</span>
+        </div>
+        <div id="linesBox" class="lines"></div>
 
         <div class="row">
           <div>
@@ -383,6 +437,8 @@
     const dtLine = document.getElementById("dtLine");
     const addrLine = document.getElementById("addrLine");
 
+    const linesBox = document.getElementById("linesBox");
+
     const createMissionsBtn = document.getElementById("createMissionsBtn");
     const refreshAgentsBtn = document.getElementById("refreshAgentsBtn");
 
@@ -439,6 +495,12 @@
       return x;
     }
 
+    function fmtMoney(n){
+      const x = Number(n || 0);
+      if(!isFinite(x)) return "0";
+      return x.toLocaleString("fr-FR", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+    }
+
     // ===== State =====
     let currentUser = null;
     const prestationId = qs("prestationId") || qs("eventId") || "";
@@ -459,9 +521,53 @@
       return collection(db, "events", prestationId, "missions");
     }
 
+    function renderLines(lines){
+      linesBox.innerHTML = "";
+
+      if(!Array.isArray(lines) || !lines.length){
+        linesBox.innerHTML = `<div class="tiny">Aucune ligne enregistrée dans cette prestation.</div>`;
+        return;
+      }
+
+      let total = 0;
+
+      for(const l of lines){
+        const label = (l.label || l.name || "Prestation").toString();
+        const cat = (l.category || "").toString();
+        const qty = Number(l.qty || 1);
+        const unitPrice = Number(l.unitPrice || l.price || 0);
+        const note = (l.note || "").toString();
+
+        const lineTotal = (isFinite(qty) ? qty : 1) * (isFinite(unitPrice) ? unitPrice : 0);
+        total += lineTotal;
+
+        const sub = [
+          cat ? `Catégorie : ${cat}` : null,
+          (isFinite(qty) && qty !== 1) ? `Quantité : ${qty}` : null,
+          note ? `Note : ${note}` : null
+        ].filter(Boolean).join("\n");
+
+        const div = document.createElement("div");
+        div.className = "line";
+        div.innerHTML = `
+          <div class="l">
+            <div class="t">${esc(label)}</div>
+            ${sub ? `<div class="s">${esc(sub)}</div>` : ``}
+          </div>
+          <div class="r">${esc(fmtMoney(lineTotal))}€</div>
+        `;
+        linesBox.appendChild(div);
+      }
+
+      const t = document.createElement("div");
+      t.className = "tot";
+      t.innerHTML = `<span>Total</span><span>${esc(fmtMoney(total))}€</span>`;
+      linesBox.appendChild(t);
+    }
+
     async function loadPrestation(){
       if(!prestationId){
-        showAlert("⛔ prestationId manquant dans l'URL. Ouvre depuis prestations.html (Programmer).");
+        showAlert("⛔ eventId/prestationId manquant dans l'URL. Ouvre depuis prestations.html (Programmer).");
         return false;
       }
 
@@ -488,6 +594,9 @@
       homeLine.value = title;
       dtLine.value = dt;
       addrLine.value = addr;
+
+      // ✅ afficher lignes
+      renderLines(x.lines || []);
 
       return true;
     }
@@ -597,6 +706,14 @@
               status: "ASSIGNEE",
               updatedAt: serverTimestamp()
             });
+
+            // ✅ option : stocker aussi au niveau prestation (pratique pour préremplir)
+            await updateDoc(doc(db, "events", prestationId), {
+              assignedToName: name,
+              assignedToEmail: normalizeEmail(email),
+              updatedAt: serverTimestamp()
+            });
+
             showAlert("✅ Mission assignée.", true);
             await loadMissions();
             await loadAgentsAndFillSelects();
@@ -612,11 +729,14 @@
     async function loadAgents(){
       agents = [];
 
+      // ⚠️ si orderBy(createdAt) te fait une erreur d'index ou champ manquant,
+      // remplace par orderBy("updatedAt","desc") et assure-toi que updatedAt existe.
       const q = query(
         collection(db,"events"),
         where("conciergerieUid","==", currentUser.uid),
         orderBy("createdAt","desc")
       );
+
       const snap = await getDocs(q);
 
       const map = new Map(); // email -> {name,email}
@@ -632,15 +752,36 @@
       agents = Array.from(map.values())
         .sort((a,b)=> a.name.localeCompare(b.name, "fr"));
 
+      // ✅ s’assurer que l’agent déjà sur la prestation est présent dans la liste
+      const pEmail = normalizeEmail(prestation?.assignedToEmail || "");
+      const pName = (prestation?.assignedToName || "").trim();
+      if(pEmail && pName && !map.has(pEmail)){
+        agents.unshift({ name: pName, email: pEmail });
+      }
+
       return agents;
     }
 
     function fillDayAgentSelect(){
-      dayAgentSelect.innerHTML = `<option value="">— Choisir —</option>` +
+      dayAgentSelect.innerHTML =
+        `<option value="">— Choisir —</option>` +
         agents.map(a=>{
           const v = `${a.name}||${a.email}`;
           return `<option value="${esc(v)}">${esc(a.name)} — ${esc(a.email)}</option>`;
         }).join("");
+
+      // ✅ préselect si prestation a déjà un agent
+      const pEmail = normalizeEmail(prestation?.assignedToEmail || "");
+      const pName = (prestation?.assignedToName || "").trim();
+      if(pEmail && pName){
+        const wanted = `${pName}||${pEmail}`;
+        for(const opt of Array.from(dayAgentSelect.options)){
+          if(opt.value === wanted){
+            dayAgentSelect.value = wanted;
+            break;
+          }
+        }
+      }
 
       sendDayLinkBtn.disabled = !(dayAgentSelect.value);
       dayLinkPreview.style.display = "none";
@@ -720,6 +861,9 @@
           homeAddress: prestation.homeAddress || prestation.address || "",
           dateKey: prestation.dateKey || prestation.date || "",
           time: prestation.time || "",
+
+          // ✅ copie le détail des lignes (ce que tu veux “reprendre”)
+          prestationLines: Array.isArray(prestation.lines) ? prestation.lines : [],
 
           checklist: defaultChecklist(type),
           photos: [],
@@ -813,7 +957,7 @@ CleanUp Manager`;
           agentName,
           agentEmail,
           active: true,
-          agentUid: "",               // sera “claim” par l’agent en anonymous auth
+          agentUid: "",
           expiresAtIso,
           createdAt: serverTimestamp()
         });
