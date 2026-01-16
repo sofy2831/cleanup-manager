@@ -840,6 +840,7 @@
     let icalEvents = [];
     let jobs = [];
     let allMerged = [];
+let usedIcalIds = new Set(); // ids de réservations déjà couvertes par une prestation
 
     // ✅ index mémoire ultra-rapide (anti lag)
     let byDate = new Map(); // dateKey -> array of events
@@ -963,13 +964,26 @@
     }
 
     function mergeAll(){
-      allMerged = [...icalEvents, ...jobs];
-      allMerged.sort((a,b)=>{
-        if(a.dateKey !== b.dateKey) return a.dateKey.localeCompare(b.dateKey);
-        return String(a.time||"").localeCompare(String(b.time||""));
-      });
-      rebuildIndexes();
-    }
+  // ✅ 1) repérer les réservations qui ont déjà une prestation
+  usedIcalIds = new Set(
+    jobs
+      .map(j => (j.icalEventId || "").trim())
+      .filter(Boolean)
+  );
+
+  // ✅ 2) masquer les réservations couvertes
+  const visibleIcal = icalEvents.filter(ev => !usedIcalIds.has(ev.id));
+
+  allMerged = [...visibleIcal, ...jobs];
+
+  allMerged.sort((a,b)=>{
+    if(a.dateKey !== b.dateKey) return a.dateKey.localeCompare(b.dateKey);
+    return String(a.time||"").localeCompare(String(b.time||""));
+  });
+
+  rebuildIndexes();
+}
+
 
     function computeKpis(){
       const today = new Date();
@@ -1039,6 +1053,9 @@
           ? (ev.summary ? ev.summary : (ev.source === "manuel" ? "Réservation manuelle" : "Réservation iCal"))
           : ((ev.meta ? ev.meta : ev.type || "Prestation") + (ev.team ? ` • Agent: ${ev.team}` : ""));
 
+const covered = (ev.kind === "ical") && usedIcalIds.has(ev.id);
+
+        
         item.innerHTML = `
           <div class="ai-main">
             <div class="ai-time">${esc(ev.time || "—")}</div>
@@ -1048,14 +1065,19 @@
           <div class="ai-actions">
             <span class="tag ${ev.kind === "ical" ? "ical" : ""}">${ev.kind === "ical" ? "Réservation" : "Prestation"}</span>
             ${
-              ev.kind === "ical"
-                ? `
-                  <button class="mini-cta" type="button" data-add="${esc(ev.id)}">+ Ajouter prestation</button>
-                  <button class="mini-cta ghost" type="button" data-edit="${esc(ev.id)}">Modifier</button>
-                  <button class="mini-cta danger" type="button" data-del="${esc(ev.id)}">Supprimer</button>
-                `
-                : ``
-            }
+  ev.kind === "ical"
+    ? (
+        covered
+          ? `<span class="tag ical">Réservation (prestation créée)</span>`
+          : `
+              <button class="mini-cta" type="button" data-add="${esc(ev.id)}">+ Ajouter prestation</button>
+              <button class="mini-cta ghost" type="button" data-edit="${esc(ev.id)}">Modifier</button>
+              <button class="mini-cta danger" type="button" data-del="${esc(ev.id)}">Supprimer</button>
+            `
+      )
+    : ``
+}
+
           </div>
         `;
         agendaList.appendChild(item);
