@@ -110,11 +110,25 @@
     .badge.st-INCIDENT{ background: rgba(179,38,30,0.14); color:#b3261e; }
     .badge.st-A_REPRENDRE{ background: rgba(179,38,30,0.14); color:#b3261e; }
 
-    .checklist{
+    .tiny{ font-size:12px; color:#666; font-weight:800; line-height:1.35; }
+
+    /* tâches (lignes de prestation) */
+    .tasks{ display:flex; flex-direction:column; gap:8px; }
+    .task{
+      background:#fff;
+      border:1px solid rgba(0,0,0,0.04);
+      box-shadow:0 3px 10px rgba(0,0,0,.06);
+      border-radius:14px;
+      padding:10px;
       display:flex;
       flex-direction:column;
-      gap:8px;
+      gap:4px;
     }
+    .task .t{ font-weight:900; font-size:13px; color:#222; }
+    .task .s{ font-size:12px; font-weight:800; color:#666; white-space:pre-wrap; }
+
+    /* checklist */
+    .checklist{ display:flex; flex-direction:column; gap:8px; }
     .check{
       background:#fff;
       border:1px solid rgba(0,0,0,0.04);
@@ -171,17 +185,10 @@
       color:#fff;
       box-shadow:0 12px 24px rgba(0,0,0,0.10);
     }
-    .btn.danger{
-      border-color:#ffb7cc;
-      color:var(--bad);
-    }
+    .btn.danger{ border-color:#ffb7cc; color:var(--bad); }
     .btn:disabled{ opacity:.6; cursor:not-allowed; }
 
-    .photos{
-      display:flex;
-      flex-direction:column;
-      gap:8px;
-    }
+    .photos{ display:flex; flex-direction:column; gap:8px; }
     .photoItem{
       background:#fff;
       border-radius:14px;
@@ -200,9 +207,8 @@
       text-decoration:none;
       word-break:break-all;
     }
-    .tiny{ font-size:12px; color:#666; font-weight:800; line-height:1.35; }
 
-    /* ===== Modals ===== */
+    /* modals */
     .modal-backdrop{
       position:fixed; inset:0;
       background:rgba(0,0,0,.28);
@@ -244,14 +250,22 @@
 
     <section class="card">
       <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px; flex-wrap:wrap;">
-        <div style="font-size:15px; font-weight:900;">Infos mission</div>
+        <div style="font-size:15px; font-weight:900;">Infos</div>
         <span class="badge" id="typeBadge">—</span>
       </div>
 
       <div class="kv" id="kv"></div>
       <div class="divider"></div>
-
       <div class="tiny" id="consignesLine">—</div>
+    </section>
+
+    <!-- ✅ TÂCHES (LIGNES DE PRESTATION) -->
+    <section class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
+        <div style="font-size:15px; font-weight:900;">Tâches</div>
+        <span class="tiny">issues de la prestation</span>
+      </div>
+      <div class="tasks" id="tasks"></div>
     </section>
 
     <section class="card">
@@ -340,20 +354,17 @@
   <script type="module">
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-    import {
-      doc, getDoc, updateDoc, serverTimestamp
-    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import { doc, getDoc, updateDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import { getStorage, ref as sRef, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js";
 
-    import {
-      getStorage, ref as sRef, uploadBytes, getDownloadURL
-    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js";
-
-    // ===== UI =====
+    // UI
     const alertBox = document.getElementById("alertBox");
     const statusPill = document.getElementById("statusPill");
     const typeBadge = document.getElementById("typeBadge");
     const kv = document.getElementById("kv");
     const consignesLine = document.getElementById("consignesLine");
+
+    const tasksEl = document.getElementById("tasks");
 
     const checklistEl = document.getElementById("checklist");
     const checkHint = document.getElementById("checkHint");
@@ -385,7 +396,6 @@
       alertBox.classList.remove("ok");
       alertBox.textContent = "";
     }
-
     function esc(s){
       return String(s ?? "")
         .replaceAll("&","&amp;")
@@ -395,12 +405,8 @@
         .replaceAll("'","&#039;");
     }
 
-    function qs(name){
-      return new URLSearchParams(location.search).get(name);
-    }
-    function normalizeToken(raw){
-      return (raw || "").toString().trim().replace(/\s+/g,"");
-    }
+    function qs(name){ return new URLSearchParams(location.search).get(name); }
+    function normalizeToken(raw){ return (raw || "").toString().trim().replace(/\s+/g,""); }
     function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
     function parseIso(s){ try{ return new Date(s).getTime(); }catch{ return 0; } }
 
@@ -425,20 +431,21 @@
       return x || "—";
     }
 
-    // ===== state =====
+    // state
     let currentUser = null;
     let token = "";
     let tokenDoc = null;
 
     const prestationId = qs("prestationId") || "";
     const missionId = qs("missionId") || "";
+
+    let prestation = null;
     let mission = null;
 
     const storage = getStorage();
 
-    function missionRef(){
-      return doc(db, "events", prestationId, "missions", missionId);
-    }
+    function missionRef(){ return doc(db, "events", prestationId, "missions", missionId); }
+    function prestaRef(){ return doc(db, "events", prestationId); }
 
     async function claimTokenIfNeeded(tokenId, td){
       if(!currentUser) return;
@@ -456,7 +463,7 @@
     async function loadTokenOrFail(){
       token = normalizeToken(qs("token") || "");
       if(!token){
-        showAlert("⛔ Token manquant. Ouvre depuis agent.html (lien journée).");
+        showAlert("⛔ Token manquant. Ouvre depuis agent.html.");
         statusPill.textContent = "Token manquant";
         statusPill.className = "pill bad";
         return false;
@@ -494,11 +501,86 @@
       return true;
     }
 
+    async function loadPrestation(){
+      try{
+        const pSnap = await getDoc(prestaRef());
+        if(pSnap.exists()){
+          prestation = { id: pSnap.id, ...(pSnap.data()||{}) };
+        }else{
+          prestation = null;
+        }
+      }catch{
+        prestation = null;
+      }
+    }
+
+    function renderTasksFromPrestation(){
+      tasksEl.innerHTML = "";
+
+      const lines = Array.isArray(prestation?.lines) ? prestation.lines
+        : (Array.isArray(prestation?.items) ? prestation.items : []);
+
+      if(!lines.length){
+        tasksEl.innerHTML = `<div class="tiny">Aucune tâche enregistrée sur la prestation.</div>`;
+        return;
+      }
+
+      for(const l of lines){
+        const label = (l.label || l.name || l.serviceName || l.title || "Tâche").toString().trim();
+        const note = (l.note || l.details || l.meta || l.description || "").toString().trim();
+
+        const box = document.createElement("div");
+        box.className = "task";
+        box.innerHTML = `
+          <div class="t">${esc(label)}</div>
+          <div class="s">${esc(note || "—")}</div>
+        `;
+        tasksEl.appendChild(box);
+      }
+    }
+
+    async function loadMissionOrFail(){
+      if(!prestationId || !missionId){
+        showAlert("⛔ prestationId / missionId manquant.");
+        statusPill.textContent = "URL invalide";
+        statusPill.className = "pill bad";
+        return false;
+      }
+
+      const snap = await getDoc(missionRef());
+      if(!snap.exists()){
+        showAlert("⛔ Mission introuvable.");
+        statusPill.textContent = "Mission introuvable";
+        statusPill.className = "pill bad";
+        return false;
+      }
+
+      const x = snap.data() || {};
+
+      // sécurité front
+      if((x.dayToken || "") !== token){
+        showAlert("⛔ Accès refusé (token ne correspond pas).");
+        statusPill.textContent = "Accès refusé";
+        statusPill.className = "pill bad";
+        return false;
+      }
+      if(normalizeEmail(x.assignedToEmail || "") !== normalizeEmail(tokenDoc?.agentEmail || "")){
+        showAlert("⛔ Accès refusé (agent mismatch).");
+        statusPill.textContent = "Accès refusé";
+        statusPill.className = "pill bad";
+        return false;
+      }
+
+      mission = { id: snap.id, ...x };
+      return true;
+    }
+
     function render(){
       if(!mission){
         kv.innerHTML = "";
         checklistEl.innerHTML = "";
         photosEl.innerHTML = "";
+        tasksEl.innerHTML = "";
         finishBtn.disabled = true;
         return;
       }
@@ -510,9 +592,9 @@
       statusPill.textContent = statusLabel(st);
       statusPill.className = "pill " + (mission.locked ? "bad" : "ok");
 
-      const home = `${mission.homeName || "Logement"}${mission.homeCity ? " — " + mission.homeCity : ""}`;
-      const addr = (mission.homeAddress || "").trim() || "—";
-      const dt = `${mission.dateKey || "—"}${mission.time ? " à " + mission.time : ""}`;
+      const home = `${mission.homeName || prestation?.homeName || "Logement"}${(mission.homeCity || prestation?.homeCity) ? " — " + (mission.homeCity || prestation?.homeCity) : ""}`;
+      const addr = (mission.homeAddress || prestation?.homeAddress || prestation?.address || "").trim() || "—";
+      const dt = `${mission.dateKey || prestation?.dateKey || prestation?.date || "—"}${(mission.time || prestation?.time) ? " à " + (mission.time || prestation?.time) : ""}`;
 
       kv.innerHTML = [
         `<div><b>Logement</b> : ${esc(home)}</div>`,
@@ -524,13 +606,15 @@
 
       consignesLine.textContent = (mission.consignes || mission.comment || "Consignes : —");
 
+      // ✅ tâches = lignes prestation
+      renderTasksFromPrestation();
+
       // checklist
       checklistEl.innerHTML = "";
       const list = Array.isArray(mission.checklist) ? mission.checklist : [];
 
       const requiredCount = list.filter(i=> !!i.required).length;
       const requiredDone = list.filter(i=> !!i.required && !!i.checked).length;
-
       checkHint.textContent = `${requiredDone} / ${requiredCount} obligatoires`;
 
       if(!list.length){
@@ -557,7 +641,6 @@
 
             const checked = !!e.target.checked;
 
-            // update local
             const next = (Array.isArray(mission.checklist) ? mission.checklist : []).map(x=>({ ...x }));
             next[idx].checked = checked;
             mission.checklist = next;
@@ -602,7 +685,6 @@
         });
       }
 
-      // disable actions if locked
       const locked = !!mission.locked;
       uploadPhotoBtn.disabled = locked;
       photoInput.disabled = locked;
@@ -625,59 +707,16 @@
       finishBtn.disabled = !(requiredOk && photosOk);
     }
 
-    async function loadMissionOrFail(){
-      if(!prestationId || !missionId){
-        showAlert("⛔ prestationId / missionId manquant.");
-        statusPill.textContent = "URL invalide";
-        statusPill.className = "pill bad";
-        return false;
-      }
-
-      const snap = await getDoc(missionRef());
-      if(!snap.exists()){
-        showAlert("⛔ Mission introuvable.");
-        statusPill.textContent = "Mission introuvable";
-        statusPill.className = "pill bad";
-        return false;
-      }
-
-      const x = snap.data() || {};
-
-      // sécurité logique côté front (en plus des rules)
-      if((x.dayToken || "") !== token){
-        showAlert("⛔ Accès refusé (token ne correspond pas).");
-        statusPill.textContent = "Accès refusé";
-        statusPill.className = "pill bad";
-        return false;
-      }
-      if(normalizeEmail(x.assignedToEmail || "") !== normalizeEmail(tokenDoc?.agentEmail || "")){
-        showAlert("⛔ Accès refusé (agent mismatch).");
-        statusPill.textContent = "Accès refusé";
-        statusPill.className = "pill bad";
-        return false;
-      }
-
-      mission = { id: snap.id, ...x };
-      render();
-      return true;
-    }
-
     async function uploadPhoto(kind){
       if(!mission || mission.locked) return;
 
       hideAlert();
 
       const file = photoInput.files?.[0];
-      if(!file){
-        showAlert("Choisis une photo.");
-        return;
-      }
+      if(!file){ showAlert("Choisis une photo."); return; }
 
       const photos = Array.isArray(mission.photos) ? mission.photos : [];
-      if(photos.length >= 3){
-        showAlert("Max 3 photos atteintes.");
-        return;
-      }
+      if(photos.length >= 3){ showAlert("Max 3 photos atteintes."); return; }
 
       uploadPhotoBtn.disabled = true;
       uploadPhotoBtn.textContent = "Envoi…";
@@ -713,7 +752,7 @@
       }
     }
 
-    // ===== Incident modal =====
+    // incident modal
     function openIncidentModal(){
       incidentMotif.value = "";
       incidentComment.value = "";
@@ -721,9 +760,7 @@
       incidentBackdrop.style.display = "flex";
       incidentMotif.focus();
     }
-    function closeIncidentModal(){
-      incidentBackdrop.style.display = "none";
-    }
+    function closeIncidentModal(){ incidentBackdrop.style.display = "none"; }
     incidentBackdrop.addEventListener("click", (e)=>{ if(e.target === incidentBackdrop) closeIncidentModal(); });
     incidentCancelBtn.addEventListener("click", closeIncidentModal);
 
@@ -735,10 +772,7 @@
       const comment = (incidentComment.value || "").trim();
       const file = incidentPhotoInput.files?.[0] || null;
 
-      if(!motif){
-        showAlert("Motif incident obligatoire.");
-        return;
-      }
+      if(!motif){ showAlert("Motif incident obligatoire."); return; }
 
       incidentSaveBtn.disabled = true;
       incidentSaveBtn.textContent = "Enregistrement…";
@@ -755,17 +789,10 @@
 
         await updateDoc(missionRef(), {
           status: "INCIDENT",
-          incident: {
-            isIncident: true,
-            label: motif,
-            comment: comment,
-            photoUrl: photoUrl,
-            at: serverTimestamp()
-          },
+          incident: { isIncident:true, label: motif, comment, photoUrl, at: serverTimestamp() },
           updatedAt: serverTimestamp()
         });
 
-        // refresh local
         mission.status = "INCIDENT";
         mission.incident = { isIncident:true, label: motif, comment, photoUrl };
         saveState.textContent = "✅ Incident enregistré";
@@ -781,7 +808,6 @@
       }
     }
 
-    // ===== Finish =====
     async function finishMission(){
       if(!mission || mission.locked) return;
 
@@ -790,14 +816,8 @@
       const list = Array.isArray(mission.checklist) ? mission.checklist : [];
       const requiredOk = list.filter(i=> !!i.required).every(i=> !!i.checked);
       const photos = Array.isArray(mission.photos) ? mission.photos : [];
-      if(!requiredOk){
-        showAlert("Checklist incomplète (items obligatoires).");
-        return;
-      }
-      if(photos.length < 2){
-        showAlert("Ajoute au moins 2 photos.");
-        return;
-      }
+      if(!requiredOk){ showAlert("Checklist incomplète (items obligatoires)."); return; }
+      if(photos.length < 2){ showAlert("Ajoute au moins 2 photos."); return; }
 
       const ok = confirm("Terminer la mission ? (elle sera verrouillée)");
       if(!ok) return;
@@ -808,14 +828,13 @@
 
       try{
         await updateDoc(missionRef(), {
-          status: "A_VALIDER",        // ou "TERMINEE_AGENT" si tu préfères
+          status: "A_VALIDER",
           completedByAgent: true,
           completedAt: serverTimestamp(),
           locked: true,
           updatedAt: serverTimestamp()
         });
 
-        // redirect
         location.href = `missionfini.html?prestationId=${encodeURIComponent(prestationId)}&missionId=${encodeURIComponent(missionId)}&token=${encodeURIComponent(token)}`;
       }catch(err){
         console.error(err);
@@ -826,28 +845,26 @@
       }
     }
 
-    // ===== wiring =====
     uploadPhotoBtn.addEventListener("click", ()=> uploadPhoto("photo"));
     incidentBtn.addEventListener("click", openIncidentModal);
     incidentSaveBtn.addEventListener("click", saveIncident);
     finishBtn.addEventListener("click", finishMission);
 
-    // ===== boot =====
     onAuthStateChanged(auth, async (user)=>{
       try{
-        if(!user){
-          await signInAnonymously(auth);
-          return;
-        }
+        if(!user){ await signInAnonymously(auth); return; }
         currentUser = user;
 
         const okToken = await loadTokenOrFail();
         if(!okToken) return;
 
+        await loadPrestation();          // ✅ charge lines/tâches
         const okMission = await loadMissionOrFail();
         if(!okMission) return;
 
-        // si A_PLANIFIER/ASSIGNEE -> EN_COURS dès ouverture
+        render();
+
+        // set EN_COURS à l’ouverture
         if(!mission.locked && ["A_PLANIFIER","ASSIGNEE","ENVOYEE"].includes((mission.status||"").toUpperCase())){
           try{
             await updateDoc(missionRef(), { status:"EN_COURS", updatedAt: serverTimestamp() });
