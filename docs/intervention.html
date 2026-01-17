@@ -382,23 +382,46 @@
       return out;
     }
 
-    // ===== Checklist builders (depuis lines[].key) =====
+    // ===== Helpers: keys / missions required =====
     function uniqUpperKeys(lines){
       const keys = (Array.isArray(lines) ? lines : [])
         .map(l => (l.key || "").toString().trim().toUpperCase())
         .filter(Boolean);
       return Array.from(new Set(keys));
     }
+    function hasAny(keys, list){
+      const set = new Set(keys);
+      return list.some(k => set.has(k));
+    }
 
+    // ✅ règles "mission requise ?" (adaptées à ton métier)
+    function requiredForMission(missionId, keys){
+      // Ménage : toujours (selon toi)
+      if(missionId === "MENAGE") return true;
+
+      // Check-in si au moins un produit check-in OU "check-in physique/autonome" etc.
+      if(missionId === "CHECKIN"){
+        return hasAny(keys, ["CHECKIN","CHECKIN_AUTONOME","CHECKIN_PHYSIQUE"]);
+      }
+
+      // Check-out si au moins un produit check-out / récupération clés / etc.
+      if(missionId === "CHECKOUT"){
+        return hasAny(keys, ["CHECKOUT","RECUP_CLES_APRES_SORTIE","RECUPERATION_CLES_APRES_SORTIE"]);
+      }
+
+      return true;
+    }
+
+    // ===== Checklist builders (depuis lines[].key) =====
     function visibleGroupsForMission(missionId, keys){
       const has = (k)=> keys.includes(k);
 
       if(missionId === "CHECKIN"){
-        return ["CHECKIN_BASE"];
+        return ["CHECKIN_BASE","COMMENT"];
       }
       if(missionId === "CHECKOUT"){
         const groups = ["CHECKOUT_BASE","PHOTOS","ANOMALIES","COMMENT"];
-        if(has("RECUP_CLES_APRES_SORTIE")) groups.push("SECURISATION");
+        if(has("RECUP_CLES_APRES_SORTIE") || has("RECUPERATION_CLES_APRES_SORTIE")) groups.push("SECURISATION");
         return groups;
       }
       // MENAGE
@@ -448,7 +471,7 @@
         blanchisserieDepose: false,
         blanchisserieRecup: false,
 
-        kitEssentiel: "NA",
+        kitEssentiel: "NA", // "OUI"|"NON"|"NA"
         kitCuisine: "NA",
         kitBain: "NA",
         kitSejour: "NA",
@@ -467,57 +490,51 @@
       };
     }
 
-    // ✅ Important : on écrit conciergerieUid + home/date dans les missions
-    // ✅ Important : on ne reset PAS les statuts si la mission existe déjà
-    async function ensureMissionsForToken({prestationId, token, agentName, agentEmail, keys, conciergerieUid, homeName, homeCity, homeAddress, dateKey, time}){
+    async function ensureMissionsForToken({prestationId, token, agentName, agentEmail, keys, prestation, conciergerieUid}){
       const common = {
-        conciergerieUid,
+        conciergerieUid,                 // ✅ indispensable pour validation.html (collectionGroup + where)
         prestationId,
         dayToken: token,
         assignedToName: agentName,
         assignedToEmail: agentEmail,
-        homeName: homeName || "",
-        homeCity: homeCity || "",
-        homeAddress: (homeAddress || "").trim(),
-        dateKey: dateKey || "",
-        time: time || "",
+
+        // ✅ contexte utile affichage validation/planning
+        homeName: prestation?.homeName || "",
+        homeCity: prestation?.homeCity || prestation?.city || "",
+        homeAddress: (prestation?.homeAddress || prestation?.address || "").trim(),
+        dateKey: prestation?.dateKey || prestation?.date || "",
+        time: prestation?.time || "",
+
         updatedAt: serverTimestamp()
       };
 
       const missions = ["CHECKIN","MENAGE","CHECKOUT"];
 
       for(const mid of missions){
-        const mRef = doc(db, "events", prestationId, "missions", mid);
-        const mSnap = await getDoc(mRef);
-        const existing = mSnap.exists() ? (mSnap.data() || {}) : null;
+        const required = requiredForMission(mid, keys);
 
-        const visibleGroups = existing?.checklistMeta?.visibleGroups || visibleGroupsForMission(mid, keys);
-        const checklist = existing?.checklist || defaultChecklistForMission(mid);
+        const visibleGroups = visibleGroupsForMission(mid, keys);
+        const checklist = defaultChecklistForMission(mid);
 
-        const status = existing?.status || "ASSIGNEE";
-        const locked = (typeof existing?.locked === "boolean") ? existing.locked : false;
-
-        const agentDone = (typeof existing?.agentDone === "boolean") ? existing.agentDone : false;
-        const agentDoneAt = existing?.agentDoneAt ?? null;
-        const agentComment = (typeof existing?.agentComment === "string") ? existing.agentComment : "";
-
-        await setDoc(mRef, {
+        await setDoc(doc(db, "events", prestationId, "missions", mid), {
           ...common,
           id: mid,
-          type: (existing?.type || mid),
-          status,
-          locked,
+          type: mid,
+
+          status: required ? "ASSIGNEE" : "NON_REQUISE",  // ✅ important
+          locked: false,
 
           checklist,
           checklistMeta: {
-            version: existing?.checklistMeta?.version || 1,
+            version: 1,
             visibleGroups,
-            sourceKeys: existing?.checklistMeta?.sourceKeys || keys
+            sourceKeys: keys,
+            required
           },
 
-          agentDone,
-          agentDoneAt,
-          agentComment
+          agentDone: false,
+          agentDoneAt: null,
+          agentComment: ""
         }, { merge: true });
       }
     }
@@ -561,8 +578,10 @@
       dtLine.value = dt;
       prestaHint.textContent = "#" + prestationId.slice(0,6);
 
+      // adresse editable (stockée dans l'event)
       addrInput.value = (x.homeAddress || x.address || "").trim();
 
+      // agent depuis event
       const aName = (x.assignedToName || "").trim();
       const aEmail = normalizeEmail(x.assignedToEmail || "");
       agentLine.value = aName ? `${aName}${aEmail ? " • " + aEmail : ""}` : "—";
@@ -664,17 +683,19 @@ CleanUp Manager`;
       const expiresAtIso = new Date(expiresAtMs).toISOString();
 
       try{
+        // token = accès agent 24h
         await setDoc(doc(db, "dayTokens", token), {
           conciergerieUid: currentUser.uid,
           prestationId,
           agentName: aName,
           agentEmail: aEmail,
-          agentUid: "",
+          agentUid: "",              // ✅ dès le départ
           active: true,
           expiresAtIso,
           createdAt: serverTimestamp()
         });
 
+        // ✅ missions auto : dayToken + assignation + checklist + NON_REQUISE
         const keys = uniqUpperKeys(prestation?.lines || []);
         await ensureMissionsForToken({
           prestationId,
@@ -682,14 +703,11 @@ CleanUp Manager`;
           agentName: aName,
           agentEmail: aEmail,
           keys,
-          conciergerieUid: currentUser.uid,
-          homeName: prestation?.homeName || "",
-          homeCity: prestation?.homeCity || "",
-          homeAddress: (prestation?.homeAddress || prestation?.address || "").trim(),
-          dateKey: prestation?.dateKey || prestation?.date || "",
-          time: prestation?.time || ""
+          prestation,
+          conciergerieUid: currentUser.uid
         });
 
+        // preview + mailto
         const { subject, body, link } = buildMail({ agentName: aName, token });
         linkPreview.style.display = "block";
         linkPreview.innerHTML = `✅ Lien prêt : <b>${esc(link)}</b> (token ${esc(token)})`;
