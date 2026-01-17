@@ -448,7 +448,7 @@
         blanchisserieDepose: false,
         blanchisserieRecup: false,
 
-        kitEssentiel: "NA", // "OUI"|"NON"|"NA"
+        kitEssentiel: "NA",
         kitCuisine: "NA",
         kitBain: "NA",
         kitSejour: "NA",
@@ -467,38 +467,57 @@
       };
     }
 
-    async function ensureMissionsForToken({prestationId, token, agentName, agentEmail, keys}){
+    // ✅ Important : on écrit conciergerieUid + home/date dans les missions
+    // ✅ Important : on ne reset PAS les statuts si la mission existe déjà
+    async function ensureMissionsForToken({prestationId, token, agentName, agentEmail, keys, conciergerieUid, homeName, homeCity, homeAddress, dateKey, time}){
       const common = {
+        conciergerieUid,
         prestationId,
         dayToken: token,
         assignedToName: agentName,
         assignedToEmail: agentEmail,
+        homeName: homeName || "",
+        homeCity: homeCity || "",
+        homeAddress: (homeAddress || "").trim(),
+        dateKey: dateKey || "",
+        time: time || "",
         updatedAt: serverTimestamp()
       };
 
       const missions = ["CHECKIN","MENAGE","CHECKOUT"];
 
       for(const mid of missions){
-        const visibleGroups = visibleGroupsForMission(mid, keys);
-        const checklist = defaultChecklistForMission(mid);
+        const mRef = doc(db, "events", prestationId, "missions", mid);
+        const mSnap = await getDoc(mRef);
+        const existing = mSnap.exists() ? (mSnap.data() || {}) : null;
 
-        await setDoc(doc(db, "events", prestationId, "missions", mid), {
+        const visibleGroups = existing?.checklistMeta?.visibleGroups || visibleGroupsForMission(mid, keys);
+        const checklist = existing?.checklist || defaultChecklistForMission(mid);
+
+        const status = existing?.status || "ASSIGNEE";
+        const locked = (typeof existing?.locked === "boolean") ? existing.locked : false;
+
+        const agentDone = (typeof existing?.agentDone === "boolean") ? existing.agentDone : false;
+        const agentDoneAt = existing?.agentDoneAt ?? null;
+        const agentComment = (typeof existing?.agentComment === "string") ? existing.agentComment : "";
+
+        await setDoc(mRef, {
           ...common,
           id: mid,
-          type: mid,
-          status: "ASSIGNEE",
-          locked: false,
+          type: (existing?.type || mid),
+          status,
+          locked,
 
           checklist,
           checklistMeta: {
-            version: 1,
+            version: existing?.checklistMeta?.version || 1,
             visibleGroups,
-            sourceKeys: keys
+            sourceKeys: existing?.checklistMeta?.sourceKeys || keys
           },
 
-          agentDone: false,
-          agentDoneAt: null,
-          agentComment: ""
+          agentDone,
+          agentDoneAt,
+          agentComment
         }, { merge: true });
       }
     }
@@ -542,10 +561,8 @@
       dtLine.value = dt;
       prestaHint.textContent = "#" + prestationId.slice(0,6);
 
-      // adresse editable (stockée dans l'event)
       addrInput.value = (x.homeAddress || x.address || "").trim();
 
-      // agent depuis event
       const aName = (x.assignedToName || "").trim();
       const aEmail = normalizeEmail(x.assignedToEmail || "");
       agentLine.value = aName ? `${aName}${aEmail ? " • " + aEmail : ""}` : "—";
@@ -658,14 +675,19 @@ CleanUp Manager`;
           createdAt: serverTimestamp()
         });
 
-        // ✅ missions auto : dayToken + assignation + checklist (merge)
         const keys = uniqUpperKeys(prestation?.lines || []);
         await ensureMissionsForToken({
           prestationId,
           token,
           agentName: aName,
           agentEmail: aEmail,
-          keys
+          keys,
+          conciergerieUid: currentUser.uid,
+          homeName: prestation?.homeName || "",
+          homeCity: prestation?.homeCity || "",
+          homeAddress: (prestation?.homeAddress || prestation?.address || "").trim(),
+          dateKey: prestation?.dateKey || prestation?.date || "",
+          time: prestation?.time || ""
         });
 
         const { subject, body, link } = buildMail({ agentName: aName, token });
