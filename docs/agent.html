@@ -75,12 +75,9 @@
     .i-main{ min-width:0; }
     .i-top{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
     .badge{ font-size:11px; font-weight:900; padding:3px 9px; border-radius:999px; background: rgba(122,92,255,0.12); color:#5b45c8; white-space:nowrap; }
-    .badge.st-A_PLANIFIER{ background: rgba(0,0,0,0.08); color:#444; }
     .badge.st-ASSIGNEE{ background: rgba(0,163,255,0.14); color:#0067a6; }
-    .badge.st-ENVOYEE{ background: rgba(255,153,0,0.16); color:#8a5600; }
     .badge.st-EN_COURS{ background: rgba(0,163,255,0.14); color:#0067a6; }
     .badge.st-A_VALIDER{ background: rgba(255,153,0,0.16); color:#8a5600; }
-    .badge.st-INCIDENT{ background: rgba(179,38,30,0.14); color:#b3261e; }
     .badge.st-VALIDEE{ background: rgba(27,143,77,0.16); color:#1b8f4d; }
 
     .i-title{ font-size:13px; font-weight:900; color:#222; margin-top:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:560px; }
@@ -90,7 +87,6 @@
       background: linear-gradient(90deg,var(--violet-main),var(--violet-dark)); box-shadow:0 10px 22px rgba(0,0,0,0.10);
       white-space:nowrap;
     }
-    .mini:disabled{ opacity:.6; cursor:not-allowed; }
 
     .empty{ padding:12px; border-radius:14px; background:#fff; box-shadow:0 3px 10px rgba(0,0,0,.06); color:#666; font-weight:900; font-size:12px; }
   </style>
@@ -179,12 +175,9 @@
 
     function statusLabel(s){
       const x = (s||"").toUpperCase();
-      if(x === "A_PLANIFIER") return "À PLANIFIER";
       if(x === "ASSIGNEE") return "ASSIGNÉE";
-      if(x === "ENVOYEE") return "ENVOYÉE";
       if(x === "EN_COURS") return "EN COURS";
       if(x === "A_VALIDER") return "À VALIDER";
-      if(x === "INCIDENT") return "INCIDENT";
       if(x === "VALIDEE") return "VALIDÉE";
       return x || "—";
     }
@@ -205,15 +198,19 @@
 
     async function claimTokenIfNeeded(tokenId, td){
       if(!currentUser) return;
-      if(td.agentUid && td.agentUid.length > 0) return;
-      try{
-        await updateDoc(doc(db, "dayTokens", tokenId), {
-          agentUid: currentUser.uid,
-          agentClaimedAt: serverTimestamp()
-        });
-      }catch(e){
-        console.warn("Claim token failed:", e);
-      }
+      if((td?.agentUid || "").length > 0) return;
+
+      // ✅ update "complet" compatible rules strictes
+      await updateDoc(doc(db, "dayTokens", tokenId), {
+        conciergerieUid: td.conciergerieUid,
+        prestationId: td.prestationId,
+        agentEmail: td.agentEmail,
+        agentName: td.agentName,
+        active: td.active,
+        expiresAtIso: td.expiresAtIso,
+        agentUid: currentUser.uid,
+        agentClaimedAt: serverTimestamp()
+      });
     }
 
     function renderList(missions){
@@ -276,8 +273,7 @@
 
       try{
         // 1) token
-        const tRef = doc(db, "dayTokens", t);
-        const tSnap = await getDoc(tRef);
+        const tSnap = await getDoc(doc(db, "dayTokens", t));
         if(!tSnap.exists()){
           showAlert("Token invalide.");
           tokenPill.textContent = "Token invalide";
@@ -298,7 +294,7 @@
         token = t;
         tokenDoc = { id: tSnap.id, ...td };
 
-        // claim (sécurité)
+        // claim
         await claimTokenIfNeeded(t, td);
 
         tokenPill.textContent = "Token OK";
@@ -314,7 +310,7 @@
           return;
         }
 
-        // 2) lire prestation 1 fois (pour la ligne de contexte)
+        // 2) prestation (optionnel, la conciergerie seule a accès => catch)
         let presta = null;
         try{
           const pSnap = await getDoc(doc(db, "events", prestationId));
@@ -328,10 +324,10 @@
             prestaLine.textContent = "Prestation introuvable.";
           }
         }catch{
-          prestaLine.textContent = "Prestation : lecture impossible.";
+          prestaLine.textContent = "Prestation : lecture impossible (normal).";
         }
 
-        // 3) PAS DE LIST : on lit les 3 missions fixes
+        // 3) lire les 3 missions fixes
         const ids = ["CHECKIN","MENAGE","CHECKOUT"];
         const out = [];
 
@@ -356,7 +352,7 @@
           });
         }
 
-        out.sort((a,b)=> (a.time||"").localeCompare(b.time||"") || (a.type||"").localeCompare(b.type||""));
+        out.sort((a,b)=> (a.type||"").localeCompare(b.type||""));
 
         showMissionsUI();
         renderList(out);
