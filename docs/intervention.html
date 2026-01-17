@@ -298,7 +298,6 @@
 
         <div class="card-title" style="margin-top:2px;">
           <span>Lien agent (24h)</span>
-         
         </div>
 
         <div class="row">
@@ -318,7 +317,6 @@
       <section class="card">
         <div class="card-title">
           <span>Tâches (résumé)</span>
-          
         </div>
         <div id="linesList"></div>
       </section>
@@ -384,6 +382,127 @@
       return out;
     }
 
+    // ===== Checklist builders (depuis lines[].key) =====
+    function uniqUpperKeys(lines){
+      const keys = (Array.isArray(lines) ? lines : [])
+        .map(l => (l.key || "").toString().trim().toUpperCase())
+        .filter(Boolean);
+      return Array.from(new Set(keys));
+    }
+
+    function visibleGroupsForMission(missionId, keys){
+      const has = (k)=> keys.includes(k);
+
+      if(missionId === "CHECKIN"){
+        return ["CHECKIN_BASE"];
+      }
+      if(missionId === "CHECKOUT"){
+        const groups = ["CHECKOUT_BASE","PHOTOS","ANOMALIES","COMMENT"];
+        if(has("RECUP_CLES_APRES_SORTIE")) groups.push("SECURISATION");
+        return groups;
+      }
+      // MENAGE
+      const groups = ["MENAGE_BASE","PHOTOS","COMMENT"];
+      if(keys.some(k => ["RECHANGE_LINGE"].includes(k))) groups.push("LINGE");
+      if(keys.some(k => ["COLLECTE_LAVAGE_SECHAGE","DEPOSE_REPRISE_BLANCHISSERIE"].includes(k))) groups.push("BLANCHISSERIE");
+      if(keys.some(k => ["KIT_ESSENTIEL","KIT_CUISINE","KIT_BAIN","KIT_SEJOUR"].includes(k))) groups.push("KITS");
+      if(keys.some(k => ["REASSORT_UNITAIRE"].includes(k))) groups.push("REASSORT");
+      if(keys.some(k => ["PETITE_MAINTENANCE"].includes(k))) groups.push("MAINTENANCE");
+      if(keys.some(k => ["INTERVENTION_URGENCE"].includes(k))) groups.push("URGENCE");
+      return groups;
+    }
+
+    function defaultChecklistForMission(missionId){
+      if(missionId === "CHECKIN"){
+        return {
+          accueil: false,
+          remiseClesOuCode: false,
+          verifKitAccueil: false,
+          comment: ""
+        };
+      }
+
+      if(missionId === "CHECKOUT"){
+        return {
+          recupClesOuChgtCode: false,
+          photos: false,
+          anomalies: false,
+          securisation: false,
+          comment: ""
+        };
+      }
+
+      // MENAGE
+      return {
+        sols: false,
+        sanitaires: false,
+        cuisine: false,
+        poubelles: false,
+        draps: false,
+        photos: false,
+
+        lingeDraps: false,
+        lingeServiettes: false,
+
+        blanchisserieCollecte: false,
+        blanchisserieDepose: false,
+        blanchisserieRecup: false,
+
+        kitEssentiel: "NA", // "OUI"|"NON"|"NA"
+        kitCuisine: "NA",
+        kitBain: "NA",
+        kitSejour: "NA",
+
+        reassort: false,
+        reassortComment: "",
+
+        maintenanceRemplacement: false,
+        maintenanceTest: false,
+        maintenancePhoto: false,
+
+        urgenceMiseSecurite: false,
+        urgenceCompteRendu: "",
+
+        comment: ""
+      };
+    }
+
+    async function ensureMissionsForToken({prestationId, token, agentName, agentEmail, keys}){
+      const common = {
+        prestationId,
+        dayToken: token,
+        assignedToName: agentName,
+        assignedToEmail: agentEmail,
+        updatedAt: serverTimestamp()
+      };
+
+      const missions = ["CHECKIN","MENAGE","CHECKOUT"];
+
+      for(const mid of missions){
+        const visibleGroups = visibleGroupsForMission(mid, keys);
+        const checklist = defaultChecklistForMission(mid);
+
+        await setDoc(doc(db, "events", prestationId, "missions", mid), {
+          ...common,
+          id: mid,
+          type: mid,
+          status: "ASSIGNEE",
+          locked: false,
+
+          checklist,
+          checklistMeta: {
+            version: 1,
+            visibleGroups,
+            sourceKeys: keys
+          },
+
+          agentDone: false,
+          agentDoneAt: null,
+          agentComment: ""
+        }, { merge: true });
+      }
+    }
+
     // State
     let currentUser = null;
     const prestationId = qs("prestationId") || qs("eventId") || "";
@@ -441,7 +560,6 @@
     function renderLinesAgentFriendly(x){
       linesList.innerHTML = "";
 
-      // différentes variantes selon ton schéma (tu as "lines" dans tes events)
       const lines = Array.isArray(x.lines) ? x.lines : (Array.isArray(x.items) ? x.items : []);
 
       if(!lines.length){
@@ -456,7 +574,6 @@
         const label =
           (l.label || l.name || l.serviceName || l.title || "Tâche").toString().trim();
 
-        // note / détail (tout ce qui aide l'agent)
         const note =
           (l.note || l.details || l.meta || l.description || "").toString().trim();
 
@@ -487,7 +604,7 @@
       }
     }
 
-    function buildMail({agentName, agentEmail, token}){
+    function buildMail({agentName, token}){
       const base = location.origin + location.pathname.replace(/\/[^\/]*$/, "/");
       const link = base + "agent.html?token=" + encodeURIComponent(token);
 
@@ -530,7 +647,6 @@ CleanUp Manager`;
       const expiresAtIso = new Date(expiresAtMs).toISOString();
 
       try{
-        // token = accès agent 24h sur SES missions (ta future logique agent.html filtrera)
         await setDoc(doc(db, "dayTokens", token), {
           conciergerieUid: currentUser.uid,
           prestationId,
@@ -542,8 +658,17 @@ CleanUp Manager`;
           createdAt: serverTimestamp()
         });
 
-        // preview + mailto
-        const { subject, body, link } = buildMail({ agentName: aName, agentEmail: aEmail, token });
+        // ✅ missions auto : dayToken + assignation + checklist (merge)
+        const keys = uniqUpperKeys(prestation?.lines || []);
+        await ensureMissionsForToken({
+          prestationId,
+          token,
+          agentName: aName,
+          agentEmail: aEmail,
+          keys
+        });
+
+        const { subject, body, link } = buildMail({ agentName: aName, token });
         linkPreview.style.display = "block";
         linkPreview.innerHTML = `✅ Lien prêt : <b>${esc(link)}</b> (token ${esc(token)})`;
 
@@ -581,6 +706,3 @@ CleanUp Manager`;
   </script>
 </body>
 </html>
-
-
-
