@@ -500,6 +500,7 @@
     }
     .badge.bad{ background: rgba(179,38,30,0.14); color:#b3261e; }
     .badge.ok{ background: rgba(27,143,77,0.16); color:#1b8f4d; }
+
     .val-title{
       margin-top:4px;
       font-size:13px;
@@ -767,7 +768,7 @@
           <div class="agenda-list" id="agendaList"></div>
         </section>
 
-        <!-- ✅ NOUVEAU : À valider -->
+        <!-- ✅ À valider -->
         <section class="card" id="validateCard">
           <div class="val-head">
             <div class="card-title">À valider</div>
@@ -792,6 +793,7 @@
 
   <div class="toast" id="toast"></div>
 
+  <!-- MODAL réservation -->
   <div class="modal-backdrop" id="resaBackdrop" aria-hidden="true">
     <div class="modal" role="dialog" aria-modal="true">
       <h2>Créer une réservation</h2>
@@ -848,6 +850,7 @@
     </div>
   </div>
 
+  <!-- MODAL prestation rapide -->
   <div class="modal-backdrop" id="jobBackdrop" aria-hidden="true">
     <div class="modal" role="dialog" aria-modal="true">
       <h2>Créer une prestation</h2>
@@ -895,7 +898,7 @@
     import {
       collection, collectionGroup, query, where, orderBy, limit, getDocs,
       addDoc, serverTimestamp,
-      deleteDoc, doc, getDoc, updateDoc
+      deleteDoc, doc, getDoc, updateDoc, writeBatch
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const alertBox = document.getElementById("alertBox");
@@ -1613,33 +1616,59 @@
       location.href = "index.html";
     });
 
-    // ✅ Bloc À valider (planning)
-    async function tryPromoteEventToBonAFacturer(eventId){
-      try{
-        const eRef = doc(db, "events", eventId);
-        const eSnap = await getDoc(eRef);
-        if(!eSnap.exists()) return;
-        const e = eSnap.data() || {};
-        if(e.conciergerieUid !== currentUser.uid) return;
+    // ============================
+    // ✅ NOUVEAU BLOC "À valider"
+    // ============================
 
-        const ids = ["CHECKIN","MENAGE","CHECKOUT"];
-        let allOk = true;
-        for(const mid of ids){
-          const mSnap = await getDoc(doc(db, "events", eventId, "missions", mid));
-          if(!mSnap.exists()){ allOk = false; break; }
-          const m = mSnap.data() || {};
-          if((m.status||"") !== "VALIDEE"){ allOk = false; break; }
-        }
-        if(allOk){
-          await updateDoc(eRef, {
-            status: "BON_A_FACTURER",
-            statusUpdatedAt: serverTimestamp(),
-            updatedAt: serverTimestamp()
-          });
-        }
-      }catch{
-        // silent
+    async function readThreeMissions(eventId){
+      const ids = ["CHECKIN","MENAGE","CHECKOUT"];
+      const out = [];
+      for(const mid of ids){
+        const mSnap = await getDoc(doc(db, "events", eventId, "missions", mid));
+        if(!mSnap.exists()) return null;
+        out.push({ id: mid, ref: mSnap.ref, data: (mSnap.data()||{}) });
       }
+      return out;
+    }
+
+    function missionOkForValidate(m){
+      return (m?.data?.status || "").toUpperCase() === "A_VALIDER";
+    }
+
+    async function validateWholePrestation(eventId){
+      const eRef = doc(db, "events", eventId);
+
+      const eSnap = await getDoc(eRef);
+      if(!eSnap.exists()) throw new Error("Prestation introuvable.");
+      const e = eSnap.data() || {};
+      if(e.conciergerieUid !== currentUser.uid) throw new Error("Accès refusé (prestation).");
+
+      const ms = await readThreeMissions(eventId);
+      if(!ms) throw new Error("Missions manquantes (CHECKIN/MENAGE/CHECKOUT).");
+
+      if(!ms.every(missionOkForValidate)){
+        throw new Error("Pas prêt : les 3 missions ne sont pas toutes À VALIDER.");
+      }
+
+      const batch = writeBatch(db);
+      const now = serverTimestamp();
+
+      for(const m of ms){
+        batch.update(m.ref, {
+          status: "VALIDEE",
+          locked: true,
+          validatedAt: now,
+          updatedAt: now
+        });
+      }
+
+      batch.update(eRef, {
+        status: "BON_A_FACTURER",
+        statusUpdatedAt: now,
+        updatedAt: now
+      });
+
+      await batch.commit();
     }
 
     async function loadToValidate(){
@@ -1647,103 +1676,107 @@
       validateCount.textContent = "Chargement…";
 
       try{
+        // ✅ pas de where("conciergerieUid") car tes missions ne l'ont pas
         const q = query(
           collectionGroup(db, "missions"),
-          where("conciergerieUid","==", currentUser.uid),
           orderBy("updatedAt","desc"),
-          limit(25)
+          limit(60)
         );
         const snap = await getDocs(q);
 
-        const rows = snap.docs.map(d=>{
+        const raw = snap.docs.map(d=>{
           const x = d.data() || {};
           const parts = d.ref.path.split("/"); // events/{eventId}/missions/{missionId}
-          const eventId = parts[1];
-          const missionId = parts[3];
-
           return {
-            eventId, missionId,
-            type: (x.type || missionId || "").toUpperCase(),
-            status: (x.status || "").toUpperCase(),
-            homeName: x.homeName || "",
-            homeCity: x.homeCity || "",
-            homeAddress: x.homeAddress || "",
-            dateKey: x.dateKey || "",
-            time: x.time || "",
-            assignedToName: x.assignedToName || "",
-            assignedToEmail: x.assignedToEmail || "",
-            qcComment: x.qcComment || ""
+            eventId: parts[1],
+            missionId: parts[3],
+            status: (x.status || "").toUpperCase()
           };
         }).filter(r => r.status === "A_VALIDER");
 
-        validateCount.textContent = `${rows.length} mission(s)`;
+        const byEvent = new Map();
+        for(const r of raw){
+          if(!byEvent.has(r.eventId)) byEvent.set(r.eventId, true);
+        }
 
-        if(!rows.length){
+        const eventIds = Array.from(byEvent.keys());
+        validateCount.textContent = `${eventIds.length} prestation(s)`;
+
+        if(!eventIds.length){
           validateList.innerHTML = `
             <div style="padding:12px;border-radius:14px;background:#fff;box-shadow:0 3px 10px rgba(0,0,0,.06);color:#666;font-weight:900;font-size:12px;">
-              Rien à valider. (Pour une fois.)
+              Rien à valider. (Profite, c’est rare.)
             </div>`;
           return;
         }
 
-        for(const r of rows){
-          const tl = typeLabel(r.type);
-          const home = `${r.homeName || "Logement"}${r.homeCity ? " — " + r.homeCity : ""}`;
-          const dt = `${r.dateKey || "—"}${r.time ? " à " + r.time : ""}${r.homeAddress ? " • " + r.homeAddress : ""}`;
-          const agent = `${r.assignedToName || "—"}${r.assignedToEmail ? " • " + r.assignedToEmail : ""}`;
+        for(const eventId of eventIds){
+          // read event (sécurité + affichage)
+          let ev = null;
+          try{
+            const eSnap = await getDoc(doc(db, "events", eventId));
+            if(!eSnap.exists()) continue;
+            const e = eSnap.data() || {};
+            if(e.conciergerieUid !== currentUser.uid) continue;
+            ev = { id: eSnap.id, ...e };
+          }catch{
+            continue;
+          }
+
+          // read the 3 missions and check 3/3 A_VALIDER
+          let three = null;
+          try{
+            three = await readThreeMissions(eventId);
+          }catch{
+            three = null;
+          }
+          const allReady = !!three && three.every(missionOkForValidate);
+
+          const home = `${ev.homeName || "Logement"}${ev.homeCity ? " — " + ev.homeCity : ""}`;
+          const dt = `${ev.dateKey || ev.date || "—"}${ev.time ? " à " + ev.time : ""}${ev.homeAddress ? " • " + ev.homeAddress : ""}`;
+
+          const agent = `${ev.assignedToName || "—"}${ev.assignedToEmail ? " • " + ev.assignedToEmail : ""}`;
 
           const div = document.createElement("div");
           div.className = "val-item";
           div.innerHTML = `
             <div class="val-left">
               <div class="val-top">
-                <span class="badge">${esc(tl)}</span>
-                <span class="badge">${esc("A_VALIDER")}</span>
+                <span class="badge">${esc("Prestation")}</span>
+                <span class="badge ${allReady ? "ok" : ""}">${esc(allReady ? "PRÊT" : "EN ATTENTE")}</span>
               </div>
               <div class="val-title">${esc(home)}</div>
               <div class="val-sub">${esc(dt)}\nAgent : ${esc(agent)}</div>
             </div>
             <div class="val-actions">
-              <button class="mini-btn ghost" type="button" data-open="${esc(r.eventId)}">Ouvrir</button>
-              <button class="mini-btn" type="button" data-validate="${esc(r.eventId)}||${esc(r.missionId)}">Valider</button>
+              <button class="mini-btn ghost" type="button" data-open="${esc(eventId)}">Ouvrir</button>
+              <button class="mini-btn" type="button" data-validate-presta="${esc(eventId)}" ${allReady ? "" : "disabled"}>
+                Valider
+              </button>
             </div>
           `;
           validateList.appendChild(div);
 
           div.querySelector("button[data-open]")?.addEventListener("click", ()=>{
-            const eventId = div.querySelector("button[data-open]").getAttribute("data-open");
             location.href = `intervention.html?prestationId=${encodeURIComponent(eventId)}`;
           });
 
-          div.querySelector("button[data-validate]")?.addEventListener("click", async ()=>{
-            hideAlert();
-            const btn = div.querySelector("button[data-validate]");
+          div.querySelector("button[data-validate-presta]")?.addEventListener("click", async ()=>{
+            const btn = div.querySelector("button[data-validate-presta]");
             btn.disabled = true;
+            const old = btn.textContent;
             btn.textContent = "…";
 
-            const [eventId, missionId] = btn.getAttribute("data-validate").split("||");
-
             try{
-              const mRef = doc(db, "events", eventId, "missions", missionId);
-              await updateDoc(mRef, {
-                status: "VALIDEE",
-                locked: true,
-                validatedAt: serverTimestamp(),
-                qcComment: "",
-                updatedAt: serverTimestamp()
-              });
-
-              await tryPromoteEventToBonAFacturer(eventId);
-
-              showToast("✅ Validé");
+              await validateWholePrestation(eventId);
+              showToast("✅ Prestation validée");
               await loadToValidate();
-
             }catch(err){
               console.error(err);
               showToast("⛔ Erreur", "bad");
               showAlert("Erreur validation : " + (err?.message || "inconnue"));
               btn.disabled = false;
-              btn.textContent = "Valider";
+              btn.textContent = old || "Valider";
             }
           });
         }
