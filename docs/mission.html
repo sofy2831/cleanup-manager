@@ -1,8 +1,4 @@
-<!-- docs/mission.html (COMPLET corrigé)
-     ✅ compatible avec tes rules strictes mission.update
-     ✅ pas de lecture "event" obligatoire (agent n’y a pas accès)
-     ✅ update uniquement sur champs autorisés : checklist, agentDone, agentDoneAt, agentComment, status, updatedAt
--->
+<!-- docs/mission.html -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -149,7 +145,6 @@
       alertBox.classList.remove("ok");
       alertBox.textContent = "";
     }
-
     function qs(name){ return new URLSearchParams(location.search).get(name); }
     function normalizeToken(raw){ return (raw||"").toString().trim().replace(/\s+/g,""); }
 
@@ -178,17 +173,19 @@
     function pillClassForStatus(s){
       const x = normalizeStatus(s);
       if(x === "VALIDEE") return "ok";
-      if(x === "INCIDENT" || x === "A_REPRENDRE") return "bad";
+      if(x === "INCIDENT") return "bad";
       if(x === "A_VALIDER") return "warn";
       return "";
     }
 
     const token = normalizeToken(qs("token") || "");
     const prestationId = (qs("prestationId") || "").trim();
-    const missionId = (qs("missionId") || "").toUpperCase().trim();
+    const missionIdRaw = (qs("missionId") || "").trim();
+    const missionId = missionIdRaw.toUpperCase(); // CHECKIN/MENAGE/CHECKOUT attendus
 
     backLink.href = token ? `agent.html?token=${encodeURIComponent(token)}` : "agent.html";
 
+    let tokenDoc = null;
     let missionDoc = null;
 
     // ===== Templates checklist =====
@@ -267,7 +264,8 @@
               </div>
             `;
             inner.appendChild(wrap);
-            wrap.querySelector("input").checked = !!checklist[it.k];
+            const el = wrap.querySelector("input");
+            el.checked = !!checklist[it.k];
           }
 
           if(it.t === "tri"){
@@ -281,10 +279,10 @@
               </div>
             `;
             inner.appendChild(wrap);
-            const radios = wrap.querySelectorAll(`input[name="${it.k}"]`);
+            const radios = wrap.querySelectorAll(\`input[name="${it.k}"]\`);
             radios.forEach(r => { if(r.value === val) r.checked = true; });
-            if(!wrap.querySelector(`input[name="${it.k}"]:checked`)){
-              wrap.querySelector(`input[name="${it.k}"][value="NA"]`).checked = true;
+            if(!wrap.querySelector(\`input[name="${it.k}"]:checked\`)){
+              wrap.querySelector(\`input[name="${it.k}"][value="NA"]\`).checked = true;
             }
           }
 
@@ -315,7 +313,7 @@
             if(el) out[it.k] = !!el.checked;
           }
           if(it.t === "tri"){
-            const checked = document.querySelector(`input[name="${it.k}"]:checked`);
+            const checked = document.querySelector(\`input[name="${it.k}"]:checked\`);
             out[it.k] = (checked ? checked.value : "NA");
           }
           if(it.t === "text"){
@@ -340,12 +338,6 @@
       agentCommentEl.disabled = !!locked;
     }
 
-    function computeContextFromMission(m){
-      const home = `${m.homeName || "Logement"}${m.homeCity ? " — " + m.homeCity : ""}`.trim();
-      const dt = `${m.dateKey || ""}${m.time ? " à " + m.time : ""}`.trim();
-      return `${home}${m.homeAddress ? " • " + m.homeAddress : ""}${dt ? " • " + dt : ""}`.trim();
-    }
-
     async function loadAll(){
       hideAlert();
 
@@ -357,19 +349,39 @@
       statusPill.textContent = "Chargement…";
       statusPill.className = "pill";
 
-      // ✅ mission (agent a le droit GET via token actif)
-      const mRef = doc(db, "events", prestationId, "missions", missionId);
-      const mSnap = await getDoc(mRef);
-      if(!mSnap.exists()){
-        showAlert("⛔ Mission introuvable.");
-        statusPill.textContent = "Introuvable";
+      const tSnap = await getDoc(doc(db, "dayTokens", token));
+      if(!tSnap.exists()){
+        showAlert("⛔ Token invalide.");
+        statusPill.textContent = "Token invalide";
+        statusPill.className = "pill bad";
+        return;
+      }
+      tokenDoc = tSnap.data() || {};
+
+      if(tokenDoc.active === false){
+        showAlert("⛔ Token désactivé.");
+        statusPill.textContent = "Token OFF";
         statusPill.className = "pill bad";
         return;
       }
 
+      if((tokenDoc.prestationId || "") !== prestationId){
+        showAlert("⛔ Token ≠ prestation (lien incohérent).");
+        statusPill.textContent = "Accès refusé";
+        statusPill.className = "pill bad";
+        return;
+      }
+
+      agentLine.textContent = `${tokenDoc.agentName || "Agent"}${tokenDoc.agentEmail ? " • " + tokenDoc.agentEmail : ""}`.trim();
+
+      const mRef = doc(db, "events", prestationId, "missions", missionId);
+      const mSnap = await getDoc(mRef);
+      if(!mSnap.exists()){
+        showAlert("⛔ Mission introuvable.");
+        return;
+      }
       missionDoc = { id: mSnap.id, ...(mSnap.data()||{}) };
 
-      // sécurité: mission ↔ token
       if((missionDoc.dayToken || "") !== token){
         showAlert("⛔ Token ≠ mission (accès refusé).");
         statusPill.textContent = "Accès refusé";
@@ -379,15 +391,30 @@
 
       missionTitle.textContent = typeLabel(missionId);
 
-      // agent line depuis mission (pas besoin de dayTokens ici)
-      agentLine.textContent = `${missionDoc.assignedToName || "Agent"}${missionDoc.assignedToEmail ? " • " + missionDoc.assignedToEmail : ""}`.trim();
-
-      // contexte depuis mission
-      contextLine.textContent = computeContextFromMission(missionDoc);
-
       const st = normalizeStatus(missionDoc.status || "ASSIGNEE");
       statusPill.textContent = statusLabel(st);
       statusPill.className = "pill " + pillClassForStatus(st);
+
+      let home = missionDoc.homeName || "";
+      let city = missionDoc.homeCity || "";
+      let addr = missionDoc.homeAddress || "";
+      let dt = `${missionDoc.dateKey || ""}${missionDoc.time ? " à " + missionDoc.time : ""}`.trim();
+
+      if(!home && !dt){
+        try{
+          const pSnap = await getDoc(doc(db, "events", prestationId));
+          if(pSnap.exists()){
+            const p = pSnap.data() || {};
+            home = p.homeName || "";
+            city = p.homeCity || p.city || "";
+            addr = p.homeAddress || p.address || "";
+            dt = `${p.dateKey || p.date || ""}${p.time ? " à " + p.time : ""}`.trim();
+          }
+        }catch{}
+      }
+
+      const homeLine = `${home || "Logement"}${city ? " — " + city : ""}`.trim();
+      contextLine.textContent = `${homeLine}${addr ? " • " + addr : ""}${dt ? " • " + dt : ""}`.trim();
 
       const visible = Array.isArray(missionDoc?.checklistMeta?.visibleGroups)
         ? missionDoc.checklistMeta.visibleGroups
@@ -396,7 +423,6 @@
       const checklist = (missionDoc.checklist && typeof missionDoc.checklist === "object") ? missionDoc.checklist : {};
       renderChecklist(visible, checklist);
 
-      // commentaire agent
       agentCommentEl.value = (missionDoc.agentComment || "").toString();
 
       const locked = (missionDoc.locked === true) || st === "VALIDEE" || st === "NON_REQUISE";
@@ -423,11 +449,8 @@
       const prev = (missionDoc.checklist && typeof missionDoc.checklist === "object") ? missionDoc.checklist : {};
       const nextChecklist = collectChecklistFromUI(visible, prev);
 
-      // ✅ Enregistrer -> EN_COURS si ASSIGNEE
-      // ✅ Terminé -> A_VALIDER
       const nextStatus = markDone ? "A_VALIDER" : (st0 === "ASSIGNEE" ? "EN_COURS" : st0);
 
-      // ✅ PATCH 100% compatible rules: uniquement champs autorisés
       const patch = {
         checklist: nextChecklist,
         agentComment: (agentCommentEl.value || "").toString().trim(),
@@ -457,7 +480,6 @@
 
         showAlert("✅ Enregistré.", true);
 
-        // reload mission (pour status pill + lock)
         const mSnap = await getDoc(doc(db, "events", prestationId, "missions", missionId));
         missionDoc = { id: mSnap.id, ...(mSnap.data()||{}) };
 
@@ -477,7 +499,7 @@
 
     onAuthStateChanged(auth, async (user)=>{
       try{
-        // anon OK (rules ne dépendent pas de request.auth côté agent)
+        // anon pour contexte auth (même si rules token/mission ne reposent pas dessus)
         if(!user){
           await signInAnonymously(auth);
           return;
