@@ -14,7 +14,7 @@
     :root{
       --violet-main:#7A5CFF; --violet-dark:#6238FF;
       --text:#111; --muted:#666;
-      --bad:#b3261e; --ok:#1b8f4d;
+      --bad:#b3261e; --ok:#1b8f4d; --warn:#8a5600;
       --border: rgba(122,92,255,0.18);
       --shadow: 0 14px 36px rgba(0,0,0,0.08);
       --bg1:#F8F4FF; --bg2:#EDE6FF;
@@ -32,6 +32,7 @@
     .pill.primary{ background:linear-gradient(90deg,var(--violet-main),var(--violet-dark)); border-color:transparent; color:#fff; }
     .pill.ok{ border-color: rgba(27,143,77,0.30); color:var(--ok); }
     .pill.bad{ border-color: rgba(179,38,30,0.30); color:var(--bad); }
+    .pill.warn{ border-color: rgba(255,153,0,0.35); color:var(--warn); }
 
     .alert{ display:none; width:100%; max-width:920px; margin-top:10px; padding:10px 12px; background:#fff;
       border-radius:14px; border-left:5px solid var(--bad); box-shadow:0 3px 10px rgba(0,0,0,.06);
@@ -67,6 +68,7 @@
       width:100%; border-radius:12px; border:1px solid #D3C7FF; padding:10px; outline:none;
       font-size:13px; font-weight:800; color:#222; background:#fff; min-height:70px;
     }
+    textarea:focus{ border-color:var(--violet-main); box-shadow:0 0 0 3px rgba(122,92,255,.12); }
 
     .btnRow{ display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap; }
     .btn{
@@ -103,6 +105,13 @@
 
       <div class="divider"></div>
 
+      <div class="group">
+        <div class="gtitle">Commentaire agent</div>
+        <textarea id="agentComment" placeholder="Ex : problème détecté, manque linge, photo envoyée, etc."></textarea>
+      </div>
+
+      <div class="divider"></div>
+
       <div class="btnRow">
         <button class="btn" id="saveBtn" type="button">Enregistrer</button>
         <button class="btn primary" id="doneBtn" type="button">Terminé</button>
@@ -124,6 +133,7 @@
     const backLink = document.getElementById("backLink");
     const saveBtn = document.getElementById("saveBtn");
     const doneBtn = document.getElementById("doneBtn");
+    const agentCommentEl = document.getElementById("agentComment");
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -145,8 +155,13 @@
       if(x === "CHECKOUT") return "Check-out";
       return x || "Mission";
     }
+    function normalizeStatus(s){
+      const x = (s||"").toUpperCase().trim();
+      if(!x) return "ASSIGNEE";
+      return x;
+    }
     function statusLabel(s){
-      const x = (s||"").toUpperCase();
+      const x = normalizeStatus(s);
       if(x === "ASSIGNEE") return "ASSIGNÉE";
       if(x === "EN_COURS") return "EN COURS";
       if(x === "A_VALIDER") return "À VALIDER";
@@ -156,10 +171,17 @@
       if(x === "VALIDEE") return "VALIDÉE";
       return x || "—";
     }
+    function pillClassForStatus(s){
+      const x = normalizeStatus(s);
+      if(x === "VALIDEE") return "ok";
+      if(x === "INCIDENT") return "bad";
+      if(x === "A_VALIDER") return "warn";
+      return "";
+    }
 
     const token = normalizeToken(qs("token") || "");
-    const prestationId = qs("prestationId") || "";
-    const missionId = (qs("missionId") || "").toUpperCase();
+    const prestationId = (qs("prestationId") || "").trim();
+    const missionId = (qs("missionId") || "").toUpperCase().trim();
 
     backLink.href = token ? `agent.html?token=${encodeURIComponent(token)}` : "agent.html";
 
@@ -258,10 +280,10 @@
               </div>
             `;
             inner.appendChild(wrap);
-            const radios = wrap.querySelectorAll(\`input[name="\${it.k}"]\`);
+            const radios = wrap.querySelectorAll(`input[name="${it.k}"]`);
             radios.forEach(r => { if(r.value === val) r.checked = true; });
-            if(!wrap.querySelector(\`input[name="\${it.k}"]:checked\`)){
-              wrap.querySelector(\`input[name="\${it.k}"][value="NA"]\`).checked = true;
+            if(!wrap.querySelector(`input[name="${it.k}"]:checked`)){
+              wrap.querySelector(`input[name="${it.k}"][value="NA"]`).checked = true;
             }
           }
 
@@ -292,7 +314,7 @@
             if(el) out[it.k] = !!el.checked;
           }
           if(it.t === "tri"){
-            const checked = document.querySelector(\`input[name="\${it.k}"]:checked\`);
+            const checked = document.querySelector(`input[name="${it.k}"]:checked`);
             out[it.k] = (checked ? checked.value : "NA");
           }
           if(it.t === "text"){
@@ -314,6 +336,7 @@
     function lockUi(locked){
       saveBtn.disabled = !!locked;
       doneBtn.disabled = !!locked;
+      agentCommentEl.disabled = !!locked;
     }
 
     async function loadAll(){
@@ -344,7 +367,7 @@
         return;
       }
 
-      // ✅ sécurité: le token doit correspondre à la prestation
+      // sécurité: token ↔ prestation
       if((tokenDoc.prestationId || "") !== prestationId){
         showAlert("⛔ Token ≠ prestation (lien incohérent).");
         statusPill.textContent = "Accès refusé";
@@ -363,7 +386,7 @@
       }
       missionDoc = { id: mSnap.id, ...(mSnap.data()||{}) };
 
-      // ✅ sécurité: la mission doit être liée à ce token
+      // sécurité: mission ↔ token
       if((missionDoc.dayToken || "") !== token){
         showAlert("⛔ Token ≠ mission (accès refusé).");
         statusPill.textContent = "Accès refusé";
@@ -373,11 +396,11 @@
 
       missionTitle.textContent = typeLabel(missionId);
 
-      const st = (missionDoc.status || "ASSIGNEE").toUpperCase();
+      const st = normalizeStatus(missionDoc.status || "ASSIGNEE");
       statusPill.textContent = statusLabel(st);
-      statusPill.className = "pill " + (st === "VALIDEE" ? "ok" : (st === "INCIDENT" ? "bad" : ""));
+      statusPill.className = "pill " + pillClassForStatus(st);
 
-      // contexte
+      // contexte: depuis mission (ou fallback event si la conciergerie autorise — sinon ignore)
       let home = missionDoc.homeName || "";
       let city = missionDoc.homeCity || "";
       let addr = missionDoc.homeAddress || "";
@@ -406,20 +429,21 @@
       const checklist = (missionDoc.checklist && typeof missionDoc.checklist === "object") ? missionDoc.checklist : {};
       renderChecklist(visible, checklist);
 
-      lockUi(missionDoc.locked === true || st === "VALIDEE" || st === "NON_REQUISE");
+      // commentaire agent
+      agentCommentEl.value = (missionDoc.agentComment || "").toString();
+
+      const locked = (missionDoc.locked === true) || st === "VALIDEE" || st === "NON_REQUISE";
+      lockUi(locked);
 
       saveBtn.onclick = ()=> saveChecklist(false);
       doneBtn.onclick = ()=> saveChecklist(true);
-
-      statusPill.textContent = "OK";
-      statusPill.className = "pill ok";
     }
 
     async function saveChecklist(markDone){
       hideAlert();
       if(!missionDoc) return;
 
-      const st0 = (missionDoc.status || "").toUpperCase();
+      const st0 = normalizeStatus(missionDoc.status || "ASSIGNEE");
       if(missionDoc.locked === true || st0 === "VALIDEE" || st0 === "NON_REQUISE"){
         showAlert("⛔ Mission verrouillée.");
         return;
@@ -432,17 +456,20 @@
       const prev = (missionDoc.checklist && typeof missionDoc.checklist === "object") ? missionDoc.checklist : {};
       const nextChecklist = collectChecklistFromUI(visible, prev);
 
+      // règle: Enregistrer -> EN_COURS (si ASSIGNEE)
+      // Terminé -> A_VALIDER
+      const nextStatus = markDone ? "A_VALIDER" : (st0 === "ASSIGNEE" ? "EN_COURS" : st0);
+
       const patch = {
         checklist: nextChecklist,
+        agentComment: (agentCommentEl.value || "").toString().trim(),
+        status: nextStatus,
         updatedAt: serverTimestamp()
       };
 
       if(markDone){
         patch.agentDone = true;
         patch.agentDoneAt = serverTimestamp();
-        patch.status = "A_VALIDER";
-      }else{
-        patch.status = (missionDoc.status || "EN_COURS");
       }
 
       saveBtn.disabled = true;
@@ -452,7 +479,6 @@
         await updateDoc(doc(db, "events", prestationId, "missions", missionId), patch);
 
         if(markDone){
-          // ✅ redirection fin agent
           const params = new URLSearchParams();
           params.set("token", token);
           params.set("prestationId", prestationId);
@@ -466,9 +492,10 @@
         const mSnap = await getDoc(doc(db, "events", prestationId, "missions", missionId));
         missionDoc = { id: mSnap.id, ...(mSnap.data()||{}) };
 
-        const st = (missionDoc.status || "ASSIGNEE").toUpperCase();
+        const st = normalizeStatus(missionDoc.status || "ASSIGNEE");
         statusPill.textContent = statusLabel(st);
-        statusPill.className = "pill " + (st === "VALIDEE" ? "ok" : (st === "INCIDENT" ? "bad" : ""));
+        statusPill.className = "pill " + pillClassForStatus(st);
+
         lockUi(missionDoc.locked === true);
 
       }catch(err){
@@ -481,6 +508,8 @@
 
     onAuthStateChanged(auth, async (user)=>{
       try{
+        // on garde anon pour avoir un contexte auth (utile si tu actives AppCheck/quotas),
+        // mais les rules missions/token ne dépendent plus de request.auth
         if(!user){
           await signInAnonymously(auth);
           return;
