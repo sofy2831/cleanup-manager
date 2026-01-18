@@ -1,4 +1,9 @@
-<!-- docs/mission.html -->
+<!-- docs/mission.html (COMPLET + CORRIGÉ)
+     ✅ Checklist toujours affichée (fallback si visibleGroups vide / missionDoc.type)
+     ✅ Photos (max 3) -> Firebase Storage + photoUrls[] en Firestore
+     ✅ Commentaire agent
+     ✅ Incident + Enregistrer + Terminé (Terminé => A_VALIDER, sans locked=true côté agent)
+-->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -52,7 +57,8 @@
     .group{ background:#fff; border-radius:16px; border:1px solid rgba(0,0,0,0.03); box-shadow:0 3px 10px rgba(0,0,0,.06);
       padding:10px; display:flex; flex-direction:column; gap:8px;
     }
-    .gtitle{ font-size:13px; font-weight:900; }
+    .gtitle{ font-size:13px; font-weight:900; display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+    .gtitle small{ font-size:11px; font-weight:900; color:#666; }
     .row{ display:flex; gap:10px; flex-wrap:wrap; }
     .row > div{ flex:1; min-width:240px; }
 
@@ -70,14 +76,28 @@
     }
     textarea:focus{ border-color:var(--violet-main); box-shadow:0 0 0 3px rgba(122,92,255,.12); }
 
-    .btnRow{ display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap; }
+    .btnRow{ display:flex; gap:8px; justify-content:space-between; flex-wrap:wrap; align-items:center; }
+    .btnRight{ display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap; }
     .btn{
       border:none; border-radius:999px; padding:10px 14px; font-size:13px; font-weight:900; cursor:pointer;
       background:#fff; color:var(--violet-main); border:2px solid var(--violet-main);
       box-shadow:0 3px 10px rgba(0,0,0,0.06); white-space:nowrap;
     }
     .btn.primary{ background:linear-gradient(90deg,var(--violet-main),var(--violet-dark)); border-color:transparent; color:#fff; box-shadow:0 12px 24px rgba(0,0,0,0.10); }
+    .btn.danger{ background:#ffe3ec; color:var(--bad); border:2px solid #ffc2d6; }
     .btn:disabled{ opacity:.6; cursor:not-allowed; }
+
+    /* Photos */
+    .photoRow{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+    .photoRow input[type="file"]{
+      flex:1; min-width:220px;
+      padding:10px; border-radius:12px; border:1px solid #D3C7FF; background:#fff;
+      font-size:12px; font-weight:800;
+    }
+    .hint{ font-size:11px; font-weight:900; color:#666; line-height:1.25; }
+    .preview{ display:flex; flex-direction:column; gap:6px; }
+    .preview a{ font-size:12px; font-weight:900; color:var(--violet-main); text-decoration:none; }
+    .preview a:hover{ text-decoration:underline; }
   </style>
 </head>
 
@@ -101,10 +121,36 @@
 
       <div class="divider"></div>
 
-      <div id="groups"></div>
+      <!-- ✅ Checklist -->
+      <div class="group">
+        <div class="gtitle">
+          <span>Checklist</span>
+          <small id="checkMeta">—</small>
+        </div>
+        <div id="groups"></div>
+      </div>
 
       <div class="divider"></div>
 
+      <!-- ✅ Photos -->
+      <div class="group">
+        <div class="gtitle">
+          <span>Photos</span>
+          <small id="photoCount">0/3</small>
+        </div>
+
+        <div class="photoRow">
+          <input id="photoInput" type="file" accept="image/*" multiple />
+          <button class="btn primary" id="uploadBtn" type="button">Ajouter</button>
+        </div>
+
+        <div class="hint">Les photos sont envoyées dans CleanUp (Storage) et liées à cette mission.</div>
+        <div class="preview" id="photoPreview"></div>
+      </div>
+
+      <div class="divider"></div>
+
+      <!-- ✅ Commentaire agent -->
       <div class="group">
         <div class="gtitle">Commentaire agent</div>
         <textarea id="agentComment" placeholder="Ex : problème détecté, manque linge, photo envoyée, etc."></textarea>
@@ -112,9 +158,18 @@
 
       <div class="divider"></div>
 
-      <div class="btnRow">
-        <button class="btn" id="saveBtn" type="button">Enregistrer</button>
-        <button class="btn primary" id="doneBtn" type="button">Terminé</button>
+      <!-- ✅ Actions -->
+      <div class="group">
+        <div class="gtitle">Actions</div>
+        <div class="btnRow">
+          <button class="btn danger" id="incidentBtn" type="button">Incident</button>
+
+          <div class="btnRight">
+            <button class="btn" id="saveBtn" type="button">Enregistrer</button>
+            <button class="btn primary" id="doneBtn" type="button">Terminé</button>
+          </div>
+        </div>
+        <div class="hint">“Terminé” passe la mission en <b>A_VALIDER</b> (validation côté conciergerie).</div>
       </div>
     </section>
   </div>
@@ -123,6 +178,9 @@
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import { doc, getDoc, updateDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import { getStorage, ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js";
+
+    const storage = getStorage();
 
     const alertBox = document.getElementById("alertBox");
     const statusPill = document.getElementById("statusPill");
@@ -130,10 +188,18 @@
     const contextLine = document.getElementById("contextLine");
     const agentLine = document.getElementById("agentLine");
     const groupsEl = document.getElementById("groups");
+    const checkMeta = document.getElementById("checkMeta");
+
     const backLink = document.getElementById("backLink");
     const saveBtn = document.getElementById("saveBtn");
     const doneBtn = document.getElementById("doneBtn");
+    const incidentBtn = document.getElementById("incidentBtn");
     const agentCommentEl = document.getElementById("agentComment");
+
+    const photoInput = document.getElementById("photoInput");
+    const uploadBtn = document.getElementById("uploadBtn");
+    const photoCount = document.getElementById("photoCount");
+    const photoPreview = document.getElementById("photoPreview");
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -181,12 +247,13 @@
     const token = normalizeToken(qs("token") || "");
     const prestationId = (qs("prestationId") || "").trim();
     const missionIdRaw = (qs("missionId") || "").trim();
-    const missionId = missionIdRaw.toUpperCase(); // CHECKIN/MENAGE/CHECKOUT attendus
+    const missionId = missionIdRaw.toUpperCase().trim();
 
     backLink.href = token ? `agent.html?token=${encodeURIComponent(token)}` : "agent.html";
 
     let tokenDoc = null;
     let missionDoc = null;
+    let visibleGroups = [];
 
     // ===== Templates checklist =====
     const GROUPS = {
@@ -239,10 +306,24 @@
       COMMENT: { title:"Commentaire", items:[ {k:"comment", t:"text", label:"Commentaire"} ] }
     };
 
-    function renderChecklist(visibleGroups, checklist){
+    function defaultVisibleGroups(mid){
+      if(mid === "CHECKIN") return ["CHECKIN_BASE","COMMENT"];
+      if(mid === "CHECKOUT") return ["CHECKOUT_BASE","PHOTOS","ANOMALIES","SECURISATION","COMMENT"];
+      return ["MENAGE_BASE","PHOTOS","LINGE","BLANCHISSERIE","KITS","REASSORT","MAINTENANCE","URGENCE","COMMENT"];
+    }
+
+    function renderChecklist(vg, checklist){
       groupsEl.innerHTML = "";
 
-      for(const gKey of visibleGroups){
+      if(!Array.isArray(vg) || vg.length === 0){
+        const div = document.createElement("div");
+        div.className = "sub";
+        div.textContent = "Aucune checklist configurée.";
+        groupsEl.appendChild(div);
+        return;
+      }
+
+      for(const gKey of vg){
         const g = GROUPS[gKey];
         if(!g) continue;
 
@@ -279,10 +360,10 @@
               </div>
             `;
             inner.appendChild(wrap);
-            const radios = wrap.querySelectorAll(\`input[name="${it.k}"]\`);
+            const radios = wrap.querySelectorAll(`input[name="${it.k}"]`);
             radios.forEach(r => { if(r.value === val) r.checked = true; });
-            if(!wrap.querySelector(\`input[name="${it.k}"]:checked\`)){
-              wrap.querySelector(\`input[name="${it.k}"][value="NA"]\`).checked = true;
+            if(!wrap.querySelector(`input[name="${it.k}"]:checked`)){
+              wrap.querySelector(`input[name="${it.k}"][value="NA"]`).checked = true;
             }
           }
 
@@ -300,10 +381,10 @@
       }
     }
 
-    function collectChecklistFromUI(visibleGroups, checklist){
+    function collectChecklistFromUI(vg, checklist){
       const out = { ...(checklist || {}) };
 
-      for(const gKey of visibleGroups){
+      for(const gKey of vg){
         const g = GROUPS[gKey];
         if(!g) continue;
 
@@ -313,7 +394,7 @@
             if(el) out[it.k] = !!el.checked;
           }
           if(it.t === "tri"){
-            const checked = document.querySelector(\`input[name="${it.k}"]:checked\`);
+            const checked = document.querySelector(`input[name="${it.k}"]:checked`);
             out[it.k] = (checked ? checked.value : "NA");
           }
           if(it.t === "text"){
@@ -326,17 +407,76 @@
       return out;
     }
 
-    function defaultVisibleGroups(mid){
-      if(mid === "CHECKIN") return ["CHECKIN_BASE","COMMENT"];
-      if(mid === "CHECKOUT") return ["CHECKOUT_BASE","PHOTOS","ANOMALIES","SECURISATION","COMMENT"];
-      return ["MENAGE_BASE","PHOTOS","LINGE","BLANCHISSERIE","KITS","REASSORT","MAINTENANCE","URGENCE","COMMENT"];
-    }
-
     function lockUi(locked){
       saveBtn.disabled = !!locked;
       doneBtn.disabled = !!locked;
+      incidentBtn.disabled = !!locked;
       agentCommentEl.disabled = !!locked;
+
+      uploadBtn.disabled = !!locked;
+      photoInput.disabled = !!locked;
     }
+
+    function renderPhotos(urls){
+      const arr = Array.isArray(urls) ? urls : [];
+      photoCount.textContent = `${arr.length}/3`;
+      photoPreview.innerHTML = arr.map((u, i)=>`
+        <div>
+          <a href="${u}" target="_blank" rel="noopener">Voir photo ${i+1}</a>
+        </div>
+      `).join("");
+    }
+
+    async function uploadPhotos(){
+      hideAlert();
+      if(!missionDoc) return;
+
+      const existing = Array.isArray(missionDoc.photoUrls) ? missionDoc.photoUrls : [];
+      const files = Array.from(photoInput.files || []);
+
+      if(!files.length) return showAlert("Aucune photo sélectionnée.");
+      if(existing.length + files.length > 3) return showAlert(`Max 3 photos. Déjà: ${existing.length}`);
+
+      uploadBtn.disabled = true;
+      uploadBtn.textContent = "Upload…";
+
+      try{
+        const newUrls = [];
+
+        for(const file of files){
+          const safeName = `${Date.now()}_${file.name}`.replaceAll(" ", "_");
+          const path = `missions/${prestationId}/${missionId}/${safeName}`;
+          const r = ref(storage, path);
+
+          await uploadBytes(r, file);
+          const url = await getDownloadURL(r);
+          newUrls.push(url);
+        }
+
+        const next = [...existing, ...newUrls];
+
+        await updateDoc(doc(db, "events", prestationId, "missions", missionId), {
+          photoUrls: next,
+          updatedAt: serverTimestamp()
+        });
+
+        const mSnap = await getDoc(doc(db, "events", prestationId, "missions", missionId));
+        missionDoc = { id: mSnap.id, ...(mSnap.data()||{}) };
+
+        renderPhotos(missionDoc.photoUrls);
+        photoInput.value = "";
+        showAlert("✅ Photos ajoutées.", true);
+
+      }catch(err){
+        console.error(err);
+        showAlert("Erreur upload : " + (err?.message || "inconnue"));
+      }finally{
+        uploadBtn.disabled = false;
+        uploadBtn.textContent = "Ajouter";
+      }
+    }
+
+    uploadBtn.addEventListener("click", uploadPhotos);
 
     async function loadAll(){
       hideAlert();
@@ -349,6 +489,7 @@
       statusPill.textContent = "Chargement…";
       statusPill.className = "pill";
 
+      // token
       const tSnap = await getDoc(doc(db, "dayTokens", token));
       if(!tSnap.exists()){
         showAlert("⛔ Token invalide.");
@@ -374,6 +515,7 @@
 
       agentLine.textContent = `${tokenDoc.agentName || "Agent"}${tokenDoc.agentEmail ? " • " + tokenDoc.agentEmail : ""}`.trim();
 
+      // mission
       const mRef = doc(db, "events", prestationId, "missions", missionId);
       const mSnap = await getDoc(mRef);
       if(!mSnap.exists()){
@@ -389,12 +531,16 @@
         return;
       }
 
-      missionTitle.textContent = typeLabel(missionId);
+      // ✅ type de mission = missionDoc.type OU missionId
+      const mid = (missionDoc.type || missionId || "").toString().toUpperCase().trim();
+
+      missionTitle.textContent = typeLabel(mid);
 
       const st = normalizeStatus(missionDoc.status || "ASSIGNEE");
       statusPill.textContent = statusLabel(st);
       statusPill.className = "pill " + pillClassForStatus(st);
 
+      // contexte
       let home = missionDoc.homeName || "";
       let city = missionDoc.homeCity || "";
       let addr = missionDoc.homeAddress || "";
@@ -416,23 +562,29 @@
       const homeLine = `${home || "Logement"}${city ? " — " + city : ""}`.trim();
       contextLine.textContent = `${homeLine}${addr ? " • " + addr : ""}${dt ? " • " + dt : ""}`.trim();
 
-      const visible = Array.isArray(missionDoc?.checklistMeta?.visibleGroups)
-        ? missionDoc.checklistMeta.visibleGroups
-        : defaultVisibleGroups(missionId);
+      // ✅ visibleGroups: fallback si absent OU vide
+      visibleGroups =
+        (Array.isArray(missionDoc?.checklistMeta?.visibleGroups) && missionDoc.checklistMeta.visibleGroups.length)
+          ? missionDoc.checklistMeta.visibleGroups
+          : defaultVisibleGroups(mid);
+
+      checkMeta.textContent = `${mid} • ${visibleGroups.length} groupe(s)`;
 
       const checklist = (missionDoc.checklist && typeof missionDoc.checklist === "object") ? missionDoc.checklist : {};
-      renderChecklist(visible, checklist);
+      renderChecklist(visibleGroups, checklist);
 
+      // commentaire + photos
       agentCommentEl.value = (missionDoc.agentComment || "").toString();
+      renderPhotos(missionDoc.photoUrls);
 
       const locked = (missionDoc.locked === true) || st === "VALIDEE" || st === "NON_REQUISE";
       lockUi(locked);
 
-      saveBtn.onclick = ()=> saveChecklist(false);
-      doneBtn.onclick = ()=> saveChecklist(true);
+      saveBtn.onclick = ()=> saveMission(false);
+      doneBtn.onclick = ()=> saveMission(true);
     }
 
-    async function saveChecklist(markDone){
+    async function saveMission(markDone){
       hideAlert();
       if(!missionDoc) return;
 
@@ -442,12 +594,8 @@
         return;
       }
 
-      const visible = Array.isArray(missionDoc?.checklistMeta?.visibleGroups)
-        ? missionDoc.checklistMeta.visibleGroups
-        : defaultVisibleGroups(missionId);
-
       const prev = (missionDoc.checklist && typeof missionDoc.checklist === "object") ? missionDoc.checklist : {};
-      const nextChecklist = collectChecklistFromUI(visible, prev);
+      const nextChecklist = collectChecklistFromUI(visibleGroups, prev);
 
       const nextStatus = markDone ? "A_VALIDER" : (st0 === "ASSIGNEE" ? "EN_COURS" : st0);
 
@@ -465,6 +613,7 @@
 
       saveBtn.disabled = true;
       doneBtn.disabled = true;
+      incidentBtn.disabled = true;
 
       try{
         await updateDoc(doc(db, "events", prestationId, "missions", missionId), patch);
@@ -492,14 +641,57 @@
       }catch(err){
         console.error(err);
         showAlert("Erreur sauvegarde : " + (err?.message || "inconnue"));
+      }finally{
         saveBtn.disabled = false;
         doneBtn.disabled = false;
+        incidentBtn.disabled = false;
       }
     }
 
+    incidentBtn.addEventListener("click", async ()=>{
+      hideAlert();
+      if(!missionDoc) return;
+
+      const st0 = normalizeStatus(missionDoc.status || "ASSIGNEE");
+      if(missionDoc.locked === true || st0 === "VALIDEE" || st0 === "NON_REQUISE"){
+        showAlert("⛔ Mission verrouillée.");
+        return;
+      }
+
+      const comment = (agentCommentEl.value || "").trim();
+      if(!comment){
+        showAlert("Décris l’incident dans le commentaire avant.", false);
+        return;
+      }
+
+      incidentBtn.disabled = true;
+
+      try{
+        await updateDoc(doc(db, "events", prestationId, "missions", missionId), {
+          status: "INCIDENT",
+          agentComment: comment,
+          updatedAt: serverTimestamp()
+        });
+
+        showAlert("⛔ Incident signalé.", true);
+
+        const mSnap = await getDoc(doc(db, "events", prestationId, "missions", missionId));
+        missionDoc = { id: mSnap.id, ...(mSnap.data()||{}) };
+
+        const st = normalizeStatus(missionDoc.status || "ASSIGNEE");
+        statusPill.textContent = statusLabel(st);
+        statusPill.className = "pill " + pillClassForStatus(st);
+
+      }catch(err){
+        console.error(err);
+        showAlert("Erreur incident : " + (err?.message || "inconnue"));
+      }finally{
+        incidentBtn.disabled = false;
+      }
+    });
+
     onAuthStateChanged(auth, async (user)=>{
       try{
-        // anon pour contexte auth (même si rules token/mission ne reposent pas dessus)
         if(!user){
           await signInAnonymously(auth);
           return;
