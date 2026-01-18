@@ -1,15 +1,15 @@
-<!-- docs/agent.html (COMPLET robuste)
-     - token depuis URL ?token=... OU saisie manuelle
-     - auth anonyme (ok Edge/Firefox/tel)
+<!-- docs/agent.html (COMPLET)
+     - token via URL ?token=... OU saisie
      - lit dayTokens/{token} puis GET missions CHECKIN/MENAGE/CHECKOUT
-     - affiche toujours quelque chose (même si une mission est absente)
+     - tolérant sur les champs : dayToken / assignedToEmail peuvent manquer (legacy)
+     - affiche un mini debug "pourquoi c'est vide" sans console
 -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>CleanUp Manager — Agent (Mes missions)</title>
+  <title>CleanUp Manager — Agent (Missions)</title>
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -104,6 +104,7 @@
       white-space:nowrap;
     }
     .empty{ padding:12px; border-radius:14px; background:#fff; box-shadow:0 3px 10px rgba(0,0,0,.06); color:#666; font-weight:900; font-size:12px; }
+    .debug{ font-size:11px; font-weight:900; color:#666; white-space:pre-wrap; background:#fff; border:1px solid rgba(0,0,0,.05); border-radius:14px; padding:10px; box-shadow:0 3px 10px rgba(0,0,0,.06); }
   </style>
 </head>
 
@@ -114,7 +115,7 @@
         <div class="logo">✓</div>
         <div class="title">
           <b>CleanUp Manager</b>
-          <span>Mes missions (token)</span>
+          <span>Mes missions</span>
         </div>
       </div>
       <span class="pill" id="tokenPill">Token…</span>
@@ -126,7 +127,7 @@
       <div style="text-align:center;">
         <div style="font-size:16px; font-weight:900;">Accès agent</div>
         <div style="font-size:12px; font-weight:800; color:#666; margin-top:4px;">
-          Si le lien ne contient pas le token, colle-le ici (valable 24h).
+          Si le token n’est pas dans le lien, colle-le ici.
         </div>
       </div>
 
@@ -143,20 +144,23 @@
 
     <section class="card" id="missionsCard" style="display:none;">
       <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
-        <div style="font-size:15px; font-weight:900;">Planning</div>
+        <div style="font-size:15px; font-weight:900;">Missions</div>
         <div style="font-size:12px; font-weight:900; color:#666;" id="agentLine">—</div>
       </div>
       <div style="font-size:12px; font-weight:900; color:#666;" id="prestaLine">—</div>
 
       <div class="divider"></div>
       <div class="list" id="list"></div>
+
+      <div class="divider"></div>
+      <div class="debug" id="debugBox" style="display:none;"></div>
     </section>
   </div>
 
   <script type="module">
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-    import { doc, getDoc, updateDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import { doc, getDoc } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const alertBox = document.getElementById("alertBox");
     const tokenPill = document.getElementById("tokenPill");
@@ -169,6 +173,7 @@
     const listEl = document.getElementById("list");
     const agentLine = document.getElementById("agentLine");
     const prestaLine = document.getElementById("prestaLine");
+    const debugBox = document.getElementById("debugBox");
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -214,19 +219,9 @@
     function showMissionsUI(){ tokenCard.style.display="none"; missionsCard.style.display="block"; }
     function showTokenUI(){ tokenCard.style.display="block"; missionsCard.style.display="none"; }
 
-    async function claimTokenIfNeeded(tokenId, td){
-      // optionnel : trace l’agent anon une fois
-      try{
-        if(!currentUser) return;
-        if((td?.agentUid || "").toString().trim()) return;
-
-        await updateDoc(doc(db, "dayTokens", tokenId), {
-          agentUid: currentUser.uid,
-          agentClaimedAt: serverTimestamp()
-        });
-      }catch{
-        // pas bloquant
-      }
+    function setDebug(text){
+      debugBox.style.display = "block";
+      debugBox.textContent = text;
     }
 
     function renderList(missions){
@@ -235,15 +230,14 @@
       if(!missions.length){
         const e = document.createElement("div");
         e.className = "empty";
-        e.textContent = "Aucune mission disponible (CHECKIN/MENAGE/CHECKOUT).";
+        e.textContent = "Aucune mission trouvée (CHECKIN/MENAGE/CHECKOUT).";
         listEl.appendChild(e);
         return;
       }
 
       for(const m of missions){
-        const st = (m.status||"").toUpperCase();
-        const [sl, cls] = statusLabel(st);
-        const tl = typeLabel(m.type);
+        const [sl, cls] = statusLabel(m.status);
+        const tl = typeLabel(m.id);
 
         const home = `${m.homeName || "Logement"}${m.homeCity ? " — " + m.homeCity : ""}`;
         const when = `${m.dateKey || "—"}${m.time ? " à " + m.time : ""}${m.homeAddress ? " • " + m.homeAddress : ""}`;
@@ -275,7 +269,9 @@
 
     async function loadTokenAndMissions(tok){
       hideAlert();
+      debugBox.style.display = "none";
       tokenPill.textContent = "Vérif token…";
+      tokenPill.className = "pill";
 
       const t = normalizeToken(tok);
       if(!t){
@@ -289,6 +285,7 @@
       accessBtn.disabled = true;
       accessBtn.textContent = "Chargement…";
 
+      const dbg = [];
       try{
         // 1) token
         const tSnap = await getDoc(doc(db, "dayTokens", t));
@@ -301,6 +298,9 @@
         }
 
         const td = tSnap.data() || {};
+        token = t;
+        tokenDoc = td;
+
         if(td.active === false){
           showAlert("Token désactivé.");
           tokenPill.textContent = "Token OFF";
@@ -309,43 +309,63 @@
           return;
         }
 
-        token = t;
-        tokenDoc = { id: tSnap.id, ...td };
+        const prestationId = (td.prestationId || "").toString().trim();
+        const tEmail = normalizeEmail(td.agentEmail || "");
 
-        // claim (optionnel)
-        await claimTokenIfNeeded(t, td);
+        dbg.push(`token: ${t}`);
+        dbg.push(`prestationId(token): ${prestationId || "(vide)"}`);
+        dbg.push(`agentEmail(token): ${tEmail || "(vide)"}`);
+
+        if(!prestationId){
+          showAlert("Token mal configuré (prestationId manquant).");
+          tokenPill.textContent = "Token KO";
+          tokenPill.className = "pill bad";
+          showTokenUI();
+          setDebug(dbg.join("\n"));
+          return;
+        }
 
         tokenPill.textContent = "Token OK";
         tokenPill.className = "pill ok";
 
-        agentLine.textContent = `${tokenDoc.agentName || "Agent"}${tokenDoc.agentEmail ? " • " + tokenDoc.agentEmail : ""}`.trim();
+        agentLine.textContent = `${td.agentName || "Agent"}${td.agentEmail ? " • " + td.agentEmail : ""}`.trim();
+        prestaLine.textContent = `Prestation : ${prestationId}`;
 
-        const prestationId = (tokenDoc.prestationId || "").toString().trim();
-        const agentEmail = normalizeEmail(tokenDoc.agentEmail || "");
-        if(!prestationId || !agentEmail){
-          showAlert("Token mal configuré (prestationId/agentEmail).");
-          showTokenUI();
-          return;
-        }
-
-        // 2) lire les 3 missions fixes (GET)
+        // 2) lire les 3 missions fixes (GET) — tolérant
         const ids = ["CHECKIN","MENAGE","CHECKOUT"];
         const out = [];
+        const reasons = [];
 
         for(const mid of ids){
           try{
             const mSnap = await getDoc(doc(db, "events", prestationId, "missions", mid));
-            if(!mSnap.exists()) continue;
+            if(!mSnap.exists()){
+              reasons.push(`${mid}: doc absent`);
+              continue;
+            }
 
             const x = mSnap.data() || {};
-            // sécurité : lien token ↔ mission
-            if((x.dayToken || "") !== token) continue;
-            if(normalizeEmail(x.assignedToEmail || "") !== agentEmail) continue;
+            const mDayToken = (x.dayToken || "").toString().trim();
+            const mEmail = normalizeEmail(x.assignedToEmail || "");
+
+            // ✅ règle d'affichage tolérante :
+            // - si dayToken existe -> il doit matcher le token
+            // - sinon (legacy) on n'exclut pas la mission (on l'affiche quand même)
+            if(mDayToken && mDayToken !== token){
+              reasons.push(`${mid}: dayToken différent (${mDayToken})`);
+              continue;
+            }
+
+            // - si assignedToEmail existe ET tokenEmail existe -> on vérifie
+            // - sinon on n'exclut pas (tolérant)
+            if(mEmail && tEmail && mEmail !== tEmail){
+              reasons.push(`${mid}: assignedToEmail différent (${mEmail})`);
+              continue;
+            }
 
             out.push({
-              id: mSnap.id,
+              id: mid,
               prestationId,
-              type: (x.type || mid).toUpperCase(),
               status: (x.status || "ASSIGNEE").toUpperCase(),
               dateKey: x.dateKey || "",
               time: x.time || "",
@@ -353,20 +373,23 @@
               homeCity: x.homeCity || "",
               homeAddress: x.homeAddress || ""
             });
+
           }catch(err){
-            // si une mission fait "permission denied", on continue au lieu de tout planter
-            console.error("Mission read error:", mid, err);
+            reasons.push(`${mid}: erreur lecture (${err?.code || err?.message || "?"})`);
           }
         }
-
-        prestaLine.textContent = `Prestation : ${prestationId}`;
-        out.sort((a,b)=> (a.type||"").localeCompare(b.type||""));
 
         showMissionsUI();
         renderList(out);
 
+        dbg.push(`missions affichées: ${out.length}`);
+        if(reasons.length){
+          dbg.push("\nDétails:");
+          dbg.push(...reasons.map(r=>" - "+r));
+        }
+        setDebug(dbg.join("\n"));
+
       }catch(err){
-        console.error(err);
         showAlert("Erreur : " + (err?.message || "inconnue"));
         tokenPill.textContent = "Erreur";
         tokenPill.className = "pill bad";
@@ -401,7 +424,6 @@
           showTokenUI();
         }
       }catch(err){
-        console.error(err);
         tokenPill.textContent = "Erreur";
         tokenPill.className = "pill bad";
         showAlert("Erreur accès : " + (err?.message || "inconnue"));
