@@ -1,8 +1,7 @@
-<!-- docs/intervention.html (COMPLET)
-     - génère token (dayTokens)
+<!-- docs/intervention.html (COMPLET corrigé)
+     - crée dayTokens avec expiresAt TIMESTAMP (plus de string ISO)
      - crée 3 missions sous events/{prestationId}/missions/{CHECKIN|MENAGE|CHECKOUT}
-     - ajoute conciergerieUid partout (indispensable pour tes queries/permissions)
-     - génère un lien agent + bouton copier + mailto
+     - conciergerieUid partout
 -->
 <!DOCTYPE html>
 <html lang="fr">
@@ -176,7 +175,7 @@
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
-      doc, getDoc, setDoc, updateDoc, serverTimestamp
+      doc, getDoc, setDoc, updateDoc, serverTimestamp, Timestamp
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     // UI
@@ -224,7 +223,6 @@
     prestaIdLine.textContent = prestationId ? ("prestationId: " + prestationId) : "prestationId manquant";
 
     let currentUser = null;
-    let eventRef = null;
     let eventData = null;
 
     logoutBtn.addEventListener("click", async ()=>{
@@ -249,7 +247,6 @@
       if(d.ownerName) rows.push(`<div><b>Propriétaire</b> : ${esc(d.ownerName)}${d.ownerEmail ? " • " + esc(d.ownerEmail) : ""}</div>`);
       recapKv.innerHTML = rows.join("");
 
-      // pré-remplissage agent si event le contient
       if(d.assignedToName && !agentNameEl.value) agentNameEl.value = d.assignedToName;
       if(d.assignedToEmail && !agentEmailEl.value) agentEmailEl.value = d.assignedToEmail;
 
@@ -265,10 +262,8 @@
       return out;
     }
 
-    function isoIn24h(){
-      const d = new Date();
-      d.setHours(d.getHours() + 24);
-      return d.toISOString();
+    function expiresIn24hTimestamp(){
+      return Timestamp.fromDate(new Date(Date.now() + 24*60*60*1000));
     }
 
     function lockUI(locked){
@@ -297,7 +292,7 @@
       try{
         // 1) token
         const tokenId = randomToken(20);
-        const expiresAtIso = isoIn24h();
+        const expiresAt = expiresIn24hTimestamp();
 
         await setDoc(doc(db, "dayTokens", tokenId), {
           conciergerieUid: currentUser.uid,
@@ -305,7 +300,7 @@
           agentEmail,
           agentName,
           active: true,
-          expiresAtIso,
+          expiresAt,
           createdAt: serverTimestamp()
         });
 
@@ -336,7 +331,7 @@
         await setDoc(doc(db, "events", prestationId, "missions", "MENAGE"),   { ...base, type:"MENAGE"   });
         await setDoc(doc(db, "events", prestationId, "missions", "CHECKOUT"), { ...base, type:"CHECKOUT" });
 
-        // 3) update event (facultatif mais utile pour ton UX)
+        // 3) update event
         await updateDoc(doc(db, "events", prestationId), {
           assignedToEmail: agentEmail,
           assignedToName: agentName,
@@ -355,7 +350,7 @@
         copyBtn.disabled = false;
         mailBtn.disabled = false;
 
-        tokenMeta.textContent = `Token: ${tokenId} • expire: ${expiresAtIso}`;
+        tokenMeta.textContent = `Token: ${tokenId} • expire dans 24h`;
 
         showAlert("✅ Token + 3 missions créés.", true);
 
@@ -374,7 +369,7 @@
         await navigator.clipboard.writeText(agentLinkEl.value || "");
         showAlert("✅ Lien copié.", true);
       }catch{
-        showAlert("Copie impossible (navigateur). Sélectionne le lien et Ctrl+C.");
+        showAlert("Copie impossible. Sélectionne le lien et Ctrl+C.");
       }
     });
 
@@ -397,7 +392,7 @@
         `Prestation : ${d.homeName || "Logement"}${d.homeCity ? " — " + d.homeCity : ""}`,
         `Date : ${d.dateKey || d.date || "—"}${d.time ? " à " + d.time : ""}`,
         ``,
-        `Merci.`,
+        `Merci.`
       ];
 
       const mailto = `mailto:${encodeURIComponent(agentEmail)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(lines.join("\n"))}`;
@@ -406,8 +401,7 @@
 
     async function loadEvent(){
       if(!prestationId) throw new Error("prestationId manquant. Exemple : intervention.html?prestationId=XXXX");
-      eventRef = doc(db, "events", prestationId);
-      const snap = await getDoc(eventRef);
+      const snap = await getDoc(doc(db, "events", prestationId));
       if(!snap.exists()) throw new Error("Prestation introuvable.");
       eventData = { id: snap.id, ...snap.data() };
       renderRecap();
@@ -421,7 +415,7 @@
       currentUser = user;
 
       try{
-        // Optionnel : tenter de pré-remplir conciergerieName depuis users/{uid}
+        // pré-remplir conciergerieName depuis users/{uid}
         try{
           const uSnap = await getDoc(doc(db, "users", currentUser.uid));
           if(uSnap.exists()){
