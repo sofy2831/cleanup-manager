@@ -896,14 +896,13 @@
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
-      collection, collectionGroup, query, where, orderBy, limit, getDocs,
+      collection, query, where, orderBy, limit, getDocs,
       addDoc, serverTimestamp,
       deleteDoc, doc, getDoc, updateDoc, writeBatch
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const alertBox = document.getElementById("alertBox");
     const logoutBtn = document.getElementById("logoutBtn");
-
     const toast = document.getElementById("toast");
 
     const kpiToday = document.getElementById("kpiToday");
@@ -1000,14 +999,6 @@
         .replaceAll("'","&#039;");
     }
     function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
-
-    function typeLabel(t){
-      const x = (t||"").toUpperCase();
-      if(x === "CHECKIN") return "Check-in";
-      if(x === "MENAGE") return "Ménage";
-      if(x === "CHECKOUT") return "Check-out";
-      return x || "Mission";
-    }
 
     let currentUser = null;
 
@@ -1603,7 +1594,6 @@
 
       if(h?.ownerName) params.set("ownerName", h.ownerName);
       if(h?.ownerEmail) params.set("ownerEmail", h.ownerEmail);
-
       if(h?.homeType) params.set("homeType", h.homeType);
 
       closeJobModal();
@@ -1617,7 +1607,7 @@
     });
 
     // ============================
-    // ✅ NOUVEAU BLOC "À valider"
+    // ✅ BLOC "À valider" (SOLIDE)
     // ============================
 
     async function readThreeMissions(eventId){
@@ -1676,65 +1666,62 @@
       validateCount.textContent = "Chargement…";
 
       try{
-        // ✅ pas de where("conciergerieUid") car tes missions ne l'ont pas
-        const q = query(
-          collectionGroup(db, "missions"),
-          orderBy("updatedAt","desc"),
-          limit(60)
-        );
-        const snap = await getDocs(q);
+        // Query events (chez toi uniquement). 2 tentatives (robuste).
+        let snap = null;
 
-        const raw = snap.docs.map(d=>{
-          const x = d.data() || {};
-          const parts = d.ref.path.split("/"); // events/{eventId}/missions/{missionId}
-          return {
-            eventId: parts[1],
-            missionId: parts[3],
-            status: (x.status || "").toUpperCase()
-          };
-        }).filter(r => r.status === "A_VALIDER");
-
-        const byEvent = new Map();
-        for(const r of raw){
-          if(!byEvent.has(r.eventId)) byEvent.set(r.eventId, true);
+        try{
+          const qEv = query(
+            collection(db, "events"),
+            where("conciergerieUid", "==", currentUser.uid),
+            orderBy("updatedAt", "desc"),
+            limit(40)
+          );
+          snap = await getDocs(qEv);
+        }catch{
+          const qEv2 = query(
+            collection(db, "events"),
+            where("conciergerieUid", "==", currentUser.uid),
+            orderBy("dateKey", "desc"),
+            limit(60)
+          );
+          snap = await getDocs(qEv2);
         }
 
-        const eventIds = Array.from(byEvent.keys());
-        validateCount.textContent = `${eventIds.length} prestation(s)`;
+        const candidates = snap.docs
+          .map(d => ({ id:d.id, ...(d.data()||{}) }))
+          .filter(e => String(e.status||"").toUpperCase() !== "BON_A_FACTURER");
 
-        if(!eventIds.length){
+        const rows = [];
+
+        for(const ev of candidates){
+          let three = null;
+          try{
+            three = await readThreeMissions(ev.id);
+          }catch{
+            three = null;
+          }
+          if(!three) continue;
+
+          const allReady = three.every(missionOkForValidate);
+          const someAValider = three.some(m => (m.data.status||"").toUpperCase() === "A_VALIDER");
+          if(!someAValider) continue;
+
+          rows.push({ ev, allReady });
+        }
+
+        validateCount.textContent = `${rows.length} prestation(s)`;
+
+        if(!rows.length){
           validateList.innerHTML = `
             <div style="padding:12px;border-radius:14px;background:#fff;box-shadow:0 3px 10px rgba(0,0,0,.06);color:#666;font-weight:900;font-size:12px;">
-              Rien à valider. (Profite, c’est rare.)
+              Rien à valider.
             </div>`;
           return;
         }
 
-        for(const eventId of eventIds){
-          // read event (sécurité + affichage)
-          let ev = null;
-          try{
-            const eSnap = await getDoc(doc(db, "events", eventId));
-            if(!eSnap.exists()) continue;
-            const e = eSnap.data() || {};
-            if(e.conciergerieUid !== currentUser.uid) continue;
-            ev = { id: eSnap.id, ...e };
-          }catch{
-            continue;
-          }
-
-          // read the 3 missions and check 3/3 A_VALIDER
-          let three = null;
-          try{
-            three = await readThreeMissions(eventId);
-          }catch{
-            three = null;
-          }
-          const allReady = !!three && three.every(missionOkForValidate);
-
+        for(const {ev, allReady} of rows){
           const home = `${ev.homeName || "Logement"}${ev.homeCity ? " — " + ev.homeCity : ""}`;
           const dt = `${ev.dateKey || ev.date || "—"}${ev.time ? " à " + ev.time : ""}${ev.homeAddress ? " • " + ev.homeAddress : ""}`;
-
           const agent = `${ev.assignedToName || "—"}${ev.assignedToEmail ? " • " + ev.assignedToEmail : ""}`;
 
           const div = document.createElement("div");
@@ -1742,23 +1729,21 @@
           div.innerHTML = `
             <div class="val-left">
               <div class="val-top">
-                <span class="badge">${esc("Prestation")}</span>
-                <span class="badge ${allReady ? "ok" : ""}">${esc(allReady ? "PRÊT" : "EN ATTENTE")}</span>
+                <span class="badge">Prestation</span>
+                <span class="badge ${allReady ? "ok" : ""}">${allReady ? "PRÊT" : "EN ATTENTE"}</span>
               </div>
               <div class="val-title">${esc(home)}</div>
               <div class="val-sub">${esc(dt)}\nAgent : ${esc(agent)}</div>
             </div>
             <div class="val-actions">
-              <button class="mini-btn ghost" type="button" data-open="${esc(eventId)}">Ouvrir</button>
-              <button class="mini-btn" type="button" data-validate-presta="${esc(eventId)}" ${allReady ? "" : "disabled"}>
-                Valider
-              </button>
+              <button class="mini-btn ghost" type="button" data-open="${esc(ev.id)}">Ouvrir</button>
+              <button class="mini-btn" type="button" data-validate-presta="${esc(ev.id)}" ${allReady ? "" : "disabled"}>Valider</button>
             </div>
           `;
           validateList.appendChild(div);
 
           div.querySelector("button[data-open]")?.addEventListener("click", ()=>{
-            location.href = `intervention.html?prestationId=${encodeURIComponent(eventId)}`;
+            location.href = `intervention.html?prestationId=${encodeURIComponent(ev.id)}`;
           });
 
           div.querySelector("button[data-validate-presta]")?.addEventListener("click", async ()=>{
@@ -1768,7 +1753,7 @@
             btn.textContent = "…";
 
             try{
-              await validateWholePrestation(eventId);
+              await validateWholePrestation(ev.id);
               showToast("✅ Prestation validée");
               await loadToValidate();
             }catch(err){
