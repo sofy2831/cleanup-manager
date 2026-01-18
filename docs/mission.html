@@ -70,9 +70,7 @@
     }
     textarea:focus{ border-color:var(--violet-main); box-shadow:0 0 0 3px rgba(122,92,255,.12); }
 
-    .hint{
-      font-size:11px; font-weight:900; color:#666; line-height:1.25;
-    }
+    .hint{ font-size:11px; font-weight:900; color:#666; line-height:1.25; }
 
     .photosRow{
       display:flex; gap:10px; flex-wrap:wrap; align-items:center; justify-content:space-between;
@@ -97,28 +95,7 @@
       box-shadow:0 3px 10px rgba(0,0,0,0.06); white-space:nowrap;
     }
     .btn.primary{ background:linear-gradient(90deg,var(--violet-main),var(--violet-dark)); border-color:transparent; color:#fff; box-shadow:0 12px 24px rgba(0,0,0,0.10); }
-    .btn.danger{
-      background:#ffe3ec; color:var(--bad);
-      border:2px solid #ffc2d6;
-      box-shadow:0 3px 10px rgba(0,0,0,0.06);
-    }
     .btn:disabled{ opacity:.6; cursor:not-allowed; }
-
-    .actionsHelp{
-      width:100%;
-      display:flex;
-      justify-content:space-between;
-      gap:10px;
-      flex-wrap:wrap;
-      margin-top:6px;
-    }
-    .micro{
-      font-size:11px;
-      font-weight:900;
-      color:#666;
-      line-height:1.25;
-    }
-    .micro b{ color:#111; }
   </style>
 </head>
 
@@ -146,7 +123,7 @@
 
       <div class="divider"></div>
 
-      <!-- ✅ PHOTOS (hors checklist) -->
+      <!-- ✅ PHOTOS -->
       <div class="group">
         <div class="gtitle">Photos</div>
         <div class="photosRow">
@@ -156,31 +133,23 @@
           </div>
           <button class="btn primary" id="uploadBtn" type="button">Ajouter</button>
         </div>
-        <div class="hint">Ajoute maxi jusqu’à 3 photos).</div>
         <div class="photoList" id="photoPreview"></div>
       </div>
 
       <div class="divider"></div>
 
-      <!-- ✅ OBSERVATIONS (1 seul champ, pas de doublon) -->
+      <!-- ✅ COMMENTAIRE -->
       <div class="group">
-        <div class="gtitle">Observations</div>
-        <textarea id="agentComment" placeholder="Décris ce qui a été fait. S’il y a un problème, décris-le ici puis clique sur INCIDENT."></textarea>
-        <div class="hint">Incident = commentaire obligatoire + (optionnel) photos. Terminé = envoi à la conciergerie pour validation.</div>
+        <div class="gtitle">Commentaire</div>
+        <textarea id="agentComment" placeholder="Ex : manque linge, casse, logement sale, urgence, etc."></textarea>
+        <div class="hint">Si tu coches « Incident », le commentaire devient obligatoire.</div>
       </div>
 
       <div class="divider"></div>
 
       <div class="btnRow">
-        <button class="btn danger" id="incidentBtn" type="button" disabled>Incident</button>
         <button class="btn" id="saveBtn" type="button">Enregistrer</button>
         <button class="btn primary" id="doneBtn" type="button">Terminé</button>
-      </div>
-
-      <div class="actionsHelp">
-        <div class="micro"><b>Enregistrer</b> = brouillon (EN_COURS)</div>
-        <div class="micro"><b>Terminé</b> = à valider côté conciergerie (A_VALIDER)</div>
-        <div class="micro"><b>Incident</b> = problème signalé (INCIDENT)</div>
       </div>
     </section>
   </div>
@@ -203,8 +172,6 @@
 
     const saveBtn = document.getElementById("saveBtn");
     const doneBtn = document.getElementById("doneBtn");
-    const incidentBtn = document.getElementById("incidentBtn");
-
     const agentCommentEl = document.getElementById("agentComment");
 
     const photoInput = document.getElementById("photoInput");
@@ -275,7 +242,6 @@
         { k:"poubelles", t:"check", label:"Poubelles" },
         { k:"draps", t:"check", label:"Draps" }
       ]},
-      PHOTOS: { title:"Photos", items:[ {k:"photos", t:"check", label:"Photos prises"} ] },
       LINGE: { title:"Linge", items:[
         {k:"lingeDraps", t:"check", label:"Changement draps"},
         {k:"lingeServiettes", t:"check", label:"Serviettes"}
@@ -302,7 +268,8 @@
       ]},
       URGENCE: { title:"Urgence", items:[
         {k:"urgenceMiseSecurite", t:"check", label:"Mise en sécurité"},
-        {k:"urgenceCompteRendu", t:"text", label:"Compte-rendu"}
+        {k:"urgenceCompteRendu", t:"text", label:"Compte-rendu"},
+        {k:"incident", t:"check", label:"Incident (problème à signaler)"}  /* ✅ demandé */
       ]},
       CHECKIN_BASE: { title:"Check-in", items:[
         {k:"accueil", t:"check", label:"Accueil"},
@@ -331,6 +298,9 @@
         const g = GROUPS[gKey];
         if(!g) continue;
 
+        // ⛔️ Bloc PHOTOS supprimé de la checklist (doublon avec bloc photos)
+        if(gKey === "PHOTOS") continue;
+
         const box = document.createElement("div");
         box.className = "group";
         box.innerHTML = `<div class="gtitle">${g.title}</div>`;
@@ -351,6 +321,14 @@
             inner.appendChild(wrap);
             const el = wrap.querySelector("input");
             el.checked = !!checklist[it.k];
+
+            // ✅ quand on coche "incident", on adapte le statut au moment du save
+            if(it.k === "incident"){
+              el.addEventListener("change", ()=> {
+                // juste UX: si on coche incident, on focus le commentaire
+                if(el.checked) agentCommentEl.focus();
+              });
+            }
           }
 
           if(it.t === "tri"){
@@ -392,6 +370,8 @@
         const g = GROUPS[gKey];
         if(!g) continue;
 
+        if(gKey === "PHOTOS") continue; // doublon supprimé
+
         for(const it of g.items){
           if(it.t === "check"){
             const el = document.getElementById(it.k);
@@ -413,19 +393,13 @@
 
     function defaultVisibleGroups(mid){
       if(mid === "CHECKIN") return ["CHECKIN_BASE"];
-      if(mid === "CHECKOUT") return ["CHECKOUT_BASE","PHOTOS","ANOMALIES","SECURISATION"];
-      return ["MENAGE_BASE","PHOTOS","LINGE","BLANCHISSERIE","KITS","REASSORT","MAINTENANCE","URGENCE"];
+      if(mid === "CHECKOUT") return ["CHECKOUT_BASE","ANOMALIES","SECURISATION","URGENCE"];
+      return ["MENAGE_BASE","LINGE","BLANCHISSERIE","KITS","REASSORT","MAINTENANCE","URGENCE"];
     }
 
     function isLockedStatus(st){
       const x = normalizeStatus(st);
       return x === "VALIDEE" || x === "NON_REQUISE";
-    }
-
-    function syncIncidentButton(){
-      const txt = (agentCommentEl.value || "").trim();
-      const locked = (missionDoc?.locked === true) || isLockedStatus(missionDoc?.status);
-      incidentBtn.disabled = locked || !txt.length;
     }
 
     function lockUi(locked){
@@ -434,9 +408,6 @@
       uploadBtn.disabled = !!locked;
       photoInput.disabled = !!locked;
       agentCommentEl.disabled = !!locked;
-
-      // incident = dépend du commentaire + locked
-      syncIncidentButton();
     }
 
     function renderPhotos(urls){
@@ -453,6 +424,11 @@
           <a href="${u}" target="_blank" rel="noopener">Voir photo ${i+1}</a>
         </div>
       `).join("");
+    }
+
+    function getIncidentChecked(){
+      const el = document.getElementById("incident");
+      return !!(el && el.checked);
     }
 
     async function loadAll(){
@@ -510,7 +486,6 @@
         return;
       }
 
-      // type mission: fallback robuste
       const mid = (missionDoc.type || missionId || "").toUpperCase().trim();
       missionTitle.textContent = typeLabel(mid);
 
@@ -540,7 +515,7 @@
       const homeLine = `${home || "Logement"}${city ? " — " + city : ""}`.trim();
       contextLine.textContent = `${homeLine}${addr ? " • " + addr : ""}${dt ? " • " + dt : ""}`.trim();
 
-      // checklist visible groups (fallback si vide)
+      // visible groups
       visibleGroups =
         (Array.isArray(missionDoc?.checklistMeta?.visibleGroups) && missionDoc.checklistMeta.visibleGroups.length)
           ? missionDoc.checklistMeta.visibleGroups
@@ -549,7 +524,7 @@
       const checklist = (missionDoc.checklist && typeof missionDoc.checklist === "object") ? missionDoc.checklist : {};
       renderChecklist(visibleGroups, checklist);
 
-      // observations
+      // commentaire
       agentCommentEl.value = (missionDoc.agentComment || "").toString();
 
       // photos
@@ -558,11 +533,11 @@
       const locked = (missionDoc.locked === true) || isLockedStatus(st);
       lockUi(locked);
 
-      saveBtn.onclick = ()=> saveMission(false, null);
-      doneBtn.onclick = ()=> saveMission(true, "A_VALIDER");
+      saveBtn.onclick = ()=> saveMission(false);
+      doneBtn.onclick = ()=> saveMission(true);
     }
 
-    async function saveMission(markDone, forceStatus=null){
+    async function saveMission(markDone){
       hideAlert();
       if(!missionDoc) return;
 
@@ -575,15 +550,31 @@
       const prev = (missionDoc.checklist && typeof missionDoc.checklist === "object") ? missionDoc.checklist : {};
       const nextChecklist = collectChecklistFromUI(visibleGroups, prev);
 
-      // Enregistrer -> EN_COURS (si ASSIGNEE)
-      // Terminé -> A_VALIDER
-      const nextStatus =
-        forceStatus ? forceStatus
-        : (markDone ? "A_VALIDER" : (st0 === "ASSIGNEE" ? "EN_COURS" : st0));
+      const incidentChecked = !!nextChecklist.incident;
+
+      const comment = (agentCommentEl.value || "").toString().trim();
+      if(incidentChecked && !comment){
+        showAlert("⛔ Incident coché : le commentaire est obligatoire.");
+        return;
+      }
+
+      // ✅ statut:
+      // - si incident coché -> INCIDENT (même si Enregistrer)
+      // - sinon Enregistrer: EN_COURS si ASSIGNEE, sinon status inchangé
+      // - Terminé: A_VALIDER (sauf incident -> INCIDENT)
+      let nextStatus = st0;
+
+      if(incidentChecked){
+        nextStatus = "INCIDENT";
+      }else if(markDone){
+        nextStatus = "A_VALIDER";
+      }else{
+        nextStatus = (st0 === "ASSIGNEE") ? "EN_COURS" : st0;
+      }
 
       const patch = {
         checklist: nextChecklist,
-        agentComment: (agentCommentEl.value || "").toString().trim(),
+        agentComment: comment,
         status: nextStatus,
         updatedAt: serverTimestamp()
       };
@@ -595,7 +586,6 @@
 
       saveBtn.disabled = true;
       doneBtn.disabled = true;
-      incidentBtn.disabled = true;
 
       try{
         await updateDoc(doc(db, "events", prestationId, "missions", missionId), patch);
@@ -625,52 +615,6 @@
         showAlert("Erreur sauvegarde : " + (err?.message || "inconnue"));
         saveBtn.disabled = false;
         doneBtn.disabled = false;
-        syncIncidentButton();
-      }
-    }
-
-    async function signalIncident(){
-      hideAlert();
-      if(!missionDoc) return;
-
-      const st0 = normalizeStatus(missionDoc.status || "ASSIGNEE");
-      if(missionDoc.locked === true || isLockedStatus(st0)){
-        showAlert("⛔ Mission verrouillée.");
-        return;
-      }
-
-      const txt = (agentCommentEl.value || "").trim();
-      if(!txt){
-        showAlert("⛔ Pour signaler un incident : écris un commentaire (ce qui ne va pas) puis clique INCIDENT.");
-        return;
-      }
-
-      incidentBtn.disabled = true;
-
-      try{
-        await updateDoc(doc(db, "events", prestationId, "missions", missionId), {
-          status: "INCIDENT",
-          agentComment: txt,
-          agentIncident: true,
-          agentIncidentAt: serverTimestamp(),
-          updatedAt: serverTimestamp()
-        });
-
-        showAlert("⛔ Incident signalé. Ajoute des photos si besoin puis clique Terminé.", true);
-
-        const mSnap = await getDoc(doc(db, "events", prestationId, "missions", missionId));
-        missionDoc = { id: mSnap.id, ...(mSnap.data()||{}) };
-
-        const st = normalizeStatus(missionDoc.status || "INCIDENT");
-        statusPill.textContent = statusLabel(st);
-        statusPill.className = "pill " + pillClassForStatus(st);
-
-        lockUi(false);
-
-      }catch(err){
-        console.error(err);
-        showAlert("Erreur incident : " + (err?.message || "inconnue"));
-        syncIncidentButton();
       }
     }
 
@@ -731,10 +675,6 @@
       }
     }
 
-    // UX: incident activé seulement si commentaire non vide
-    agentCommentEl.addEventListener("input", syncIncidentButton);
-
-    incidentBtn.addEventListener("click", signalIncident);
     uploadBtn.addEventListener("click", uploadPhotos);
 
     onAuthStateChanged(auth, async (user)=>{
@@ -752,4 +692,3 @@
   </script>
 </body>
 </html>
-
