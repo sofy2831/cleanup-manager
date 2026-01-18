@@ -1,15 +1,15 @@
-<!-- docs/agent.html (COMPLET corrigé)
-     - lit dayTokens/{token} (expiresAt timestamp)
-     - charge les 3 missions (CHECKIN/MENAGE/CHECKOUT) en GET
-     - liens vers mission.html avec token + prestationId + missionId
-     - (optionnel) claim du token (agentUid) si tu veux tracer l’agent anon
+<!-- docs/agent.html (COMPLET robuste)
+     - token depuis URL ?token=... OU saisie manuelle
+     - auth anonyme (ok Edge/Firefox/tel)
+     - lit dayTokens/{token} puis GET missions CHECKIN/MENAGE/CHECKOUT
+     - affiche toujours quelque chose (même si une mission est absente)
 -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>CleanUp Manager — Mes missions</title>
+  <title>CleanUp Manager — Agent (Mes missions)</title>
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -26,79 +26,130 @@
     }
     *{ box-sizing:border-box; font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; }
     body{ margin:0; background:linear-gradient(180deg,var(--bg1) 0%, var(--bg2) 80%); color:var(--text); }
-    .page{ min-height:100vh; display:flex; flex-direction:column; align-items:center; padding:14px 14px 40px; }
+    .page{ min-height:100vh; display:flex; flex-direction:column; align-items:center; padding:14px 14px 36px; }
 
-    .top{ width:100%; max-width:820px; display:flex; align-items:center; justify-content:space-between; gap:10px; padding:10px 0 4px; }
+    .top{ width:100%; max-width:860px; display:flex; align-items:center; justify-content:space-between; gap:10px; padding:10px 0 4px; }
+    .brand{ display:flex; align-items:center; gap:10px; }
+    .logo{ width:40px;height:40px;border-radius:50%; background:#fff;border:2px solid var(--violet-main);
+      display:flex;align-items:center;justify-content:center; font-weight:900;color:var(--violet-main);
+      position:relative; flex-shrink:0;
+    }
+    .logo::after{ content:"✦"; position:absolute; top:-6px; right:-6px; font-size:12px; color:var(--violet-main); }
+    .title{ display:flex; flex-direction:column; line-height:1.05; }
+    .title b{ font-size:15px; letter-spacing:-0.2px; }
+    .title span{ font-size:12px; color:#444; font-weight:800; }
+
     .pill{
       display:inline-flex; align-items:center; gap:8px; padding:8px 10px; border-radius:999px; background:#fff;
       border:2px solid rgba(122,92,255,0.22); color:#5b45c8; font-weight:900; font-size:12px; white-space:nowrap;
-      box-shadow:0 3px 10px rgba(0,0,0,.06);
     }
     .pill.ok{ border-color: rgba(27,143,77,0.30); color:var(--ok); }
     .pill.bad{ border-color: rgba(179,38,30,0.30); color:var(--bad); }
 
-    .alert{ display:none; width:100%; max-width:820px; margin-top:10px; padding:10px 12px; background:#fff;
+    .alert{ display:none; width:100%; max-width:860px; margin-top:10px; padding:10px 12px; background:#fff;
       border-radius:14px; border-left:5px solid var(--bad); box-shadow:0 3px 10px rgba(0,0,0,.06);
       font-size:12px; color:#444; white-space:pre-wrap;
     }
     .alert.ok{ border-left-color:var(--ok); }
 
-    .card{ width:100%; max-width:820px; background: rgba(255,255,255,0.86); border:1px solid var(--border);
+    .card{ width:100%; max-width:860px; background: rgba(255,255,255,0.86); border:1px solid var(--border);
       border-radius:18px; box-shadow:var(--shadow); backdrop-filter: blur(10px);
       padding:12px; display:flex; flex-direction:column; gap:10px; margin-top:10px;
     }
-    .h1{ font-size:16px; font-weight:900; }
-    .sub{ font-size:12px; font-weight:800; color:#666; white-space:pre-wrap; }
+
+    .row{ display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; }
+    .row > div{ flex:1; min-width:220px; }
+    label{ display:block; font-size:11px; font-weight:900; color:#444; margin:0 0 4px; }
+    input{
+      width:100%; padding:10px 10px; border-radius:12px; border:1px solid #D3C7FF; background:#fff;
+      font-size:14px; font-weight:800; color:#222; outline:none;
+    }
+    input:focus{ border-color:var(--violet-main); box-shadow:0 0 0 3px rgba(122,92,255,.12); }
+
+    .btn{
+      border:none; border-radius:999px; padding:10px 14px; font-size:13px; font-weight:900; cursor:pointer;
+      background:#fff; color:var(--violet-main); border:2px solid var(--violet-main);
+      box-shadow:0 3px 10px rgba(0,0,0,.06); white-space:nowrap;
+    }
+    .btn.primary{
+      background:linear-gradient(90deg,var(--violet-main),var(--violet-dark));
+      border-color:transparent; color:#fff; box-shadow:0 12px 24px rgba(0,0,0,0.10);
+    }
+    .btn:disabled{ opacity:.6; cursor:not-allowed; }
+
     .divider{ height:1px; width:100%; background:rgba(122,92,255,0.18); margin:4px 0; }
 
     .list{ display:flex; flex-direction:column; gap:10px; }
     .item{
-      background:#fff; border-radius:16px; border:1px solid rgba(0,0,0,0.03);
-      box-shadow:0 3px 10px rgba(0,0,0,.06);
-      padding:10px; display:flex; justify-content:space-between; gap:10px; align-items:center;
-      cursor:pointer;
+      background:#fff; border-radius:16px; border:1px solid rgba(0,0,0,0.03); box-shadow:0 3px 10px rgba(0,0,0,.06);
+      padding:10px; display:flex; justify-content:space-between; gap:10px; align-items:flex-start;
     }
-    .left{ min-width:0; }
-    .t{ font-size:13px; font-weight:900; color:#222; }
-    .m{ font-size:12px; font-weight:800; color:#666; margin-top:2px; }
-
-    .tag{
-      font-size:11px; font-weight:900; padding:4px 10px; border-radius:999px;
+    .i-main{ min-width:0; }
+    .i-top{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    .badge{
+      font-size:11px; font-weight:900; padding:3px 9px; border-radius:999px;
       background: rgba(122,92,255,0.12); color:#5b45c8; white-space:nowrap;
     }
-    .tag.ok{ background: rgba(27,143,77,0.16); color:var(--ok); }
-    .tag.bad{ background: rgba(179,38,30,0.14); color:var(--bad); }
-    .tag.warn{ background: rgba(255,153,0,0.18); color:var(--warn); }
+    .badge.ok{ background: rgba(27,143,77,0.16); color:#1b8f4d; }
+    .badge.bad{ background: rgba(179,38,30,0.14); color:#b3261e; }
+    .badge.warn{ background: rgba(255,153,0,0.16); color:#8a5600; }
 
-    .btn{
-      border:none; border-radius:999px; padding:10px 14px; font-size:13px; font-weight:900; cursor:pointer;
-      background:linear-gradient(90deg,var(--violet-main),var(--violet-dark)); color:#fff;
-      box-shadow:0 12px 24px rgba(0,0,0,0.10); white-space:nowrap;
+    .i-title{ font-size:13px; font-weight:900; color:#222; margin-top:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:560px; }
+    .i-sub{ margin-top:3px; font-size:12px; font-weight:800; color:#666; white-space:pre-wrap; max-width:560px; }
+    .i-actions{ display:flex; flex-direction:column; gap:6px; align-items:flex-end; flex-shrink:0; }
+    .mini{
+      border:none; border-radius:999px; padding:8px 10px; font-size:12px; font-weight:900; cursor:pointer; color:#fff;
+      background: linear-gradient(90deg,var(--violet-main),var(--violet-dark));
+      box-shadow:0 10px 22px rgba(0,0,0,0.10);
+      white-space:nowrap;
     }
-    .btn:disabled{ opacity:.6; cursor:not-allowed; }
+    .empty{ padding:12px; border-radius:14px; background:#fff; box-shadow:0 3px 10px rgba(0,0,0,.06); color:#666; font-weight:900; font-size:12px; }
   </style>
 </head>
 
 <body>
   <div class="page">
     <div class="top">
-      <span class="pill" id="agentPill">Agent</span>
-      <span class="pill" id="tokenPill">—</span>
+      <div class="brand">
+        <div class="logo">✓</div>
+        <div class="title">
+          <b>CleanUp Manager</b>
+          <span>Mes missions (token)</span>
+        </div>
+      </div>
+      <span class="pill" id="tokenPill">Token…</span>
     </div>
 
     <div class="alert" id="alertBox"></div>
 
-    <section class="card">
-      <div class="h1">Mes missions</div>
-      <div class="sub" id="contextLine">—</div>
+    <section class="card" id="tokenCard">
+      <div style="text-align:center;">
+        <div style="font-size:16px; font-weight:900;">Accès agent</div>
+        <div style="font-size:12px; font-weight:800; color:#666; margin-top:4px;">
+          Si le lien ne contient pas le token, colle-le ici (valable 24h).
+        </div>
+      </div>
+
+      <div class="row">
+        <div>
+          <label for="tokenInput">Token</label>
+          <input id="tokenInput" placeholder="Ex. K3Q9WZ8P2M..." autocomplete="one-time-code" />
+        </div>
+        <div style="flex:0; min-width:auto;">
+          <button class="btn primary" id="accessBtn" type="button">Accéder</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="card" id="missionsCard" style="display:none;">
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
+        <div style="font-size:15px; font-weight:900;">Planning</div>
+        <div style="font-size:12px; font-weight:900; color:#666;" id="agentLine">—</div>
+      </div>
+      <div style="font-size:12px; font-weight:900; color:#666;" id="prestaLine">—</div>
 
       <div class="divider"></div>
-
       <div class="list" id="list"></div>
-
-      <div class="divider"></div>
-
-      <button class="btn" id="refreshBtn" type="button">Rafraîchir</button>
     </section>
   </div>
 
@@ -108,11 +159,16 @@
     import { doc, getDoc, updateDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const alertBox = document.getElementById("alertBox");
-    const agentPill = document.getElementById("agentPill");
     const tokenPill = document.getElementById("tokenPill");
-    const contextLine = document.getElementById("contextLine");
+
+    const tokenCard = document.getElementById("tokenCard");
+    const tokenInput = document.getElementById("tokenInput");
+    const accessBtn = document.getElementById("accessBtn");
+
+    const missionsCard = document.getElementById("missionsCard");
     const listEl = document.getElementById("list");
-    const refreshBtn = document.getElementById("refreshBtn");
+    const agentLine = document.getElementById("agentLine");
+    const prestaLine = document.getElementById("prestaLine");
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -124,11 +180,16 @@
       alertBox.classList.remove("ok");
       alertBox.textContent = "";
     }
-    function qs(name){ return new URLSearchParams(location.search).get(name); }
+    function esc(s){
+      return String(s ?? "")
+        .replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;")
+        .replaceAll('"',"&quot;").replaceAll("'","&#039;");
+    }
     function normalizeToken(raw){ return (raw||"").toString().trim().replace(/\s+/g,""); }
+    function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
 
     function statusLabel(s){
-      const x = (s||"").toUpperCase().trim();
+      const x = (s||"").toUpperCase();
       if(x === "ASSIGNEE") return ["ASSIGNÉE",""];
       if(x === "EN_COURS") return ["EN COURS","warn"];
       if(x === "A_VALIDER") return ["À VALIDER","warn"];
@@ -138,28 +199,28 @@
       if(x === "NON_REQUISE") return ["NON REQUISE","ok"];
       return [x || "—",""];
     }
-    function typeLabel(id){
-      const x = (id||"").toUpperCase();
+    function typeLabel(t){
+      const x = (t||"").toUpperCase();
       if(x === "CHECKIN") return "Check-in";
       if(x === "MENAGE") return "Ménage";
       if(x === "CHECKOUT") return "Check-out";
       return x || "Mission";
     }
 
-    const token = normalizeToken(qs("token") || "");
-    let tokenDoc = null;
     let currentUser = null;
+    let token = "";
+    let tokenDoc = null;
 
-    refreshBtn.addEventListener("click", ()=> loadAll().catch(()=>{}));
+    function showMissionsUI(){ tokenCard.style.display="none"; missionsCard.style.display="block"; }
+    function showTokenUI(){ tokenCard.style.display="block"; missionsCard.style.display="none"; }
 
-    async function claimTokenIfNeeded(){
-      // optionnel : on trace l’agent anon dans dayTokens.agentUid
+    async function claimTokenIfNeeded(tokenId, td){
+      // optionnel : trace l’agent anon une fois
       try{
-        if(!tokenDoc) return;
-        if(tokenDoc.agentUid && String(tokenDoc.agentUid).trim()) return;
         if(!currentUser) return;
+        if((td?.agentUid || "").toString().trim()) return;
 
-        await updateDoc(doc(db, "dayTokens", token), {
+        await updateDoc(doc(db, "dayTokens", tokenId), {
           agentUid: currentUser.uid,
           agentClaimedAt: serverTimestamp()
         });
@@ -168,110 +229,158 @@
       }
     }
 
-    async function loadAll(){
-      hideAlert();
-
-      if(!token){
-        showAlert("⛔ Token manquant.");
-        tokenPill.textContent = "Token manquant";
-        tokenPill.className = "pill bad";
-        return;
-      }
-
-      tokenPill.textContent = "Chargement…";
-      tokenPill.className = "pill";
-
-      const tSnap = await getDoc(doc(db, "dayTokens", token));
-      if(!tSnap.exists()){
-        showAlert("⛔ Token invalide.");
-        tokenPill.textContent = "Token invalide";
-        tokenPill.className = "pill bad";
-        return;
-      }
-
-      tokenDoc = tSnap.data() || {};
-
-      if(tokenDoc.active === false){
-        showAlert("⛔ Token désactivé.");
-        tokenPill.textContent = "Token OFF";
-        tokenPill.className = "pill bad";
-        return;
-      }
-
-      // expiresAt timestamp (rules exigent timestamp)
-      tokenPill.textContent = "Token OK";
-      tokenPill.className = "pill ok";
-
-      agentPill.textContent = `${tokenDoc.agentName || "Agent"}${tokenDoc.agentEmail ? " • " + tokenDoc.agentEmail : ""}`.trim();
-
-      const prestationId = (tokenDoc.prestationId || "").toString().trim();
-      if(!prestationId){
-        showAlert("⛔ Token sans prestationId.");
-        return;
-      }
-
-      await claimTokenIfNeeded();
-
-      // charge 3 missions (GET) - pas de list
-      const ids = ["CHECKIN","MENAGE","CHECKOUT"];
-      const missions = [];
-
-      for(const mid of ids){
-        const mSnap = await getDoc(doc(db, "events", prestationId, "missions", mid));
-        if(!mSnap.exists()){
-          missions.push({ id: mid, missing:true, data:{} });
-        }else{
-          missions.push({ id: mid, missing:false, data: (mSnap.data()||{}) });
-        }
-      }
-
-      // contexte (depuis la 1ère mission qui existe)
-      const ctx = missions.find(x=>!x.missing)?.data || {};
-      const home = `${ctx.homeName || "Logement"}${ctx.homeCity ? " — " + ctx.homeCity : ""}`.trim();
-      const dt = `${ctx.dateKey || ""}${ctx.time ? " à " + ctx.time : ""}`.trim();
-      contextLine.textContent = `${home}${dt ? " • " + dt : ""}${ctx.homeAddress ? " • " + ctx.homeAddress : ""}`.trim();
-
-      // render
+    function renderList(missions){
       listEl.innerHTML = "";
+
+      if(!missions.length){
+        const e = document.createElement("div");
+        e.className = "empty";
+        e.textContent = "Aucune mission disponible (CHECKIN/MENAGE/CHECKOUT).";
+        listEl.appendChild(e);
+        return;
+      }
+
       for(const m of missions){
-        const item = document.createElement("div");
-        item.className = "item";
+        const st = (m.status||"").toUpperCase();
+        const [sl, cls] = statusLabel(st);
+        const tl = typeLabel(m.type);
 
-        if(m.missing){
-          item.innerHTML = `
-            <div class="left">
-              <div class="t">${typeLabel(m.id)}</div>
-              <div class="m">Mission non créée.</div>
+        const home = `${m.homeName || "Logement"}${m.homeCity ? " — " + m.homeCity : ""}`;
+        const when = `${m.dateKey || "—"}${m.time ? " à " + m.time : ""}${m.homeAddress ? " • " + m.homeAddress : ""}`;
+
+        const link = `mission.html?token=${encodeURIComponent(token)}&prestationId=${encodeURIComponent(m.prestationId)}&missionId=${encodeURIComponent(m.id)}`;
+
+        const div = document.createElement("div");
+        div.className = "item";
+        div.innerHTML = `
+          <div class="i-main">
+            <div class="i-top">
+              <span class="badge ${cls}">${esc(sl)}</span>
+              <span class="badge">${esc(tl)}</span>
             </div>
-            <span class="tag bad">MANQUANTE</span>
-          `;
-          item.style.cursor = "default";
-          listEl.appendChild(item);
-          continue;
-        }
-
-        const st = m.data.status || "ASSIGNEE";
-        const [lab, cls] = statusLabel(st);
-
-        item.innerHTML = `
-          <div class="left">
-            <div class="t">${typeLabel(m.id)}</div>
-            <div class="m">${(m.data.locked===true) ? "Verrouillée" : "Ouvrir / compléter"}</div>
+            <div class="i-title">${esc(home)}</div>
+            <div class="i-sub">${esc(when)}</div>
           </div>
-          <span class="tag ${cls}">${lab}</span>
+          <div class="i-actions">
+            <button class="mini" type="button" data-open="${esc(link)}">Ouvrir</button>
+          </div>
         `;
+        listEl.appendChild(div);
 
-        item.addEventListener("click", ()=>{
-          const params = new URLSearchParams();
-          params.set("token", token);
-          params.set("prestationId", prestationId);
-          params.set("missionId", m.id);
-          location.href = "mission.html?" + params.toString();
+        div.querySelector("button[data-open]")?.addEventListener("click", ()=>{
+          window.location.href = div.querySelector("button[data-open]").getAttribute("data-open");
         });
-
-        listEl.appendChild(item);
       }
     }
+
+    async function loadTokenAndMissions(tok){
+      hideAlert();
+      tokenPill.textContent = "Vérif token…";
+
+      const t = normalizeToken(tok);
+      if(!t){
+        showAlert("Token manquant.");
+        tokenPill.textContent = "Token ?";
+        tokenPill.className = "pill bad";
+        showTokenUI();
+        return;
+      }
+
+      accessBtn.disabled = true;
+      accessBtn.textContent = "Chargement…";
+
+      try{
+        // 1) token
+        const tSnap = await getDoc(doc(db, "dayTokens", t));
+        if(!tSnap.exists()){
+          showAlert("Token invalide.");
+          tokenPill.textContent = "Token invalide";
+          tokenPill.className = "pill bad";
+          showTokenUI();
+          return;
+        }
+
+        const td = tSnap.data() || {};
+        if(td.active === false){
+          showAlert("Token désactivé.");
+          tokenPill.textContent = "Token OFF";
+          tokenPill.className = "pill bad";
+          showTokenUI();
+          return;
+        }
+
+        token = t;
+        tokenDoc = { id: tSnap.id, ...td };
+
+        // claim (optionnel)
+        await claimTokenIfNeeded(t, td);
+
+        tokenPill.textContent = "Token OK";
+        tokenPill.className = "pill ok";
+
+        agentLine.textContent = `${tokenDoc.agentName || "Agent"}${tokenDoc.agentEmail ? " • " + tokenDoc.agentEmail : ""}`.trim();
+
+        const prestationId = (tokenDoc.prestationId || "").toString().trim();
+        const agentEmail = normalizeEmail(tokenDoc.agentEmail || "");
+        if(!prestationId || !agentEmail){
+          showAlert("Token mal configuré (prestationId/agentEmail).");
+          showTokenUI();
+          return;
+        }
+
+        // 2) lire les 3 missions fixes (GET)
+        const ids = ["CHECKIN","MENAGE","CHECKOUT"];
+        const out = [];
+
+        for(const mid of ids){
+          try{
+            const mSnap = await getDoc(doc(db, "events", prestationId, "missions", mid));
+            if(!mSnap.exists()) continue;
+
+            const x = mSnap.data() || {};
+            // sécurité : lien token ↔ mission
+            if((x.dayToken || "") !== token) continue;
+            if(normalizeEmail(x.assignedToEmail || "") !== agentEmail) continue;
+
+            out.push({
+              id: mSnap.id,
+              prestationId,
+              type: (x.type || mid).toUpperCase(),
+              status: (x.status || "ASSIGNEE").toUpperCase(),
+              dateKey: x.dateKey || "",
+              time: x.time || "",
+              homeName: x.homeName || "",
+              homeCity: x.homeCity || "",
+              homeAddress: x.homeAddress || ""
+            });
+          }catch(err){
+            // si une mission fait "permission denied", on continue au lieu de tout planter
+            console.error("Mission read error:", mid, err);
+          }
+        }
+
+        prestaLine.textContent = `Prestation : ${prestationId}`;
+        out.sort((a,b)=> (a.type||"").localeCompare(b.type||""));
+
+        showMissionsUI();
+        renderList(out);
+
+      }catch(err){
+        console.error(err);
+        showAlert("Erreur : " + (err?.message || "inconnue"));
+        tokenPill.textContent = "Erreur";
+        tokenPill.className = "pill bad";
+        showTokenUI();
+      }finally{
+        accessBtn.disabled = false;
+        accessBtn.textContent = "Accéder";
+      }
+    }
+
+    accessBtn.addEventListener("click", ()=> loadTokenAndMissions(tokenInput.value));
+    tokenInput.addEventListener("keydown", (e)=>{
+      if(e.key === "Enter"){ e.preventDefault(); accessBtn.click(); }
+    });
 
     onAuthStateChanged(auth, async (user)=>{
       try{
@@ -280,10 +389,22 @@
           return;
         }
         currentUser = user;
-        await loadAll();
+
+        const url = new URL(location.href);
+        const t = normalizeToken(url.searchParams.get("token") || "");
+        if(t){
+          tokenInput.value = t;
+          loadTokenAndMissions(t);
+        }else{
+          tokenPill.textContent = "Token ?";
+          tokenPill.className = "pill";
+          showTokenUI();
+        }
       }catch(err){
         console.error(err);
-        showAlert("Erreur : " + (err?.message || "inconnue"));
+        tokenPill.textContent = "Erreur";
+        tokenPill.className = "pill bad";
+        showAlert("Erreur accès : " + (err?.message || "inconnue"));
       }
     });
   </script>
