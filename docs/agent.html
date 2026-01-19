@@ -1,179 +1,199 @@
-<!-- docs/agent.html (COMPLET)
-     - token via URL ?token=... OU saisie
-     - lit dayTokens/{token} puis GET missions CHECKIN/MENAGE/CHECKOUT
-     - tolérant sur les champs : dayToken / assignedToEmail peuvent manquer (legacy)
-     - affiche un mini debug "pourquoi c'est vide" sans console
--->
+<!-- docs/agent.html -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>CleanUp Manager — Agent (Missions)</title>
+  <title>CleanUp Manager — Agent</title>
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
 
   <style>
+    *, *::before, *::after { box-sizing:border-box; font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
     :root{
       --violet-main:#7A5CFF; --violet-dark:#6238FF;
       --text:#111; --muted:#666;
-      --bad:#b3261e; --ok:#1b8f4d; --warn:#8a5600;
       --border: rgba(122,92,255,0.18);
+      --bad:#b3261e; --ok:#1b8f4d;
       --shadow: 0 14px 36px rgba(0,0,0,0.08);
       --bg1:#F8F4FF; --bg2:#EDE6FF;
     }
-    *{ box-sizing:border-box; font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; }
-    body{ margin:0; background:linear-gradient(180deg,var(--bg1) 0%, var(--bg2) 80%); color:var(--text); }
-    .page{ min-height:100vh; display:flex; flex-direction:column; align-items:center; padding:14px 14px 36px; }
+    body{ margin:0; background: linear-gradient(180deg,var(--bg1) 0%,var(--bg2) 80%); color:var(--text); }
+    .page{ min-height:100vh; display:flex; flex-direction:column; align-items:center; padding:14px 14px 26px; padding-bottom:34px; }
 
-    .top{ width:100%; max-width:860px; display:flex; align-items:center; justify-content:space-between; gap:10px; padding:10px 0 4px; }
-    .brand{ display:flex; align-items:center; gap:10px; }
-    .logo{ width:40px;height:40px;border-radius:50%; background:#fff;border:2px solid var(--violet-main);
-      display:flex;align-items:center;justify-content:center; font-weight:900;color:var(--violet-main);
+    .topbar{
+      width:100%; max-width:980px;
+      position:sticky; top:0; z-index:10;
+      display:flex; justify-content:space-between; align-items:center; gap:10px;
+      padding:10px 0;
+      background:rgba(248,244,255,.85);
+      backdrop-filter:blur(6px);
+    }
+    .pill{
+      display:inline-flex; align-items:center; gap:8px;
+      padding:8px 12px; border-radius:999px;
+      background:#fff; border:2px solid var(--violet-main);
+      color:var(--violet-main); text-decoration:none;
+      font-weight:900; font-size:13px;
+      cursor:pointer; box-shadow:0 3px 10px rgba(0,0,0,.06);
+      white-space:nowrap;
+    }
+
+    .logo{ display:flex; align-items:center; gap:10px; margin-top:8px; margin-bottom:2px; width:100%; max-width:980px; }
+    .logo-icon{
+      width:42px;height:42px;border-radius:50%;
+      background:#fff; border:2px solid var(--violet-main);
+      display:flex; align-items:center; justify-content:center;
+      color:var(--violet-main); font-size:18px; font-weight:900;
       position:relative; flex-shrink:0;
     }
-    .logo::after{ content:"✦"; position:absolute; top:-6px; right:-6px; font-size:12px; color:var(--violet-main); }
-    .title{ display:flex; flex-direction:column; line-height:1.05; }
-    .title b{ font-size:15px; letter-spacing:-0.2px; }
-    .title span{ font-size:12px; color:#444; font-weight:800; }
-
-    .pill{
-      display:inline-flex; align-items:center; gap:8px; padding:8px 10px; border-radius:999px; background:#fff;
-      border:2px solid rgba(122,92,255,0.22); color:#5b45c8; font-weight:900; font-size:12px; white-space:nowrap;
+    .logo-icon::after{
+      content:"✦";
+      position:absolute;
+      top:-6px; right:-5px;
+      font-size:12px;
+      color:var(--violet-main);
     }
-    .pill.ok{ border-color: rgba(27,143,77,0.30); color:var(--ok); }
-    .pill.bad{ border-color: rgba(179,38,30,0.30); color:var(--bad); }
+    h1{ margin:0; font-size:22px; font-weight:900; letter-spacing:-0.2px; }
+    .subtitle{ margin-top:2px; font-size:12px; color:#444; font-weight:800; width:100%; max-width:980px; }
 
-    .alert{ display:none; width:100%; max-width:860px; margin-top:10px; padding:10px 12px; background:#fff;
-      border-radius:14px; border-left:5px solid var(--bad); box-shadow:0 3px 10px rgba(0,0,0,.06);
-      font-size:12px; color:#444; white-space:pre-wrap;
+    .alert{
+      width:100%; max-width:980px;
+      display:none; margin-top:10px;
+      padding:10px 12px;
+      background:#fff;
+      border-radius:14px;
+      border-left:5px solid var(--bad);
+      box-shadow:0 3px 10px rgba(0,0,0,.06);
+      font-size:12px;
+      color:#444;
+      white-space:pre-wrap;
+      font-weight:800;
     }
-    .alert.ok{ border-left-color:var(--ok); }
+    .alert.ok{ border-left-color: var(--ok); }
 
-    .card{ width:100%; max-width:860px; background: rgba(255,255,255,0.86); border:1px solid var(--border);
-      border-radius:18px; box-shadow:var(--shadow); backdrop-filter: blur(10px);
-      padding:12px; display:flex; flex-direction:column; gap:10px; margin-top:10px;
-    }
+    .wrap{ width:100%; max-width:980px; margin-top:10px; display:flex; flex-direction:column; gap:10px; }
 
-    .row{ display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; }
-    .row > div{ flex:1; min-width:220px; }
-    label{ display:block; font-size:11px; font-weight:900; color:#444; margin:0 0 4px; }
-    input{
-      width:100%; padding:10px 10px; border-radius:12px; border:1px solid #D3C7FF; background:#fff;
-      font-size:14px; font-weight:800; color:#222; outline:none;
+    .card{
+      background: rgba(255,255,255,0.86);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(10px);
+      padding: 12px 12px 12px;
+      display:flex;
+      flex-direction:column;
+      gap:10px;
     }
-    input:focus{ border-color:var(--violet-main); box-shadow:0 0 0 3px rgba(122,92,255,.12); }
-
-    .btn{
-      border:none; border-radius:999px; padding:10px 14px; font-size:13px; font-weight:900; cursor:pointer;
-      background:#fff; color:var(--violet-main); border:2px solid var(--violet-main);
-      box-shadow:0 3px 10px rgba(0,0,0,.06); white-space:nowrap;
-    }
-    .btn.primary{
-      background:linear-gradient(90deg,var(--violet-main),var(--violet-dark));
-      border-color:transparent; color:#fff; box-shadow:0 12px 24px rgba(0,0,0,0.10);
-    }
-    .btn:disabled{ opacity:.6; cursor:not-allowed; }
-
-    .divider{ height:1px; width:100%; background:rgba(122,92,255,0.18); margin:4px 0; }
+    .card-title{ font-size:14px; font-weight:900; color:#111; display:flex; justify-content:space-between; gap:10px; align-items:flex-end; }
+    .small{ font-size:12px; font-weight:900; color:#666; }
 
     .list{ display:flex; flex-direction:column; gap:10px; }
     .item{
-      background:#fff; border-radius:16px; border:1px solid rgba(0,0,0,0.03); box-shadow:0 3px 10px rgba(0,0,0,.06);
-      padding:10px; display:flex; justify-content:space-between; gap:10px; align-items:flex-start;
+      background:#fff;
+      border-radius:16px;
+      border:1px solid rgba(0,0,0,0.03);
+      box-shadow:0 3px 10px rgba(0,0,0,.06);
+      padding:10px;
+      display:flex;
+      justify-content:space-between;
+      gap:10px;
+      align-items:flex-start;
     }
-    .i-main{ min-width:0; }
-    .i-top{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-    .badge{
-      font-size:11px; font-weight:900; padding:3px 9px; border-radius:999px;
-      background: rgba(122,92,255,0.12); color:#5b45c8; white-space:nowrap;
+    .left{ min-width:0; }
+    .title{
+      font-size:13px; font-weight:900; color:#222;
+      white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+      max-width: 620px;
     }
-    .badge.ok{ background: rgba(27,143,77,0.16); color:#1b8f4d; }
-    .badge.bad{ background: rgba(179,38,30,0.14); color:#b3261e; }
-    .badge.warn{ background: rgba(255,153,0,0.16); color:#8a5600; }
-
-    .i-title{ font-size:13px; font-weight:900; color:#222; margin-top:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:560px; }
-    .i-sub{ margin-top:3px; font-size:12px; font-weight:800; color:#666; white-space:pre-wrap; max-width:560px; }
-    .i-actions{ display:flex; flex-direction:column; gap:6px; align-items:flex-end; flex-shrink:0; }
-    .mini{
-      border:none; border-radius:999px; padding:8px 10px; font-size:12px; font-weight:900; cursor:pointer; color:#fff;
-      background: linear-gradient(90deg,var(--violet-main),var(--violet-dark));
-      box-shadow:0 10px 22px rgba(0,0,0,0.10);
+    .sub{
+      margin-top:3px;
+      font-size:12px; font-weight:800; color:#666;
+      white-space:pre-wrap;
+      max-width: 620px;
+    }
+    .chip{
+      display:inline-flex; align-items:center; gap:6px;
+      padding:3px 9px; border-radius:999px;
+      background: rgba(122,92,255,0.12);
+      color:#5b45c8;
       white-space:nowrap;
+      font-size:11px;
+      font-weight:900;
     }
-    .empty{ padding:12px; border-radius:14px; background:#fff; box-shadow:0 3px 10px rgba(0,0,0,.06); color:#666; font-weight:900; font-size:12px; }
-    .debug{ font-size:11px; font-weight:900; color:#666; white-space:pre-wrap; background:#fff; border:1px solid rgba(0,0,0,.05); border-radius:14px; padding:10px; box-shadow:0 3px 10px rgba(0,0,0,.06); }
+    .chip.ok{ background: rgba(27,143,77,0.16); color: var(--ok); }
+    .chip.bad{ background: rgba(179,38,30,0.14); color: var(--bad); }
+
+    .actions{ display:flex; flex-direction:column; gap:6px; align-items:flex-end; flex-shrink:0; }
+    .btn{
+      border:none;
+      border-radius:999px;
+      padding:9px 12px;
+      font-size:12px;
+      font-weight:900;
+      cursor:pointer;
+      background:#fff;
+      color:var(--violet-main);
+      border:2px solid var(--violet-main);
+      white-space:nowrap;
+      box-shadow:0 3px 10px rgba(0,0,0,.06);
+    }
+    .btn.primary{
+      background: linear-gradient(90deg,var(--violet-main),var(--violet-dark));
+      border-color: transparent;
+      color:#fff;
+      box-shadow:0 10px 22px rgba(0,0,0,0.10);
+    }
+
+    .hint{
+      font-size:11px; font-weight:900; color:#666; line-height:1.25;
+    }
   </style>
 </head>
 
 <body>
   <div class="page">
-    <div class="top">
-      <div class="brand">
-        <div class="logo">✓</div>
-        <div class="title">
-          <b>CleanUp Manager</b>
-          <span>Mes missions</span>
-        </div>
+    <div class="topbar">
+      <a class="pill" href="index.html">← Accueil</a>
+      <button class="pill" id="logoutBtn" type="button">Déconnexion</button>
+    </div>
+
+    <div class="logo">
+      <div class="logo-icon">🧹</div>
+      <div>
+        <h1>Espace agent</h1>
+        <div class="subtitle" id="helloLine">—</div>
       </div>
-      <span class="pill" id="tokenPill">Token…</span>
     </div>
 
     <div class="alert" id="alertBox"></div>
 
-    <section class="card" id="tokenCard">
-      <div style="text-align:center;">
-        <div style="font-size:16px; font-weight:900;">Accès agent</div>
-        <div style="font-size:12px; font-weight:800; color:#666; margin-top:4px;">
-          Si le token n’est pas dans le lien, colle-le ici.
+    <div class="wrap">
+      <section class="card">
+        <div class="card-title">
+          <span>Missions assignées</span>
+          <span class="small" id="countLine">—</span>
         </div>
-      </div>
-
-      <div class="row">
-        <div>
-          <label for="tokenInput">Token</label>
-          <input id="tokenInput" placeholder="Ex. K3Q9WZ8P2M..." autocomplete="one-time-code" />
+        <div class="list" id="list"></div>
+        <div class="hint">
+          Si tu ne vois rien : soit tu n’es pas assigné(e), soit la conciergerie n’a pas encore envoyé les prestations.
         </div>
-        <div style="flex:0; min-width:auto;">
-          <button class="btn primary" id="accessBtn" type="button">Accéder</button>
-        </div>
-      </div>
-    </section>
-
-    <section class="card" id="missionsCard" style="display:none;">
-      <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
-        <div style="font-size:15px; font-weight:900;">Missions</div>
-        <div style="font-size:12px; font-weight:900; color:#666;" id="agentLine">—</div>
-      </div>
-      <div style="font-size:12px; font-weight:900; color:#666;" id="prestaLine">—</div>
-
-      <div class="divider"></div>
-      <div class="list" id="list"></div>
-
-      <div class="divider"></div>
-      <div class="debug" id="debugBox" style="display:none;"></div>
-    </section>
+      </section>
+    </div>
   </div>
 
   <script type="module">
     import { auth, db } from "./firebase-init.js";
-    import { onAuthStateChanged, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-    import { doc, getDoc } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+    import { doc, getDoc, collection, query, where, orderBy, getDocs, limit } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const alertBox = document.getElementById("alertBox");
-    const tokenPill = document.getElementById("tokenPill");
-
-    const tokenCard = document.getElementById("tokenCard");
-    const tokenInput = document.getElementById("tokenInput");
-    const accessBtn = document.getElementById("accessBtn");
-
-    const missionsCard = document.getElementById("missionsCard");
-    const listEl = document.getElementById("list");
-    const agentLine = document.getElementById("agentLine");
-    const prestaLine = document.getElementById("prestaLine");
-    const debugBox = document.getElementById("debugBox");
+    const logoutBtn = document.getElementById("logoutBtn");
+    const helloLine = document.getElementById("helloLine");
+    const countLine = document.getElementById("countLine");
+    const list = document.getElementById("list");
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -185,253 +205,137 @@
       alertBox.classList.remove("ok");
       alertBox.textContent = "";
     }
-    function esc(s){
-      return String(s ?? "")
-        .replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;")
-        .replaceAll('"',"&quot;").replaceAll("'","&#039;");
+    function esc(str){
+      return String(str ?? "")
+        .replaceAll("&","&amp;")
+        .replaceAll("<","&lt;")
+        .replaceAll(">","&gt;")
+        .replaceAll('"',"&quot;")
+        .replaceAll("'","&#039;");
     }
-    function normalizeToken(raw){ return (raw||"").toString().trim().replace(/\s+/g,""); }
     function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
 
-    function statusLabel(s){
-      const x = (s||"").toUpperCase();
-      if(x === "ASSIGNEE") return ["ASSIGNÉE",""];
-      if(x === "EN_COURS") return ["EN COURS","warn"];
-      if(x === "A_VALIDER") return ["À VALIDER","warn"];
-      if(x === "A_REPRENDRE") return ["À REPRENDRE","bad"];
-      if(x === "INCIDENT") return ["INCIDENT","bad"];
-      if(x === "VALIDEE") return ["VALIDÉE","ok"];
-      if(x === "NON_REQUISE") return ["NON REQUISE","ok"];
-      return [x || "—",""];
-    }
-    function typeLabel(t){
-      const x = (t||"").toUpperCase();
-      if(x === "CHECKIN") return "Check-in";
-      if(x === "MENAGE") return "Ménage";
-      if(x === "CHECKOUT") return "Check-out";
-      return x || "Mission";
+    function statusChip(status){
+      const x = (status||"").toUpperCase();
+      if(x === "BON_A_FACTURER") return `<span class="chip ok">BON À FACTURER</span>`;
+      if(x === "A_VALIDER") return `<span class="chip ok">À VALIDER</span>`;
+      if(x === "EN_COURS") return `<span class="chip">EN COURS</span>`;
+      if(x === "ASSIGNEE") return `<span class="chip">ASSIGNÉE</span>`;
+      if(x === "VALIDEE") return `<span class="chip ok">VALIDÉE</span>`;
+      return `<span class="chip">${esc(x || "—")}</span>`;
     }
 
     let currentUser = null;
-    let token = "";
-    let tokenDoc = null;
+    let currentEmail = "";
 
-    function showMissionsUI(){ tokenCard.style.display="none"; missionsCard.style.display="block"; }
-    function showTokenUI(){ tokenCard.style.display="block"; missionsCard.style.display="none"; }
-
-    function setDebug(text){
-      debugBox.style.display = "block";
-      debugBox.textContent = text;
+    async function guardAgent(user){
+      // 1) lire users/{uid}
+      const uSnap = await getDoc(doc(db, "users", user.uid));
+      if(!uSnap.exists()){
+        throw new Error("Profil introuvable (users/{uid}).");
+      }
+      const u = uSnap.data() || {};
+      const role = String(u.role || "").toLowerCase();
+      if(role !== "agent"){
+        throw new Error("Accès refusé : rôle ≠ agent.");
+      }
+      return u;
     }
 
-    function renderList(missions){
-      listEl.innerHTML = "";
+    async function loadAssignedEvents(){
+      hideAlert();
+      list.innerHTML = "";
+      countLine.textContent = "Chargement…";
 
-      if(!missions.length){
-        const e = document.createElement("div");
-        e.className = "empty";
-        e.textContent = "Aucune mission trouvée (CHECKIN/MENAGE/CHECKOUT).";
-        listEl.appendChild(e);
+      // Version actuelle (ta base) : filtrer par assignedToEmail
+      // (mieux plus tard : assignedAgentUid == user.uid)
+      const q = query(
+        collection(db, "events"),
+        where("assignedToEmail", "==", currentEmail),
+        orderBy("dateKey", "desc"),
+        limit(40)
+      );
+
+      const snap = await getDocs(q);
+
+      const rows = snap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
+
+      countLine.textContent = rows.length ? `${rows.length} prestation(s)` : "0";
+
+      if(!rows.length){
+        list.innerHTML = `
+          <div style="padding:12px;border-radius:14px;background:#fff;box-shadow:0 3px 10px rgba(0,0,0,.06);color:#666;font-weight:900;font-size:12px;">
+            Aucune prestation assignée.
+          </div>`;
         return;
       }
 
-      for(const m of missions){
-        const [sl, cls] = statusLabel(m.status);
-        const tl = typeLabel(m.id);
+      for(const ev of rows){
+        const home = `${ev.homeName || "Logement"}${ev.homeCity ? " — " + ev.homeCity : ""}`;
+        const dt = `${(ev.dateKey || ev.date || "—")}${ev.time ? " à " + ev.time : ""}${ev.homeAddress ? " • " + ev.homeAddress : ""}`;
+        const conc = ev.conciergerieName ? `Conciergerie : ${ev.conciergerieName}` : "";
+        const st = ev.status || "EN_COURS";
 
-        const home = `${m.homeName || "Logement"}${m.homeCity ? " — " + m.homeCity : ""}`;
-        const when = `${m.dateKey || "—"}${m.time ? " à " + m.time : ""}${m.homeAddress ? " • " + m.homeAddress : ""}`;
-
-        const link = `mission.html?token=${encodeURIComponent(token)}&prestationId=${encodeURIComponent(m.prestationId)}&missionId=${encodeURIComponent(m.id)}`;
-
-        const div = document.createElement("div");
-        div.className = "item";
-        div.innerHTML = `
-          <div class="i-main">
-            <div class="i-top">
-              <span class="badge ${cls}">${esc(sl)}</span>
-              <span class="badge">${esc(tl)}</span>
+        const item = document.createElement("div");
+        item.className = "item";
+        item.innerHTML = `
+          <div class="left">
+            <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+              ${statusChip(st)}
+              ${ev.conciergerieName ? `<span class="chip">${esc(ev.conciergerieName)}</span>` : ``}
             </div>
-            <div class="i-title">${esc(home)}</div>
-            <div class="i-sub">${esc(when)}</div>
+            <div class="title" title="${esc(home)}">${esc(home)}</div>
+            <div class="sub">${esc(dt)}${conc ? "\n" + esc(conc) : ""}</div>
           </div>
-          <div class="i-actions">
-            <button class="mini" type="button" data-open="${esc(link)}">Ouvrir</button>
+          <div class="actions">
+            <button class="btn primary" type="button" data-open="${esc(ev.id)}">Ouvrir</button>
           </div>
         `;
-        listEl.appendChild(div);
+        list.appendChild(item);
 
-       div.querySelector("button[data-open]")?.addEventListener("click", ()=>{
-  const raw = div.querySelector("button[data-open]").getAttribute("data-open") || "";
-  window.location.href = raw.replaceAll("&amp;", "&");
-});
+        item.querySelector(`button[data-open="${CSS.escape(ev.id)}"]`).addEventListener("click", ()=>{
+          const params = new URLSearchParams();
+          params.set("prestationId", ev.id);
 
+          // token optionnel : si tu le gardes, intervention.html peut aussi le passer.
+          // ici on ne l’a pas forcément, donc on n’en met pas.
+
+          // petit bonus : passer le nom conciergerie en query param pour affichage
+          if(ev.conciergerieName) params.set("c", ev.conciergerieName);
+
+          location.href = "mission.html?" + params.toString();
+        });
       }
     }
 
-    async function loadTokenAndMissions(tok){
-      hideAlert();
-      debugBox.style.display = "none";
-      tokenPill.textContent = "Vérif token…";
-      tokenPill.className = "pill";
-
-      const t = normalizeToken(tok);
-      if(!t){
-        showAlert("Token manquant.");
-        tokenPill.textContent = "Token ?";
-        tokenPill.className = "pill bad";
-        showTokenUI();
-        return;
-      }
-
-      accessBtn.disabled = true;
-      accessBtn.textContent = "Chargement…";
-
-      const dbg = [];
-      try{
-        // 1) token
-        const tSnap = await getDoc(doc(db, "dayTokens", t));
-        if(!tSnap.exists()){
-          showAlert("Token invalide.");
-          tokenPill.textContent = "Token invalide";
-          tokenPill.className = "pill bad";
-          showTokenUI();
-          return;
-        }
-
-        const td = tSnap.data() || {};
-        token = t;
-        tokenDoc = td;
-
-        if(td.active === false){
-          showAlert("Token désactivé.");
-          tokenPill.textContent = "Token OFF";
-          tokenPill.className = "pill bad";
-          showTokenUI();
-          return;
-        }
-
-        const prestationId = (td.prestationId || "").toString().trim();
-        const tEmail = normalizeEmail(td.agentEmail || "");
-
-        dbg.push(`token: ${t}`);
-        dbg.push(`prestationId(token): ${prestationId || "(vide)"}`);
-        dbg.push(`agentEmail(token): ${tEmail || "(vide)"}`);
-
-        if(!prestationId){
-          showAlert("Token mal configuré (prestationId manquant).");
-          tokenPill.textContent = "Token KO";
-          tokenPill.className = "pill bad";
-          showTokenUI();
-          setDebug(dbg.join("\n"));
-          return;
-        }
-
-        tokenPill.textContent = "Token OK";
-        tokenPill.className = "pill ok";
-
-        agentLine.textContent = `${td.agentName || "Agent"}${td.agentEmail ? " • " + td.agentEmail : ""}`.trim();
-        prestaLine.textContent = `Prestation : ${prestationId}`;
-
-        // 2) lire les 3 missions fixes (GET) — tolérant
-        const ids = ["CHECKIN","MENAGE","CHECKOUT"];
-        const out = [];
-        const reasons = [];
-
-        for(const mid of ids){
-          try{
-            const mSnap = await getDoc(doc(db, "events", prestationId, "missions", mid));
-            if(!mSnap.exists()){
-              reasons.push(`${mid}: doc absent`);
-              continue;
-            }
-
-            const x = mSnap.data() || {};
-            const mDayToken = (x.dayToken || "").toString().trim();
-            const mEmail = normalizeEmail(x.assignedToEmail || "");
-
-            // ✅ règle d'affichage tolérante :
-            // - si dayToken existe -> il doit matcher le token
-            // - sinon (legacy) on n'exclut pas la mission (on l'affiche quand même)
-            if(mDayToken && mDayToken !== token){
-              reasons.push(`${mid}: dayToken différent (${mDayToken})`);
-              continue;
-            }
-
-            // - si assignedToEmail existe ET tokenEmail existe -> on vérifie
-            // - sinon on n'exclut pas (tolérant)
-            if(mEmail && tEmail && mEmail !== tEmail){
-              reasons.push(`${mid}: assignedToEmail différent (${mEmail})`);
-              continue;
-            }
-
-            out.push({
-              id: mid,
-              prestationId,
-              status: (x.status || "ASSIGNEE").toUpperCase(),
-              dateKey: x.dateKey || "",
-              time: x.time || "",
-              homeName: x.homeName || "",
-              homeCity: x.homeCity || "",
-              homeAddress: x.homeAddress || ""
-            });
-
-          }catch(err){
-            reasons.push(`${mid}: erreur lecture (${err?.code || err?.message || "?"})`);
-          }
-        }
-
-        showMissionsUI();
-        renderList(out);
-
-        dbg.push(`missions affichées: ${out.length}`);
-        if(reasons.length){
-          dbg.push("\nDétails:");
-          dbg.push(...reasons.map(r=>" - "+r));
-        }
-        setDebug(dbg.join("\n"));
-
-      }catch(err){
-        showAlert("Erreur : " + (err?.message || "inconnue"));
-        tokenPill.textContent = "Erreur";
-        tokenPill.className = "pill bad";
-        showTokenUI();
-      }finally{
-        accessBtn.disabled = false;
-        accessBtn.textContent = "Accéder";
-      }
-    }
-
-    accessBtn.addEventListener("click", ()=> loadTokenAndMissions(tokenInput.value));
-    tokenInput.addEventListener("keydown", (e)=>{
-      if(e.key === "Enter"){ e.preventDefault(); accessBtn.click(); }
+    logoutBtn.addEventListener("click", async ()=>{
+      await signOut(auth);
+      localStorage.removeItem("cm_auth");
+      location.href = "index.html";
     });
 
     onAuthStateChanged(auth, async (user)=>{
-      try{
-        if(!user){
-          await signInAnonymously(auth);
-          return;
-        }
-        currentUser = user;
+      if(!user){
+        const back = encodeURIComponent(location.pathname + location.search);
+        location.href = "login.html?role=agent&redirect=" + back;
+        return;
+      }
+      currentUser = user;
 
-        const url = new URL(location.href);
-        const t = normalizeToken(url.searchParams.get("token") || "");
-        if(t){
-          tokenInput.value = t;
-          loadTokenAndMissions(t);
-        }else{
-          tokenPill.textContent = "Token ?";
-          tokenPill.className = "pill";
-          showTokenUI();
+      try{
+        const profile = await guardAgent(user);
+        currentEmail = normalizeEmail(profile.email || user.email || "");
+        if(!currentEmail){
+          throw new Error("Email agent manquant (users/{uid}.email).");
         }
+        helloLine.textContent = `${profile.company?.tradeName ? profile.company.tradeName + " • " : ""}${currentEmail}`;
+        await loadAssignedEvents();
       }catch(err){
-        tokenPill.textContent = "Erreur";
-        tokenPill.className = "pill bad";
-        showAlert("Erreur accès : " + (err?.message || "inconnue"));
+        console.error(err);
+        showAlert(err?.message || "Erreur");
+        countLine.textContent = "—";
       }
     });
   </script>
 </body>
 </html>
-
