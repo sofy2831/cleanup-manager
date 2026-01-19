@@ -70,7 +70,6 @@
     </div>
 
     <div class="wrap">
-      <!-- LEFT: prestation + missions -->
       <section class="card">
         <div class="row" style="align-items:flex-end;">
           <div style="flex:1;min-width:280px;">
@@ -91,7 +90,6 @@
         </div>
       </section>
 
-      <!-- RIGHT: assign agent + generate link -->
       <aside class="card">
         <div style="font-weight:900;">Agent (lien email)</div>
         <div class="mini" style="margin-top:4px;">Agent connecté (Auth) obligatoire. Le token sert juste à limiter à 24h.</div>
@@ -170,7 +168,6 @@
     }
     function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
 
-    // Token friendly (pas de 0/O/I/1)
     function randomToken(len=20){
       const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
       const arr = new Uint32Array(len);
@@ -219,8 +216,6 @@
     }
 
     async function ensureMissionsExist(event){
-      // OPTION : si une mission n’existe pas, on la crée.
-      // (si tu préfères “no create”, dis-le et je retire)
       const base = {
         conciergerieUid: event.conciergerieUid,
         prestationId: prestationId,
@@ -262,7 +257,6 @@
       const e = eSnap.data() || {};
       currentEvent = { id: eSnap.id, ...e };
 
-      // sécurité : conciergerieUid doit matcher l’utilisateur connecté
       if(e.conciergerieUid !== currentUser.uid){
         showAlert("Accès refusé : tu n’es pas la conciergerie propriétaire de cette prestation.");
         return;
@@ -273,15 +267,12 @@
       homeLine.textContent = `${e.homeName || "Logement"}${e.homeCity ? " — "+e.homeCity : ""}`;
       metaLine.textContent = `${e.dateKey || e.date || "—"}${e.time ? " à "+e.time : ""}${e.homeAddress ? " • "+e.homeAddress : ""} • status: ${(e.status||"").toUpperCase() || "—"}`;
 
-      // préfill agent/conciergerie
       agentName.value = e.assignedToName || agentName.value || "";
       agentEmail.value = e.assignedToEmail || agentEmail.value || "";
       conciergerieName.value = e.conciergerieName || conciergerieName.value || "";
 
-      // si tu veux garantir 3 missions existent :
       await ensureMissionsExist(e);
 
-      // read missions
       const ms = await Promise.all(["CHECKIN","MENAGE","CHECKOUT"].map(readMission));
 
       missionsList.innerHTML = "";
@@ -322,11 +313,9 @@
       if(!/^\S+@\S+\.\S+$/.test(aEmail)) return showAlert("Email agent invalide.");
       if(!aName) return showAlert("Nom agent obligatoire.");
 
-      // 1) create dayToken doc with expiresAtIso STRING (sinon rules refusent)
       const tokenId = randomToken(20);
       const expiresAtIso = new Date(Date.now() + 24*60*60*1000).toISOString();
 
-      // IMPORTANT: ce setDoc doit matcher EXACTEMENT tes rules dayTokens/create
       await setDoc(doc(db, "dayTokens", tokenId), {
         conciergerieUid: currentUser.uid,
         prestationId: String(prestationId),
@@ -337,7 +326,6 @@
         createdAt: serverTimestamp()
       });
 
-      // 2) update event (optionnels utiles)
       await updateDoc(doc(db, "events", prestationId), {
         assignedToEmail: aEmail,
         assignedToName: aName,
@@ -345,9 +333,7 @@
         updatedAt: serverTimestamp()
       });
 
-      // 3) push token into the missions (conciergerie write ok)
-      const mids = ["CHECKIN","MENAGE","CHECKOUT"];
-      for(const mid of mids){
+      for(const mid of ["CHECKIN","MENAGE","CHECKOUT"]){
         await updateDoc(doc(db, "events", prestationId, "missions", mid), {
           dayToken: tokenId,
           assignedToEmail: aEmail,
@@ -356,13 +342,9 @@
         });
       }
 
-      // 4) link vers mission.html (agent connecté obligatoire)
       const params = new URLSearchParams();
       params.set("token", tokenId);
       params.set("prestationId", prestationId);
-
-      // on garde la conciergerieName pour afficher côté agent
-      if(cName) params.set(Name);
 
       const base = location.href.split("?")[0];
       const link = base.replace("intervention.html", "mission.html") + "?" + params.toString();
@@ -387,9 +369,11 @@
       const to = normalizeEmail(agentEmail.value);
       const cName = (conciergerieName.value || "").trim() || "CleanUp Manager";
       const subject = encodeURIComponent("Mission CleanUp — " + cName);
+
+      // ✅ 1 ligne vide avant l'URL
       const body = encodeURIComponent(
         `Bonjour ${agentName.value || ""},\n\n` +
-        `Voici ton lien pour exécuter la mission :\n` +
+        `Voici ton lien pour exécuter la mission :\n\n` +
         `${linkBox.value}\n\n` +
         `⚠️ Tu dois être connecté(e) (lien de connexion email).\n` +
         `Le lien/token expire sous 24h.\n\n` +
@@ -428,7 +412,6 @@
 
     onAuthStateChanged(auth, async (user)=>{
       if(!user){
-        // Auth obligatoire
         location.href = "login.html?role=conciergerie";
         return;
       }
@@ -445,4 +428,3 @@
   </script>
 </body>
 </html>
-
