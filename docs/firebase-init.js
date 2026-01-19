@@ -20,7 +20,6 @@ const app = initializeApp(firebaseConfig);
 
 export const auth = getAuth(app);
 
-// ✅ on fixe la persistence dès le chargement (et on ignore l’erreur si navigateur restrictif)
 setPersistence(auth, browserLocalPersistence).catch((e) => {
   console.warn("Auth persistence non appliquée:", e?.code || e);
 });
