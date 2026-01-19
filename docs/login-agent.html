@@ -1,0 +1,189 @@
+<!-- docs/login-agent.html -->
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CleanUp Manager — Connexion Agent</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+
+  <style>
+    *{ box-sizing:border-box; font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; }
+    :root{
+      --violet:#7A5CFF; --violet2:#6238FF;
+      --bg1:#F8F4FF; --bg2:#EDE6FF;
+      --text:#111; --muted:#666; --bad:#b3261e; --ok:#1b8f4d;
+      --border: rgba(122,92,255,0.18);
+      --shadow: 0 14px 36px rgba(0,0,0,0.08);
+    }
+    body{ margin:0; background:linear-gradient(180deg,var(--bg1) 0%, var(--bg2) 80%); color:var(--text); }
+    .page{ min-height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:18px; }
+    .card{
+      width:100%; max-width:520px;
+      background:rgba(255,255,255,0.86);
+      border:1px solid var(--border);
+      border-radius:18px;
+      box-shadow:var(--shadow);
+      backdrop-filter:blur(10px);
+      padding:16px;
+    }
+    h1{ margin:0; font-size:18px; font-weight:900; letter-spacing:-0.2px; }
+    .sub{ margin-top:6px; color:#444; font-size:12px; font-weight:800; line-height:1.35; }
+    .alert{
+      display:none; margin-top:12px; padding:10px 12px; border-radius:14px; background:#fff;
+      border-left:5px solid var(--bad); box-shadow:0 3px 10px rgba(0,0,0,.06);
+      font-size:12px; font-weight:800; color:#444; white-space:pre-wrap;
+    }
+    .alert.ok{ border-left-color:var(--ok); }
+    label{ display:block; margin:12px 0 6px; font-size:12px; font-weight:900; color:#333; }
+    input{
+      width:100%; padding:12px 10px; border-radius:12px; border:1px solid #D3C7FF; background:#fff;
+      font-size:14px; outline:none; font-weight:800;
+    }
+    input:focus{ border-color:var(--violet); box-shadow:0 0 0 2px rgba(122,92,255,.15); }
+    .row{ display:flex; gap:10px; flex-wrap:wrap; margin-top:12px; }
+    .btn{
+      border:none; border-radius:999px; padding:11px 12px; font-size:13px; font-weight:900; cursor:pointer;
+      white-space:nowrap;
+    }
+    .btn.primary{ color:#fff; background:linear-gradient(90deg,var(--violet),var(--violet2)); box-shadow:0 10px 22px rgba(0,0,0,0.10); flex:1; }
+    .btn.ghost{ background:#fff; color:var(--violet); border:2px solid var(--violet); box-shadow:0 3px 10px rgba(0,0,0,.06); }
+    .hint{ margin-top:10px; font-size:11px; font-weight:800; color:#666; line-height:1.35; }
+    .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size:11px; }
+  </style>
+</head>
+
+<body>
+  <div class="page">
+    <div class="card">
+      <h1>Connexion Agent</h1>
+      <div class="sub">
+        Connexion par lien email (aucun mot de passe).<br>
+        Tu recevras un email : clique le lien dans <b>le même navigateur</b>.
+      </div>
+
+      <div class="alert" id="alertBox"></div>
+
+      <label for="email">Email agent</label>
+      <input id="email" type="email" placeholder="ex. agent@email.com" autocomplete="email" required />
+
+      <div class="row">
+        <button class="btn primary" id="sendBtn" type="button">Envoyer le lien</button>
+        <button class="btn ghost" id="backBtn" type="button">Retour</button>
+      </div>
+
+      <div class="hint">
+        Si tu arrives ici depuis un lien mission, on te renverra automatiquement après connexion.<br>
+        <span class="mono" id="nextLine"></span>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { auth } from "./firebase-init.js";
+    import {
+      isSignInWithEmailLink,
+      signInWithEmailLink,
+      sendSignInLinkToEmail
+    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+
+    const alertBox = document.getElementById("alertBox");
+    const emailEl = document.getElementById("email");
+    const sendBtn = document.getElementById("sendBtn");
+    const backBtn = document.getElementById("backBtn");
+    const nextLine = document.getElementById("nextLine");
+
+    function showAlert(msg, ok=false){
+      alertBox.style.display = "block";
+      alertBox.classList.toggle("ok", !!ok);
+      alertBox.textContent = msg;
+    }
+    function hideAlert(){
+      alertBox.style.display = "none";
+      alertBox.classList.remove("ok");
+      alertBox.textContent = "";
+    }
+    function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
+    function qs(name){ return new URLSearchParams(location.search).get(name) || ""; }
+
+    // where to go after login
+    const next = qs("next") || "agent.html";
+    nextLine.textContent = "Retour après connexion : " + next;
+
+    // Store next so the email-link callback can use it
+    localStorage.setItem("cm_agent_next", next);
+
+    // ===== 1) If we are opening from the email link callback
+    async function handleEmailLinkCallback(){
+      if(!isSignInWithEmailLink(auth, window.location.href)) return;
+
+      hideAlert();
+      const storedEmail = localStorage.getItem("cm_agent_email") || "";
+      let email = storedEmail;
+
+      // If not stored, ask
+      if(!email){
+        email = normalizeEmail(prompt("Confirme ton email pour te connecter :") || "");
+      }
+      if(!email){
+        showAlert("⛔ Email manquant. Recommence la demande de lien.");
+        return;
+      }
+
+      try{
+        await signInWithEmailLink(auth, email, window.location.href);
+        localStorage.removeItem("cm_agent_email");
+
+        const nextUrl = localStorage.getItem("cm_agent_next") || "agent.html";
+        showAlert("✅ Connecté. Redirection…", true);
+
+        // Clean URL (optional): remove oobCode params by redirecting
+        setTimeout(()=>{ window.location.href = nextUrl; }, 450);
+      }catch(err){
+        console.error(err);
+        showAlert("⛔ Connexion impossible : " + (err?.message || "inconnue"));
+      }
+    }
+
+    // ===== 2) Normal flow: send the sign-in link
+    async function sendLink(){
+      hideAlert();
+      const email = normalizeEmail(emailEl.value);
+      if(!email) return showAlert("⛔ Email obligatoire.");
+      if(!/^\S+@\S+\.\S+$/.test(email)) return showAlert("⛔ Email invalide.");
+
+      // IMPORTANT: must be hosted under your authorized domain
+      // Use the current origin + this page path, so it works on GitHub Pages
+      const actionCodeSettings = {
+        url: window.location.origin + window.location.pathname + "?next=" + encodeURIComponent(next),
+        handleCodeInApp: true
+      };
+
+      sendBtn.disabled = true;
+      sendBtn.textContent = "…";
+
+      try{
+        await sendSignInLinkToEmail(auth, email, actionCodeSettings);
+        localStorage.setItem("cm_agent_email", email);
+
+        showAlert("✅ Lien envoyé. Ouvre ta boîte mail et clique le lien DANS CE NAVIGATEUR.", true);
+      }catch(err){
+        console.error(err);
+        showAlert("⛔ Envoi impossible : " + (err?.message || "inconnue"));
+      }finally{
+        sendBtn.disabled = false;
+        sendBtn.textContent = "Envoyer le lien";
+      }
+    }
+
+    backBtn.addEventListener("click", ()=> history.back());
+    sendBtn.addEventListener("click", ()=> sendLink().catch(()=>{}));
+
+    // Kick
+    handleEmailLinkCallback().catch(()=>{});
+  </script>
+</body>
+</html>
