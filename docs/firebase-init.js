@@ -19,7 +19,10 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 
 export const auth = getAuth(app);
-// ✅ évite les sessions "capricieuses" sur PC (Edge/Firefox)
-setPersistence(auth, browserLocalPersistence);
+
+// ✅ on fixe la persistence dès le chargement (et on ignore l’erreur si navigateur restrictif)
+setPersistence(auth, browserLocalPersistence).catch((e) => {
+  console.warn("Auth persistence non appliquée:", e?.code || e);
+});
 
 export const db = getFirestore(app);
