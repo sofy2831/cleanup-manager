@@ -49,7 +49,7 @@
     .chip.ok{ background:rgba(27,143,77,0.16); color:var(--ok); }
     .chip.bad{ background:rgba(179,38,30,0.14); color:var(--bad); }
     .list{ display:flex; flex-direction:column; gap:8px; margin-top:8px; }
-    .item{ background:#fff; border-radius:14px; border:1px solid rgba(0,0,0,0.03); box-shadow:0 3px 10px rgba(0,0,0,.06); padding:10px; }
+    .item{ background:#fff; border-radius:14px; border:1px solid rgba(0,0,0,0.03); box-shadow:0 3px 10px rgba(0,0,0,0.06); padding:10px; }
     .item-top{ display:flex; justify-content:space-between; gap:10px; align-items:flex-start; }
     .item-title{ font-size:13px; font-weight:900; color:#222; }
     .item-sub{ margin-top:4px; font-size:12px; font-weight:800; color:#666; white-space:pre-wrap; }
@@ -59,7 +59,7 @@
 <body>
   <div class="page">
     <div class="topbar">
-      <a class="pill" href="prestations.html">← Retour</a>
+      <a class="pill" href="planning.html">← Planning</a>
       <button class="pill" id="logoutBtn" type="button">Déconnexion</button>
     </div>
 
@@ -70,6 +70,7 @@
     </div>
 
     <div class="wrap">
+      <!-- LEFT -->
       <section class="card">
         <div class="row" style="align-items:flex-end;">
           <div style="flex:1;min-width:280px;">
@@ -86,13 +87,17 @@
         <div class="list" id="missionsList"></div>
 
         <div style="margin-top:10px;" class="mini">
-          Rappel : ici on ne fait pas de collectionGroup. On lit <span class="mono">events/{eventId}/missions/*</span>.
+          Ici on lit <span class="mono">events/{eventId}/missions/*</span> (pas de collectionGroup).
         </div>
       </section>
 
+      <!-- RIGHT -->
       <aside class="card">
         <div style="font-weight:900;">Agent (lien email)</div>
-        <div class="mini" style="margin-top:4px;">Agent connecté (Auth) obligatoire. Le token sert juste à limiter à 24h.</div>
+        <div class="mini" style="margin-top:4px;">
+          Agent connecté (Auth) obligatoire. Le token sert juste à limiter à 24h.
+          Le lien envoyé ouvre <b>agent.html</b>.
+        </div>
 
         <div class="row">
           <div>
@@ -105,8 +110,8 @@
           </div>
         </div>
 
-        <label>Nom conciergerie (optionnel dans le mail)</label>
-        <input id="conciergerieName" type="text" placeholder="Ex. CleanUp – Mathilde" />
+        <label>Nom conciergerie (signature mail)</label>
+        <input id="conciergerieName" type="text" placeholder="Ex. conciergerie ROSE" />
 
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
           <button class="btn primary" id="genLinkBtn" type="button">Générer lien agent</button>
@@ -121,9 +126,9 @@
         </div>
 
         <div class="mini" style="margin-top:10px;">
-          Si tu vois “Missing or insufficient permissions” ici, c’est 99% :
-          <br>• champ <span class="mono">expiresAtIso</span> pas en string ISO
-          <br>• ou tu n’es pas sur le bon compte conciergerie
+          Si tu vois “Missing or insufficient permissions” ici :
+          <br>• tu n’es pas sur le bon compte conciergerie
+          <br>• ou <span class="mono">expiresAtIso</span> n’est pas une string ISO
         </div>
       </aside>
     </div>
@@ -134,6 +139,7 @@
     import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
       doc, getDoc, setDoc, updateDoc,
+      collection, getDocs,
       serverTimestamp
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
@@ -168,6 +174,7 @@
     }
     function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
 
+    // Token friendly (pas de 0/O/I/1)
     function randomToken(len=20){
       const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
       const arr = new Uint32Array(len);
@@ -198,6 +205,9 @@
       if(t==="CHECKIN") return "Check-in";
       if(t==="MENAGE") return "Ménage";
       if(t==="CHECKOUT") return "Check-out";
+      if(t==="LINGE") return "Linge";
+      if(t==="KITS") return "Kits";
+      if(t==="MAINTENANCE") return "Maintenance";
       return t || "Mission";
     }
 
@@ -209,36 +219,11 @@
       return `<span class="chip">${s || "—"}</span>`;
     }
 
-    async function readMission(mid){
-      const mRef = doc(db, "events", prestationId, "missions", mid);
-      const mSnap = await getDoc(mRef);
-      return { id: mid, ref: mRef, exists: mSnap.exists(), data: mSnap.exists() ? (mSnap.data()||{}) : null };
-    }
-
-    async function ensureMissionsExist(event){
-      const base = {
-        conciergerieUid: event.conciergerieUid,
-        prestationId: prestationId,
-        dateKey: event.dateKey || event.date || "",
-        time: event.time || "",
-        homeName: event.homeName || "",
-        homeCity: event.homeCity || "",
-        homeAddress: event.homeAddress || "",
-        assignedToEmail: event.assignedToEmail || "",
-        assignedToName: event.assignedToName || "",
-        locked: false,
-        status: "ASSIGNEE",
-        updatedAt: serverTimestamp(),
-        createdAt: serverTimestamp()
-      };
-
-      const ids = ["CHECKIN","MENAGE","CHECKOUT"];
-      for(const mid of ids){
-        const m = await readMission(mid);
-        if(!m.exists){
-          await setDoc(m.ref, { ...base, type: mid });
-        }
-      }
+    async function readAllMissions(){
+      const col = collection(db, "events", prestationId, "missions");
+      const snap = await getDocs(col);
+      return snap.docs.map(d => ({ id: d.id, data: d.data() || {} }))
+        .sort((a,b)=> (a.id||"").localeCompare(b.id||""));
     }
 
     async function load(){
@@ -265,37 +250,45 @@
       subLine.textContent = "Prestation #" + prestationId;
 
       homeLine.textContent = `${e.homeName || "Logement"}${e.homeCity ? " — "+e.homeCity : ""}`;
-      metaLine.textContent = `${e.dateKey || e.date || "—"}${e.time ? " à "+e.time : ""}${e.homeAddress ? " • "+e.homeAddress : ""} • status: ${(e.status||"").toUpperCase() || "—"}`;
+      metaLine.textContent =
+        `${e.dateKey || e.date || "—"}${e.time ? " à "+e.time : ""}` +
+        `${e.homeAddress ? " • "+e.homeAddress : ""}` +
+        ` • status: ${(e.status||"").toUpperCase() || "—"}`;
 
       agentName.value = e.assignedToName || agentName.value || "";
       agentEmail.value = e.assignedToEmail || agentEmail.value || "";
       conciergerieName.value = e.conciergerieName || conciergerieName.value || "";
 
-      await ensureMissionsExist(e);
-
-      const ms = await Promise.all(["CHECKIN","MENAGE","CHECKOUT"].map(readMission));
+      const ms = await readAllMissions();
 
       missionsList.innerHTML = "";
+      if(!ms.length){
+        missionsList.innerHTML = `
+          <div class="item">
+            <div class="item-title">Aucune mission</div>
+            <div class="item-sub">Crée d’abord les missions via ta création de prestation (lines → missions).</div>
+          </div>`;
+        return;
+      }
+
       for(const m of ms){
         const d = m.data || {};
-        const html = `
-          <div class="item">
-            <div class="item-top">
-              <div>
-                <div class="item-title">${missionLabel(d.type || m.id)}</div>
-                <div class="item-sub">Agent : ${(d.assignedToName||"—")}${d.assignedToEmail ? " • "+d.assignedToEmail : ""}</div>
-              </div>
-              <div>${chipForStatus(d.status)}</div>
+        const div = document.createElement("div");
+        div.className = "item";
+        div.innerHTML = `
+          <div class="item-top">
+            <div>
+              <div class="item-title">${missionLabel(d.type || m.id)}</div>
+              <div class="item-sub">Agent : ${(d.assignedToName||"—")}${d.assignedToEmail ? " • "+d.assignedToEmail : ""}</div>
             </div>
-            <div class="item-sub" style="margin-top:8px;">
-              Token : ${d.dayToken ? "<span class='mono'>"+d.dayToken+"</span>" : "—"}
-              \nLocked : ${String(!!d.locked)}
-            </div>
+            <div>${chipForStatus(d.status)}</div>
+          </div>
+          <div class="item-sub" style="margin-top:8px;">
+            Token : ${d.dayToken ? "<span class='mono'>"+d.dayToken+"</span>" : "—"}
+            \nLocked : ${String(!!d.locked)}
           </div>
         `;
-        const div = document.createElement("div");
-        div.innerHTML = html;
-        missionsList.appendChild(div.firstElementChild);
+        missionsList.appendChild(div);
       }
     }
 
@@ -313,6 +306,7 @@
       if(!/^\S+@\S+\.\S+$/.test(aEmail)) return showAlert("Email agent invalide.");
       if(!aName) return showAlert("Nom agent obligatoire.");
 
+      // 1) create dayToken (24h)
       const tokenId = randomToken(20);
       const expiresAtIso = new Date(Date.now() + 24*60*60*1000).toISOString();
 
@@ -322,10 +316,11 @@
         agentEmail: aEmail,
         agentName: aName,
         active: true,
-        expiresAtIso: expiresAtIso,
+        expiresAtIso,
         createdAt: serverTimestamp()
       });
 
+      // 2) update event
       await updateDoc(doc(db, "events", prestationId), {
         assignedToEmail: aEmail,
         assignedToName: aName,
@@ -333,8 +328,10 @@
         updatedAt: serverTimestamp()
       });
 
-      for(const mid of ["CHECKIN","MENAGE","CHECKOUT"]){
-        await updateDoc(doc(db, "events", prestationId, "missions", mid), {
+      // 3) push token to ALL missions under this event
+      const mSnap = await getDocs(collection(db, "events", prestationId, "missions"));
+      for(const d of mSnap.docs){
+        await updateDoc(d.ref, {
           dayToken: tokenId,
           assignedToEmail: aEmail,
           assignedToName: aName,
@@ -342,18 +339,19 @@
         });
       }
 
+      // 4) link => agent.html (stable)
       const params = new URLSearchParams();
       params.set("token", tokenId);
       params.set("prestationId", prestationId);
 
       const base = location.href.split("?")[0];
-      const link = base.replace("intervention.html", "mission.html") + "?" + params.toString();
+      const link = base.replace("intervention.html", "agent.html") + "?" + params.toString();
 
       linkBox.value = link;
       copyBtn.disabled = false;
       mailtoBtn.disabled = false;
 
-      showAlert("✅ Lien agent généré + token enregistré.", true);
+      showAlert("✅ Lien agent généré (valable 24h).", true);
     }
 
     copyBtn.addEventListener("click", async ()=>{
@@ -370,15 +368,15 @@
       const cName = (conciergerieName.value || "").trim() || "CleanUp Manager";
       const subject = encodeURIComponent("Mission CleanUp — " + cName);
 
-      // ✅ 1 ligne vide avant l'URL
       const body = encodeURIComponent(
         `Bonjour ${agentName.value || ""},\n\n` +
-        `Voici ton lien pour exécuter la mission :\n\n` +
+        `Voici ton lien pour exécuter la mission :\n\n` +   // ✅ ligne vide avant l’URL
         `${linkBox.value}\n\n` +
         `⚠️ Tu dois être connecté(e) (lien de connexion email).\n` +
         `Le lien/token expire sous 24h.\n\n` +
         `— ${cName}`
       );
+
       window.location.href = `mailto:${to}?subject=${subject}&body=${body}`;
     });
 
@@ -428,5 +426,3 @@
   </script>
 </body>
 </html>
-
-
