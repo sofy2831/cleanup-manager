@@ -49,7 +49,7 @@
     .chip.ok{ background:rgba(27,143,77,0.16); color:var(--ok); }
     .chip.bad{ background:rgba(179,38,30,0.14); color:var(--bad); }
     .list{ display:flex; flex-direction:column; gap:8px; margin-top:8px; }
-    .item{ background:#fff; border-radius:14px; border:1px solid rgba(0,0,0,0.03); box-shadow:0 3px 10px rgba(0,0,0,0.06); padding:10px; }
+    .item{ background:#fff; border-radius:14px; border:1px solid rgba(0,0,0,0.03); box-shadow:0 3px 10px rgba(0,0,0,.06); padding:10px; }
     .item-top{ display:flex; justify-content:space-between; gap:10px; align-items:flex-start; }
     .item-title{ font-size:13px; font-weight:900; color:#222; }
     .item-sub{ margin-top:4px; font-size:12px; font-weight:800; color:#666; white-space:pre-wrap; }
@@ -59,7 +59,7 @@
 <body>
   <div class="page">
     <div class="topbar">
-      <a class="pill" href="prestations.html">← Retour</a>
+      <a class="pill" href="planning.html">← Planning</a>
       <button class="pill" id="logoutBtn" type="button">Déconnexion</button>
     </div>
 
@@ -76,7 +76,7 @@
           <div style="flex:1;min-width:280px;">
             <div class="mini">Prestation</div>
             <div style="margin-top:6px;font-weight:900;font-size:14px;" id="homeLine">—</div>
-            <div class="mini" id="metaLine" style="margin-top:4px;">—</div>
+            <div class="mini" id="metaLine" style="margin-top:4px;white-space:pre-wrap;">—</div>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
             <button class="btn ghost" id="refreshBtn" type="button">Rafraîchir</button>
@@ -87,16 +87,15 @@
         <div class="list" id="missionsList"></div>
 
         <div style="margin-top:10px;" class="mini">
-          Ici on lit <span class="mono">events/{eventId}/missions/*</span> (pas de collectionGroup).
+          Ici on GARANTIT les missions côté conciergerie. L’agent ne crée rien.
         </div>
       </section>
 
       <!-- RIGHT -->
       <aside class="card">
-        <div style="font-weight:900;">Agent (lien email)</div>
+        <div style="font-weight:900;">Agent (email-link)</div>
         <div class="mini" style="margin-top:4px;">
-          Agent connecté (Auth) obligatoire. Le token sert juste à limiter à 24h.
-          Le lien envoyé ouvre <b>agent.html</b>.
+          L’agent doit se connecter (sans mot de passe). Le token limite l’accès à 24h.
         </div>
 
         <div class="row">
@@ -110,7 +109,7 @@
           </div>
         </div>
 
-        <label>Nom conciergerie (signature mail)</label>
+        <label>Nom conciergerie (optionnel dans le mail)</label>
         <input id="conciergerieName" type="text" placeholder="Ex. conciergerie ROSE" />
 
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
@@ -124,12 +123,6 @@
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
           <button class="btn ghost" id="mailtoBtn" type="button" disabled>Ouvrir email</button>
         </div>
-
-        <div class="mini" style="margin-top:10px;">
-          Si tu vois “Missing or insufficient permissions” ici :
-          <br>• tu n’es pas sur le bon compte conciergerie
-          <br>• ou <span class="mono">expiresAtIso</span> n’est pas une string ISO
-        </div>
       </aside>
     </div>
   </div>
@@ -139,7 +132,6 @@
     import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
       doc, getDoc, setDoc, updateDoc,
-      collection, getDocs,
       serverTimestamp
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
@@ -188,23 +180,52 @@
       return new URLSearchParams(location.search).get(name) || "";
     }
 
-    const prestationId = qs("prestationId") || qs("eventId") || "";
-    let currentUser = null;
-    let currentEvent = null;
+    function norm(s){
+      return (s||"").toString().trim().toLowerCase()
+        .normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+    }
+    function hasAny(label, arr){
+      const x = norm(label);
+      return arr.some(k => x.includes(norm(k)));
+    }
 
-    async function guardConciergerie(uid){
-      const uSnap = await getDoc(doc(db, "users", uid));
-      if(!uSnap.exists()) throw new Error("Profil user introuvable (users/{uid}).");
-      const u = uSnap.data() || {};
-      if(u.role !== "conciergerie") throw new Error("Accès refusé : rôle requis = conciergerie.");
-      return u;
+    const KW_CHECKOUT = [
+      "check-out","checkout","depart","départ","sortie","fin de sejour","fin de séjour",
+      "recuperation","récupération","recup","récup",
+      "retour cles","retour clés","recup cles","récup clés","recuperer cles","récupérer clés",
+      "rendre cles","rendre clés","badges","badge","changer code","changement code","code change"
+    ];
+    const KW_CHECKIN = [
+      "check-in","checkin","arrivee","arrivée","accueil","entree","entrée",
+      "remise cles","remise clés","boite a cles","boîte a clés","boite a clés",
+      "code","digicode"
+    ];
+
+    function detectTypesFromLines(lines){
+      const types = new Set();
+      for(const ln of (lines||[])){
+        const cat = norm(ln.category);
+        const lab = ln.label || "";
+
+        if(cat.includes("menage")) types.add("MENAGE");
+        if(cat.includes("linge") || cat.includes("blanch")) types.add("LINGE");
+        if(cat.includes("kits") || cat.includes("consomm")) types.add("KITS");
+        if(cat.includes("maintenance") || cat.includes("depannage") || cat.includes("dépannage")) types.add("MAINTENANCE");
+
+        if(cat.includes("accueil") || cat.includes("voyageur") || cat.includes("sortie")){
+          if(hasAny(lab, KW_CHECKOUT)) types.add("CHECKOUT");
+          else if(hasAny(lab, KW_CHECKIN)) types.add("CHECKIN");
+          else types.add("CHECKIN");
+        }
+      }
+      return Array.from(types);
     }
 
     function missionLabel(type){
       const t = (type||"").toUpperCase();
       if(t==="CHECKIN") return "Check-in";
-      if(t==="MENAGE") return "Ménage";
       if(t==="CHECKOUT") return "Check-out";
+      if(t==="MENAGE") return "Ménage";
       if(t==="LINGE") return "Linge";
       if(t==="KITS") return "Kits";
       if(t==="MAINTENANCE") return "Maintenance";
@@ -219,11 +240,42 @@
       return `<span class="chip">${s || "—"}</span>`;
     }
 
-    async function readAllMissions(){
-      const col = collection(db, "events", prestationId, "missions");
-      const snap = await getDocs(col);
-      return snap.docs.map(d => ({ id: d.id, data: d.data() || {} }))
-        .sort((a,b)=> (a.id||"").localeCompare(b.id||""));
+    const prestationId = qs("prestationId") || qs("eventId") || "";
+    let currentUser = null;
+    let currentEvent = null;
+
+    async function guardConciergerie(uid){
+      const uSnap = await getDoc(doc(db, "users", uid));
+      if(!uSnap.exists()) throw new Error("Profil user introuvable (users/{uid}).");
+      const u = uSnap.data() || {};
+      if(u.role !== "conciergerie") throw new Error("Accès refusé : rôle requis = conciergerie.");
+      return u;
+    }
+
+    async function ensureMissionConciergerie(eventId, base, type){
+      // conciergerie peut créer / maj : OK avec tes rules
+      const mRef = doc(db, "events", eventId, "missions", type);
+      const mSnap = await getDoc(mRef);
+
+      if(!mSnap.exists()){
+        await setDoc(mRef, {
+          ...base,
+          type,
+          status: "ASSIGNEE",
+          locked: false,
+          agentDone: false,
+          checklist: {},
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        });
+      }else{
+        // on met à jour seulement les champs “routing”, sans écraser checklist
+        await setDoc(mRef, {
+          ...base,
+          type,
+          updatedAt: serverTimestamp()
+        }, { merge: true });
+      }
     }
 
     async function load(){
@@ -248,44 +300,37 @@
       }
 
       subLine.textContent = "Prestation #" + prestationId;
-
       homeLine.textContent = `${e.homeName || "Logement"}${e.homeCity ? " — "+e.homeCity : ""}`;
-      metaLine.textContent =
-        `${e.dateKey || e.date || "—"}${e.time ? " à "+e.time : ""}` +
-        `${e.homeAddress ? " • "+e.homeAddress : ""}` +
-        ` • status: ${(e.status||"").toUpperCase() || "—"}`;
+      metaLine.textContent = `${e.dateKey || e.date || "—"}${e.time ? " à "+e.time : ""}${e.homeAddress ? " • "+e.homeAddress : ""} • status: ${(e.status||"").toUpperCase() || "—"}`;
 
       agentName.value = e.assignedToName || agentName.value || "";
       agentEmail.value = e.assignedToEmail || agentEmail.value || "";
       conciergerieName.value = e.conciergerieName || conciergerieName.value || "";
 
-      const ms = await readAllMissions();
-
+      // Affiche les missions existantes (sans les créer ici)
+      const types = detectTypesFromLines(e.lines || []);
       missionsList.innerHTML = "";
-      if(!ms.length){
-        missionsList.innerHTML = `
-          <div class="item">
-            <div class="item-title">Aucune mission</div>
-            <div class="item-sub">Crée d’abord les missions via ta création de prestation (lines → missions).</div>
-          </div>`;
+      if(!types.length){
+        missionsList.innerHTML = `<div class="item"><div class="item-title">Aucune mission détectée</div><div class="item-sub">Ajoute des lines (prestations) pour générer les missions.</div></div>`;
         return;
       }
 
-      for(const m of ms){
-        const d = m.data || {};
+      for(const type of types){
+        const mSnap = await getDoc(doc(db, "events", prestationId, "missions", type));
+        const d = mSnap.exists() ? (mSnap.data()||{}) : null;
+
         const div = document.createElement("div");
         div.className = "item";
         div.innerHTML = `
           <div class="item-top">
             <div>
-              <div class="item-title">${missionLabel(d.type || m.id)}</div>
-              <div class="item-sub">Agent : ${(d.assignedToName||"—")}${d.assignedToEmail ? " • "+d.assignedToEmail : ""}</div>
+              <div class="item-title">${missionLabel(type)}</div>
+              <div class="item-sub">Existe : ${mSnap.exists() ? "oui" : "non"}</div>
             </div>
-            <div>${chipForStatus(d.status)}</div>
+            <div>${d ? chipForStatus(d.status) : `<span class="chip bad">ABSENTE</span>`}</div>
           </div>
           <div class="item-sub" style="margin-top:8px;">
-            Token : ${d.dayToken ? "<span class='mono'>"+d.dayToken+"</span>" : "—"}
-            \nLocked : ${String(!!d.locked)}
+            Agent : ${(d?.assignedToName || e.assignedToName || "—")}${(d?.assignedToEmail || e.assignedToEmail) ? " • " + (d?.assignedToEmail || e.assignedToEmail) : ""}
           </div>
         `;
         missionsList.appendChild(div);
@@ -306,7 +351,14 @@
       if(!/^\S+@\S+\.\S+$/.test(aEmail)) return showAlert("Email agent invalide.");
       if(!aName) return showAlert("Nom agent obligatoire.");
 
-      // 1) create dayToken (24h)
+      // reload event
+      const eSnap = await getDoc(doc(db,"events",prestationId));
+      if(!eSnap.exists()) throw new Error("Prestation introuvable.");
+      const ev = eSnap.data() || {};
+
+      if(ev.conciergerieUid !== currentUser.uid) throw new Error("Accès refusé (prestation).");
+
+      // 1) create dayToken doc
       const tokenId = randomToken(20);
       const expiresAtIso = new Date(Date.now() + 24*60*60*1000).toISOString();
 
@@ -316,7 +368,7 @@
         agentEmail: aEmail,
         agentName: aName,
         active: true,
-        expiresAtIso,
+        expiresAtIso: expiresAtIso,
         createdAt: serverTimestamp()
       });
 
@@ -324,34 +376,47 @@
       await updateDoc(doc(db, "events", prestationId), {
         assignedToEmail: aEmail,
         assignedToName: aName,
-        conciergerieName: cName || (currentEvent?.conciergerieName || ""),
+        conciergerieName: cName || (ev.conciergerieName || ""),
         updatedAt: serverTimestamp()
       });
 
-      // 3) push token to ALL missions under this event
-      const mSnap = await getDocs(collection(db, "events", prestationId, "missions"));
-      for(const d of mSnap.docs){
-        await updateDoc(d.ref, {
-          dayToken: tokenId,
-          assignedToEmail: aEmail,
-          assignedToName: aName,
-          updatedAt: serverTimestamp()
-        });
+      // 3) ensure missions exist (côté conciergerie) selon lines
+      const needed = detectTypesFromLines(ev.lines || []);
+      if(!needed.length){
+        throw new Error("Aucune mission détectée (lines vides). Ajoute des prestations puis réessaie.");
       }
 
-      // 4) link => agent.html (stable)
+      const base = {
+        conciergerieUid: ev.conciergerieUid || currentUser.uid,
+        prestationId: prestationId,
+        dayToken: tokenId,
+        assignedToEmail: aEmail,
+        assignedToName: aName,
+        dateKey: ev.dateKey || ev.date || "",
+        time: ev.time || "",
+        homeName: ev.homeName || "",
+        homeCity: ev.homeCity || "",
+        homeAddress: ev.homeAddress || ""
+      };
+
+      for(const type of needed){
+        await ensureMissionConciergerie(prestationId, base, type);
+      }
+
+      // 4) link vers agent.html (pas mission.html)
       const params = new URLSearchParams();
       params.set("token", tokenId);
       params.set("prestationId", prestationId);
+      if(cName) params.set("c", cName); // ✅ correct
 
-      const base = location.href.split("?")[0];
-      const link = base.replace("intervention.html", "agent.html") + "?" + params.toString();
+      const baseUrl = location.href.split("?")[0];
+      const link = baseUrl.replace("intervention.html", "agent.html") + "?" + params.toString();
 
       linkBox.value = link;
       copyBtn.disabled = false;
       mailtoBtn.disabled = false;
 
-      showAlert("✅ Lien agent généré (valable 24h).", true);
+      showAlert("✅ Lien agent généré + missions garanties.", true);
     }
 
     copyBtn.addEventListener("click", async ()=>{
@@ -368,9 +433,10 @@
       const cName = (conciergerieName.value || "").trim() || "CleanUp Manager";
       const subject = encodeURIComponent("Mission CleanUp — " + cName);
 
+      // ✅ saut de ligne + URL seule sur sa ligne
       const body = encodeURIComponent(
         `Bonjour ${agentName.value || ""},\n\n` +
-        `Voici ton lien pour exécuter la mission :\n\n` +   // ✅ ligne vide avant l’URL
+        `Voici ton lien pour exécuter la mission :\n\n` +
         `${linkBox.value}\n\n` +
         `⚠️ Tu dois être connecté(e) (lien de connexion email).\n` +
         `Le lien/token expire sous 24h.\n\n` +
@@ -426,4 +492,3 @@
   </script>
 </body>
 </html>
-
