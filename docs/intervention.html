@@ -82,7 +82,6 @@
     </div>
 
     <div class="wrap">
-      <!-- LEFT: prestation + missions -->
       <section class="card">
         <div class="row" style="align-items:flex-end;">
           <div style="flex:1;min-width:280px;">
@@ -109,7 +108,6 @@
         </div>
       </section>
 
-      <!-- RIGHT: assign agent + generate link -->
       <aside class="card">
         <div style="font-weight:900;">Agent (email-link)</div>
         <div class="mini" style="margin-top:4px;">Agent connecté obligatoire. Token = accès 24h.</div>
@@ -154,7 +152,7 @@
     import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
       doc, getDoc, setDoc, updateDoc,
-      serverTimestamp
+      serverTimestamp, Timestamp
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const alertBox = document.getElementById("alertBox");
@@ -248,7 +246,6 @@
       "code","digicode"
     ];
 
-    // ✅ FIX: détecter via label SI category absente
     function detectTypesFromLines(lines){
       const types = new Set();
 
@@ -256,43 +253,28 @@
         const cat = norm(ln.category || "");
         const lab = norm(ln.label || "");
 
-        // MENAGE
-        if (cat.includes("menage") || lab.includes("menage") || lab.includes("ménage")) {
-          types.add("MENAGE");
-        }
+        if (cat.includes("menage") || lab.includes("menage") || lab.includes("ménage")) types.add("MENAGE");
 
-        // LINGE / BLANCHISSERIE
         if (
           cat.includes("linge") || cat.includes("blanch") ||
           lab.includes("linge") || lab.includes("blanch") || lab.includes("lavage") || lab.includes("sechage") || lab.includes("séchage")
-        ) {
-          types.add("LINGE");
-        }
+        ) types.add("LINGE");
 
-        // KITS / CONSOMMABLES
         if (
           cat.includes("kits") || cat.includes("consomm") ||
           lab.includes("kit") || lab.includes("reassort") || lab.includes("réassort") || lab.includes("consomm")
-        ) {
-          types.add("KITS");
-        }
+        ) types.add("KITS");
 
-        // MAINTENANCE / DEPANNAGE
         if (
           cat.includes("maintenance") || cat.includes("depannage") || cat.includes("dépannage") ||
           lab.includes("maintenance") || lab.includes("dépannage") || lab.includes("depannage") || lab.includes("urgence") || lab.includes("fuite") || lab.includes("serrure")
-        ) {
-          types.add("MAINTENANCE");
-        }
+        ) types.add("MAINTENANCE");
 
-        // CHECKIN / CHECKOUT (priorité)
         if (hasAny(lab, KW_CHECKOUT)) types.add("CHECKOUT");
         if (hasAny(lab, KW_CHECKIN)) types.add("CHECKIN");
       }
 
-      // fallback: si aucune mission détectée mais il y a des lines => MENAGE par défaut
       if (!types.size && (lines||[]).length) types.add("MENAGE");
-
       return Array.from(types);
     }
 
@@ -323,6 +305,7 @@
 
     async function ensureMission(event, type, dayTokenId){
       const m = await readMission(type);
+
       const base = {
         conciergerieUid: event.conciergerieUid,
         prestationId: prestationId,
@@ -334,6 +317,7 @@
         homeAddress: event.homeAddress || "",
         assignedToEmail: event.assignedToEmail || "",
         assignedToName: event.assignedToName || "",
+        dayToken: dayTokenId || "",
         locked: false,
         status: m.exists ? (m.data?.status || "ASSIGNEE") : "ASSIGNEE",
         updatedAt: serverTimestamp()
@@ -343,10 +327,9 @@
         await setDoc(m.ref, {
           ...base,
           createdAt: serverTimestamp(),
-          checklist: {} // prêt
+          checklist: {}
         });
       }else{
-        // on met à jour au besoin (sans écraser checklist)
         await updateDoc(m.ref, {
           dayToken: dayTokenId || (m.data?.dayToken || ""),
           assignedToEmail: event.assignedToEmail || "",
@@ -399,7 +382,6 @@
       const e = eSnap.data() || {};
       currentEvent = { id: eSnap.id, ...e };
 
-      // sécurité : conciergerieUid doit matcher l’utilisateur connecté
       if(e.conciergerieUid !== currentUser.uid){
         showAlert("Accès refusé : tu n’es pas la conciergerie propriétaire de cette prestation.");
         return;
@@ -410,15 +392,12 @@
       homeLine.textContent = `${e.homeName || "Logement"}${e.homeCity ? " — "+e.homeCity : ""}`;
       metaLine.textContent = `${e.dateKey || e.date || "—"}${e.time ? " à "+e.time : ""}${e.homeAddress ? " • "+e.homeAddress : ""} • status: ${(e.status||"").toUpperCase() || "—"}`;
 
-      // préfill agent/conciergerie
       agentName.value = e.assignedToName || agentName.value || "";
       agentEmail.value = e.assignedToEmail || agentEmail.value || "";
       conciergerieName.value = e.conciergerieName || conciergerieName.value || "";
 
-      // afficher les lines
       renderLines(e.lines || []);
 
-      // read missions (on essaie toutes les catégories possibles)
       const allTypes = ["CHECKIN","MENAGE","CHECKOUT","LINGE","KITS","MAINTENANCE"];
       const ms = await Promise.all(allTypes.map(readMission));
 
@@ -460,16 +439,15 @@
       if(!/^\S+@\S+\.\S+$/.test(aEmail)) return showAlert("Email agent invalide.");
       if(!aName) return showAlert("Nom agent obligatoire.");
 
-      // reload event
       const eRef = doc(db, "events", prestationId);
       const eSnap = await getDoc(eRef);
       if(!eSnap.exists()) return showAlert("Prestation introuvable.");
       const e = eSnap.data() || {};
       if(e.conciergerieUid !== currentUser.uid) return showAlert("Accès refusé.");
 
-      // 1) create dayToken doc with expiresAtIso STRING (sinon rules refusent)
+      // 1) dayToken avec expiresAt Timestamp (24h)
       const tokenId = randomToken(20);
-      const expiresAtIso = new Date(Date.now() + 24*60*60*1000).toISOString();
+      const expiresAtDate = new Date(Date.now() + 24*60*60*1000);
 
       await setDoc(doc(db, "dayTokens", tokenId), {
         conciergerieUid: currentUser.uid,
@@ -477,8 +455,9 @@
         agentEmail: aEmail,
         agentName: aName,
         active: true,
-        expiresAtIso: expiresAtIso,
-        createdAt: serverTimestamp()
+        createdAt: serverTimestamp(),
+        expiresAt: Timestamp.fromDate(expiresAtDate),
+        expiresAtIso: expiresAtDate.toISOString()
       });
 
       // 2) update event
@@ -489,7 +468,7 @@
         updatedAt: serverTimestamp()
       });
 
-      // 3) ensure missions exist based on LINES (created/updated by conciergerie)
+      // 3) missions based on lines
       const needed = detectTypesFromLines(e.lines || []);
       if(!needed.length){
         showAlert("Aucune mission détectée.\nAjoute des lines (prestations) pour générer les missions.");
@@ -500,7 +479,7 @@
         await ensureMission({ ...e, assignedToEmail:aEmail, assignedToName:aName }, type, tokenId);
       }
 
-      // 4) link vers agent.html (agent connecté obligatoire)
+      // 4) link
       const params = new URLSearchParams();
       params.set("token", tokenId);
       params.set("prestationId", prestationId);
@@ -529,7 +508,6 @@
       const cName = (conciergerieName.value || "").trim() || "CleanUp Manager";
       const subject = encodeURIComponent("Mission CleanUp — " + cName);
 
-      // ✅ saut de ligne + URL seule, et on n’ajoute PAS c= dans l’URL
       const body = encodeURIComponent(
         `Bonjour ${agentName.value || ""},\n\n` +
         `Voici ton lien pour exécuter la mission :\n\n` +
