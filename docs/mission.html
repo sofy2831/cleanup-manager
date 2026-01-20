@@ -114,22 +114,38 @@
       border:1px solid rgba(122,92,255,0.12);
     }
     .it input{ width:18px; height:18px; margin-top:2px; }
-    .it .t{
-      font-size:12px;
-      font-weight:900;
-      color:#222;
-      line-height:1.25;
-    }
-    .it .s{
-      margin-top:2px;
-      font-size:11px;
-      font-weight:800;
-      color:#666;
-      line-height:1.2;
-      white-space:pre-wrap;
-    }
+    .it .t{ font-size:12px; font-weight:900; color:#222; line-height:1.25; }
+    .it .s{ margin-top:2px; font-size:11px; font-weight:800; color:#666; line-height:1.2; white-space:pre-wrap; }
     .it.done{ background:rgba(27,143,77,0.10); border-color:rgba(27,143,77,0.20); }
     .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+
+    /* ===== Photos ===== */
+    .photosTop{ display:flex; justify-content:space-between; gap:10px; align-items:flex-end; flex-wrap:wrap; margin-top:10px; }
+    .phCount{ font-size:11px; font-weight:900; color:var(--muted); }
+    .phGrid{ margin-top:10px; display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
+    @media(max-width:520px){ .phGrid{ grid-template-columns:repeat(2,1fr); } }
+    .phCard{
+      border:1px solid rgba(0,0,0,0.06);
+      border-radius:14px;
+      overflow:hidden;
+      background:#fff;
+      box-shadow:0 3px 10px rgba(0,0,0,.06);
+      display:flex; flex-direction:column;
+    }
+    .phCard img{ width:100%; height:140px; object-fit:cover; display:block; background:#f5f5f5; }
+    .phBar{ padding:8px; display:flex; justify-content:space-between; gap:8px; align-items:center; }
+    .phBtn{
+      border:none; border-radius:999px;
+      padding:6px 10px;
+      font-size:11px; font-weight:900;
+      cursor:pointer;
+      background:#fff; color:var(--violet);
+      border:2px solid var(--violet);
+      box-shadow:0 3px 10px rgba(0,0,0,.06);
+      white-space:nowrap;
+    }
+    .phBtn.danger{ color:var(--bad); border-color:#ffc2d6; background:#ffe3ec; }
+    .phBtn:disabled{ opacity:.6; cursor:not-allowed; }
 
     .bottom{
       position:fixed;
@@ -234,6 +250,23 @@
             </div>
           </div>
         </div>
+
+        <!-- ✅ Photos -->
+        <div class="check" style="margin-top:10px;">
+          <div class="photosTop">
+            <div>
+              <h2>Photos (max 3)</h2>
+              <div class="hint">Ajoute jusqu’à 3 photos. Elles seront stockées dans Firebase Storage.</div>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end;">
+              <div class="phCount" id="phCount">0/3</div>
+              <input id="photoInput" type="file" accept="image/*" multiple style="max-width:220px;">
+            </div>
+          </div>
+
+          <div class="phGrid" id="phGrid"></div>
+          <div class="hint" id="phHint" style="margin-top:8px;"></div>
+        </div>
       </section>
     </div>
   </div>
@@ -252,8 +285,14 @@
     import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
       doc, getDoc, updateDoc,
-      serverTimestamp
+      serverTimestamp, arrayUnion
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+
+    import {
+      getStorage, ref as sRef, uploadBytes, getDownloadURL, deleteObject
+    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js";
+
+    const storage = getStorage();
 
     const titleLine = document.getElementById("titleLine");
     const subLine = document.getElementById("subLine");
@@ -274,6 +313,12 @@
     const logoutBtn = document.getElementById("logoutBtn");
     const backAgent = document.getElementById("backAgent");
     const toast = document.getElementById("toast");
+
+    // Photos UI
+    const photoInput = document.getElementById("photoInput");
+    const phGrid = document.getElementById("phGrid");
+    const phCount = document.getElementById("phCount");
+    const phHint = document.getElementById("phHint");
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -305,25 +350,21 @@
     }
     function tokenValid(t){
       if(!t?.active) return false;
-      // ✅ priorité Timestamp si présent
       if(t?.expiresAt?.seconds){
         const expMs = Number(t.expiresAt.seconds) * 1000;
         return Date.now() < expMs;
       }
-      // fallback ISO
       if(!t?.expiresAtIso) return false;
       const exp = parseIso(t.expiresAtIso);
       if(!Number.isFinite(exp)) return false;
       return Date.now() < exp;
     }
     function prettyExpiry(t){
-      // ✅ Timestamp prioritaire
       if(t?.expiresAt?.seconds){
         const d = new Date(Number(t.expiresAt.seconds) * 1000);
         const pad2 = (n)=> String(n).padStart(2,"0");
         return `${pad2(d.getDate())}/${pad2(d.getMonth()+1)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
       }
-      // fallback ISO
       const tt = parseIso(t?.expiresAtIso);
       if(!Number.isFinite(tt)) return "—";
       const d = new Date(tt);
@@ -342,7 +383,6 @@
       return t || "Mission";
     }
 
-    // Templates checklists simples (tu peux enrichir ensuite)
     const CHECKLIST_TEMPLATES = {
       CHECKIN: [
         { key:"arrivee_ok", label:"Arrivée / accueil", sub:"Voyageurs accueillis ou instructions données" },
@@ -378,7 +418,7 @@
 
     const token = qs("token");
     const prestationId = qs("prestationId");
-    const type = qs("type"); // docId mission = TYPE
+    const type = qs("type");
 
     let currentUser = null;
     let tokenDoc = null;
@@ -389,14 +429,15 @@
     function setLockedUI(locked){
       saveBtn.disabled = !!locked;
       doneBtn.disabled = !!locked;
+      photoInput.disabled = !!locked;
       saveBtn.style.opacity = locked ? "0.7" : "1";
       doneBtn.style.opacity = locked ? "0.7" : "1";
     }
 
     function renderChecklist(template, savedChecklist){
       itemsBox.innerHTML = "";
-
       const state = savedChecklist || {};
+
       for(const item of template){
         const checked = !!state[item.key];
         const row = document.createElement("label");
@@ -411,9 +452,7 @@
         itemsBox.appendChild(row);
 
         const cb = row.querySelector("input[type=checkbox]");
-        cb.addEventListener("change", ()=>{
-          row.classList.toggle("done", cb.checked);
-        });
+        cb.addEventListener("change", ()=> row.classList.toggle("done", cb.checked));
       }
     }
 
@@ -426,6 +465,142 @@
       return out;
     }
 
+    // ===== Photos logic =====
+    function getPhotosArray(){
+      const arr = Array.isArray(missionData?.photos) ? missionData.photos : [];
+      return arr.filter(p => p && typeof p.url === "string" && typeof p.path === "string");
+    }
+
+    function updatePhotoCountUI(){
+      const count = getPhotosArray().length;
+      phCount.textContent = `${count}/3`;
+      if(count >= 3){
+        phHint.textContent = "Limite atteinte (3/3).";
+        photoInput.disabled = true || !!missionData?.locked;
+      }else{
+        phHint.textContent = "";
+        photoInput.disabled = !!missionData?.locked;
+      }
+    }
+
+    function renderPhotos(){
+      phGrid.innerHTML = "";
+      const photos = getPhotosArray();
+
+      for(const p of photos){
+        const card = document.createElement("div");
+        card.className = "phCard";
+        card.innerHTML = `
+          <img src="${p.url}" alt="photo">
+          <div class="phBar">
+            <a class="phBtn" href="${p.url}" target="_blank" rel="noopener">Voir</a>
+            <button class="phBtn danger" type="button">Supprimer</button>
+          </div>
+        `;
+        const delBtn = card.querySelector("button");
+        delBtn.disabled = !!missionData?.locked;
+
+        delBtn.addEventListener("click", async ()=>{
+          if(missionData?.locked) return;
+          try{
+            delBtn.disabled = true;
+            // delete storage object
+            await deleteObject(sRef(storage, p.path));
+
+            // remove from firestore (rewrite array)
+            const remaining = getPhotosArray().filter(x => x.path !== p.path);
+            await updateDoc(missionRef, {
+              photos: remaining,
+              updatedAt: serverTimestamp()
+            });
+
+            // refresh local
+            missionData.photos = remaining;
+            renderPhotos();
+            updatePhotoCountUI();
+            showToast("✅ Photo supprimée");
+          }catch(err){
+            console.error(err);
+            showToast("⛔ Erreur", "bad");
+            showAlert("Erreur suppression photo : " + (err?.message || "inconnue"));
+            delBtn.disabled = false;
+          }
+        });
+
+        phGrid.appendChild(card);
+      }
+
+      updatePhotoCountUI();
+    }
+
+    async function uploadSelectedPhotos(files){
+      if(!missionRef || !missionData) return;
+      if(missionData.locked) return showAlert("Mission verrouillée.");
+      if(!files || !files.length) return;
+
+      const existing = getPhotosArray();
+      const remainingSlots = 3 - existing.length;
+      if(remainingSlots <= 0){
+        showAlert("Limite de 3 photos atteinte.");
+        return;
+      }
+
+      const list = Array.from(files).slice(0, remainingSlots);
+
+      // verrou UI le temps upload
+      photoInput.disabled = true;
+      saveBtn.disabled = true;
+      doneBtn.disabled = true;
+
+      try{
+        for(let i=0;i<list.length;i++){
+          const file = list[i];
+
+          // path: missions/{prestationId}/{type}/{uid}/{timestamp}_{i}.jpg
+          const safeName = (file.name || "photo").replace(/[^\w.\-]+/g, "_");
+          const path = `missions/${prestationId}/${type}/${currentUser.uid}/${Date.now()}_${i}_${safeName}`;
+          const r = sRef(storage, path);
+
+          await uploadBytes(r, file, { contentType: file.type || "image/jpeg" });
+          const url = await getDownloadURL(r);
+
+          const photoObj = {
+            url,
+            path,
+            createdAt: new Date().toISOString()
+          };
+
+          // append in Firestore
+          await updateDoc(missionRef, {
+            photos: arrayUnion(photoObj),
+            updatedAt: serverTimestamp()
+          });
+
+          // keep local mirror
+          missionData.photos = [...getPhotosArray(), photoObj];
+        }
+
+        renderPhotos();
+        showToast("✅ Photo(s) ajoutée(s)");
+      }catch(err){
+        console.error(err);
+        showToast("⛔ Erreur", "bad");
+        showAlert("Erreur upload photo : " + (err?.message || "inconnue"));
+      }finally{
+        saveBtn.disabled = !!missionData?.locked;
+        doneBtn.disabled = !!missionData?.locked;
+        updatePhotoCountUI();
+      }
+    }
+
+    photoInput.addEventListener("change", async (e)=>{
+      const files = e.target.files;
+      // reset input so same file can be reselected later
+      e.target.value = "";
+      await uploadSelectedPhotos(files);
+    });
+
+    // ===== Load =====
     async function load(){
       hideAlert();
 
@@ -435,10 +610,9 @@
         return;
       }
 
-      // back link
       backAgent.href = `agent.html?token=${encodeURIComponent(token)}&prestationId=${encodeURIComponent(prestationId)}`;
 
-      // 1) token
+      // token
       const tSnap = await getDoc(doc(db, "dayTokens", token));
       if(!tSnap.exists()){
         showAlert("⛔ Token invalide.");
@@ -462,7 +636,7 @@
         return;
       }
 
-      // 2) user email check
+      // user email check
       const userEmail = normalizeEmail(currentUser?.email || "");
       if(!userEmail){
         showAlert("⛔ Compte connecté mais email manquant (Auth).");
@@ -478,7 +652,7 @@
 
       chipStatus.innerHTML = `<span class="chip ok">OK</span>`;
 
-      // 3) event
+      // event
       const eSnap = await getDoc(doc(db, "events", prestationId));
       if(!eSnap.exists()){
         showAlert("⛔ Prestation introuvable.");
@@ -487,11 +661,10 @@
       }
       eventDoc = eSnap.data() || {};
 
-      // 4) mission doc (events/{prestationId}/missions/{type})
+      // mission
       missionRef = doc(db, "events", prestationId, "missions", type);
       const mSnap = await getDoc(missionRef);
 
-      // ✅ IMPORTANT : l’agent ne crée jamais
       if(!mSnap.exists()){
         showAlert("⛔ Mission introuvable. La conciergerie doit générer les missions depuis Intervention.");
         setLockedUI(true);
@@ -500,7 +673,6 @@
 
       missionData = mSnap.data() || {};
 
-      // UI header
       const homeLine = `${eventDoc.homeName || "Logement"}${eventDoc.homeCity ? " — " + eventDoc.homeCity : ""}`;
       titleLine.textContent = missionTitle(type) + " — " + homeLine;
 
@@ -520,6 +692,7 @@
       const tpl = CHECKLIST_TEMPLATES[(type||"").toUpperCase()] || [];
       renderChecklist(tpl, missionData.checklist || {});
 
+      renderPhotos();
       setLockedUI(!!missionData.locked);
     }
 
@@ -546,8 +719,8 @@
         showToast("⛔ Erreur", "bad");
         showAlert("Erreur enregistrement : " + (err?.message || "inconnue"));
       }finally{
-        saveBtn.disabled = false;
-        doneBtn.disabled = false;
+        saveBtn.disabled = !!missionData?.locked;
+        doneBtn.disabled = !!missionData?.locked;
       }
     }
 
@@ -573,20 +746,20 @@
         });
         showToast("✅ Mission terminée");
 
-        // refresh local view
         const mSnap = await getDoc(missionRef);
         missionData = mSnap.data() || {};
         chipStatus.textContent = "status: " + ((missionData.status||"").toUpperCase() || "—");
         statusEl.value = (missionData.status||"").toUpperCase() || "A_VALIDER";
         lockedEl.value = String(!!missionData.locked);
         setLockedUI(!!missionData.locked);
+        renderPhotos();
       }catch(err){
         console.error(err);
         showToast("⛔ Erreur", "bad");
         showAlert("Erreur terminaison : " + (err?.message || "inconnue"));
       }finally{
-        saveBtn.disabled = false;
-        doneBtn.disabled = false;
+        saveBtn.disabled = !!missionData?.locked;
+        doneBtn.disabled = !!missionData?.locked;
       }
     }
 
