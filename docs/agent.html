@@ -187,20 +187,33 @@
     }
     function tokenValid(t){
       if(!t?.active) return false;
+      // ✅ priorité Timestamp si présent
+      if(t?.expiresAt?.seconds){
+        const expMs = Number(t.expiresAt.seconds) * 1000;
+        return Date.now() < expMs;
+      }
+      // fallback ISO
       if(!t?.expiresAtIso) return false;
       const exp = parseIso(t.expiresAtIso);
       if(!Number.isFinite(exp)) return false;
       return Date.now() < exp;
     }
-    function prettyExpiry(iso){
-      const t = parseIso(iso);
-      if(!Number.isFinite(t)) return "—";
-      const d = new Date(t);
+    function prettyExpiry(t){
+      // ✅ Timestamp prioritaire
+      if(t?.expiresAt?.seconds){
+        const d = new Date(Number(t.expiresAt.seconds) * 1000);
+        const pad2 = (n)=> String(n).padStart(2,"0");
+        return `${pad2(d.getDate())}/${pad2(d.getMonth()+1)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+      }
+      // fallback ISO
+      const tt = parseIso(t?.expiresAtIso);
+      if(!Number.isFinite(tt)) return "—";
+      const d = new Date(tt);
       const pad2 = (n)=> String(n).padStart(2,"0");
       return `${pad2(d.getDate())}/${pad2(d.getMonth()+1)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
     }
 
-    // mots clés check-in/out
+    // mots clés check-in/out (détection label)
     const KW_CHECKOUT = [
       "check-out","checkout","depart","départ","sortie","fin de sejour","fin de séjour",
       "recuperation","récupération","recup","récup",
@@ -209,27 +222,44 @@
     ];
     const KW_CHECKIN = [
       "check-in","checkin","arrivee","arrivée","accueil","entree","entrée",
-      "remise cles","remise clés","boite a cles","boîte a clés","boite a clés",
+      "remise cles","remise clés","boite a cles","boîte à clés","boite a clés",
       "code","digicode"
     ];
 
+    // ✅ Détection robuste sur TON modèle (lines = array, pas de category)
     function detectTypesFromLines(lines){
       const types = new Set();
-      for(const ln of (lines||[])){
-        const cat = norm(ln.category);
-        const lab = ln.label || "";
 
-        if(cat.includes("menage")) types.add("MENAGE");
-        if(cat.includes("linge") || cat.includes("blanch")) types.add("LINGE");
-        if(cat.includes("kits") || cat.includes("consomm")) types.add("KITS");
-        if(cat.includes("maintenance") || cat.includes("depannage") || cat.includes("dépannage")) types.add("MAINTENANCE");
+      for (const ln of (lines || [])) {
+        const labRaw = (ln.label || "");
+        const lab = norm(labRaw);
 
-        if(cat.includes("accueil") || cat.includes("voyageur") || cat.includes("sortie")){
-          if(hasAny(lab, KW_CHECKOUT)) types.add("CHECKOUT");
-          else if(hasAny(lab, KW_CHECKIN)) types.add("CHECKIN");
-          else types.add("CHECKIN");
+        // MENAGE
+        if (lab.includes("menage") || lab.includes("ménage")) types.add("MENAGE");
+
+        // LINGE
+        if (lab.includes("linge") || lab.includes("blanch") || lab.includes("lavage") || lab.includes("sechage") || lab.includes("séchage")) {
+          types.add("LINGE");
         }
+
+        // KITS
+        if (lab.includes("kit") || lab.includes("reassort") || lab.includes("réassort") || lab.includes("consomm")) {
+          types.add("KITS");
+        }
+
+        // MAINTENANCE
+        if (lab.includes("maintenance") || lab.includes("depannage") || lab.includes("dépannage") || lab.includes("urgence") || lab.includes("fuite") || lab.includes("serrure")) {
+          types.add("MAINTENANCE");
+        }
+
+        // CHECKIN / CHECKOUT (priorité)
+        if (hasAny(labRaw, KW_CHECKOUT)) types.add("CHECKOUT");
+        if (hasAny(labRaw, KW_CHECKIN)) types.add("CHECKIN");
       }
+
+      // fallback si lines non vides mais rien détecté
+      if (!types.size && (lines||[]).length) types.add("MENAGE");
+
       return Array.from(types);
     }
 
@@ -276,7 +306,7 @@
       const tokenDoc = tSnap.data() || {};
 
       chipToken.textContent = "token: " + token;
-      chipExpiry.textContent = "expire: " + prettyExpiry(tokenDoc.expiresAtIso);
+      chipExpiry.textContent = "expire: " + prettyExpiry(tokenDoc);
 
       if(String(tokenDoc.prestationId) !== String(prestationId)){
         showAlert("⛔ Token ≠ prestation.");
@@ -289,10 +319,10 @@
         return;
       }
 
-      // 2) email agent must match
+      // 2) email agent must match token
       const userEmail = normalizeEmail(currentUser?.email || "");
       if(!userEmail){
-        showAlert("⛔ Compte agent connecté mais email manquant (Auth).");
+        showAlert("⛔ Compte connecté mais email manquant (Auth).");
         return;
       }
       const expected = normalizeEmail(tokenDoc.agentEmail || "");
@@ -304,7 +334,7 @@
       chipStatus.innerHTML = `<span class="chip ok">OK</span>`;
       whoAmI.textContent = `Connectée : ${userEmail}`;
 
-      // 3) event
+      // 3) event (agent doit pouvoir le lire via rules)
       const eSnap = await getDoc(doc(db, "events", prestationId));
       if(!eSnap.exists()){
         showAlert("⛔ Prestation introuvable.");
@@ -318,7 +348,7 @@
         `${eventDoc.homeAddress ? " • " + eventDoc.homeAddress : ""}` +
         `\nAgent : ${(tokenDoc.agentName || "—")}${tokenDoc.agentEmail ? " • " + tokenDoc.agentEmail : ""}`;
 
-      // 4) needed mission types
+      // 4) needed mission types (sur lines)
       const needed = detectTypesFromLines(eventDoc.lines || []);
       if(!needed.length){
         subLine.textContent = "Aucune mission détectée (lines vides).";
@@ -332,7 +362,7 @@
         return;
       }
 
-      // 5) READ ONLY : l’agent ne crée rien (sinon rules = refus)
+      // 5) READ ONLY : l’agent ne crée rien
       const ms = [];
       const missing = [];
       for(const type of needed){
