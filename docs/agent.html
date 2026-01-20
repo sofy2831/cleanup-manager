@@ -120,7 +120,7 @@
   <script type="module">
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged, signOut, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-    import { doc, getDoc } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import { doc, getDoc, updateDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const alertBox = document.getElementById("alertBox");
     const subLine = document.getElementById("subLine");
@@ -148,20 +148,16 @@
     }
     function qs(name){ return new URLSearchParams(location.search).get(name) || ""; }
 
-    function parseIso(iso){ const t = Date.parse(iso || ""); return Number.isFinite(t) ? t : NaN; }
+    // tokenValid = côté JS (l’authorité c’est rules/expiresAt, mais on garde UX)
     function tokenValid(t){
-      // on ne dépend PAS des rules, mais on garde la logique JS
       if(t?.expiresAt?.seconds){
         return Date.now() < (Number(t.expiresAt.seconds) * 1000);
       }
-      const exp = parseIso(t?.expiresAtIso);
-      return Number.isFinite(exp) ? (Date.now() < exp) : true; // si pas de date => on laisse passer
+      return true;
     }
     function prettyExpiry(t){
-      let ms = NaN;
-      if(t?.expiresAt?.seconds) ms = Number(t.expiresAt.seconds) * 1000;
-      else ms = parseIso(t?.expiresAtIso);
-      if(!Number.isFinite(ms)) return "—";
+      if(!t?.expiresAt?.seconds) return "—";
+      const ms = Number(t.expiresAt.seconds) * 1000;
       const d = new Date(ms);
       const pad2 = (n)=> String(n).padStart(2,"0");
       return `${pad2(d.getDate())}/${pad2(d.getMonth()+1)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
@@ -189,6 +185,50 @@
     const prestationId = qs("prestationId");
     const ALL_TYPES = ["CHECKIN","MENAGE","CHECKOUT","LINGE","KITS","MAINTENANCE"];
 
+    let currentUser = null;
+    let tokenData = null;
+
+    async function claimTokenIfNeeded(){
+      // IMPORTANT: avec les nouvelles rules, on lie le token au UID anonymous (agentUid)
+      if(!currentUser?.uid) return;
+      if(!token) return;
+
+      const tRef = doc(db, "dayTokens", token);
+      const tSnap = await getDoc(tRef);
+      if(!tSnap.exists()) return;
+
+      const t = tSnap.data() || {};
+      tokenData = t;
+
+      // token déjà claimé par CE uid => ok
+      if(t.agentUid && String(t.agentUid) === String(currentUser.uid)) return;
+
+      // token claimé par un autre uid => KO (lien déjà ouvert sur un autre device/browser)
+      if(t.agentUid && String(t.agentUid) !== String(currentUser.uid)) {
+        throw new Error("Token déjà utilisé sur un autre appareil. Demande un nouveau lien.");
+      }
+
+      // pas claimé => on claim (rules autorisent seulement agentUid/claimedAt/lastSeenAt)
+      await updateDoc(tRef, {
+        agentUid: currentUser.uid,
+        claimedAt: serverTimestamp(),
+        lastSeenAt: serverTimestamp()
+      });
+
+      // refresh local
+      const t2 = await getDoc(tRef);
+      tokenData = t2.exists() ? (t2.data() || {}) : t;
+    }
+
+    async function touchLastSeen(){
+      if(!currentUser?.uid || !token) return;
+      try{
+        await updateDoc(doc(db, "dayTokens", token), { lastSeenAt: serverTimestamp() });
+      }catch{
+        // silence (pas bloquant)
+      }
+    }
+
     async function load(){
       hideAlert();
       missionsGrid.innerHTML = "";
@@ -197,18 +237,16 @@
       metaLine.textContent = "—";
 
       if(!token || !prestationId){
+        chipStatus.innerHTML = `<span class="chip bad">KO</span>`;
         showAlert("⛔ Paramètres manquants (token / prestationId).");
         return;
       }
 
-      const tSnap = await getDoc(doc(db, "dayTokens", token));
-      if(!tSnap.exists()){
-        chipStatus.innerHTML = `<span class="chip bad">KO</span>`;
-        showAlert("⛔ Token invalide.");
-        return;
-      }
-      const t = tSnap.data() || {};
+      // 1) read token (public get) + claim
+      await claimTokenIfNeeded();
+      await touchLastSeen();
 
+      const t = tokenData || {};
       chipToken.textContent = "token: " + token;
       chipExpiry.textContent = "expire: " + prettyExpiry(t);
 
@@ -224,8 +262,15 @@
         return;
       }
 
+      if(t.active !== true){
+        chipStatus.innerHTML = `<span class="chip bad">INACTIF</span>`;
+        showAlert("⛔ Token inactif. Demande un nouveau lien.");
+        return;
+      }
+
       chipStatus.innerHTML = `<span class="chip ok">OK</span>`;
 
+      // 2) read missions (rules: get only if token valid + agentUid match)
       const ms = [];
       for(const type of ALL_TYPES){
         const mSnap = await getDoc(doc(db, "events", prestationId, "missions", type));
@@ -296,11 +341,12 @@ ${d.agentDone ? "✔ Terminée" : "—"}
           await signInAnonymously(auth);
           return;
         }
+        currentUser = user;
         whoAmI.textContent = `${user.isAnonymous ? "anonymous" : "auth"}:${user.uid}`;
         await load();
       }catch(err){
         console.error(err);
-        showAlert("Erreur Firestore : " + (err?.message || "inconnue"));
+        showAlert("Erreur : " + (err?.message || "inconnue"));
       }
     });
   </script>
