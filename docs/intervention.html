@@ -110,7 +110,7 @@
 
       <aside class="card">
         <div style="font-weight:900;">Agent (email-link)</div>
-        <div class="mini" style="margin-top:4px;">Agent connecté obligatoire. Token = accès 24h.</div>
+        <div class="mini" style="margin-top:4px;">Agent connecté obligatoire. Token = accès 24h (lié au téléphone).</div>
 
         <div class="row">
           <div>
@@ -141,7 +141,7 @@
         <div class="mini" style="margin-top:10px;">
           Si tu vois “Missing permissions” ici :
           <br>• tu n’es pas sur le bon compte conciergerie
-          <br>• ou token/dayTokens ne match pas les rules
+          <br>• ou le doc <span class="mono">users/{uid}</span> n’a pas role=conciergerie
         </div>
       </aside>
     </div>
@@ -331,7 +331,8 @@
         });
       }else{
         await updateDoc(m.ref, {
-          dayToken: dayTokenId || (m.data?.dayToken || ""),
+          // IMPORTANT : ne jamais écraser dayToken si déjà posé (sinon tu tues l’accès agent)
+          dayToken: m.data?.dayToken || dayTokenId || "",
           assignedToEmail: event.assignedToEmail || "",
           assignedToName: event.assignedToName || "",
           updatedAt: serverTimestamp()
@@ -402,7 +403,23 @@
       const ms = await Promise.all(allTypes.map(readMission));
 
       missionsList.innerHTML = "";
-      for(const m of ms.filter(x=>x.exists)){
+      const existing = ms.filter(x=>x.exists);
+
+      if(!existing.length){
+        missionsList.innerHTML = `
+          <div class="item">
+            <div class="item-top">
+              <div>
+                <div class="item-title">Aucune mission</div>
+                <div class="item-sub">Génère un lien agent pour créer les missions automatiquement (basé sur les lines).</div>
+              </div>
+              <div><span class="chip">—</span></div>
+            </div>
+          </div>`;
+        return;
+      }
+
+      for(const m of existing){
         const d = m.data || {};
         const html = `
           <div class="item">
@@ -445,7 +462,12 @@
       const e = eSnap.data() || {};
       if(e.conciergerieUid !== currentUser.uid) return showAlert("Accès refusé.");
 
-      // 1) dayToken avec expiresAt Timestamp (24h)
+      // =============== IMPORTANT RULES MVP ===============
+      // dayTokens.create exige expiresAt Timestamp + active bool
+      // agentUid sera "claim" côté agent.html / mission.html (anonymous)
+      // =====================================================
+
+      // 1) dayToken (24h) - Timestamp obligatoire
       const tokenId = randomToken(20);
       const expiresAtDate = new Date(Date.now() + 24*60*60*1000);
 
@@ -457,10 +479,11 @@
         active: true,
         createdAt: serverTimestamp(),
         expiresAt: Timestamp.fromDate(expiresAtDate),
+        // gardé en info UI (non utilisé par rules)
         expiresAtIso: expiresAtDate.toISOString()
       });
 
-      // 2) update event
+      // 2) update event (conciergerie only)
       await updateDoc(eRef, {
         assignedToEmail: aEmail,
         assignedToName: aName,
@@ -491,7 +514,7 @@
       copyBtn.disabled = false;
       mailtoBtn.disabled = false;
 
-      showAlert("✅ Lien agent généré + missions prêtes.", true);
+      showAlert("✅ Lien agent généré + missions prêtes.\nNote : le lien sera lié au téléphone (1er appareil qui l’ouvre).", true);
     }
 
     copyBtn.addEventListener("click", async ()=>{
@@ -512,8 +535,8 @@
         `Bonjour ${agentName.value || ""},\n\n` +
         `Voici ton lien pour exécuter la mission :\n\n` +
         `${linkBox.value}\n\n` +
-        `⚠️ Tu dois être connecté(e) (lien de connexion email).\n` +
-        `Le lien/token expire sous 24h.\n\n` +
+        `⚠️ Ouvre le lien sur ton téléphone (il est lié au 1er appareil).\n` +
+        `Le token expire sous 24h.\n\n` +
         `— ${cName}`
       );
 
@@ -566,4 +589,3 @@
   </script>
 </body>
 </html>
-
