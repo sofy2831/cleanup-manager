@@ -150,12 +150,12 @@
 
     function parseIso(iso){ const t = Date.parse(iso || ""); return Number.isFinite(t) ? t : NaN; }
     function tokenValid(t){
-      if(!t?.active) return false;
+      // on ne dépend PAS des rules, mais on garde la logique JS
       if(t?.expiresAt?.seconds){
         return Date.now() < (Number(t.expiresAt.seconds) * 1000);
       }
       const exp = parseIso(t?.expiresAtIso);
-      return Number.isFinite(exp) && Date.now() < exp;
+      return Number.isFinite(exp) ? (Date.now() < exp) : true; // si pas de date => on laisse passer
     }
     function prettyExpiry(t){
       let ms = NaN;
@@ -189,8 +189,6 @@
     const prestationId = qs("prestationId");
     const ALL_TYPES = ["CHECKIN","MENAGE","CHECKOUT","LINGE","KITS","MAINTENANCE"];
 
-    let tokenDoc = null;
-
     async function load(){
       hideAlert();
       missionsGrid.innerHTML = "";
@@ -203,32 +201,31 @@
         return;
       }
 
-      // dayToken (public si actif)
       const tSnap = await getDoc(doc(db, "dayTokens", token));
       if(!tSnap.exists()){
-        showAlert("⛔ Token invalide.");
         chipStatus.innerHTML = `<span class="chip bad">KO</span>`;
+        showAlert("⛔ Token invalide.");
         return;
       }
-      tokenDoc = tSnap.data() || {};
+      const t = tSnap.data() || {};
 
       chipToken.textContent = "token: " + token;
-      chipExpiry.textContent = "expire: " + prettyExpiry(tokenDoc);
+      chipExpiry.textContent = "expire: " + prettyExpiry(t);
 
-      if(String(tokenDoc.prestationId) !== String(prestationId)){
-        showAlert("⛔ Token ≠ prestation.");
+      if(String(t.prestationId) !== String(prestationId)){
         chipStatus.innerHTML = `<span class="chip bad">KO</span>`;
+        showAlert("⛔ Token ≠ prestation.");
         return;
       }
 
-      if(!tokenValid(tokenDoc)){
+      if(!tokenValid(t)){
         chipStatus.innerHTML = `<span class="chip bad">EXPIRÉ</span>`;
-        showAlert("⛔ Token expiré (24h). Demande un nouveau lien.");
+        showAlert("⛔ Token expiré. Demande un nouveau lien.");
         return;
       }
+
       chipStatus.innerHTML = `<span class="chip ok">OK</span>`;
 
-      // missions (zéro lecture de events !)
       const ms = [];
       for(const type of ALL_TYPES){
         const mSnap = await getDoc(doc(db, "events", prestationId, "missions", type));
@@ -250,13 +247,12 @@
         return;
       }
 
-      // Header prestation depuis la 1ère mission existante
       const first = ms[0].data || {};
       homeLine.textContent = `${first.homeName || "Logement"}${first.homeCity ? " — " + first.homeCity : ""}`;
       metaLine.textContent =
         `${first.dateKey || "—"}${first.time ? " à " + first.time : ""}` +
         `${first.homeAddress ? " • " + first.homeAddress : ""}` +
-        `\nAgent : ${(tokenDoc.agentName || "—")}${tokenDoc.agentEmail ? " • " + tokenDoc.agentEmail : ""}`;
+        `\nAgent : ${(t.agentName || "—")}${t.agentEmail ? " • " + t.agentEmail : ""}`;
 
       for(const m of ms){
         const d = m.data || {};
@@ -285,7 +281,7 @@ ${d.agentDone ? "✔ Terminée" : "—"}
 
     refreshBtn.addEventListener("click", ()=> load().catch(err=>{
       console.error(err);
-      showAlert("Erreur reload : " + (err?.message || "inconnue"));
+      showAlert("Erreur Firestore : " + (err?.message || "inconnue"));
     }));
 
     resetBtn.addEventListener("click", async ()=>{
