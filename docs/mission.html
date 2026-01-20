@@ -345,21 +345,17 @@
     }
 
     function qs(name){ return new URLSearchParams(location.search).get(name) || ""; }
-    function parseIso(iso){ const t = Date.parse(iso || ""); return Number.isFinite(t) ? t : NaN; }
 
-    // côté JS : on accepte Timestamp OU expiresAtIso
     function tokenValid(t){
+      // UX only (rules check expiresAt timestamp too)
       if(t?.expiresAt?.seconds){
         return Date.now() < (Number(t.expiresAt.seconds) * 1000);
       }
-      const exp = parseIso(t?.expiresAtIso);
-      return Number.isFinite(exp) ? Date.now() < exp : true; // si pas d'expiry, on laisse passer (MVP)
+      return true;
     }
     function prettyExpiry(t){
-      let ms = NaN;
-      if(t?.expiresAt?.seconds) ms = Number(t.expiresAt.seconds) * 1000;
-      else ms = parseIso(t?.expiresAtIso);
-      if(!Number.isFinite(ms)) return "—";
+      if(!t?.expiresAt?.seconds) return "—";
+      const ms = Number(t.expiresAt.seconds) * 1000;
       const d = new Date(ms);
       const pad2 = (n)=> String(n).padStart(2,"0");
       return `${pad2(d.getDate())}/${pad2(d.getMonth()+1)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
@@ -414,7 +410,7 @@
     const type = qs("type");
 
     let currentUser = null;
-    let tokenDoc = null;
+    let tokenData = null;
     let missionRef = null;
     let missionData = null;
 
@@ -493,7 +489,7 @@
 
             const remaining = getPhotos().filter(x => x.path !== p.path);
 
-            // IMPORTANT : on renvoie le doc complet requis par les rules => on fait update mais sans toucher aux invariants
+            // rules: allowed keys include photos, updatedAt
             await updateDoc(missionRef, {
               photos: remaining,
               updatedAt: serverTimestamp()
@@ -545,7 +541,6 @@
           updated.push({ url, path, createdAt: new Date().toISOString() });
         }
 
-        // update mission (allowed keys: photos, updatedAt)
         await updateDoc(missionRef, {
           photos: updated,
           updatedAt: serverTimestamp()
@@ -575,6 +570,42 @@
       await uploadSelectedPhotos(files);
     });
 
+    async function claimTokenIfNeeded(){
+      if(!currentUser?.uid) return;
+      if(!token) return;
+
+      const tRef = doc(db, "dayTokens", token);
+      const tSnap = await getDoc(tRef);
+      if(!tSnap.exists()) throw new Error("Token invalide.");
+
+      const t = tSnap.data() || {};
+      tokenData = t;
+
+      if(t.agentUid && String(t.agentUid) === String(currentUser.uid)) return;
+
+      if(t.agentUid && String(t.agentUid) !== String(currentUser.uid)) {
+        throw new Error("Token déjà utilisé sur un autre appareil. Demande un nouveau lien.");
+      }
+
+      await updateDoc(tRef, {
+        agentUid: currentUser.uid,
+        claimedAt: serverTimestamp(),
+        lastSeenAt: serverTimestamp()
+      });
+
+      const t2 = await getDoc(tRef);
+      tokenData = t2.exists() ? (t2.data() || {}) : t;
+    }
+
+    async function touchLastSeen(){
+      if(!currentUser?.uid || !token) return;
+      try{
+        await updateDoc(doc(db, "dayTokens", token), { lastSeenAt: serverTimestamp() });
+      }catch{
+        // silence
+      }
+    }
+
     async function load(){
       hideAlert();
 
@@ -586,24 +617,24 @@
 
       backAgent.href = `agent.html?token=${encodeURIComponent(token)}&prestationId=${encodeURIComponent(prestationId)}`;
 
-      // token (public get)
-      const tSnap = await getDoc(doc(db, "dayTokens", token));
-      if(!tSnap.exists()){
-        showAlert("⛔ Token invalide.");
-        setLockedUI(true);
-        return;
-      }
-      tokenDoc = tSnap.data() || {};
+      // token (public get) + claim (rules require agentUid match for missions)
+      await claimTokenIfNeeded();
+      await touchLastSeen();
 
       chipToken.textContent = "token: " + token;
-      chipExpiry.textContent = "expire: " + prettyExpiry(tokenDoc);
+      chipExpiry.textContent = "expire: " + prettyExpiry(tokenData);
 
-      if(String(tokenDoc.prestationId) !== String(prestationId)){
+      if(String(tokenData?.prestationId) !== String(prestationId)){
         showAlert("⛔ Token ≠ prestation.");
         setLockedUI(true);
         return;
       }
-      if(!tokenValid(tokenDoc)){
+      if(tokenData?.active !== true){
+        showAlert("⛔ Token inactif. Demande un nouveau lien.");
+        setLockedUI(true);
+        return;
+      }
+      if(!tokenValid(tokenData)){
         chipStatus.innerHTML = `<span class="chip bad">EXPIRÉ</span>`;
         showAlert("⛔ Token expiré (24h). Demande un nouveau lien.");
         setLockedUI(true);
@@ -626,7 +657,7 @@
       subLine.textContent =
         `${missionData.dateKey || "—"}${missionData.time ? " à " + missionData.time : ""}` +
         `${missionData.homeAddress ? " • " + missionData.homeAddress : ""}` +
-        `\nAgent : ${(tokenDoc.agentName || "—")}${tokenDoc.agentEmail ? " • " + tokenDoc.agentEmail : ""}`;
+        `\nAgent : ${(tokenData?.agentName || "—")}${tokenData?.agentEmail ? " • " + tokenData.agentEmail : ""}`;
 
       chipType.textContent = "type: " + type.toUpperCase();
       chipStatus.textContent = "status: " + ((missionData.status||"").toUpperCase() || "—");
@@ -647,6 +678,9 @@
       hideAlert();
       if(!missionRef) return showAlert("⛔ Mission non chargée.");
       if(missionData?.locked) return showAlert("Mission verrouillée.");
+
+      // keep token alive UX
+      await touchLastSeen();
 
       const checklist = collectChecklistFromUI();
       const agentComment = (commentEl.value || "").trim();
@@ -675,6 +709,8 @@
       hideAlert();
       if(!missionRef) return showAlert("⛔ Mission non chargée.");
       if(missionData?.locked) return showAlert("Mission verrouillée.");
+
+      await touchLastSeen();
 
       const checklist = collectChecklistFromUI();
       const agentComment = (commentEl.value || "").trim();
