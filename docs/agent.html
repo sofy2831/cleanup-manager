@@ -120,7 +120,7 @@
   <script type="module">
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged, signOut, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-    import { doc, getDoc, updateDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import { doc, getDoc } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const alertBox = document.getElementById("alertBox");
     const subLine = document.getElementById("subLine");
@@ -148,16 +148,19 @@
     }
     function qs(name){ return new URLSearchParams(location.search).get(name) || ""; }
 
-    // tokenValid = côté JS (l’authorité c’est rules/expiresAt, mais on garde UX)
+    function parseIso(iso){ const t = Date.parse(iso || ""); return Number.isFinite(t) ? t : NaN; }
     function tokenValid(t){
       if(t?.expiresAt?.seconds){
         return Date.now() < (Number(t.expiresAt.seconds) * 1000);
       }
-      return true;
+      const exp = parseIso(t?.expiresAtIso);
+      return Number.isFinite(exp) ? (Date.now() < exp) : true;
     }
     function prettyExpiry(t){
-      if(!t?.expiresAt?.seconds) return "—";
-      const ms = Number(t.expiresAt.seconds) * 1000;
+      let ms = NaN;
+      if(t?.expiresAt?.seconds) ms = Number(t.expiresAt.seconds) * 1000;
+      else ms = parseIso(t?.expiresAtIso);
+      if(!Number.isFinite(ms)) return "—";
       const d = new Date(ms);
       const pad2 = (n)=> String(n).padStart(2,"0");
       return `${pad2(d.getDate())}/${pad2(d.getMonth()+1)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
@@ -183,49 +186,16 @@
 
     const token = qs("token");
     const prestationId = qs("prestationId");
-    const ALL_TYPES = ["CHECKIN","MENAGE","CHECKOUT","LINGE","KITS","MAINTENANCE"];
+    const FALLBACK_TYPES = ["CHECKIN","MENAGE","CHECKOUT","LINGE","KITS","MAINTENANCE"];
 
-    let currentUser = null;
-    let tokenData = null;
-
-    async function claimTokenIfNeeded(){
-      // IMPORTANT: avec les nouvelles rules, on lie le token au UID anonymous (agentUid)
-      if(!currentUser?.uid) return;
-      if(!token) return;
-
-      const tRef = doc(db, "dayTokens", token);
-      const tSnap = await getDoc(tRef);
-      if(!tSnap.exists()) return;
-
-      const t = tSnap.data() || {};
-      tokenData = t;
-
-      // token déjà claimé par CE uid => ok
-      if(t.agentUid && String(t.agentUid) === String(currentUser.uid)) return;
-
-      // token claimé par un autre uid => KO (lien déjà ouvert sur un autre device/browser)
-      if(t.agentUid && String(t.agentUid) !== String(currentUser.uid)) {
-        throw new Error("Token déjà utilisé sur un autre appareil. Demande un nouveau lien.");
-      }
-
-      // pas claimé => on claim (rules autorisent seulement agentUid/claimedAt/lastSeenAt)
-      await updateDoc(tRef, {
-        agentUid: currentUser.uid,
-        claimedAt: serverTimestamp(),
-        lastSeenAt: serverTimestamp()
-      });
-
-      // refresh local
-      const t2 = await getDoc(tRef);
-      tokenData = t2.exists() ? (t2.data() || {}) : t;
-    }
-
-    async function touchLastSeen(){
-      if(!currentUser?.uid || !token) return;
+    async function safeGetMission(type){
       try{
-        await updateDoc(doc(db, "dayTokens", token), { lastSeenAt: serverTimestamp() });
-      }catch{
-        // silence (pas bloquant)
+        const mSnap = await getDoc(doc(db, "events", prestationId, "missions", type));
+        return mSnap.exists() ? { id:type, data:mSnap.data() || {} } : null;
+      }catch(err){
+        // Important: on NE plante plus l'écran à cause d'un type manquant/denied
+        console.warn("Mission read failed:", type, err?.code || err?.message);
+        return null;
       }
     }
 
@@ -237,16 +207,18 @@
       metaLine.textContent = "—";
 
       if(!token || !prestationId){
-        chipStatus.innerHTML = `<span class="chip bad">KO</span>`;
         showAlert("⛔ Paramètres manquants (token / prestationId).");
         return;
       }
 
-      // 1) read token (public get) + claim
-      await claimTokenIfNeeded();
-      await touchLastSeen();
+      const tSnap = await getDoc(doc(db, "dayTokens", token));
+      if(!tSnap.exists()){
+        chipStatus.innerHTML = `<span class="chip bad">KO</span>`;
+        showAlert("⛔ Token invalide.");
+        return;
+      }
+      const t = tSnap.data() || {};
 
-      const t = tokenData || {};
       chipToken.textContent = "token: " + token;
       chipExpiry.textContent = "expire: " + prettyExpiry(t);
 
@@ -262,22 +234,15 @@
         return;
       }
 
-      if(t.active !== true){
-        chipStatus.innerHTML = `<span class="chip bad">INACTIF</span>`;
-        showAlert("⛔ Token inactif. Demande un nouveau lien.");
-        return;
-      }
-
       chipStatus.innerHTML = `<span class="chip ok">OK</span>`;
 
-      // 2) read missions (rules: get only if token valid + agentUid match)
-      const ms = [];
-      for(const type of ALL_TYPES){
-        const mSnap = await getDoc(doc(db, "events", prestationId, "missions", type));
-        if(mSnap.exists()){
-          ms.push({ id:type, data:mSnap.data() || {} });
-        }
-      }
+      // ✅ Types depuis le token si dispo, sinon fallback (sans planter)
+      const TYPES = Array.isArray(t.missionTypes) && t.missionTypes.length
+        ? t.missionTypes.map(x => String(x||"").toUpperCase())
+        : FALLBACK_TYPES;
+
+      const results = await Promise.all(TYPES.map(safeGetMission));
+      const ms = results.filter(Boolean);
 
       subLine.textContent = "Prestation #" + prestationId + " — " + ms.length + " mission(s)";
 
@@ -285,8 +250,12 @@
         missionsGrid.innerHTML = `
           <div class="mcard">
             <div class="m-left">
-              <div class="m-title">Aucune mission</div>
-              <div class="m-sub">La conciergerie doit générer les missions depuis Intervention.</div>
+              <div class="m-title">Aucune mission affichable</div>
+              <div class="m-sub">
+Soit la conciergerie n'a pas généré les missions,
+soit le token ne contient pas missionTypes,
+soit les rules refusent la lecture.
+              </div>
             </div>
           </div>`;
         return;
@@ -341,12 +310,11 @@ ${d.agentDone ? "✔ Terminée" : "—"}
           await signInAnonymously(auth);
           return;
         }
-        currentUser = user;
         whoAmI.textContent = `${user.isAnonymous ? "anonymous" : "auth"}:${user.uid}`;
         await load();
       }catch(err){
         console.error(err);
-        showAlert("Erreur : " + (err?.message || "inconnue"));
+        showAlert("Erreur Firestore : " + (err?.message || "inconnue"));
       }
     });
   </script>
