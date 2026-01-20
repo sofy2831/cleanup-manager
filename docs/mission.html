@@ -251,7 +251,7 @@
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
-      doc, getDoc, setDoc, updateDoc,
+      doc, getDoc, updateDoc,
       serverTimestamp
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
@@ -297,31 +297,38 @@
     }
 
     function qs(name){ return new URLSearchParams(location.search).get(name) || ""; }
-
-    function norm(s){
-      return (s||"").toString().trim().toLowerCase()
-        .normalize("NFD").replace(/[\u0300-\u036f]/g,"");
-    }
+    function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
 
     function parseIso(iso){
       const t = Date.parse(iso || "");
       return Number.isFinite(t) ? t : NaN;
     }
-
-    function prettyExpiry(iso){
-      const t = parseIso(iso);
-      if(!Number.isFinite(t)) return "—";
-      const d = new Date(t);
-      const pad2 = (n)=> String(n).padStart(2,"0");
-      return `${pad2(d.getDate())}/${pad2(d.getMonth()+1)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
-    }
-
     function tokenValid(t){
       if(!t?.active) return false;
+      // ✅ priorité Timestamp si présent
+      if(t?.expiresAt?.seconds){
+        const expMs = Number(t.expiresAt.seconds) * 1000;
+        return Date.now() < expMs;
+      }
+      // fallback ISO
       if(!t?.expiresAtIso) return false;
       const exp = parseIso(t.expiresAtIso);
       if(!Number.isFinite(exp)) return false;
       return Date.now() < exp;
+    }
+    function prettyExpiry(t){
+      // ✅ Timestamp prioritaire
+      if(t?.expiresAt?.seconds){
+        const d = new Date(Number(t.expiresAt.seconds) * 1000);
+        const pad2 = (n)=> String(n).padStart(2,"0");
+        return `${pad2(d.getDate())}/${pad2(d.getMonth()+1)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+      }
+      // fallback ISO
+      const tt = parseIso(t?.expiresAtIso);
+      if(!Number.isFinite(tt)) return "—";
+      const d = new Date(tt);
+      const pad2 = (n)=> String(n).padStart(2,"0");
+      return `${pad2(d.getDate())}/${pad2(d.getMonth()+1)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
     }
 
     function missionTitle(type){
@@ -335,7 +342,7 @@
       return t || "Mission";
     }
 
-    // Templates checklists simples (tu pourras enrichir depuis ton doc categories)
+    // Templates checklists simples (tu peux enrichir ensuite)
     const CHECKLIST_TEMPLATES = {
       CHECKIN: [
         { key:"arrivee_ok", label:"Arrivée / accueil", sub:"Voyageurs accueillis ou instructions données" },
@@ -371,7 +378,7 @@
 
     const token = qs("token");
     const prestationId = qs("prestationId");
-    const type = qs("type"); // IMPORTANT: plus de missionId, on utilise type (doc id)
+    const type = qs("type"); // docId mission = TYPE
 
     let currentUser = null;
     let tokenDoc = null;
@@ -424,49 +431,58 @@
 
       if(!token || !prestationId || !type){
         showAlert("⛔ Paramètres manquants (token / prestationId / type).");
+        setLockedUI(true);
         return;
       }
 
-      // link back
+      // back link
       backAgent.href = `agent.html?token=${encodeURIComponent(token)}&prestationId=${encodeURIComponent(prestationId)}`;
 
       // 1) token
       const tSnap = await getDoc(doc(db, "dayTokens", token));
       if(!tSnap.exists()){
         showAlert("⛔ Token invalide.");
+        setLockedUI(true);
         return;
       }
       tokenDoc = tSnap.data() || {};
 
       chipToken.textContent = "token: " + token;
-      chipExpiry.textContent = "expire: " + prettyExpiry(tokenDoc.expiresAtIso);
+      chipExpiry.textContent = "expire: " + prettyExpiry(tokenDoc);
 
       if(String(tokenDoc.prestationId) !== String(prestationId)){
         showAlert("⛔ Token ≠ prestation.");
+        setLockedUI(true);
         return;
       }
       if(!tokenValid(tokenDoc)){
         chipStatus.innerHTML = `<span class="chip bad">EXPIRÉ</span>`;
         showAlert("⛔ Token expiré (24h). Demande un nouveau lien.");
+        setLockedUI(true);
         return;
       }
 
       // 2) user email check
-      const userEmail = (currentUser?.email || "").toLowerCase();
+      const userEmail = normalizeEmail(currentUser?.email || "");
       if(!userEmail){
-        showAlert("⛔ Compte agent connecté mais email manquant (Auth).");
+        showAlert("⛔ Compte connecté mais email manquant (Auth).");
+        setLockedUI(true);
         return;
       }
-      const expected = (tokenDoc.agentEmail || "").toLowerCase();
+      const expected = normalizeEmail(tokenDoc.agentEmail || "");
       if(expected && userEmail !== expected){
         showAlert("⛔ Mauvais compte : connecte-toi avec " + expected);
+        setLockedUI(true);
         return;
       }
+
+      chipStatus.innerHTML = `<span class="chip ok">OK</span>`;
 
       // 3) event
       const eSnap = await getDoc(doc(db, "events", prestationId));
       if(!eSnap.exists()){
         showAlert("⛔ Prestation introuvable.");
+        setLockedUI(true);
         return;
       }
       eventDoc = eSnap.data() || {};
@@ -474,31 +490,15 @@
       // 4) mission doc (events/{prestationId}/missions/{type})
       missionRef = doc(db, "events", prestationId, "missions", type);
       const mSnap = await getDoc(missionRef);
+
+      // ✅ IMPORTANT : l’agent ne crée jamais
       if(!mSnap.exists()){
-        // on crée une mission minimale si elle n'existe pas
-        const base = {
-          conciergerieUid: eventDoc.conciergerieUid || "",
-          prestationId: prestationId,
-          dayToken: token,
-          assignedToEmail: tokenDoc.agentEmail || "",
-          assignedToName: tokenDoc.agentName || "",
-          dateKey: eventDoc.dateKey || eventDoc.date || "",
-          time: eventDoc.time || "",
-          homeName: eventDoc.homeName || "",
-          homeCity: eventDoc.homeCity || "",
-          homeAddress: eventDoc.homeAddress || "",
-          type: type,
-          status: "ASSIGNEE",
-          locked: false,
-          checklist: {},
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp()
-        };
-        await setDoc(missionRef, base);
+        showAlert("⛔ Mission introuvable. La conciergerie doit générer les missions depuis Intervention.");
+        setLockedUI(true);
+        return;
       }
 
-      const mSnap2 = await getDoc(missionRef);
-      missionData = mSnap2.data() || {};
+      missionData = mSnap.data() || {};
 
       // UI header
       const homeLine = `${eventDoc.homeName || "Logement"}${eventDoc.homeCity ? " — " + eventDoc.homeCity : ""}`;
@@ -572,11 +572,14 @@
           updatedAt: serverTimestamp()
         });
         showToast("✅ Mission terminée");
-        // reload to show locked status if conciergerie later locks; here we just refresh local UI
+
+        // refresh local view
         const mSnap = await getDoc(missionRef);
         missionData = mSnap.data() || {};
         chipStatus.textContent = "status: " + ((missionData.status||"").toUpperCase() || "—");
         statusEl.value = (missionData.status||"").toUpperCase() || "A_VALIDER";
+        lockedEl.value = String(!!missionData.locked);
+        setLockedUI(!!missionData.locked);
       }catch(err){
         console.error(err);
         showToast("⛔ Erreur", "bad");
@@ -593,18 +596,17 @@
     logoutBtn.addEventListener("click", async ()=>{
       await signOut(auth);
       localStorage.removeItem("cm_auth");
-      const next = encodeURIComponent(location.href);
-      location.href = `login.html?role=agent&next=${next}`;
+      location.href = `login-agent.html?next=${encodeURIComponent(location.href)}`;
     });
 
     onAuthStateChanged(auth, async (user)=>{
       if(!token || !prestationId || !type){
         showAlert("⛔ Paramètres manquants (token / prestationId / type).");
+        setLockedUI(true);
         return;
       }
       if(!user){
-        const next = encodeURIComponent(location.href);
-        location.href = `login.html?role=agent&next=${next}`;
+        location.href = `login-agent.html?next=${encodeURIComponent(location.href)}`;
         return;
       }
       currentUser = user;
@@ -614,6 +616,7 @@
       }catch(err){
         console.error(err);
         showAlert("Erreur chargement mission : " + (err?.message || "inconnue"));
+        setLockedUI(true);
       }
     });
   </script>
