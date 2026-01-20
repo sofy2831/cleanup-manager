@@ -192,21 +192,37 @@
     function qs(name){ return new URLSearchParams(location.search).get(name) || ""; }
     function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
 
-    function parseIso(iso){
-      const t = Date.parse(iso || "");
-      return Number.isFinite(t) ? t : NaN;
+    // ✅ expMs prioritaire, sinon Timestamp, sinon iso
+    function tokenExpiresMs(t){
+      const ms = Number(t?.expiresAtMs);
+      if(Number.isFinite(ms) && ms > 0) return ms;
+
+      // Firestore Timestamp (object avec seconds/nanoseconds)
+      const ts = t?.expiresAt;
+      if(ts && typeof ts === "object"){
+        const sec = Number(ts.seconds);
+        const nano = Number(ts.nanoseconds || 0);
+        if(Number.isFinite(sec) && sec > 0){
+          return sec * 1000 + Math.floor(nano / 1e6);
+        }
+      }
+
+      // fallback iso
+      const iso = (t?.expiresAtIso || "").toString();
+      const parsed = Date.parse(iso);
+      return Number.isFinite(parsed) ? parsed : NaN;
     }
+
     function tokenValid(t){
       if(!t?.active) return false;
-      if(!t?.expiresAtIso) return false;
-      const exp = parseIso(t.expiresAtIso);
+      const exp = tokenExpiresMs(t);
       if(!Number.isFinite(exp)) return false;
       return Date.now() < exp;
     }
-    function prettyExpiry(iso){
-      const t = parseIso(iso);
-      if(!Number.isFinite(t)) return "—";
-      const d = new Date(t);
+
+    function prettyFromMs(ms){
+      if(!Number.isFinite(ms)) return "—";
+      const d = new Date(ms);
       const pad2 = (n)=> String(n).padStart(2,"0");
       return `${pad2(d.getDate())}/${pad2(d.getMonth()+1)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
     }
@@ -245,7 +261,6 @@
     let eventDoc = null;
 
     async function ensureMissionExists(type){
-      // Au cas où (mais normalement intervention les crée déjà)
       const mRef = doc(db, "events", prestationId, "missions", type);
       const mSnap = await getDoc(mRef);
       if(mSnap.exists()) return;
@@ -272,9 +287,6 @@
     }
 
     function checklistToArray(cl){
-      // support checklist as:
-      // - array [{label, done}] or ["..."]
-      // - map { key: {label, done}, ... } or { key: true/false }
       if(!cl) return [];
       if(Array.isArray(cl)){
         return cl.map((x,i)=>{
@@ -297,7 +309,6 @@
     }
 
     function arrayToChecklistObject(items){
-      // store as map: { key: {label, done} }
       const obj = {};
       for(const it of items){
         obj[it.key] = { label: it.label, done: !!it.done };
@@ -324,7 +335,7 @@
       tokenDoc = tSnap.data() || {};
 
       chipToken.textContent = "token: " + token;
-      chipExpiry.textContent = "expire: " + prettyExpiry(tokenDoc.expiresAtIso);
+      chipExpiry.textContent = "expire: " + prettyFromMs(tokenExpiresMs(tokenDoc));
 
       if(String(tokenDoc.prestationId) !== String(prestationId)){
         showAlert("⛔ Token ≠ prestation.");
@@ -333,7 +344,7 @@
 
       if(!tokenValid(tokenDoc)){
         chipStatus.innerHTML = `<span class="chip bad">EXPIRÉ</span>`;
-        showAlert("⛔ Token expiré (24h). Demande un nouveau lien.");
+        showAlert("⛔ Token expiré. Demande un nouveau lien.");
         return;
       }
 
@@ -370,12 +381,10 @@
       // 4) missions
       const TYPES = ["CHECKIN","MENAGE","CHECKOUT"];
 
-      // (sécurité) si elles n'existent pas, on les crée
       for(const t of TYPES){
         await ensureMissionExists(t);
       }
 
-      // read + render
       const missions = [];
       for(const t of TYPES){
         const mSnap = await getDoc(doc(db, "events", prestationId, "missions", t));
@@ -401,7 +410,7 @@
         const status = (d.status || "").toUpperCase() || "—";
 
         const items = checklistToArray(d.checklist);
-        // si checklist vide : on affiche quand même un bloc propre
+
         const checklistHtml = items.length
           ? items.map((it, idx)=>{
               const id = `chk_${m.id}_${idx}`;
@@ -454,12 +463,10 @@
           hideAlert();
           const type = m.id;
 
-          // rebuild checklist map from DOM
           const box = wrap.querySelector(`.checklist[data-m="${type}"]`);
           const checks = Array.from(box.querySelectorAll('input[type="checkbox"][data-k]'));
           const newItems = checks.map(ch => {
             const key = ch.getAttribute("data-k");
-            // label = find corresponding label text (best effort)
             const labelEl = box.querySelector(`label[for="${ch.id}"]`);
             const label = labelEl ? labelEl.textContent.trim() : key;
             return { key, label, done: !!ch.checked };
