@@ -76,7 +76,7 @@
   <div class="page">
     <div class="topbar">
       <span class="pill">Agent</span>
-      <button class="pill" id="logoutBtn" type="button">Réinitialiser</button>
+      <button class="pill" id="resetBtn" type="button">Réinitialiser</button>
     </div>
 
     <div class="wrap">
@@ -132,7 +132,7 @@
     const chipExpiry = document.getElementById("chipExpiry");
     const chipStatus = document.getElementById("chipStatus");
 
-    const logoutBtn = document.getElementById("logoutBtn");
+    const resetBtn = document.getElementById("resetBtn");
     const refreshBtn = document.getElementById("refreshBtn");
     const whoAmI = document.getElementById("whoAmI");
 
@@ -191,7 +191,11 @@
 
     let currentUser = null;
     let tokenDoc = null;
-    let eventDoc = null;
+
+    function firstNonEmpty(arr){
+      for(const x of arr) if(x) return x;
+      return "";
+    }
 
     async function load(){
       hideAlert();
@@ -203,7 +207,7 @@
         return;
       }
 
-      // token doc
+      // token doc (public get)
       const tSnap = await getDoc(doc(db, "dayTokens", token));
       if(!tSnap.exists()){
         showAlert("⛔ Token invalide.");
@@ -229,26 +233,16 @@
 
       chipStatus.innerHTML = `<span class="chip ok">OK</span>`;
 
-      // event
-      const eSnap = await getDoc(doc(db, "events", prestationId));
-      if(!eSnap.exists()){
-        showAlert("⛔ Prestation introuvable.");
-        return;
-      }
-      eventDoc = eSnap.data() || {};
-
-      homeLine.textContent = `${eventDoc.homeName || "Logement"}${eventDoc.homeCity ? " — " + eventDoc.homeCity : ""}`;
-      metaLine.textContent =
-        `${eventDoc.dateKey || eventDoc.date || "—"}${eventDoc.time ? " à " + eventDoc.time : ""}` +
-        `${eventDoc.homeAddress ? " • " + eventDoc.homeAddress : ""}` +
-        `\nAgent : ${(tokenDoc.agentName || "—")}${tokenDoc.agentEmail ? " • " + tokenDoc.agentEmail : ""}`;
-
       // read missions by known types; only those existing are shown (zéro fantôme)
       const ms = [];
       for(const type of ALL_TYPES){
         const mSnap = await getDoc(doc(db, "events", prestationId, "missions", type));
         if(mSnap.exists()){
-          ms.push({ id: type, data: mSnap.data() || {} });
+          const d = mSnap.data() || {};
+          // sécurité minimale : mission liée au token
+          if(String(d.dayToken || "") === String(token)){
+            ms.push({ id: type, data: d });
+          }
         }
       }
 
@@ -258,11 +252,21 @@
           <div class="mcard">
             <div class="m-left">
               <div class="m-title">Aucune mission</div>
-              <div class="m-sub">La conciergerie doit générer les missions depuis Intervention.</div>
+              <div class="m-sub">La conciergerie doit générer les missions (ou token non lié).</div>
             </div>
           </div>`;
+        homeLine.textContent = "—";
+        metaLine.textContent = "—";
         return;
       }
+
+      // on affiche les infos prestation depuis la 1ère mission (elles sont dupliquées dans chaque mission)
+      const any = ms[0].data || {};
+      homeLine.textContent = `${any.homeName || "Logement"}${any.homeCity ? " — " + any.homeCity : ""}`;
+      metaLine.textContent =
+        `${any.dateKey || "—"}${any.time ? " à " + any.time : ""}` +
+        `${any.homeAddress ? " • " + any.homeAddress : ""}` +
+        `\nAgent : ${(tokenDoc.agentName || "—")}${tokenDoc.agentEmail ? " • " + tokenDoc.agentEmail : ""}`;
 
       for(const m of ms){
         const d = m.data || {};
@@ -294,8 +298,7 @@ ${d.agentDone ? "✔ Terminée" : "—"}
       showAlert("Erreur reload : " + (err?.message || "inconnue"));
     }));
 
-    // “Réinitialiser” : coupe la session anonyme locale
-    logoutBtn.addEventListener("click", async ()=>{
+    resetBtn.addEventListener("click", async ()=>{
       await signOut(auth);
       localStorage.removeItem("cm_auth");
       location.reload();
@@ -305,7 +308,7 @@ ${d.agentDone ? "✔ Terminée" : "—"}
       try{
         if(!user){
           await signInAnonymously(auth);
-          return; // onAuthStateChanged sera relancé
+          return; // relance
         }
         currentUser = user;
         whoAmI.textContent = `${user.isAnonymous ? "anonymous" : "auth"}:${user.uid}`;
