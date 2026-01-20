@@ -104,6 +104,10 @@
           <div style="margin-top:6px;font-weight:900;font-size:14px;" id="homeLine">—</div>
           <div class="mini" id="metaLine" style="margin-top:4px;white-space:pre-wrap;">—</div>
         </div>
+
+        <div class="mini" style="margin-top:10px;">
+          missionTypes : <span class="mono" id="typesLine">—</span>
+        </div>
       </section>
 
       <section class="card">
@@ -135,6 +139,7 @@
     const resetBtn = document.getElementById("resetBtn");
     const refreshBtn = document.getElementById("refreshBtn");
     const whoAmI = document.getElementById("whoAmI");
+    const typesLine = document.getElementById("typesLine");
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -186,14 +191,12 @@
 
     const token = qs("token");
     const prestationId = qs("prestationId");
-    const FALLBACK_TYPES = ["CHECKIN","MENAGE","CHECKOUT","LINGE","KITS","MAINTENANCE"];
 
     async function safeGetMission(type){
       try{
         const mSnap = await getDoc(doc(db, "events", prestationId, "missions", type));
         return mSnap.exists() ? { id:type, data:mSnap.data() || {} } : null;
       }catch(err){
-        // Important: on NE plante plus l'écran à cause d'un type manquant/denied
         console.warn("Mission read failed:", type, err?.code || err?.message);
         return null;
       }
@@ -205,6 +208,7 @@
       subLine.textContent = "Chargement…";
       homeLine.textContent = "—";
       metaLine.textContent = "—";
+      typesLine.textContent = "—";
 
       if(!token || !prestationId){
         showAlert("⛔ Paramètres manquants (token / prestationId).");
@@ -219,9 +223,8 @@
       }
       const t = tSnap.data() || {};
       console.log("TOKEN DOC", t);
-console.log("missionTypes?", t.missionTypes);
+      console.log("missionTypes?", t.missionTypes);
 
-      
       chipToken.textContent = "token: " + token;
       chipExpiry.textContent = "expire: " + prettyExpiry(t);
 
@@ -239,47 +242,44 @@ console.log("missionTypes?", t.missionTypes);
 
       chipStatus.innerHTML = `<span class="chip ok">OK</span>`;
 
-      // ✅ Types depuis le token (obligatoire pour éviter de tester 6 docs)
-const TYPES = Array.isArray(t.missionTypes) && t.missionTypes.length
-  ? t.missionTypes.map(x => String(x || "").toUpperCase())
-  : [];
+      // ✅ Types depuis le token (pas de fallback : on évite les lectures inutiles)
+      const TYPES = Array.isArray(t.missionTypes) && t.missionTypes.length
+        ? t.missionTypes.map(x => String(x || "").toUpperCase())
+        : [];
 
-if(!TYPES.length){
-  subLine.textContent = "Prestation #" + prestationId + " — 0 mission(s)";
-  missionsGrid.innerHTML = `
-    <div class="mcard">
-      <div class="m-left">
-        <div class="m-title">Aucune mission (token incomplet)</div>
-        <div class="m-sub">
-Le token ne contient pas <b>missionTypes</b>.
-Regénère le lien depuis Intervention.
-        </div>
-      </div>
-    </div>`;
-  return;
-}
+      typesLine.textContent = TYPES.length ? TYPES.join(",") : "—";
 
-// Lire uniquement les missions listées
-const results = await Promise.all(TYPES.map(safeGetMission));
-const ms = results.filter(Boolean);
+      if(!TYPES.length){
+        subLine.textContent = "Prestation #" + prestationId + " — 0 mission(s)";
+        missionsGrid.innerHTML = `
+          <div class="mcard">
+            <div class="m-left">
+              <div class="m-title">Aucune mission (token incomplet)</div>
+              <div class="m-sub">Le token ne contient pas <b>missionTypes</b>. Regénère le lien depuis Intervention.</div>
+            </div>
+          </div>`;
+        return;
+      }
 
-subLine.textContent = "Prestation #" + prestationId + " — " + ms.length + " mission(s)";
+      const results = await Promise.all(TYPES.map(safeGetMission));
+      const ms = results.filter(Boolean);
 
-if(!ms.length){
-  missionsGrid.innerHTML = `
-    <div class="mcard">
-      <div class="m-left">
-        <div class="m-title">Aucune mission affichable</div>
-        <div class="m-sub">
+      subLine.textContent = "Prestation #" + prestationId + " — " + ms.length + " mission(s)";
+
+      if(!ms.length){
+        missionsGrid.innerHTML = `
+          <div class="mcard">
+            <div class="m-left">
+              <div class="m-title">Aucune mission affichable</div>
+              <div class="m-sub">
 Les missions existent peut-être côté conciergerie, mais l’agent ne peut pas les lire (rules) ou elles n’existent pas sur ce <b>prestationId</b>.
-        </div>
-      </div>
-    </div>`;
-  return;
-}
+              </div>
+            </div>
+          </div>`;
+        return;
+      }
 
-const first = ms[0].data || {};
-
+      const first = ms[0].data || {};
       homeLine.textContent = `${first.homeName || "Logement"}${first.homeCity ? " — " + first.homeCity : ""}`;
       metaLine.textContent =
         `${first.dateKey || "—"}${first.time ? " à " + first.time : ""}` +
@@ -306,7 +306,7 @@ ${d.agentDone ? "✔ Terminée" : "—"}
         missionsGrid.appendChild(div);
 
         div.querySelector("button[data-open]")?.addEventListener("click", ()=>{
-          location.href = `mission.html?token=${encodeURIComponent(token)}&prestationId=${encodeURIComponent(prestationId)}&type=${encodeURIComponent(m.id)}`;
+          location.href = `mission.html?token=${encodeURIComponent(token)}&prestationId=${encodeURIComponent(prestationId)}&type=${encodeURIComponent(m.id)}&v=${encodeURIComponent(qs("v") || Date.now())}`;
         });
       }
     }
@@ -338,5 +338,3 @@ ${d.agentDone ? "✔ Terminée" : "—"}
   </script>
 </body>
 </html>
-
-
