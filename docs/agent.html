@@ -95,10 +95,6 @@
 
         <div class="alert" id="alertBox"></div>
 
-        <div class="mini" style="margin-top:10px;">
-          Session : <span class="mono" id="whoAmI">—</span>
-        </div>
-
         <div style="margin-top:10px;">
           <div class="mini">Prestation</div>
           <div style="margin-top:6px;font-weight:900;font-size:14px;" id="homeLine">—</div>
@@ -134,7 +130,6 @@
 
     const resetBtn = document.getElementById("resetBtn");
     const refreshBtn = document.getElementById("refreshBtn");
-    const whoAmI = document.getElementById("whoAmI");
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -189,25 +184,23 @@
     const prestationId = qs("prestationId");
     const ALL_TYPES = ["CHECKIN","MENAGE","CHECKOUT","LINGE","KITS","MAINTENANCE"];
 
-    let currentUser = null;
     let tokenDoc = null;
-
-    function firstNonEmpty(arr){
-      for(const x of arr) if(x) return x;
-      return "";
-    }
+    let headerFromFirstMission = null;
 
     async function load(){
       hideAlert();
       missionsGrid.innerHTML = "";
       subLine.textContent = "Chargement…";
+      homeLine.textContent = "—";
+      metaLine.textContent = "—";
+      headerFromFirstMission = null;
 
       if(!token || !prestationId){
         showAlert("⛔ Paramètres manquants (token / prestationId).");
         return;
       }
 
-      // token doc (public get)
+      // 1) token doc (public get)
       const tSnap = await getDoc(doc(db, "dayTokens", token));
       if(!tSnap.exists()){
         showAlert("⛔ Token invalide.");
@@ -233,40 +226,41 @@
 
       chipStatus.innerHTML = `<span class="chip ok">OK</span>`;
 
-      // read missions by known types; only those existing are shown (zéro fantôme)
+      // 2) missions
       const ms = [];
       for(const type of ALL_TYPES){
         const mSnap = await getDoc(doc(db, "events", prestationId, "missions", type));
         if(mSnap.exists()){
           const d = mSnap.data() || {};
-          // sécurité minimale : mission liée au token
+          // IMPORTANT : on ne montre que les missions qui ont le bon token
           if(String(d.dayToken || "") === String(token)){
             ms.push({ id: type, data: d });
+            if(!headerFromFirstMission) headerFromFirstMission = d;
           }
         }
       }
 
       subLine.textContent = "Prestation #" + prestationId + " — " + ms.length + " mission(s)";
+
+      if(headerFromFirstMission){
+        const d = headerFromFirstMission;
+        homeLine.textContent = `${d.homeName || "Logement"}${d.homeCity ? " — " + d.homeCity : ""}`;
+        metaLine.textContent =
+          `${d.dateKey || d.date || "—"}${d.time ? " à " + d.time : ""}` +
+          `${d.homeAddress ? " • " + d.homeAddress : ""}` +
+          `\nAgent : ${(tokenDoc.agentName || "—")}${tokenDoc.agentEmail ? " • " + tokenDoc.agentEmail : ""}`;
+      }
+
       if(!ms.length){
         missionsGrid.innerHTML = `
           <div class="mcard">
             <div class="m-left">
               <div class="m-title">Aucune mission</div>
-              <div class="m-sub">La conciergerie doit générer les missions (ou token non lié).</div>
+              <div class="m-sub">Soit la conciergerie n’a pas généré les missions, soit le token ne correspond pas au dayToken de la mission.</div>
             </div>
           </div>`;
-        homeLine.textContent = "—";
-        metaLine.textContent = "—";
         return;
       }
-
-      // on affiche les infos prestation depuis la 1ère mission (elles sont dupliquées dans chaque mission)
-      const any = ms[0].data || {};
-      homeLine.textContent = `${any.homeName || "Logement"}${any.homeCity ? " — " + any.homeCity : ""}`;
-      metaLine.textContent =
-        `${any.dateKey || "—"}${any.time ? " à " + any.time : ""}` +
-        `${any.homeAddress ? " • " + any.homeAddress : ""}` +
-        `\nAgent : ${(tokenDoc.agentName || "—")}${tokenDoc.agentEmail ? " • " + tokenDoc.agentEmail : ""}`;
 
       for(const m of ms){
         const d = m.data || {};
@@ -308,14 +302,12 @@ ${d.agentDone ? "✔ Terminée" : "—"}
       try{
         if(!user){
           await signInAnonymously(auth);
-          return; // relance
+          return;
         }
-        currentUser = user;
-        whoAmI.textContent = `${user.isAnonymous ? "anonymous" : "auth"}:${user.uid}`;
         await load();
       }catch(err){
         console.error(err);
-        showAlert("Erreur auth : " + (err?.message || "inconnue"));
+        showAlert("Erreur Firestore : " + (err?.message || "inconnue"));
       }
     });
   </script>
