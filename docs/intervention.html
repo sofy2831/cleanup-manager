@@ -110,7 +110,7 @@
 
       <aside class="card">
         <div style="font-weight:900;">Agent (email-link)</div>
-        <div class="mini" style="margin-top:4px;">Agent connecté obligatoire. Token = accès 24h.</div>
+        <div class="mini" style="margin-top:4px;">Token = accès 24h. (Lien avec anti-cache mobile.)</div>
 
         <div class="row">
           <div>
@@ -139,9 +139,10 @@
         </div>
 
         <div class="mini" style="margin-top:10px;">
-          Si tu vois “Missing permissions” ici :
-          <br>• tu n’es pas sur le bon compte conciergerie
-          <br>• ou token/dayTokens ne match pas les rules
+          Si tu vois “Missing permissions” :
+          <br>• mauvais compte conciergerie
+          <br>• ou rules missions/dayTokens incorrectes
+          <br>• ou cache mobile (résolu par v=… dans l’URL)
         </div>
       </aside>
     </div>
@@ -188,10 +189,7 @@
       alertBox.textContent = "";
     }
     function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
-
-    function qs(name){
-      return new URLSearchParams(location.search).get(name) || "";
-    }
+    function qs(name){ return new URLSearchParams(location.search).get(name) || ""; }
 
     const prestationId = qs("prestationId") || qs("eventId") || "";
     let currentUser = null;
@@ -204,7 +202,6 @@
       return u;
     }
 
-    // Token friendly (pas de 0/O/I/1)
     function randomToken(len=20){
       const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
       const arr = new Uint32Array(len);
@@ -227,7 +224,6 @@
       return (s||"").toString().trim().toLowerCase()
         .normalize("NFD").replace(/[\u0300-\u036f]/g,"");
     }
-
     function hasAny(label, arr){
       const x = norm(label);
       return arr.some(k => x.includes(norm(k)));
@@ -387,7 +383,6 @@
       }
 
       subLine.textContent = "Prestation #" + prestationId;
-
       homeLine.textContent = `${e.homeName || "Logement"}${e.homeCity ? " — "+e.homeCity : ""}`;
       metaLine.textContent = `${e.dateKey || e.date || "—"}${e.time ? " à "+e.time : ""}${e.homeAddress ? " • "+e.homeAddress : ""} • status: ${(e.status||"").toUpperCase() || "—"}`;
 
@@ -444,14 +439,14 @@
       const e = eSnap.data() || {};
       if(e.conciergerieUid !== currentUser.uid) return showAlert("Accès refusé.");
 
-      // 1) missions needed (AVANT dayTokens)
+      // 1) needed missions (AVANT token)
       const needed = detectTypesFromLines(e.lines || []);
       if(!needed.length){
         showAlert("Aucune mission détectée.\nAjoute des lines (prestations) pour générer les missions.");
         return;
       }
 
-      // 2) dayToken (expiresAt Timestamp) + missionTypes
+      // 2) create token (expiresAt Timestamp + missionTypes)
       const tokenId = randomToken(20);
       const expiresAtDate = new Date(Date.now() + 24*60*60*1000);
 
@@ -462,18 +457,12 @@
         agentName: aName,
         active: true,
         createdAt: serverTimestamp(),
-
-        // required by your design (JS checks + rules friendly)
         expiresAt: Timestamp.fromDate(expiresAtDate),
-
-        // ✅ crucial: agent reads only these mission types
-        missionTypes: needed,
-
-        // optional UX/debug
-        expiresAtIso: expiresAtDate.toISOString()
+        expiresAtIso: expiresAtDate.toISOString(),
+        missionTypes: needed
       });
 
-      // 3) update event (assigne agent)
+      // 3) update event
       await updateDoc(eRef, {
         assignedToEmail: aEmail,
         assignedToName: aName,
@@ -481,15 +470,16 @@
         updatedAt: serverTimestamp()
       });
 
-      // 4) create/update missions
+      // 4) create/maj missions
       for(const type of needed){
         await ensureMission({ ...e, assignedToEmail:aEmail, assignedToName:aName }, type, tokenId);
       }
 
-      // 5) link
+      // 5) link + anti-cache (v=)
       const params = new URLSearchParams();
       params.set("token", tokenId);
       params.set("prestationId", prestationId);
+      params.set("v", String(Date.now())); // ✅ anti-cache mobile
 
       const base = location.href.split("?")[0];
       const link = base.replace("intervention.html", "agent.html") + "?" + params.toString();
