@@ -45,26 +45,13 @@
     .chip.ok{ background:rgba(27,143,77,0.16); color:var(--ok); }
     .chip.bad{ background:rgba(179,38,30,0.14); color:var(--bad); }
 
-    .grid{
-      display:grid;
-      grid-template-columns:1fr;
-      gap:10px;
-      margin-top:10px;
-    }
-    @media(min-width:820px){
-      .grid{ grid-template-columns: 1fr 1fr; }
-    }
+    .grid{ display:grid; grid-template-columns:1fr; gap:10px; margin-top:10px; }
+    @media(min-width:820px){ .grid{ grid-template-columns: 1fr 1fr; } }
 
     .mcard{
-      background:#fff;
-      border-radius:16px;
-      border:1px solid rgba(0,0,0,0.03);
-      box-shadow:0 3px 10px rgba(0,0,0,.06);
-      padding:10px;
-      display:flex;
-      justify-content:space-between;
-      gap:10px;
-      align-items:flex-start;
+      background:#fff; border-radius:16px; border:1px solid rgba(0,0,0,0.03);
+      box-shadow:0 3px 10px rgba(0,0,0,.06); padding:10px;
+      display:flex; justify-content:space-between; gap:10px; align-items:flex-start;
     }
     .m-left{ min-width:0; }
     .m-title{ font-size:13px; font-weight:900; color:#222; }
@@ -72,19 +59,14 @@
     .m-actions{ display:flex; flex-direction:column; gap:6px; align-items:flex-end; flex-shrink:0; }
 
     .btn{
-      border:none; border-radius:999px;
-      padding:9px 12px;
-      font-size:13px; font-weight:900;
-      cursor:pointer;
+      border:none; border-radius:999px; padding:9px 12px;
+      font-size:13px; font-weight:900; cursor:pointer;
       background:linear-gradient(90deg,var(--violet),var(--violet2));
-      color:#fff;
-      box-shadow:0 10px 22px rgba(0,0,0,0.10);
-      white-space:nowrap;
+      color:#fff; box-shadow:0 10px 22px rgba(0,0,0,0.10); white-space:nowrap;
     }
     .btn.ghost{
       background:#fff; color:var(--violet);
-      border:2px solid var(--violet);
-      box-shadow:0 3px 10px rgba(0,0,0,.06);
+      border:2px solid var(--violet); box-shadow:0 3px 10px rgba(0,0,0,.06);
     }
     .btn:disabled{ opacity:.6; cursor:not-allowed; }
   </style>
@@ -94,7 +76,7 @@
   <div class="page">
     <div class="topbar">
       <span class="pill">Agent</span>
-      <button class="pill" id="logoutBtn" type="button">Déconnexion</button>
+      <button class="pill" id="logoutBtn" type="button">Réinitialiser</button>
     </div>
 
     <div class="wrap">
@@ -114,7 +96,7 @@
         <div class="alert" id="alertBox"></div>
 
         <div class="mini" style="margin-top:10px;">
-          <span id="whoAmI">—</span>
+          Session : <span class="mono" id="whoAmI">—</span>
         </div>
 
         <div style="margin-top:10px;">
@@ -129,19 +111,15 @@
           <div style="font-weight:900;">Missions</div>
           <button class="btn ghost" id="refreshBtn" type="button">Rafraîchir</button>
         </div>
-        <div class="mini" style="margin-top:6px;">
-          Clique sur une mission pour ouvrir la checklist.
-        </div>
+        <div class="mini" style="margin-top:6px;">Clique sur une mission pour ouvrir la checklist.</div>
         <div class="grid" id="missionsGrid"></div>
       </section>
     </div>
   </div>
 
   <script type="module">
-    const nextUrl = encodeURIComponent(location.href);
-
     import { auth, db } from "./firebase-init.js";
-    import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+    import { onAuthStateChanged, signOut, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import { doc, getDoc } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const alertBox = document.getElementById("alertBox");
@@ -168,99 +146,25 @@
       alertBox.classList.remove("ok");
       alertBox.textContent = "";
     }
-
     function qs(name){ return new URLSearchParams(location.search).get(name) || ""; }
-    function norm(s){
-      return (s||"").toString().trim().toLowerCase()
-        .normalize("NFD").replace(/[\u0300-\u036f]/g,"");
-    }
-    function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
 
-    function hasAny(label, arr){
-      const x = norm(label);
-      return arr.some(k => x.includes(norm(k)));
-    }
-
-    function parseIso(iso){
-      const t = Date.parse(iso || "");
-      return Number.isFinite(t) ? t : NaN;
-    }
+    function parseIso(iso){ const t = Date.parse(iso || ""); return Number.isFinite(t) ? t : NaN; }
     function tokenValid(t){
       if(!t?.active) return false;
-      // ✅ priorité Timestamp si présent
       if(t?.expiresAt?.seconds){
-        const expMs = Number(t.expiresAt.seconds) * 1000;
-        return Date.now() < expMs;
+        return Date.now() < (Number(t.expiresAt.seconds) * 1000);
       }
-      // fallback ISO
-      if(!t?.expiresAtIso) return false;
-      const exp = parseIso(t.expiresAtIso);
-      if(!Number.isFinite(exp)) return false;
-      return Date.now() < exp;
+      const exp = parseIso(t?.expiresAtIso);
+      return Number.isFinite(exp) && Date.now() < exp;
     }
     function prettyExpiry(t){
-      // ✅ Timestamp prioritaire
-      if(t?.expiresAt?.seconds){
-        const d = new Date(Number(t.expiresAt.seconds) * 1000);
-        const pad2 = (n)=> String(n).padStart(2,"0");
-        return `${pad2(d.getDate())}/${pad2(d.getMonth()+1)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
-      }
-      // fallback ISO
-      const tt = parseIso(t?.expiresAtIso);
-      if(!Number.isFinite(tt)) return "—";
-      const d = new Date(tt);
+      let ms = NaN;
+      if(t?.expiresAt?.seconds) ms = Number(t.expiresAt.seconds) * 1000;
+      else ms = parseIso(t?.expiresAtIso);
+      if(!Number.isFinite(ms)) return "—";
+      const d = new Date(ms);
       const pad2 = (n)=> String(n).padStart(2,"0");
       return `${pad2(d.getDate())}/${pad2(d.getMonth()+1)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
-    }
-
-    // mots clés check-in/out (détection label)
-    const KW_CHECKOUT = [
-      "check-out","checkout","depart","départ","sortie","fin de sejour","fin de séjour",
-      "recuperation","récupération","recup","récup",
-      "retour cles","retour clés","recup cles","récup clés","recuperer cles","récupérer clés",
-      "rendre cles","rendre clés","badges","badge","changer code","changement code","code change"
-    ];
-    const KW_CHECKIN = [
-      "check-in","checkin","arrivee","arrivée","accueil","entree","entrée",
-      "remise cles","remise clés","boite a cles","boîte à clés","boite a clés",
-      "code","digicode"
-    ];
-
-    // ✅ Détection robuste sur TON modèle (lines = array, pas de category)
-    function detectTypesFromLines(lines){
-      const types = new Set();
-
-      for (const ln of (lines || [])) {
-        const labRaw = (ln.label || "");
-        const lab = norm(labRaw);
-
-        // MENAGE
-        if (lab.includes("menage") || lab.includes("ménage")) types.add("MENAGE");
-
-        // LINGE
-        if (lab.includes("linge") || lab.includes("blanch") || lab.includes("lavage") || lab.includes("sechage") || lab.includes("séchage")) {
-          types.add("LINGE");
-        }
-
-        // KITS
-        if (lab.includes("kit") || lab.includes("reassort") || lab.includes("réassort") || lab.includes("consomm")) {
-          types.add("KITS");
-        }
-
-        // MAINTENANCE
-        if (lab.includes("maintenance") || lab.includes("depannage") || lab.includes("dépannage") || lab.includes("urgence") || lab.includes("fuite") || lab.includes("serrure")) {
-          types.add("MAINTENANCE");
-        }
-
-        // CHECKIN / CHECKOUT (priorité)
-        if (hasAny(labRaw, KW_CHECKOUT)) types.add("CHECKOUT");
-        if (hasAny(labRaw, KW_CHECKIN)) types.add("CHECKIN");
-      }
-
-      // fallback si lines non vides mais rien détecté
-      if (!types.size && (lines||[]).length) types.add("MENAGE");
-
-      return Array.from(types);
     }
 
     function missionTitle(type){
@@ -273,7 +177,6 @@
       if(t==="MAINTENANCE") return "Maintenance";
       return t || "Mission";
     }
-
     function chipFor(st){
       const s = (st||"").toUpperCase();
       if(s==="VALIDEE") return `<span class="chip ok">VALIDÉE</span>`;
@@ -284,8 +187,11 @@
 
     const token = qs("token");
     const prestationId = qs("prestationId");
+    const ALL_TYPES = ["CHECKIN","MENAGE","CHECKOUT","LINGE","KITS","MAINTENANCE"];
 
     let currentUser = null;
+    let tokenDoc = null;
+    let eventDoc = null;
 
     async function load(){
       hideAlert();
@@ -297,19 +203,21 @@
         return;
       }
 
-      // 1) token
+      // token doc
       const tSnap = await getDoc(doc(db, "dayTokens", token));
       if(!tSnap.exists()){
         showAlert("⛔ Token invalide.");
+        chipStatus.innerHTML = `<span class="chip bad">KO</span>`;
         return;
       }
-      const tokenDoc = tSnap.data() || {};
+      tokenDoc = tSnap.data() || {};
 
       chipToken.textContent = "token: " + token;
       chipExpiry.textContent = "expire: " + prettyExpiry(tokenDoc);
 
       if(String(tokenDoc.prestationId) !== String(prestationId)){
         showAlert("⛔ Token ≠ prestation.");
+        chipStatus.innerHTML = `<span class="chip bad">KO</span>`;
         return;
       }
 
@@ -319,28 +227,15 @@
         return;
       }
 
-      // 2) email agent must match token
-      const userEmail = normalizeEmail(currentUser?.email || "");
-      if(!userEmail){
-        showAlert("⛔ Compte connecté mais email manquant (Auth).");
-        return;
-      }
-      const expected = normalizeEmail(tokenDoc.agentEmail || "");
-      if(expected && userEmail !== expected){
-        showAlert("⛔ Mauvais compte : connecte-toi avec " + expected);
-        return;
-      }
-
       chipStatus.innerHTML = `<span class="chip ok">OK</span>`;
-      whoAmI.textContent = `Connectée : ${userEmail}`;
 
-      // 3) event (agent doit pouvoir le lire via rules)
+      // event
       const eSnap = await getDoc(doc(db, "events", prestationId));
       if(!eSnap.exists()){
         showAlert("⛔ Prestation introuvable.");
         return;
       }
-      const eventDoc = eSnap.data() || {};
+      eventDoc = eSnap.data() || {};
 
       homeLine.textContent = `${eventDoc.homeName || "Logement"}${eventDoc.homeCity ? " — " + eventDoc.homeCity : ""}`;
       metaLine.textContent =
@@ -348,40 +243,27 @@
         `${eventDoc.homeAddress ? " • " + eventDoc.homeAddress : ""}` +
         `\nAgent : ${(tokenDoc.agentName || "—")}${tokenDoc.agentEmail ? " • " + tokenDoc.agentEmail : ""}`;
 
-      // 4) needed mission types (sur lines)
-      const needed = detectTypesFromLines(eventDoc.lines || []);
-      if(!needed.length){
-        subLine.textContent = "Aucune mission détectée (lines vides).";
+      // read missions by known types; only those existing are shown (zéro fantôme)
+      const ms = [];
+      for(const type of ALL_TYPES){
+        const mSnap = await getDoc(doc(db, "events", prestationId, "missions", type));
+        if(mSnap.exists()){
+          ms.push({ id: type, data: mSnap.data() || {} });
+        }
+      }
+
+      subLine.textContent = "Prestation #" + prestationId + " — " + ms.length + " mission(s)";
+      if(!ms.length){
         missionsGrid.innerHTML = `
           <div class="mcard">
             <div class="m-left">
               <div class="m-title">Aucune mission</div>
-              <div class="m-sub">La conciergerie doit ajouter des prestations (lines) et générer les missions.</div>
+              <div class="m-sub">La conciergerie doit générer les missions depuis Intervention.</div>
             </div>
           </div>`;
         return;
       }
 
-      // 5) READ ONLY : l’agent ne crée rien
-      const ms = [];
-      const missing = [];
-      for(const type of needed){
-        const mSnap = await getDoc(doc(db, "events", prestationId, "missions", type));
-        if(mSnap.exists()) ms.push({ id: type, data: mSnap.data() || {} });
-        else missing.push(type);
-      }
-
-      if(missing.length){
-        showAlert(
-          "⚠️ Missions non générées côté conciergerie : " + missing.join(", ") +
-          "\n➡️ La conciergerie doit regénérer les missions depuis Intervention.",
-          false
-        );
-      }
-
-      subLine.textContent = "Prestation #" + prestationId + " — " + ms.length + " mission(s)";
-
-      missionsGrid.innerHTML = "";
       for(const m of ms){
         const d = m.data || {};
         const div = document.createElement("div");
@@ -402,8 +284,7 @@ ${d.agentDone ? "✔ Terminée" : "—"}
         missionsGrid.appendChild(div);
 
         div.querySelector("button[data-open]")?.addEventListener("click", ()=>{
-          const type = m.id;
-          location.href = `mission.html?token=${encodeURIComponent(token)}&prestationId=${encodeURIComponent(prestationId)}&type=${encodeURIComponent(type)}`;
+          location.href = `mission.html?token=${encodeURIComponent(token)}&prestationId=${encodeURIComponent(prestationId)}&type=${encodeURIComponent(m.id)}`;
         });
       }
     }
@@ -413,28 +294,25 @@ ${d.agentDone ? "✔ Terminée" : "—"}
       showAlert("Erreur reload : " + (err?.message || "inconnue"));
     }));
 
+    // “Réinitialiser” : coupe la session anonyme locale
     logoutBtn.addEventListener("click", async ()=>{
       await signOut(auth);
       localStorage.removeItem("cm_auth");
-      location.href = `login-agent.html?next=${encodeURIComponent(location.href)}`;
+      location.reload();
     });
 
     onAuthStateChanged(auth, async (user)=>{
-      if(!token || !prestationId){
-        showAlert("⛔ Paramètres manquants (token / prestationId).");
-        return;
-      }
-      if(!user){
-        location.href = `login-agent.html?next=${nextUrl}`;
-        return;
-      }
-      currentUser = user;
-
       try{
+        if(!user){
+          await signInAnonymously(auth);
+          return; // onAuthStateChanged sera relancé
+        }
+        currentUser = user;
+        whoAmI.textContent = `${user.isAnonymous ? "anonymous" : "auth"}:${user.uid}`;
         await load();
       }catch(err){
         console.error(err);
-        showAlert("Erreur chargement agent : " + (err?.message || "inconnue"));
+        showAlert("Erreur auth : " + (err?.message || "inconnue"));
       }
     });
   </script>
