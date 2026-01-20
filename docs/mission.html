@@ -223,6 +223,7 @@
 
       <section class="card">
         <div class="grid">
+          <
           <div class="check">
             <h2>Checklist</h2>
             <div class="hint">Coche ce que tu as fait. Tu peux enregistrer à tout moment.</div>
@@ -258,11 +259,22 @@
               <h2>Photos (max 3)</h2>
               <div class="hint">Ajoute maxi jusqu’à 3 photos.</div>
             </div>
-            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
-    <button class="btn ghost" id="pickPhotosBtn" type="button">Sélectionner photos</button>
-    <span class="mini" id="pickedInfo">Aucun fichier</span>
-  </div>
+
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+              <button class="btn ghost" id="pickPhotosBtn" type="button">Sélectionner photos</button>
+              <span class="phCount" id="phCount">0/3</span>
+              <span class="mini" id="pickedInfo">Aucun fichier</span>
+            </div>
           </div>
+
+          <!-- IMPORTANT: pas display:none -->
+          <input
+            id="photoInput"
+            type="file"
+            accept="image/*"
+            multiple
+            style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0;"
+          />
 
           <div class="phGrid" id="phGrid"></div>
           <div class="hint" id="phHint" style="margin-top:8px;"></div>
@@ -315,6 +327,8 @@
     const toast = document.getElementById("toast");
 
     // Photos UI
+    const pickPhotosBtn = document.getElementById("pickPhotosBtn");
+    const pickedInfo = document.getElementById("pickedInfo");
     const photoInput = document.getElementById("photoInput");
     const phGrid = document.getElementById("phGrid");
     const phCount = document.getElementById("phCount");
@@ -425,13 +439,14 @@
     let eventDoc = null;
     let missionRef = null;
     let missionData = null;
+    let uploadBusy = false;
 
     function setLockedUI(locked){
-      saveBtn.disabled = !!locked;
-      doneBtn.disabled = !!locked;
-      photoInput.disabled = !!locked;
-      saveBtn.style.opacity = locked ? "0.7" : "1";
-      doneBtn.style.opacity = locked ? "0.7" : "1";
+      saveBtn.disabled = !!locked || uploadBusy;
+      doneBtn.disabled = !!locked || uploadBusy;
+      pickPhotosBtn.disabled = !!locked || uploadBusy;
+      saveBtn.style.opacity = (locked || uploadBusy) ? "0.7" : "1";
+      doneBtn.style.opacity = (locked || uploadBusy) ? "0.7" : "1";
     }
 
     function renderChecklist(template, savedChecklist){
@@ -476,10 +491,8 @@
       phCount.textContent = `${count}/3`;
       if(count >= 3){
         phHint.textContent = "Limite atteinte (3/3).";
-        photoInput.disabled = true || !!missionData?.locked;
       }else{
         phHint.textContent = "";
-        photoInput.disabled = !!missionData?.locked;
       }
     }
 
@@ -498,23 +511,24 @@
           </div>
         `;
         const delBtn = card.querySelector("button");
-        delBtn.disabled = !!missionData?.locked;
+        delBtn.disabled = !!missionData?.locked || uploadBusy;
 
         delBtn.addEventListener("click", async ()=>{
           if(missionData?.locked) return;
+          if(uploadBusy) return;
+
           try{
-            delBtn.disabled = true;
-            // delete storage object
+            uploadBusy = true;
+            setLockedUI(!!missionData?.locked);
+
             await deleteObject(sRef(storage, p.path));
 
-            // remove from firestore (rewrite array)
             const remaining = getPhotosArray().filter(x => x.path !== p.path);
             await updateDoc(missionRef, {
               photos: remaining,
               updatedAt: serverTimestamp()
             });
 
-            // refresh local
             missionData.photos = remaining;
             renderPhotos();
             updatePhotoCountUI();
@@ -523,7 +537,9 @@
             console.error(err);
             showToast("⛔ Erreur", "bad");
             showAlert("Erreur suppression photo : " + (err?.message || "inconnue"));
-            delBtn.disabled = false;
+          }finally{
+            uploadBusy = false;
+            setLockedUI(!!missionData?.locked);
           }
         });
 
@@ -547,37 +563,31 @@
 
       const list = Array.from(files).slice(0, remainingSlots);
 
-      // verrou UI le temps upload
-      photoInput.disabled = true;
-      saveBtn.disabled = true;
-      doneBtn.disabled = true;
-
       try{
+        uploadBusy = true;
+        setLockedUI(!!missionData?.locked);
+
         for(let i=0;i<list.length;i++){
           const file = list[i];
-
-          // path: missions/{prestationId}/{type}/{uid}/{timestamp}_{i}.jpg
           const safeName = (file.name || "photo").replace(/[^\w.\-]+/g, "_");
+
           const path = `missions/${prestationId}/${type}/${currentUser.uid}/${Date.now()}_${i}_${safeName}`;
           const r = sRef(storage, path);
 
           await uploadBytes(r, file, { contentType: file.type || "image/jpeg" });
           const url = await getDownloadURL(r);
 
-          const photoObj = {
-            url,
-            path,
-            createdAt: new Date().toISOString()
-          };
+          const photoObj = { url, path, createdAt: new Date().toISOString() };
 
-          // append in Firestore
+          // NOTE: arrayUnion is ok even with multiple uploads
           await updateDoc(missionRef, {
             photos: arrayUnion(photoObj),
             updatedAt: serverTimestamp()
           });
 
-          // keep local mirror
-          missionData.photos = [...getPhotosArray(), photoObj];
+          // mirror local without duplicating
+          const merged = [...getPhotosArray(), photoObj];
+          missionData.photos = merged;
         }
 
         renderPhotos();
@@ -587,17 +597,32 @@
         showToast("⛔ Erreur", "bad");
         showAlert("Erreur upload photo : " + (err?.message || "inconnue"));
       }finally{
-        saveBtn.disabled = !!missionData?.locked;
-        doneBtn.disabled = !!missionData?.locked;
-        updatePhotoCountUI();
+        uploadBusy = false;
+        setLockedUI(!!missionData?.locked);
       }
     }
 
+    pickPhotosBtn.addEventListener("click", ()=>{
+      if(uploadBusy) return;
+      if(missionData?.locked) return;
+      pickedInfo.textContent = "Ouverture…";
+      photoInput.click();
+      setTimeout(()=>{
+        // si user annule, on remet le texte
+        pickedInfo.textContent = "Aucun fichier";
+      }, 600);
+    });
+
     photoInput.addEventListener("change", async (e)=>{
-      const files = e.target.files;
-      // reset input so same file can be reselected later
-      e.target.value = "";
+      const files = Array.from(e.target.files || []);
+      e.target.value = ""; // allow same file again
+      if(!files.length){
+        pickedInfo.textContent = "Aucun fichier";
+        return;
+      }
+      pickedInfo.textContent = `${Math.min(files.length, 3)} fichier(s) sélectionné(s)`;
       await uploadSelectedPhotos(files);
+      pickedInfo.textContent = "Aucun fichier";
     });
 
     // ===== Load =====
@@ -700,6 +725,7 @@
       hideAlert();
       if(!missionRef) return showAlert("⛔ Mission non chargée.");
       if(missionData?.locked) return showAlert("Mission verrouillée.");
+      if(uploadBusy) return showAlert("Upload photo en cours…");
 
       const checklist = collectChecklistFromUI();
       const agentComment = (commentEl.value || "").trim();
@@ -719,8 +745,7 @@
         showToast("⛔ Erreur", "bad");
         showAlert("Erreur enregistrement : " + (err?.message || "inconnue"));
       }finally{
-        saveBtn.disabled = !!missionData?.locked;
-        doneBtn.disabled = !!missionData?.locked;
+        setLockedUI(!!missionData?.locked);
       }
     }
 
@@ -728,6 +753,7 @@
       hideAlert();
       if(!missionRef) return showAlert("⛔ Mission non chargée.");
       if(missionData?.locked) return showAlert("Mission verrouillée.");
+      if(uploadBusy) return showAlert("Upload photo en cours…");
 
       const checklist = collectChecklistFromUI();
       const agentComment = (commentEl.value || "").trim();
@@ -751,6 +777,7 @@
         chipStatus.textContent = "status: " + ((missionData.status||"").toUpperCase() || "—");
         statusEl.value = (missionData.status||"").toUpperCase() || "A_VALIDER";
         lockedEl.value = String(!!missionData.locked);
+
         setLockedUI(!!missionData.locked);
         renderPhotos();
       }catch(err){
@@ -758,8 +785,7 @@
         showToast("⛔ Erreur", "bad");
         showAlert("Erreur terminaison : " + (err?.message || "inconnue"));
       }finally{
-        saveBtn.disabled = !!missionData?.locked;
-        doneBtn.disabled = !!missionData?.locked;
+        setLockedUI(!!missionData?.locked);
       }
     }
 
@@ -795,4 +821,3 @@
   </script>
 </body>
 </html>
-
