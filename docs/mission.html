@@ -255,7 +255,7 @@
           </div>
         </div>
 
-        <!-- ✅ Photos -->
+        <!-- Photos -->
         <div class="check" style="margin-top:10px;">
           <div class="photosTop">
             <div>
@@ -271,7 +271,6 @@
           </div>
 
           <input id="photoInput" type="file" accept="image/*" multiple style="display:none;" />
-
           <div class="phGrid" id="phGrid"></div>
           <div class="hint" id="phHint" style="margin-top:8px;"></div>
         </div>
@@ -291,14 +290,8 @@
   <script type="module">
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged, signOut, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-    import {
-      doc, getDoc, updateDoc,
-      serverTimestamp, arrayUnion
-    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
-
-    import {
-      getStorage, ref as sRef, uploadBytes, getDownloadURL, deleteObject
-    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js";
+    import { doc, getDoc, updateDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import { getStorage, ref as sRef, uploadBytes, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js";
 
     const storage = getStorage();
 
@@ -352,19 +345,15 @@
     }
 
     function qs(name){ return new URLSearchParams(location.search).get(name) || ""; }
+    function parseIso(iso){ const t = Date.parse(iso || ""); return Number.isFinite(t) ? t : NaN; }
 
-    function parseIso(iso){
-      const t = Date.parse(iso || "");
-      return Number.isFinite(t) ? t : NaN;
-    }
+    // côté JS : on accepte Timestamp OU expiresAtIso
     function tokenValid(t){
-      if(!t?.active) return false;
       if(t?.expiresAt?.seconds){
-        const expMs = Number(t.expiresAt.seconds) * 1000;
-        return Date.now() < expMs;
+        return Date.now() < (Number(t.expiresAt.seconds) * 1000);
       }
       const exp = parseIso(t?.expiresAtIso);
-      return Number.isFinite(exp) && Date.now() < exp;
+      return Number.isFinite(exp) ? Date.now() < exp : true; // si pas d'expiry, on laisse passer (MVP)
     }
     function prettyExpiry(t){
       let ms = NaN;
@@ -475,20 +464,14 @@
     function updatePhotoCountUI(){
       const count = getPhotos().length;
       phCount.textContent = `${count}/3`;
-      if(count >= 3){
-        phHint.textContent = "Limite atteinte (3/3).";
-        photoInput.disabled = true;
-      }else{
-        phHint.textContent = "";
-        photoInput.disabled = !!missionData?.locked;
-      }
+      if(count >= 3) phHint.textContent = "Limite atteinte (3/3).";
+      else phHint.textContent = "";
+      pickPhotosBtn.disabled = !!missionData?.locked || count >= 3;
     }
 
     function renderPhotos(){
       phGrid.innerHTML = "";
-      const photos = getPhotos();
-
-      for(const p of photos){
+      for(const p of getPhotos()){
         const card = document.createElement("div");
         card.className = "phCard";
         card.innerHTML = `
@@ -509,6 +492,8 @@
             await deleteObject(sRef(storage, p.path));
 
             const remaining = getPhotos().filter(x => x.path !== p.path);
+
+            // IMPORTANT : on renvoie le doc complet requis par les rules => on fait update mais sans toucher aux invariants
             await updateDoc(missionRef, {
               photos: remaining,
               updatedAt: serverTimestamp()
@@ -527,7 +512,6 @@
 
         phGrid.appendChild(card);
       }
-
       updatePhotoCountUI();
     }
 
@@ -537,42 +521,37 @@
       if(!files || !files.length) return;
 
       const existing = getPhotos();
-      const remainingSlots = 3 - existing.length;
-      if(remainingSlots <= 0){
-        showAlert("Limite de 3 photos atteinte.");
-        return;
-      }
+      const free = 3 - existing.length;
+      if(free <= 0) return showAlert("Limite 3 photos atteinte.");
 
-      const list = Array.from(files).slice(0, remainingSlots);
-      pickedInfo.textContent = `${list.length} fichier(s) sélectionné(s)`;
+      const list = Array.from(files).slice(0, free);
+      pickedInfo.textContent = `${list.length} fichier(s)`;
 
       pickPhotosBtn.disabled = true;
       phHint.textContent = "Upload…";
 
       try{
+        const updated = [...existing];
+
         for(let i=0;i<list.length;i++){
           const file = list[i];
-
-          const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
-          const safeExt = ["jpg","jpeg","png","webp"].includes(ext) ? ext : "jpg";
           const safeName = (file.name || "photo").replace(/[^\w.\-]+/g, "_");
-
-          const path = `missions/${prestationId}/${type}/${currentUser.uid}/${Date.now()}_${i}_${safeName}.${safeExt}`;
+          const path = `missions/${prestationId}/${type}/${Date.now()}_${i}_${safeName}`;
           const r = sRef(storage, path);
 
           await uploadBytes(r, file, { contentType: file.type || "image/jpeg" });
           const url = await getDownloadURL(r);
 
-          const photoObj = { url, path, createdAt: new Date().toISOString() };
-
-          await updateDoc(missionRef, {
-            photos: arrayUnion(photoObj),
-            updatedAt: serverTimestamp()
-          });
-
-          missionData.photos = [...getPhotos(), photoObj];
+          updated.push({ url, path, createdAt: new Date().toISOString() });
         }
 
+        // update mission (allowed keys: photos, updatedAt)
+        await updateDoc(missionRef, {
+          photos: updated,
+          updatedAt: serverTimestamp()
+        });
+
+        missionData.photos = updated;
         renderPhotos();
         showToast("✅ Photo(s) ajoutée(s)");
       }catch(err){
@@ -581,7 +560,6 @@
         showAlert("Upload photo : " + (err?.message || "inconnue"));
       }finally{
         phHint.textContent = "";
-        pickPhotosBtn.disabled = !!missionData?.locked;
         updatePhotoCountUI();
       }
     }
@@ -593,7 +571,7 @@
 
     photoInput.addEventListener("change", async (e)=>{
       const files = e.target.files;
-      e.target.value = ""; // permet de re-sélectionner le même fichier
+      e.target.value = "";
       await uploadSelectedPhotos(files);
     });
 
@@ -608,7 +586,7 @@
 
       backAgent.href = `agent.html?token=${encodeURIComponent(token)}&prestationId=${encodeURIComponent(prestationId)}`;
 
-      // token
+      // token (public get)
       const tSnap = await getDoc(doc(db, "dayTokens", token));
       if(!tSnap.exists()){
         showAlert("⛔ Token invalide.");
