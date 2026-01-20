@@ -245,6 +245,10 @@
       align-items:center;
       justify-content:center;
     }
+    .mini-btn.primary{
+      background:linear-gradient(90deg,var(--violet-main),var(--violet-dark));
+      color:#fff;
+    }
     .mini-btn.red{ background:#ffe3ec; color:var(--bad); }
     .mini-btn.disabled{
       opacity:.45;
@@ -341,7 +345,6 @@
     <div class="topbar">
       <a class="pill-link" href="conciergerie.html">← Tableau de bord</a>
       <div style="display:flex; gap:8px; align-items:center;">
-        <a class="pill-link primary" href="planning.html">Planning</a>
         <button class="pill-link" id="logoutBtn" type="button">Déconnexion</button>
       </div>
     </div>
@@ -507,42 +510,10 @@
     let allHomes = [];
     let showArchived = false;
 
-    let planningOkByHome = {}; // homeId -> boolean
     let editingHomeId = null;
 
     function isArchived(h){
       return h?.status === "archived";
-    }
-
-    async function computePlanningOk(homeIds){
-      const result = {};
-      await Promise.all(homeIds.map(async (hid)=>{
-        try{
-          // events ?
-          const qEv = query(
-            collection(db,"events"),
-            where("conciergerieUid","==", currentUid),
-            where("homeId","==", hid),
-            limit(1)
-          );
-          const sEv = await getDocs(qEv);
-          if(!sEv.empty){ result[hid] = true; return; }
-
-          // icalEvents ?
-          const qIc = query(
-            collection(db,"icalEvents"),
-            where("conciergerieUid","==", currentUid),
-            where("homeId","==", hid),
-            limit(1)
-          );
-          const sIc = await getDocs(qIc);
-          result[hid] = !sIc.empty;
-        }catch(e){
-          // fail-open
-          result[hid] = true;
-        }
-      }));
-      return result;
     }
 
     async function loadHomes(){
@@ -570,7 +541,6 @@
           return tb - ta;
         });
 
-        planningOkByHome = await computePlanningOk(allHomes.map(h=>h.id));
         render();
       }catch(err){
         console.error("Erreur lecture homes:", err);
@@ -641,10 +611,9 @@
         const ownerLabel = h.ownerName || h.ownerEmail || "—";
         const statusChip = isArchived(h) ? `<span class="chip">Archivé</span>` : "";
 
-        const canPlan = !!planningOkByHome[h.id];
-        const planningBtn = canPlan
-          ? `<a class="mini-btn" href="planning.html?homeId=${encodeURIComponent(h.id)}">Planning</a>`
-          : `<span class="mini-btn disabled">Planning</span>`;
+        const createBookingBtn = isArchived(h)
+          ? `<span class="mini-btn disabled">Créer une réservation</span>`
+          : `<a class="mini-btn primary" href="planning.html?homeId=${encodeURIComponent(h.id)}">Créer une réservation</a>`;
 
         item.innerHTML = `
           <div class="item-top">
@@ -658,7 +627,7 @@
               </div>
             </div>
             <div class="item-actions">
-              ${planningBtn}
+              ${createBookingBtn}
               <button class="mini-btn red" type="button" data-delete="${h.id}">Supprimer</button>
               ${
                 isArchived(h)
@@ -771,7 +740,6 @@
           try{
             await deleteDoc(doc(db,"homes", id));
             allHomes = allHomes.filter(x=>x.id !== id);
-            delete planningOkByHome[id];
             render();
             showAlert("✅ Logement supprimé définitivement.", true);
           }catch(err){
