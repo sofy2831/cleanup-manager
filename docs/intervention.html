@@ -43,6 +43,7 @@
     .btn.primary{ color:#fff; background:linear-gradient(90deg,var(--violet),var(--violet2)); box-shadow:0 10px 22px rgba(0,0,0,0.10); }
     .btn.ghost{ background:#fff; color:var(--violet); border:2px solid var(--violet); box-shadow:0 3px 10px rgba(0,0,0,.06); }
     .btn.danger{ background:#ffe3ec; color:var(--bad); border:2px solid #ffc2d6; box-shadow:0 3px 10px rgba(0,0,0,.06); }
+    .btn:disabled{ opacity:.6; cursor:not-allowed; }
     .mini{ font-size:11px; font-weight:900; color:var(--muted); }
     .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size:12px; }
     .chip{ display:inline-flex; align-items:center; gap:6px; padding:4px 9px; border-radius:999px; background:rgba(122,92,255,0.12); color:#5b45c8; font-size:11px; font-weight:900; }
@@ -94,7 +95,7 @@
       <!-- RIGHT: assign agent + generate link -->
       <aside class="card">
         <div style="font-weight:900;">Agent (lien email)</div>
-        <div class="mini" style="margin-top:4px;">Token 24h. L’agent doit être connecté (email-link) côté agent.</div>
+        <div class="mini" style="margin-top:4px;">Token 24h. L’agent ouvre le lien (sans login).</div>
 
         <div class="row">
           <div>
@@ -123,9 +124,9 @@
         </div>
 
         <div class="mini" style="margin-top:10px;">
-          Si tu as “Missing or insufficient permissions” au clic :
+          Si tu as “Missing or insufficient permissions” :
           <br>• tu n’es pas connectée conciergerie
-          <br>• ou les rules dayTokens/create ne matchent pas le payload
+          <br>• ou la création du token ne respecte pas les rules (expiresAt/expiresAtMs)
         </div>
       </aside>
     </div>
@@ -192,7 +193,13 @@
       const uSnap = await getDoc(doc(db, "users", uid));
       if(!uSnap.exists()) throw new Error("Profil user introuvable (users/{uid}).");
       const u = uSnap.data() || {};
-      if(u.role !== "conciergerie") throw new Error("Accès refusé : rôle requis = conciergerie.");
+      if(u.role !== "conciergerie" && u.role !== "admin") {
+        throw new Error("Accès refusé : rôle requis = conciergerie.");
+      }
+      if(u.role !== "admin"){
+        // Si tu veux forcer abonnement actif, dé-commente
+        // if(u.subscriptionStatus !== "active") throw new Error("Abonnement inactif.");
+      }
       return u;
     }
 
@@ -220,6 +227,7 @@
     }
 
     async function ensureMissionsExist(event){
+      // Force 3 missions
       const base = {
         conciergerieUid: event.conciergerieUid,
         prestationId: prestationId,
@@ -275,6 +283,7 @@
         `${e.homeAddress ? " • "+e.homeAddress : ""}` +
         ` • status: ${(e.status||"").toUpperCase() || "—"}`;
 
+      // préfill
       agentName.value = e.assignedToName || agentName.value || "";
       agentEmail.value = e.assignedToEmail || agentEmail.value || "";
       conciergerieName.value = e.conciergerieName || conciergerieName.value || "";
@@ -321,14 +330,12 @@
       if(!/^\S+@\S+\.\S+$/.test(aEmail)) return showAlert("Email agent invalide.");
       if(!aName) return showAlert("Nom agent obligatoire.");
 
-      // ✅ Expiration blindée
+      // 1) create dayToken doc with expiresAt (Timestamp) + expiresAtMs (int) + (optional) expiresAtIso
       const tokenId = randomToken(20);
       const expiresAtDate = new Date(Date.now() + 24*60*60*1000);
-      const expiresAtIso  = expiresAtDate.toISOString();
-      const expiresAtMs   = expiresAtDate.getTime();              // number
-      const expiresAtTs   = Timestamp.fromDate(expiresAtDate);    // Timestamp
+      const expiresAtMs = expiresAtDate.getTime();
+      const expiresAtTs = Timestamp.fromDate(expiresAtDate);
 
-      // 1) create dayToken doc
       await setDoc(doc(db, "dayTokens", tokenId), {
         conciergerieUid: currentUser.uid,
         prestationId: String(prestationId),
@@ -336,9 +343,12 @@
         agentName: aName,
         active: true,
 
-        expiresAt: expiresAtTs,       // ✅ Timestamp comparable rules
-        expiresAtMs: expiresAtMs,     // ✅ number (front/debug)
-        expiresAtIso: expiresAtIso,   // (optionnel, debug)
+        // ✅ nouveaux champs (rules)
+        expiresAt: expiresAtTs,
+        expiresAtMs: expiresAtMs,
+
+        // (optionnel) compat/debug
+        expiresAtIso: expiresAtDate.toISOString(),
 
         createdAt: serverTimestamp()
       });
@@ -368,15 +378,13 @@
       params.set("prestationId", prestationId);
 
       const base = location.href.split("?")[0];
-      const link = base
-        .replace("intervention.html", "agent.html")
-        + "?" + params.toString();
+      const link = base.replace("intervention.html", "agent.html") + "?" + params.toString();
 
       linkBox.value = link;
       copyBtn.disabled = false;
       mailtoBtn.disabled = false;
 
-      showAlert("✅ Lien agent généré + token enregistré (expiresAt Timestamp + expiresAtMs).", true);
+      showAlert("✅ Lien agent généré + token enregistré (expiresAt / expiresAtMs).", true);
     }
 
     copyBtn.addEventListener("click", async ()=>{
@@ -397,8 +405,7 @@
         `Bonjour ${agentName.value || ""},\n\n` +
         `Voici ton lien pour exécuter la mission :\n\n` +
         `${linkBox.value}\n\n` +
-        `⚠️ Tu dois être connecté(e) (connexion par email).\n` +
-        `Le lien/token expire sous 24h.\n\n` +
+        `⚠️ Le lien/token expire sous 24h.\n\n` +
         `— ${cName}`
       );
 
