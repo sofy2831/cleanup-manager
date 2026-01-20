@@ -75,7 +75,8 @@
       width:44px;height:44px;border-radius:50%;
       background:#fff;border:2px solid var(--violet-main);
       display:flex;align-items:center;justify-content:center;
-      color:#violet-main;font-size:22px;font-weight:800;
+      color: var(--violet-main); /* ✅ FIX */
+      font-size:22px;font-weight:800;
       position:relative;flex-shrink:0;
     }
     .logo-icon::after{ content:"✦"; position:absolute; top:-6px; right:-5px; font-size:12px; color:var(--violet-main); }
@@ -268,7 +269,6 @@
     }
     .totals .mut{ font-weight:800; color:#666; }
 
-    /* Bottom nav */
     .bottom-nav{
       position: fixed;
       left: 0;
@@ -313,7 +313,6 @@
       }
       .page{ padding-bottom: 32px; }
     }
-
     @media (max-width: 520px){
       .page{ padding-left:12px; padding-right:12px; }
       html, body{ overflow-x:hidden; }
@@ -338,7 +337,6 @@
     <div class="alert" id="alertBox"></div>
 
     <div class="layout">
-      <!-- CONTEXTE -->
       <div class="card left">
         <div class="card-title">
           <span>Contexte</span>
@@ -347,16 +345,13 @@
         <div class="kv" id="contextKv"></div>
       </div>
 
-      <!-- PRESTATION -->
       <div class="card right">
         <div class="card-title">
           <span>Nouvelle prestation</span>
           <span class="tiny" id="homeLabel">—</span>
         </div>
 
-        
-          <form id="jobForm" autocomplete="off" novalidate>
-            
+        <form id="jobForm" autocomplete="off" novalidate>
           <div class="inline">
             <div>
               <label for="dateKeyInput">Date</label>
@@ -382,7 +377,7 @@
           <div class="inline">
             <div>
               <label for="team">Agent (optionnel)</label>
-              <input id="team" type="text" placeholder="Ex. Sarah / Équipe A" />
+              <input id="team" type="text" placeholder="Ex. Sarah / Équipe A (ou email)" />
             </div>
             <div>
               <label for="jobNote">Note globale (optionnel)</label>
@@ -397,7 +392,6 @@
             <span class="tiny">Tarif conseillé + unité = indicatifs. Tu fixes ton prix.</span>
           </div>
 
-          <!-- BUILDER LIGNE -->
           <div>
             <label for="productSelect">Prestation</label>
             <select id="productSelect">
@@ -497,7 +491,7 @@
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
-      doc, getDoc, addDoc, updateDoc,
+      doc, getDoc, setDoc, addDoc, updateDoc, writeBatch,
       collection, serverTimestamp
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
@@ -575,16 +569,16 @@
       const p = new URLSearchParams(location.search);
       return (p.get(name) || "").trim();
     }
-    const homeId        = getParam("homeId");
-    const from          = getParam("from") || "manuel";
-    const icalEventId   = getParam("icalEventId");
-    const summary       = getParam("summary");
-    const timeParam     = getParam("time");
-    const dateKeyParam  = getParam("dateKey");
-    const ownerNameParam= getParam("ownerName");
-    const ownerEmailParam=getParam("ownerEmail");
-    const noteParam     = getParam("note");
-    const homeTypeParam = getParam("homeType");      // <-- NOUVEAU
+    const homeId         = getParam("homeId");
+    const from           = getParam("from") || "manuel";
+    const icalEventId    = getParam("icalEventId");
+    const summary        = getParam("summary");
+    const timeParam      = getParam("time");
+    const dateKeyParam   = getParam("dateKey");
+    const ownerNameParam = getParam("ownerName");
+    const ownerEmailParam= getParam("ownerEmail");
+    const noteParam      = getParam("note");
+    const homeTypeParam  = getParam("homeType");
 
     // ========= Produits (suggestions) =========
     const PRODUCT_TEMPLATES = [
@@ -625,11 +619,9 @@
     let currentUser = null;
     let currentHome = null;
 
-    // Event draft
     let lines = [];
     let editingIndex = -1;
 
-    // After save
     let createdEventId = null;
     let createdEventRef = null;
 
@@ -657,7 +649,6 @@
       currentHome = {
         id: snap.id,
         ...d,
-        // fallback pour le type
         homeType: (d.homeType || d.type || d.kind || homeTypeParam || "").toString().trim()
       };
     }
@@ -694,6 +685,8 @@
       const t = getTemplateByKey(key);
       if(!t){
         suggestLine.style.display = "none";
+        otherNameWrap.style.display = "none";
+        otherNameEl.value = "";
         return;
       }
       if(key === "__OTHER__"){
@@ -827,26 +820,18 @@
       const suggested = tpl?.suggested || "";
       return {
         ok:true,
-        line: {
-          label,
-          qty,
-          unit,
-          unitPrice,
-          category: category || "",
-          note,
-          suggestedPrice: suggested
-        }
+        line: { label, qty, unit, unitPrice, category: category || "", note, suggestedPrice: suggested }
       };
     }
 
     function renderContext(){
       contextTag.textContent = (from === "ical") ? "Réservation" : "Création manuelle";
 
-      const ht = (currentHome?.homeType || "").trim();           // <-- type
+      const ht = (currentHome?.homeType || "").trim();
       const homeText = currentHome
         ? (currentHome.name
            + (currentHome.city ? " — " + currentHome.city : "")
-           + (ht ? ` (${ht})` : ""))                             // <-- affichage dans le nom
+           + (ht ? ` (${ht})` : ""))
         : "—";
 
       const ownerEmail = ownerEmailEl.value ? escapeHtml(ownerEmailEl.value) : escapeHtml(currentHome?.ownerEmail || "—");
@@ -854,7 +839,7 @@
 
       const rows = [];
       rows.push(`<div><b>Logement</b> : ${escapeHtml(homeText)}</div>`);
-      if(ht) rows.push(`<div><b>Type</b> : ${escapeHtml(ht)}</div>`);   // <-- ligne dédiée
+      if(ht) rows.push(`<div><b>Type</b> : ${escapeHtml(ht)}</div>`);
       rows.push(`<div><b>Propriétaire</b> : ${ownerName} • ${ownerEmail}</div>`);
       rows.push(`<div><b>Date</b> : ${escapeHtml(dateKeyInput.value || "—")}</div>`);
       rows.push(`<div><b>Heure</b> : ${escapeHtml(timeEl.value || "—")}</div>`);
@@ -862,10 +847,11 @@
       if(noteParam)rows.push(`<div><b>Note</b> : ${escapeHtml(noteParam)}</div>`);
       contextKv.innerHTML = rows.join("");
 
-      homeLabel.textContent = homeText;                            // <-- aussi en en-tête
+      homeLabel.textContent = homeText;
     }
 
     function setBillingButtonsAvailability(){
+      // Tu rediriges après création => ces boutons servent surtout si tu réutilises la page en édition.
       const billingMode = currentHome?.billingMode || "";
       const firstDone = !!(currentHome?.firstQuoteDone || currentHome?.hasFirstApproval || currentHome?.firstApprovalDone);
       const canDirect = (billingMode === "facture_directe") || firstDone;
@@ -896,6 +882,62 @@
       goInvoiceBtn.disabled = locked ? true : goInvoiceBtn.disabled;
     }
 
+    function splitAgentInput(raw){
+      const s = (raw || "").trim();
+      if(!s) return { name:"", email:"" };
+
+      // si on a un email quelque part, on l’extrait
+      const emailMatch = s.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+      const email = (emailMatch ? emailMatch[0] : "").toLowerCase();
+
+      // le nom = ce qui reste sans email / séparateurs
+      let name = s;
+      if(email) name = name.replace(email, "").replace(/[•|()]/g, " ").trim();
+      name = name.replace(/\s+/g, " ").trim();
+
+      // si l'utilisateur n’a mis QUE l’email, on laisse name vide
+      if(email && (name === "" || name === email)) name = "";
+      return { name, email };
+    }
+
+    async function createDefaultMissions(eventId, payloadForMissions){
+      const ids = ["CHECKIN","MENAGE","CHECKOUT"];
+      const batch = writeBatch(db);
+      const now = serverTimestamp();
+
+      for(const mid of ids){
+        const mRef = doc(db, "events", eventId, "missions", mid);
+        batch.set(mRef, {
+          conciergerieUid: payloadForMissions.conciergerieUid,
+          eventId: eventId,
+          missionId: mid,
+          type: mid,
+          status: "A_FAIRE",
+          locked: false,
+          // contexte utile
+          homeId: payloadForMissions.homeId,
+          homeName: payloadForMissions.homeName,
+          homeCity: payloadForMissions.homeCity,
+          dateKey: payloadForMissions.dateKey,
+          time: payloadForMissions.time || "",
+          assignedToName: payloadForMissions.assignedToName || "",
+          assignedToEmail: payloadForMissions.assignedToEmail || "",
+          createdAt: now,
+          updatedAt: now
+        }, { merge: true });
+      }
+
+      // petit marqueur au niveau event (pratique pour UI)
+      const eRef = doc(db, "events", eventId);
+      batch.update(eRef, {
+        missionTypes: ids,
+        missionsInitialized: true,
+        updatedAt: now
+      });
+
+      await batch.commit();
+    }
+
     // ========= Events =========
     productSelect.addEventListener("change", refreshSuggest);
     [dateKeyInput, timeEl, ownerNameEl, ownerEmailEl].forEach(el=>{
@@ -921,7 +963,7 @@
     goQuoteBtn.addEventListener("click", async ()=>{
       if(!createdEventRef) return showAlert("Enregistre d’abord la prestation.");
       try{
-        await updateDoc(createdEventRef, { status: "DEVIS", statusUpdatedAt: serverTimestamp() });
+        await updateDoc(createdEventRef, { status: "DEVIS", statusUpdatedAt: serverTimestamp(), updatedAt: serverTimestamp() });
         showAlert("✅ Statut : DEVIS", true);
         location.href = "devis.html?eventId=" + encodeURIComponent(createdEventId);
       }catch(err){
@@ -934,7 +976,7 @@
       if(!createdEventRef) return showAlert("Enregistre d’abord la prestation.");
       if(goInvoiceBtn.disabled) return;
       try{
-        await updateDoc(createdEventRef, { status: "FACTURE", statusUpdatedAt: serverTimestamp() });
+        await updateDoc(createdEventRef, { status: "FACTURE", statusUpdatedAt: serverTimestamp(), updatedAt: serverTimestamp() });
         showAlert("✅ Statut : FACTURE", true);
         location.href = "facture.html?eventId=" + encodeURIComponent(createdEventId);
       }catch(err){
@@ -958,30 +1000,33 @@
         return showAlert("Email propriétaire invalide.");
       }
 
-      const payload = {
+      const agentRaw = (teamEl.value || "").trim();
+      const agentParsed = splitAgentInput(agentRaw);
+
+      const basePayload = {
         conciergerieUid: currentUser.uid,
 
-        // logement
         homeId:   currentHome.id,
         homeName: currentHome.name || "",
         homeCity: currentHome.city || "",
-        homeType: (currentHome.homeType || ""),           // <-- on stocke le type
+        homeType: (currentHome.homeType || ""),
 
-        // date
         dateKey: dateKeyInput.value,
         date:    dateKeyInput.value,
         time:    (timeEl.value || "").trim(),
 
-        // owner
         ownerUid:  currentHome.ownerUid || null,
         ownerName: ownerName || "",
         ownerEmail:ownerEmail || "",
 
-        // prestation
-        team: (teamEl.value || "").trim(),
+        // tes champs existants
+        team: agentRaw,
         meta: (jobNoteEl.value || "").trim(),
 
-        // lignes
+        // ✅ utilisés par planning.html “À valider”
+        assignedToName: agentParsed.name || "",
+        assignedToEmail: agentParsed.email || "",
+
         lines: lines.map(l=>({
           label: l.label || "",
           qty: Number(l.qty)||0,
@@ -993,10 +1038,8 @@
         })),
         total: computeTotal(),
 
-        // statut
         status: "EN_COURS",
 
-        // source
         source: (from === "ical") ? "ical" : "manuel",
         icalEventId: icalEventId || null,
         summary: summary || "",
@@ -1007,20 +1050,27 @@
       lockUI(true);
       try{
         if(!createdEventId){
-          payload.createdAt = serverTimestamp();
-          const ref = await addDoc(collection(db,"events"), payload);
+          basePayload.createdAt = serverTimestamp();
+          basePayload.missionTypes = ["CHECKIN","MENAGE","CHECKOUT"]; // ✅ cohérence
+          basePayload.missionsInitialized = false;
+
+          const ref = await addDoc(collection(db,"events"), basePayload);
           createdEventId = ref.id;
           createdEventRef = doc(db,"events",createdEventId);
-          showAlert("✅ Prestation enregistrée (EN_COURS).", true);
-          
- // ✅ REDIRECT (création)
-  location.href = "planning.html";
-  return;
-          
+
+          // ✅ create subcollection missions (sinon “À valider” ne verra jamais rien)
+          await createDefaultMissions(createdEventId, basePayload);
+
+          showAlert("✅ Prestation enregistrée (EN_COURS) + missions créées.", true);
+
+          // ✅ REDIRECT (comme tu avais mis)
+          location.href = "planning.html";
+          return;
         }else{
-          await updateDoc(createdEventRef, payload);
+          await updateDoc(createdEventRef, basePayload);
           showAlert("✅ Prestation mise à jour (EN_COURS).", true);
         }
+
         setBillingButtonsAvailability();
       }catch(err){
         console.error(err);
@@ -1051,7 +1101,6 @@
         return;
       }
 
-      // Prefill
       dateKeyInput.value = dateKeyParam || "";
       if(!dateKeyInput.value){
         const d = new Date();
@@ -1063,22 +1112,16 @@
       ownerEmailEl.value = ownerEmailParam || currentHome.ownerEmail || "";
       if(noteParam) jobNoteEl.value = noteParam;
 
-      // Build products
       buildProductSelect();
       refreshSuggest();
 
-      // Context
       renderContext();
 
-      // Lines/init
       renderLines();
       refreshTotals();
 
-      // Buttons
       setBillingButtonsAvailability();
     });
   </script>
 </body>
 </html>
-
-
