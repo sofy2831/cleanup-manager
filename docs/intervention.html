@@ -195,7 +195,6 @@
 
     const prestationId = qs("prestationId") || qs("eventId") || "";
     let currentUser = null;
-    let currentEvent = null;
 
     async function guardConciergerie(uid){
       const uSnap = await getDoc(doc(db, "users", uid));
@@ -331,7 +330,6 @@
           photos: []
         });
       }else{
-        // update minimal (on ne touche pas aux invariants côté agent)
         await updateDoc(m.ref, {
           dayToken: dayTokenId || (m.data?.dayToken || ""),
           assignedToEmail: event.assignedToEmail || "",
@@ -382,7 +380,6 @@
         return;
       }
       const e = eSnap.data() || {};
-      currentEvent = { id: eSnap.id, ...e };
 
       if(e.conciergerieUid !== currentUser.uid){
         showAlert("Accès refusé : tu n’es pas la conciergerie propriétaire de cette prestation.");
@@ -447,10 +444,14 @@
       const e = eSnap.data() || {};
       if(e.conciergerieUid !== currentUser.uid) return showAlert("Accès refusé.");
 
-      // =========================
-      // 1) dayToken
-      // IMPORTANT: expiresAt MUST be Timestamp (rules)
-      // =========================
+      // 1) missions needed (AVANT dayTokens)
+      const needed = detectTypesFromLines(e.lines || []);
+      if(!needed.length){
+        showAlert("Aucune mission détectée.\nAjoute des lines (prestations) pour générer les missions.");
+        return;
+      }
+
+      // 2) dayToken (expiresAt Timestamp) + missionTypes
       const tokenId = randomToken(20);
       const expiresAtDate = new Date(Date.now() + 24*60*60*1000);
 
@@ -462,17 +463,17 @@
         active: true,
         createdAt: serverTimestamp(),
 
-        // ✅ required by rules
+        // required by your design (JS checks + rules friendly)
         expiresAt: Timestamp.fromDate(expiresAtDate),
 
-        // ✅ AJOUT IMPORTANT
-  missionTypes: needed,
-        
+        // ✅ crucial: agent reads only these mission types
+        missionTypes: needed,
+
         // optional UX/debug
         expiresAtIso: expiresAtDate.toISOString()
       });
 
-      // 2) update event
+      // 3) update event (assigne agent)
       await updateDoc(eRef, {
         assignedToEmail: aEmail,
         assignedToName: aName,
@@ -480,18 +481,12 @@
         updatedAt: serverTimestamp()
       });
 
-      // 3) missions based on lines
-      const needed = detectTypesFromLines(e.lines || []);
-      if(!needed.length){
-        showAlert("Aucune mission détectée.\nAjoute des lines (prestations) pour générer les missions.");
-        return;
-      }
-
+      // 4) create/update missions
       for(const type of needed){
         await ensureMission({ ...e, assignedToEmail:aEmail, assignedToName:aName }, type, tokenId);
       }
 
-      // 4) link
+      // 5) link
       const params = new URLSearchParams();
       params.set("token", tokenId);
       params.set("prestationId", prestationId);
@@ -578,4 +573,3 @@
   </script>
 </body>
 </html>
-
