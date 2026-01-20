@@ -118,7 +118,7 @@
       <span class="pill" id="whoAmI">Agent</span>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
         <button class="pill" id="refreshBtn" type="button">Rafraîchir</button>
-        <button class="pill" id="logoutBtn" type="button">Déconnexion</button>
+        <button class="pill" id="logoutBtn" type="button">Fermer</button>
       </div>
     </div>
 
@@ -151,14 +151,13 @@
       </section>
 
       <div class="mini">
-        Règle simple : l’agent ne peut modifier que ses missions si le token est actif (24h) + email Auth = email du token.
+        Accès simplifié : le lien (token) donne accès pendant 24h.
       </div>
     </div>
   </div>
 
   <script type="module">
-    import { auth, db } from "./firebase-init.js";
-    import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+    import { db } from "./firebase-init.js";
     import {
       doc, getDoc, updateDoc, setDoc,
       serverTimestamp
@@ -190,37 +189,24 @@
     }
 
     function qs(name){ return new URLSearchParams(location.search).get(name) || ""; }
-    function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
 
-    // ✅ expMs prioritaire, sinon Timestamp, sinon iso
-    function tokenExpiresMs(t){
-      const ms = Number(t?.expiresAtMs);
-      if(Number.isFinite(ms) && ms > 0) return ms;
-
-      // Firestore Timestamp (object avec seconds/nanoseconds)
-      const ts = t?.expiresAt;
-      if(ts && typeof ts === "object"){
-        const sec = Number(ts.seconds);
-        const nano = Number(ts.nanoseconds || 0);
-        if(Number.isFinite(sec) && sec > 0){
-          return sec * 1000 + Math.floor(nano / 1e6);
-        }
-      }
-
-      // fallback iso
-      const iso = (t?.expiresAtIso || "").toString();
-      const parsed = Date.parse(iso);
-      return Number.isFinite(parsed) ? parsed : NaN;
+    function tokenExpiryMs(t){
+      if(Number.isFinite(Number(t?.expiresAtMs))) return Number(t.expiresAtMs);
+      if(t?.expiresAt?.seconds != null) return Number(t.expiresAt.seconds) * 1000;
+      const iso = t?.expiresAtIso || "";
+      const ms = Date.parse(iso);
+      return Number.isFinite(ms) ? ms : NaN;
     }
 
     function tokenValid(t){
       if(!t?.active) return false;
-      const exp = tokenExpiresMs(t);
+      const exp = tokenExpiryMs(t);
       if(!Number.isFinite(exp)) return false;
       return Date.now() < exp;
     }
 
-    function prettyFromMs(ms){
+    function prettyExpiryFromToken(t){
+      const ms = tokenExpiryMs(t);
       if(!Number.isFinite(ms)) return "—";
       const d = new Date(ms);
       const pad2 = (n)=> String(n).padStart(2,"0");
@@ -256,7 +242,6 @@
     const token = qs("token");
     const prestationId = qs("prestationId");
 
-    let currentUser = null;
     let tokenDoc = null;
     let eventDoc = null;
 
@@ -335,7 +320,7 @@
       tokenDoc = tSnap.data() || {};
 
       chipToken.textContent = "token: " + token;
-      chipExpiry.textContent = "expire: " + prettyFromMs(tokenExpiresMs(tokenDoc));
+      chipExpiry.textContent = "expire: " + prettyExpiryFromToken(tokenDoc);
 
       if(String(tokenDoc.prestationId) !== String(prestationId)){
         showAlert("⛔ Token ≠ prestation.");
@@ -344,47 +329,22 @@
 
       if(!tokenValid(tokenDoc)){
         chipStatus.innerHTML = `<span class="chip bad">EXPIRÉ</span>`;
-        showAlert("⛔ Token expiré. Demande un nouveau lien.");
-        return;
-      }
-
-      // 2) email auth vs token email
-      const userEmail = normalizeEmail(currentUser?.email || "");
-      if(!userEmail){
-        showAlert("⛔ Compte agent connecté mais email manquant (Auth).");
-        return;
-      }
-
-      const expected = normalizeEmail(tokenDoc.agentEmail || "");
-      if(expected && userEmail !== expected){
-        showAlert("⛔ Mauvais compte : connecte-toi avec " + expected);
+        showAlert("⛔ Token expiré (24h). Demande un nouveau lien.");
         return;
       }
 
       chipStatus.innerHTML = `<span class="chip ok">OK</span>`;
-      whoAmI.textContent = `Connectée : ${userEmail}`;
+      whoAmI.textContent = `Agent : ${(tokenDoc.agentName || "—")}`;
 
-      // 3) event
-      const eSnap = await getDoc(doc(db, "events", prestationId));
-      if(!eSnap.exists()){
-        showAlert("⛔ Prestation introuvable.");
-        return;
-      }
-      eventDoc = eSnap.data() || {};
+      // 2) event (⚠️ en rules actuelles, events est privé conciergerie => on n’en dépend pas)
+      // Donc on se base sur les missions pour afficher logement/date.
 
-      homeLine.textContent = `${eventDoc.homeName || "Logement"}${eventDoc.homeCity ? " — " + eventDoc.homeCity : ""}`;
-      metaLine.textContent =
-        `${eventDoc.dateKey || eventDoc.date || "—"}${eventDoc.time ? " à " + eventDoc.time : ""}` +
-        `${eventDoc.homeAddress ? " • " + eventDoc.homeAddress : ""}` +
-        `\nAgent : ${(tokenDoc.agentName || "—")}${tokenDoc.agentEmail ? " • " + tokenDoc.agentEmail : ""}`;
-
-      // 4) missions
+      // 3) missions
       const TYPES = ["CHECKIN","MENAGE","CHECKOUT"];
 
-      for(const t of TYPES){
-        await ensureMissionExists(t);
-      }
-
+      // (sécurité) si elles n'existent pas, on les crée, mais ça nécessite d'avoir eventDoc
+      // Or events est privé, donc on NE crée PAS depuis agent.
+      // => Les missions doivent être créées côté intervention.html (conciergerie).
       const missions = [];
       for(const t of TYPES){
         const mSnap = await getDoc(doc(db, "events", prestationId, "missions", t));
@@ -397,10 +357,18 @@
         missionsWrap.innerHTML = `
           <div class="mcard">
             <div class="mtitle">Aucune mission</div>
-            <div class="msub">Vérifie que intervention.html a bien créé les missions.</div>
+            <div class="msub">La conciergerie doit créer les missions dans intervention.html.</div>
           </div>`;
         return;
       }
+
+      // header infos depuis 1ère mission
+      const first = missions[0].data || {};
+      homeLine.textContent = `${first.homeName || "Logement"}${first.homeCity ? " — " + first.homeCity : ""}`;
+      metaLine.textContent =
+        `${first.dateKey || first.date || "—"}${first.time ? " à " + first.time : ""}` +
+        `${first.homeAddress ? " • " + first.homeAddress : ""}` +
+        `\nAgent : ${(tokenDoc.agentName || "—")}${tokenDoc.agentEmail ? " • " + tokenDoc.agentEmail : ""}`;
 
       missionsWrap.innerHTML = "";
       for(const m of missions){
@@ -410,7 +378,6 @@
         const status = (d.status || "").toUpperCase() || "—";
 
         const items = checklistToArray(d.checklist);
-
         const checklistHtml = items.length
           ? items.map((it, idx)=>{
               const id = `chk_${m.id}_${idx}`;
@@ -426,8 +393,7 @@
             }).join("")
           : `
             <div class="mini">
-              Checklist vide. (Ce n’est pas bloquant.)<br>
-              Tu peux quand même mettre un commentaire + Terminer.
+              Checklist vide. Tu peux quand même ajouter un commentaire + Terminer.
             </div>
           `;
 
@@ -448,7 +414,7 @@
 
           <div>
             <div class="mini" style="margin-bottom:6px;">Commentaire (optionnel)</div>
-            <textarea rows="2" placeholder="Ex. problème, photo manquante, remarque..." data-comment="${esc(m.id)}" ${locked ? "disabled" : ""}>${esc(d.agentComment || "")}</textarea>
+            <textarea rows="2" placeholder="Ex. problème, remarque..." data-comment="${esc(m.id)}" ${locked ? "disabled" : ""}>${esc(d.agentComment || "")}</textarea>
           </div>
 
           <div class="actions">
@@ -507,32 +473,20 @@
       showAlert("Erreur reload : " + (err?.message || "inconnue"));
     }));
 
-    logoutBtn.addEventListener("click", async ()=>{
-      await signOut(auth);
-      localStorage.removeItem("cm_auth");
-      const next = encodeURIComponent(location.href);
-      location.href = `login-agent.html?next=${next}`;
+    logoutBtn.addEventListener("click", ()=>{
+      // pas d'auth => on "ferme" en rechargeant sans query (ou simple reload)
+      location.href = "about:blank";
     });
 
-    onAuthStateChanged(auth, async (user)=>{
-      if(!token || !prestationId){
-        showAlert("⛔ Paramètres manquants (token / prestationId).");
-        return;
-      }
-      if(!user){
-        const next = encodeURIComponent(location.href);
-        location.href = `login-agent.html?next=${next}`;
-        return;
-      }
-      currentUser = user;
-
+    // boot direct, pas de login
+    (async ()=>{
       try{
         await load();
       }catch(err){
         console.error(err);
         showAlert("Erreur chargement agent : " + (err?.message || "inconnue"));
       }
-    });
+    })();
   </script>
 </body>
 </html>
