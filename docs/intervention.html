@@ -22,7 +22,7 @@
     body{ margin:0; background:linear-gradient(180deg,var(--bg1) 0%, var(--bg2) 80%); color:var(--text); }
     .page{ min-height:100vh; display:flex; flex-direction:column; align-items:center; padding:14px 14px 26px; }
     .topbar{ width:100%; max-width:980px; display:flex; justify-content:space-between; gap:10px; position:sticky; top:0; z-index:10; padding:10px 0; background:rgba(248,244,255,.85); backdrop-filter:blur(6px); }
-    .pill{ display:inline-flex; align-items:center; gap:8px; padding:8px 12px; border-radius:999px; background:#fff; border:2px solid var(--violet); color:var(--violet); text-decoration:none; font-weight:900; font-size:13px; cursor:pointer; box-shadow:0 3px 10px rgba(0,0,0,.06); white-space:nowrap; }
+    .pill{ display:inline-flex; align-items:center; gap:8px; padding:8px 12px; border-radius:999px; background:#fff; border:2px solid var(--violet); color:var(--violet); text-decoration:none; font-weight:900; font-size:13px; cursor:pointer; box-shadow:0 3px 10px rgba(0,0,0,.06); }
     .wrap{ width:100%; max-width:980px; margin-top:10px; display:grid; grid-template-columns:1fr; gap:10px; }
     @media(min-width:900px){ .wrap{ grid-template-columns: 1.2fr .8fr; } }
     .card{ background:rgba(255,255,255,0.86); border:1px solid var(--border); border-radius:18px; box-shadow:var(--shadow); backdrop-filter:blur(10px); padding:12px; }
@@ -43,7 +43,6 @@
     .btn.primary{ color:#fff; background:linear-gradient(90deg,var(--violet),var(--violet2)); box-shadow:0 10px 22px rgba(0,0,0,0.10); }
     .btn.ghost{ background:#fff; color:var(--violet); border:2px solid var(--violet); box-shadow:0 3px 10px rgba(0,0,0,.06); }
     .btn.danger{ background:#ffe3ec; color:var(--bad); border:2px solid #ffc2d6; box-shadow:0 3px 10px rgba(0,0,0,.06); }
-    .btn:disabled{ opacity:.6; cursor:not-allowed; }
     .mini{ font-size:11px; font-weight:900; color:var(--muted); }
     .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size:12px; }
     .chip{ display:inline-flex; align-items:center; gap:6px; padding:4px 9px; border-radius:999px; background:rgba(122,92,255,0.12); color:#5b45c8; font-size:11px; font-weight:900; }
@@ -78,7 +77,6 @@
             <div class="mini">Prestation</div>
             <div style="margin-top:6px;font-weight:900;font-size:14px;" id="homeLine">—</div>
             <div class="mini" id="metaLine" style="margin-top:4px;">—</div>
-            <div class="mini" id="missionTypesLine" style="margin-top:6px;">Missions: —</div>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
             <button class="btn ghost" id="refreshBtn" type="button">Rafraîchir</button>
@@ -89,15 +87,14 @@
         <div class="list" id="missionsList"></div>
 
         <div style="margin-top:10px;" class="mini">
-          Missions stockées : <span class="mono">events/{eventId}/missions/{CHECKIN|MENAGE|CHECKOUT}</span><br>
-          Token stocké : <span class="mono">dayTokens/{tokenId}</span>
+          Missions : <span class="mono">events/{eventId}/missions/{TYPE}</span>
         </div>
       </section>
 
       <!-- RIGHT -->
       <aside class="card">
         <div style="font-weight:900;">Agent (lien)</div>
-        <div class="mini" style="margin-top:4px;">Token 24h. Pas de login agent : lien = accès (bearer token).</div>
+        <div class="mini" style="margin-top:4px;">Token 24h. L’agent ouvre le lien (pas de login).</div>
 
         <div class="row">
           <div>
@@ -124,11 +121,6 @@
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
           <button class="btn ghost" id="mailtoBtn" type="button" disabled>Ouvrir email</button>
         </div>
-
-        <div class="mini" style="margin-top:10px;">
-          Note : si tu ne vois pas de checklist côté agent, c’est que les missions ont été créées sans checklist.
-          Ici, on les “patch” automatiquement avec une checklist par défaut.
-        </div>
       </aside>
     </div>
   </div>
@@ -145,7 +137,6 @@
     const subLine = document.getElementById("subLine");
     const homeLine = document.getElementById("homeLine");
     const metaLine = document.getElementById("metaLine");
-    const missionTypesLine = document.getElementById("missionTypesLine");
     const missionsList = document.getElementById("missionsList");
 
     const logoutBtn = document.getElementById("logoutBtn");
@@ -160,8 +151,6 @@
     const copyBtn = document.getElementById("copyBtn");
     const mailtoBtn = document.getElementById("mailtoBtn");
     const linkBox = document.getElementById("linkBox");
-
-    const TTL_HOURS = 24;
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -191,13 +180,12 @@
     const prestationId = qs("prestationId") || qs("eventId") || "";
     let currentUser = null;
     let currentEvent = null;
-    let currentMissionTypes = [];
 
     async function guardConciergerie(uid){
       const uSnap = await getDoc(doc(db, "users", uid));
       if(!uSnap.exists()) throw new Error("Profil user introuvable (users/{uid}).");
       const u = uSnap.data() || {};
-      if(u.role !== "conciergerie" && u.role !== "admin") throw new Error("Accès refusé : rôle requis = conciergerie.");
+      if(u.role !== "conciergerie") throw new Error("Accès refusé : rôle requis = conciergerie.");
       return u;
     }
 
@@ -215,79 +203,37 @@
       if(s==="A_VALIDER") return `<span class="chip">À VALIDER</span>`;
       if(s==="ASSIGNEE") return `<span class="chip">ASSIGNÉE</span>`;
       if(s==="EN_COURS") return `<span class="chip">EN COURS</span>`;
-      return `<span class="chip">${(s || "—")}</span>`;
+      return `<span class="chip">${s || "—"}</span>`;
     }
 
-    function defaultChecklist(type){
-      const t = (type||"").toUpperCase();
-      if(t==="CHECKIN"){
-        return {
-          ARRIVEE:   { label:"Arrivée / accueil ok", done:false },
-          CLES:      { label:"Clés / boîte à clés ok", done:false },
-          WIFI:      { label:"Wifi / infos pratiques envoyées", done:false },
-          TOUR:      { label:"Tour rapide / points sensibles", done:false },
-          PHOTO:     { label:"Photo état entrée (si besoin)", done:false },
-          REMONTEE:  { label:"Remontées à la conciergerie", done:false }
-        };
-      }
-      if(t==="CHECKOUT"){
-        return {
-          DEPART:    { label:"Départ confirmé", done:false },
-          FERMETURE: { label:"Fenêtres fermées / portes verrouillées", done:false },
-          ELEC:      { label:"Lumières / clim / chauffage éteints", done:false },
-          POUBELLES: { label:"Poubelles sorties si nécessaire", done:false },
-          CLES:      { label:"Clés récupérées / remises", done:false },
-          PHOTO:     { label:"Photo état sortie (si besoin)", done:false }
-        };
-      }
-      // MENAGE par défaut
-      return {
-        CUISINE:   { label:"Cuisine propre (évier, plan, plaques)", done:false },
-        SDB:       { label:"Salle de bain/WC propres", done:false },
-        SOLS:      { label:"Sols aspirés/lavés", done:false },
-        POUSSIERE: { label:"Poussières / surfaces", done:false },
-        LINGE:     { label:"Linge (si prévu) ok", done:false },
-        POUBELLES: { label:"Poubelles vidées", done:false },
-        CHECKFIN:  { label:"Check final (odeur, détail)", done:false }
-      };
-    }
+    // Checklist par défaut (tu pourras affiner ensuite)
+    const DEFAULT_CHECKLIST = {
+      CHECKIN: [
+        "Récupérer / vérifier clés",
+        "Vérifier propreté générale",
+        "Mettre en route chauffage / eau chaude si besoin",
+        "Photo entrée (si souci)"
+      ],
+      MENAGE: [
+        "Poubelles / tri",
+        "Cuisine (plan, évier, frigo, micro-ondes)",
+        "Salle de bain (WC, douche, lavabo)",
+        "Sols aspirés + lavés",
+        "Lits faits / linge (si prévu)",
+        "Photos si non conforme"
+      ],
+      CHECKOUT: [
+        "Vérifier départ voyageurs",
+        "Reprendre clés / fermer",
+        "Relever dégâts / oubli",
+        "Photo dégâts si besoin"
+      ]
+    };
 
-    function detectMissionTypesFromEvent(e){
-      const types = new Set();
-      const lines = Array.isArray(e?.lines) ? e.lines : [];
-
-      const hay = (x)=> String(x||"").toLowerCase();
-
-      for(const l of lines){
-        const cat = hay(l.category);
-        const lab = hay(l.label);
-
-        // MENAGE
-        if(cat.includes("ménage") || lab.includes("ménage") || lab.includes("menage")){
-          types.add("MENAGE");
-        }
-
-        // CHECKIN
-        if(cat.includes("check") || lab.includes("check-in") || lab.includes("checkin") || lab.includes("arrivée") || lab.includes("arrivee")){
-          if(lab.includes("check-out") || lab.includes("checkout") || lab.includes("départ") || lab.includes("depart")){
-            // laisse CHECKOUT gérer
-          }else{
-            types.add("CHECKIN");
-          }
-        }
-
-        // CHECKOUT
-        if(lab.includes("check-out") || lab.includes("checkout") || lab.includes("départ") || lab.includes("depart")){
-          types.add("CHECKOUT");
-        }
-      }
-
-      // Si rien détecté, on met MENAGE (sinon agent = page vide)
-      if(types.size === 0) types.add("MENAGE");
-
-      // Ordre stable
-      const order = ["CHECKIN","MENAGE","CHECKOUT"];
-      return order.filter(t=> types.has(t));
+    function checklistArrayToMap(arr){
+      const obj = {};
+      arr.forEach((label, i)=> obj["i"+i] = { label, done:false });
+      return obj;
     }
 
     async function readMission(mid){
@@ -296,14 +242,26 @@
       return { id: mid, ref: mRef, exists: mSnap.exists(), data: mSnap.exists() ? (mSnap.data()||{}) : null };
     }
 
-    function checklistIsEmpty(ch){
-      if(!ch) return true;
-      if(Array.isArray(ch)) return ch.length === 0;
-      if(typeof ch === "object") return Object.keys(ch).length === 0;
-      return true;
+    function inferNeededMissionTypes(event){
+      // Ici on fait SIMPLE :
+      // - si lines contient catégorie check-in/out => CHECKIN/CHECKOUT
+      // - si lines contient ménage => MENAGE
+      // sinon, par défaut MENAGE
+      const lines = Array.isArray(event?.lines) ? event.lines : [];
+      const text = lines.map(l => (l.category||"") + " " + (l.label||"")).join(" ").toLowerCase();
+
+      const need = new Set();
+      if(text.includes("check-in") || text.includes("checkin") || text.includes("arriv")) need.add("CHECKIN");
+      if(text.includes("check-out") || text.includes("checkout") || text.includes("départ") || text.includes("depart")) need.add("CHECKOUT");
+      if(text.includes("ménage") || text.includes("menage") || text.includes("clean")) need.add("MENAGE");
+
+      if(need.size === 0) need.add("MENAGE");
+      return Array.from(need);
     }
 
-    async function ensureMissionsExist(event, missionTypes){
+    async function ensureMissionsExist(event){
+      const needed = inferNeededMissionTypes(event); // ✅ uniquement les nécessaires
+
       const base = {
         conciergerieUid: event.conciergerieUid,
         prestationId: prestationId,
@@ -316,30 +274,23 @@
         assignedToName: event.assignedToName || "",
         locked: false,
         status: "ASSIGNEE",
+        photos: [],
         updatedAt: serverTimestamp(),
+        createdAt: serverTimestamp()
       };
 
-      for(const mid of missionTypes){
+      for(const mid of needed){
         const m = await readMission(mid);
         if(!m.exists){
           await setDoc(m.ref, {
             ...base,
             type: mid,
-            checklist: defaultChecklist(mid),
-            photos: [],
-            createdAt: serverTimestamp()
+            checklist: checklistArrayToMap(DEFAULT_CHECKLIST[mid] || [])
           });
-        }else{
-          const d = m.data || {};
-          const patch = {};
-          if(checklistIsEmpty(d.checklist)) patch.checklist = defaultChecklist(mid);
-          if(!Array.isArray(d.photos)) patch.photos = [];
-          if(Object.keys(patch).length){
-            patch.updatedAt = serverTimestamp();
-            await updateDoc(m.ref, patch);
-          }
         }
       }
+
+      return needed;
     }
 
     async function load(){
@@ -364,26 +315,20 @@
       }
 
       subLine.textContent = "Prestation #" + prestationId;
+
       homeLine.textContent = `${e.homeName || "Logement"}${e.homeCity ? " — "+e.homeCity : ""}`;
       metaLine.textContent =
         `${e.dateKey || e.date || "—"}${e.time ? " à "+e.time : ""}` +
         `${e.homeAddress ? " • "+e.homeAddress : ""}` +
         ` • status: ${(e.status||"").toUpperCase() || "—"}`;
 
-      // détecte les missions nécessaires
-      currentMissionTypes = detectMissionTypesFromEvent(e);
-      missionTypesLine.textContent = "Missions: " + currentMissionTypes.join(", ");
-
       // préfill agent/conciergerie
       agentName.value = e.assignedToName || agentName.value || "";
       agentEmail.value = e.assignedToEmail || agentEmail.value || "";
       conciergerieName.value = e.conciergerieName || conciergerieName.value || "";
 
-      // crée/patch missions nécessaires + checklist défaut
-      await ensureMissionsExist(e, currentMissionTypes);
-
-      // render missions
-      const ms = await Promise.all(currentMissionTypes.map(readMission));
+      const needed = await ensureMissionsExist(e);
+      const ms = await Promise.all(needed.map(readMission));
 
       missionsList.innerHTML = "";
       for(const m of ms){
@@ -400,8 +345,6 @@
             <div class="item-sub" style="margin-top:8px;">
               Token : ${d.dayToken ? "<span class='mono'>"+d.dayToken+"</span>" : "—"}
               \nLocked : ${String(!!d.locked)}
-              \nChecklist : ${d.checklist ? Object.keys(d.checklist||{}).length : 0} item(s)
-              \nPhotos : ${Array.isArray(d.photos) ? d.photos.length : 0}
             </div>
           </div>
         `;
@@ -425,26 +368,24 @@
       if(!/^\S+@\S+\.\S+$/.test(aEmail)) return showAlert("Email agent invalide.");
       if(!aName) return showAlert("Nom agent obligatoire.");
 
-      if(!currentMissionTypes.length){
-        return showAlert("Aucune mission détectée. Vérifie les lignes de la prestation.");
-      }
+      // missionTypes = celles nécessaires
+      const missionTypes = inferNeededMissionTypes(currentEvent);
 
+      // expiresAt Timestamp + expiresAtMs
       const tokenId = randomToken(20);
-      const expiresAtMs = Date.now() + TTL_HOURS*60*60*1000;
-      const expiresAt = Timestamp.fromMillis(expiresAtMs);
-      const expiresAtIso = new Date(expiresAtMs).toISOString(); // optionnel debug
+      const expMs = Date.now() + 24*60*60*1000;
+      const expiresAt = Timestamp.fromMillis(expMs);
 
-      // 1) create dayToken doc (blindé)
+      // 1) create dayToken doc
       await setDoc(doc(db, "dayTokens", tokenId), {
         conciergerieUid: currentUser.uid,
         prestationId: String(prestationId),
         agentEmail: aEmail,
         agentName: aName,
-        missionTypes: currentMissionTypes,      // ✅ crucial : l’agent lit ça
+        missionTypes: missionTypes,
         active: true,
-        expiresAt: expiresAt,                   // ✅ Timestamp
-        expiresAtMs: expiresAtMs,               // ✅ number
-        expiresAtIso: expiresAtIso,             // (optionnel)
+        expiresAt: expiresAt,
+        expiresAtMs: expMs,
         createdAt: serverTimestamp()
       });
 
@@ -456,8 +397,8 @@
         updatedAt: serverTimestamp()
       });
 
-      // 3) update only needed missions
-      for(const mid of currentMissionTypes){
+      // 3) update missions with token + agent (only needed missions)
+      for(const mid of missionTypes){
         await updateDoc(doc(db, "events", prestationId, "missions", mid), {
           dayToken: tokenId,
           assignedToEmail: aEmail,
@@ -478,7 +419,7 @@
       copyBtn.disabled = false;
       mailtoBtn.disabled = false;
 
-      showAlert(`✅ Lien agent généré (expire dans ${TTL_HOURS}h).`, true);
+      showAlert("✅ Lien agent généré + token enregistré (24h).", true);
     }
 
     copyBtn.addEventListener("click", async ()=>{
@@ -486,7 +427,7 @@
         await navigator.clipboard.writeText(linkBox.value || "");
         showAlert("✅ Lien copié.", true);
       }catch{
-        showAlert("Copie impossible (clipboard). Copie manuelle.");
+        showAlert("Copie impossible. Copie manuelle.");
       }
     });
 
@@ -499,7 +440,7 @@
         `Bonjour ${agentName.value || ""},\n\n` +
         `Voici ton lien pour exécuter la mission :\n\n` +
         `${linkBox.value}\n\n` +
-        `⚠️ Le lien/token expire sous ${TTL_HOURS}h.\n\n` +
+        `Le lien/token expire sous 24h.\n\n` +
         `— ${cName}`
       );
 
