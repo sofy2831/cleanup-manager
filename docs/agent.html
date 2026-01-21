@@ -227,10 +227,7 @@
   </div>
 
   <script type="module">
-    // IMPORTANT:
-    // - Ne redéclare PAS "storage" si tu l'importes depuis firebase-init.js.
-    // - Le bug photo le plus fréquent chez toi = double storage (const storage = ... + import {storage}).
-    // Ici: on utilise UNIQUEMENT celui de firebase-init.js.
+    // ✅ On utilise UNIQUEMENT storage/db depuis firebase-init.js (pas de double init)
     import { storage, db } from "./firebase-init.js";
     import { doc, getDoc, updateDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
     import { ref as sRef, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js";
@@ -355,8 +352,15 @@
       return (name || "photo.jpg").replace(/[^\w.\-]+/g, "_");
     }
 
+    // ✅ Fix iOS/Android: file.type peut être vide -> tes storage rules bloquent "image/*"
+    function forceImageContentType(file){
+      const t = (file?.type || "").toLowerCase();
+      if(t && t.startsWith("image/")) return t;
+      // fallback: jpeg (ok pour règles + affichage)
+      return "image/jpeg";
+    }
+
     async function uploadMissionPhoto(missionType, file){
-      // path = missionPhotos/{prestationId}/{missionType}/{tokenId}/{fileName}
       const safeName =
         Date.now() + "_" +
         Math.random().toString(16).slice(2) + "_" +
@@ -365,7 +369,10 @@
       const path = `missionPhotos/${prestationId}/${missionType}/${token}/${safeName}`;
       const ref = sRef(storage, path);
 
-      await uploadBytes(ref, file, { contentType: file.type || "image/jpeg" });
+      // ✅ FORCE contentType pour passer tes rules
+      const ct = forceImageContentType(file);
+
+      await uploadBytes(ref, file, { contentType: ct });
       const url = await getDownloadURL(ref);
       return url;
     }
@@ -600,7 +607,7 @@
             await load();
           }catch(err){
             console.error(err);
-            showAlert("Erreur enregistrement : " + (err?.message || "inconnue"));
+            showAlert("Erreur enregistrement : " + (err?.code || err?.message || "inconnue"));
           }
         }
 
@@ -619,12 +626,13 @@
           if(curPhotos.length >= 3) return showAlert("Max 3 photos.");
 
           try{
+            // ⚠️ Sur mobile, l'upload peut être long -> UI
             setHint("Upload…");
+
+            // ✅ upload storage + url
             const url = await uploadMissionPhoto(type, file);
-            hint.textContent = "URL: " + url;
 
-
-            // IMPORTANT: écrire l’URL dans Firestore
+            // ✅ écrire l’URL dans Firestore
             const nextPhotos = curPhotos.concat([url]).slice(0,3);
 
             await updateDoc(doc(db, "events", prestationId, "missions", type), {
@@ -636,7 +644,8 @@
             await load();
           }catch(err){
             console.error(err);
-            showAlert("Erreur upload photo : " + (err?.message || "inconnue"));
+            // ✅ affiche le code (ex: storage/unauthorized)
+            showAlert("Erreur upload photo : " + (err?.code || err?.message || "inconnue"));
           }finally{
             if(input) input.value = "";
             showPreviews([]);
@@ -663,7 +672,7 @@
             await load();
           }catch(err){
             console.error(err);
-            showAlert("Erreur suppression photo : " + (err?.message || "inconnue"));
+            showAlert("Erreur suppression photo : " + (err?.code || err?.message || "inconnue"));
           }
         }
 
@@ -689,15 +698,14 @@
 
     refreshBtn.addEventListener("click", ()=> load().catch(err=>{
       console.error(err);
-      showAlert("Erreur reload : " + (err?.message || "inconnue"));
+      showAlert("Erreur reload : " + (err?.code || err?.message || "inconnue"));
     }));
 
     // boot (sans auth)
     load().catch(err=>{
       console.error(err);
-      showAlert("Erreur chargement agent : " + (err?.message || "inconnue"));
+      showAlert("Erreur chargement agent : " + (err?.code || err?.message || "inconnue"));
     });
   </script>
 </body>
 </html>
-
