@@ -33,7 +33,6 @@
       text-decoration:none; font-weight:900; font-size:13px; cursor:pointer;
       box-shadow:0 3px 10px rgba(0,0,0,.06); white-space:nowrap;
     }
-
     .wrap{ width:100%; max-width:980px; margin-top:6px; display:flex; flex-direction:column; gap:10px; }
     h1{ margin:0; font-size:20px; font-weight:900; letter-spacing:-0.2px; }
     .sub{ margin-top:4px; color:#444; font-size:12px; font-weight:800; }
@@ -118,7 +117,7 @@
       <span class="pill" id="whoAmI">Agent</span>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
         <button class="pill" id="refreshBtn" type="button">Rafraîchir</button>
-        <button class="pill" id="logoutBtn" type="button">Fermer</button>
+        <button class="pill" id="logoutBtn" type="button">Quitter</button>
       </div>
     </div>
 
@@ -151,13 +150,14 @@
       </section>
 
       <div class="mini">
-        Accès simplifié : le lien (token) donne accès pendant 24h.
+        Mode token-only : ouverture directe. Connexion anonyme automatique (zéro écran).
       </div>
     </div>
   </div>
 
   <script type="module">
-    import { db } from "./firebase-init.js";
+    import { auth, db } from "./firebase-init.js";
+    import { onAuthStateChanged, signInAnonymously, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
       doc, getDoc, updateDoc, setDoc,
       serverTimestamp
@@ -190,29 +190,6 @@
 
     function qs(name){ return new URLSearchParams(location.search).get(name) || ""; }
 
-    function tokenExpiryMs(t){
-      if(Number.isFinite(Number(t?.expiresAtMs))) return Number(t.expiresAtMs);
-      if(t?.expiresAt?.seconds != null) return Number(t.expiresAt.seconds) * 1000;
-      const iso = t?.expiresAtIso || "";
-      const ms = Date.parse(iso);
-      return Number.isFinite(ms) ? ms : NaN;
-    }
-
-    function tokenValid(t){
-      if(!t?.active) return false;
-      const exp = tokenExpiryMs(t);
-      if(!Number.isFinite(exp)) return false;
-      return Date.now() < exp;
-    }
-
-    function prettyExpiryFromToken(t){
-      const ms = tokenExpiryMs(t);
-      if(!Number.isFinite(ms)) return "—";
-      const d = new Date(ms);
-      const pad2 = (n)=> String(n).padStart(2,"0");
-      return `${pad2(d.getDate())}/${pad2(d.getMonth()+1)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
-    }
-
     function esc(str){
       return String(str ?? "")
         .replaceAll("&","&amp;")
@@ -239,9 +216,33 @@
       return `<span class="chip">${esc(s || "—")}</span>`;
     }
 
+    function tokenValid(t){
+      if(!t?.active) return false;
+      // priorité expiresAtMs si présent
+      if(Number.isFinite(Number(t.expiresAtMs))){
+        return Date.now() < Number(t.expiresAtMs);
+      }
+      // fallback expiresAt Timestamp
+      if(t?.expiresAt && typeof t.expiresAt.toMillis === "function"){
+        return Date.now() < t.expiresAt.toMillis();
+      }
+      return false;
+    }
+
+    function prettyExpiry(t){
+      let ms = NaN;
+      if(Number.isFinite(Number(t?.expiresAtMs))) ms = Number(t.expiresAtMs);
+      else if(t?.expiresAt && typeof t.expiresAt.toMillis === "function") ms = t.expiresAt.toMillis();
+      if(!Number.isFinite(ms)) return "—";
+      const d = new Date(ms);
+      const pad2 = (n)=> String(n).padStart(2,"0");
+      return `${pad2(d.getDate())}/${pad2(d.getMonth()+1)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+    }
+
     const token = qs("token");
     const prestationId = qs("prestationId");
 
+    let currentUser = null;
     let tokenDoc = null;
     let eventDoc = null;
 
@@ -320,7 +321,7 @@
       tokenDoc = tSnap.data() || {};
 
       chipToken.textContent = "token: " + token;
-      chipExpiry.textContent = "expire: " + prettyExpiryFromToken(tokenDoc);
+      chipExpiry.textContent = "expire: " + prettyExpiry(tokenDoc);
 
       if(String(tokenDoc.prestationId) !== String(prestationId)){
         showAlert("⛔ Token ≠ prestation.");
@@ -334,17 +335,18 @@
       }
 
       chipStatus.innerHTML = `<span class="chip ok">OK</span>`;
-      whoAmI.textContent = `Agent : ${(tokenDoc.agentName || "—")}`;
+      whoAmI.textContent = `Agent (session anonyme)`;
 
-      // 2) event (⚠️ en rules actuelles, events est privé conciergerie => on n’en dépend pas)
-      // Donc on se base sur les missions pour afficher logement/date.
+      // 2) event (lecture par l’agent : NON autorisée dans tes rules -> on n’en dépend pas)
+      // On affiche l’essentiel via les missions (homeName/homeCity/dateKey).
+      // MAIS: ton intervention met ces champs dans chaque mission => parfait.
 
       // 3) missions
       const TYPES = ["CHECKIN","MENAGE","CHECKOUT"];
 
-      // (sécurité) si elles n'existent pas, on les crée, mais ça nécessite d'avoir eventDoc
-      // Or events est privé, donc on NE crée PAS depuis agent.
-      // => Les missions doivent être créées côté intervention.html (conciergerie).
+      // sécurité : si elles n'existent pas, on tente de les créer (si rules autorisent: non, donc best effort)
+      // Ici on NE crée PAS pour éviter un fail bruité (rules create=false). On laisse intervention faire.
+
       const missions = [];
       for(const t of TYPES){
         const mSnap = await getDoc(doc(db, "events", prestationId, "missions", t));
@@ -357,18 +359,15 @@
         missionsWrap.innerHTML = `
           <div class="mcard">
             <div class="mtitle">Aucune mission</div>
-            <div class="msub">La conciergerie doit créer les missions dans intervention.html.</div>
+            <div class="msub">La conciergerie doit ouvrir intervention.html une fois (création des missions).</div>
           </div>`;
         return;
       }
 
-      // header infos depuis 1ère mission
+      // En-tête logement via 1ère mission
       const first = missions[0].data || {};
       homeLine.textContent = `${first.homeName || "Logement"}${first.homeCity ? " — " + first.homeCity : ""}`;
-      metaLine.textContent =
-        `${first.dateKey || first.date || "—"}${first.time ? " à " + first.time : ""}` +
-        `${first.homeAddress ? " • " + first.homeAddress : ""}` +
-        `\nAgent : ${(tokenDoc.agentName || "—")}${tokenDoc.agentEmail ? " • " + tokenDoc.agentEmail : ""}`;
+      metaLine.textContent = `${first.dateKey || "—"}${first.time ? " à " + first.time : ""}`;
 
       missionsWrap.innerHTML = "";
       for(const m of missions){
@@ -393,7 +392,7 @@
             }).join("")
           : `
             <div class="mini">
-              Checklist vide. Tu peux quand même ajouter un commentaire + Terminer.
+              Checklist vide. Tu peux quand même mettre un commentaire + Terminer.
             </div>
           `;
 
@@ -422,7 +421,6 @@
             <button class="btn" type="button" data-done="${esc(m.id)}" ${locked ? "disabled" : ""}>Terminer</button>
           </div>
         `;
-
         missionsWrap.appendChild(wrap);
 
         async function saveMission(markDone=false){
@@ -473,20 +471,26 @@
       showAlert("Erreur reload : " + (err?.message || "inconnue"));
     }));
 
-    logoutBtn.addEventListener("click", ()=>{
-      // pas d'auth => on "ferme" en rechargeant sans query (ou simple reload)
-      location.href = "about:blank";
+    logoutBtn.addEventListener("click", async ()=>{
+      // optionnel : on “quitte” en signOut anonyme (nettoyage)
+      try{ await signOut(auth); }catch{}
+      showAlert("Session fermée. Tu peux fermer l’onglet.", true);
     });
 
-    // boot direct, pas de login
-    (async ()=>{
+    // Boot : auth anonyme auto
+    onAuthStateChanged(auth, async (user)=>{
       try{
+        if(!user){
+          await signInAnonymously(auth);
+          return; // onAuthStateChanged va re-trigger
+        }
+        currentUser = user;
         await load();
       }catch(err){
         console.error(err);
-        showAlert("Erreur chargement agent : " + (err?.message || "inconnue"));
+        showAlert("Erreur démarrage agent : " + (err?.message || "inconnue"));
       }
-    })();
+    });
   </script>
 </body>
 </html>
