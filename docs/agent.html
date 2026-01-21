@@ -49,8 +49,8 @@
       box-shadow:var(--shadow); backdrop-filter:blur(10px); padding:12px;
     }
     .row{ display:flex; gap:10px; flex-wrap:wrap; align-items:flex-start; justify-content:space-between; }
-    .mini{ font-size:11px; font-weight:900; color:var(--muted); }
     .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size:12px; }
+    .mini{ font-size:11px; font-weight:900; color:var(--muted); }
 
     .chips{ display:flex; gap:8px; flex-wrap:wrap; }
     .chip{
@@ -99,10 +99,6 @@
       background:#fff; color:var(--violet); border:2px solid var(--violet);
       box-shadow:0 3px 10px rgba(0,0,0,.06);
     }
-    .btn.danger{
-      background:#ffe3ec; color:var(--bad); border:2px solid #ffc2d6;
-      box-shadow:0 3px 10px rgba(0,0,0,.06);
-    }
     .btn:disabled{ opacity:.6; cursor:not-allowed; }
 
     .done{
@@ -118,44 +114,54 @@
     .photos{
       border-top:1px dashed rgba(122,92,255,0.25);
       padding-top:10px;
-      display:flex; flex-direction:column; gap:8px;
+      display:flex;
+      flex-direction:column;
+      gap:8px;
     }
-    .photos-top{ display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
-    .grid{
+    .photo-grid{
       display:grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
       gap:8px;
     }
-    @media(max-width:520px){
-      .grid{ grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    }
-    .p{
-      position:relative;
-      border-radius:14px;
+    .ph{
+      border-radius:12px;
       overflow:hidden;
       border:1px solid rgba(0,0,0,0.06);
       box-shadow:0 2px 8px rgba(0,0,0,.06);
       background:#fff;
-      aspect-ratio: 4 / 3;
+      aspect-ratio: 1 / 1;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      color:#666;
+      font-weight:900;
+      font-size:11px;
+      text-align:center;
+      padding:8px;
     }
-    .p img{ width:100%; height:100%; object-fit:cover; display:block; }
-    .p .del{
-      position:absolute; top:8px; right:8px;
-      border:none; border-radius:999px;
-      padding:7px 9px; font-weight:900; font-size:12px;
-      cursor:pointer;
-      background:rgba(255,255,255,0.92);
-      border:2px solid rgba(255,0,80,0.25);
-      color:var(--bad);
-      box-shadow:0 2px 8px rgba(0,0,0,.10);
+    .ph img{
+      width:100%;
+      height:100%;
+      object-fit:cover;
+      display:block;
     }
-    .p .tag{
-      position:absolute; left:8px; bottom:8px;
-      background:rgba(255,255,255,0.92);
-      border:1px solid rgba(0,0,0,0.08);
-      border-radius:999px;
-      padding:4px 8px;
-      font-weight:900; font-size:11px; color:#333;
+    .fileline{
+      display:flex;
+      gap:8px;
+      flex-wrap:wrap;
+      align-items:center;
+      justify-content:space-between;
+    }
+    .fileline input[type="file"]{
+      flex:1;
+      min-width:220px;
+      border-radius:12px;
+      border:1px solid #D3C7FF;
+      padding:8px;
+      background:#fff;
+      font-size:12px;
+      font-weight:900;
+      color:#333;
     }
   </style>
 </head>
@@ -179,8 +185,8 @@
       <section class="card">
         <div class="row">
           <div style="min-width:260px;">
-            <div class="mini">Logement</div>
-            <div style="margin-top:6px;font-weight:900;font-size:14px;" id="homeLine">—</div>
+            <div class="mini">Prestation</div>
+            <div style="margin-top:6px;font-weight:900;font-size:14px;" class="mono" id="prestaLine">—</div>
             <div class="mini" id="metaLine" style="margin-top:4px;">—</div>
           </div>
 
@@ -198,30 +204,29 @@
       </section>
 
       <div class="mini">
-        Mode token-only : l’agent ouvre le lien et peut cocher + envoyer jusqu’à expiration (24h).<br>
-        “Terminer” verrouille la mission.
+        Token-only : l’agent ouvre le lien, point. (Token 24h)
       </div>
     </div>
   </div>
 
   <script type="module">
-    import { db } from "./firebase-init.js";
+    import { app, db } from "./firebase-init.js";
     import {
-      doc, getDoc, updateDoc,
+      doc, getDoc, updateDoc, setDoc,
       serverTimestamp
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     import {
-      getStorage, ref as sRef, uploadBytes, getDownloadURL, deleteObject
+      getStorage, ref as sRef, uploadBytes, getDownloadURL
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js";
 
-    const storage = getStorage();
+    const storage = getStorage(app);
 
     const alertBox = document.getElementById("alertBox");
     const subLine = document.getElementById("subLine");
-    const homeLine = document.getElementById("homeLine");
-    const metaLine = document.getElementById("metaLine");
     const missionsWrap = document.getElementById("missionsWrap");
+    const prestaLine = document.getElementById("prestaLine");
+    const metaLine = document.getElementById("metaLine");
 
     const chipToken = document.getElementById("chipToken");
     const chipExpiry = document.getElementById("chipExpiry");
@@ -243,37 +248,6 @@
 
     function qs(name){ return new URLSearchParams(location.search).get(name) || ""; }
 
-    function toMsFromToken(t){
-      // priorité: expiresAtMs (number)
-      if(typeof t?.expiresAtMs === "number") return t.expiresAtMs;
-
-      // sinon: expiresAt (Firestore Timestamp)
-      if(t?.expiresAt && typeof t.expiresAt.toMillis === "function"){
-        return t.expiresAt.toMillis();
-      }
-
-      // fallback debug: expiresAtIso
-      const iso = t?.expiresAtIso;
-      const p = Date.parse(iso || "");
-      if(Number.isFinite(p)) return p;
-
-      return NaN;
-    }
-
-    function tokenValid(t){
-      if(!t?.active) return false;
-      const exp = toMsFromToken(t);
-      if(!Number.isFinite(exp)) return false;
-      return Date.now() < exp;
-    }
-
-    function prettyExpiryFromMs(ms){
-      if(!Number.isFinite(ms)) return "—";
-      const d = new Date(ms);
-      const pad2 = (n)=> String(n).padStart(2,"0");
-      return `${pad2(d.getDate())}/${pad2(d.getMonth()+1)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
-    }
-
     function esc(str){
       return String(str ?? "")
         .replaceAll("&","&amp;")
@@ -281,6 +255,14 @@
         .replaceAll(">","&gt;")
         .replaceAll('"',"&quot;")
         .replaceAll("'","&#039;");
+    }
+
+    function prettyExpiryFromMs(ms){
+      const n = Number(ms);
+      if(!Number.isFinite(n)) return "—";
+      const d = new Date(n);
+      const pad2 = (x)=> String(x).padStart(2,"0");
+      return `${pad2(d.getDate())}/${pad2(d.getMonth()+1)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
     }
 
     function missionTitle(type){
@@ -301,17 +283,22 @@
     }
 
     function checklistToArray(cl){
-      // map { key:{label,done} } ou { key:true }
-      if(!cl || typeof cl !== "object") return [];
-      const out = [];
-      for(const [k,v] of Object.entries(cl)){
-        if(typeof v === "boolean"){
-          out.push({ key:k, label:k, done:v });
-        }else{
-          out.push({ key:k, label:(v?.label || k), done: !!v?.done });
-        }
+      if(!cl) return [];
+      if(Array.isArray(cl)){
+        return cl.map((x,i)=>{
+          if(typeof x === "string") return { key:String(i), label:x, done:false };
+          return { key: x.key || String(i), label: x.label || ("Item "+(i+1)), done: !!x.done };
+        });
       }
-      return out;
+      if(typeof cl === "object"){
+        const out = [];
+        for(const [k,v] of Object.entries(cl)){
+          if(typeof v === "boolean") out.push({ key:k, label:k, done:v });
+          else out.push({ key:k, label:(v?.label || k), done: !!v?.done });
+        }
+        return out;
+      }
+      return [];
     }
 
     function arrayToChecklistObject(items){
@@ -326,31 +313,54 @@
     const prestationId = qs("prestationId");
 
     let tokenDoc = null;
-    let eventDoc = null;
-    let missionTypes = [];
 
-    async function uploadOnePhoto({ file, missionType }){
-      // path = missionPhotos/{prestationId}/{missionType}/{token}/{ts}_{rand}.jpg
-      const ts = Date.now();
-      const rnd = Math.random().toString(16).slice(2);
-      const safeName = (file.name || "photo").replace(/[^\w.\-]+/g,"_").slice(0,50);
-      const path = `missionPhotos/${prestationId}/${missionType}/${token}/${ts}_${rnd}_${safeName}`;
+    async function ensureMissionExists(type){
+      const mRef = doc(db, "events", prestationId, "missions", type);
+      const mSnap = await getDoc(mRef);
+      if(mSnap.exists()) return;
 
-      const r = sRef(storage, path);
-      await uploadBytes(r, file, { contentType: file.type || "image/jpeg" });
-      const url = await getDownloadURL(r);
-      return { url, path, createdAtMs: ts };
+      // fallback minimal (si intervention n'a pas créé, rare)
+      const base = {
+        prestationId: prestationId,
+        dayToken: token,
+        assignedToEmail: tokenDoc?.agentEmail || "",
+        assignedToName: tokenDoc?.agentName || "",
+        type: type,
+        status: "ASSIGNEE",
+        locked: false,
+        checklist: {},
+        photos: [],
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      };
+      await setDoc(mRef, base);
     }
 
-    async function deleteOnePhoto(photo){
-      if(photo?.path){
-        try{
-          await deleteObject(sRef(storage, photo.path));
-        }catch(e){
-          // si suppression échoue, on continue quand même (tu ne veux pas de bug bloquant)
-          console.warn("deleteObject failed", e);
-        }
+    function tokenValid(t){
+      if(!t?.active) return false;
+      // priorité expiresAtMs (simple côté front)
+      const ms = Number(t?.expiresAtMs);
+      if(Number.isFinite(ms)) return Date.now() < ms;
+      // sinon fallback : si expiresAt (Timestamp) présent, on ne le parse pas côté client sans map,
+      // donc on s'appuie sur ms.
+      return false;
+    }
+
+    async function uploadPhotosForMission(missionType, existingUrls, files){
+      const urls = Array.isArray(existingUrls) ? existingUrls.slice() : [];
+      const remaining = 3 - urls.length;
+      const pick = Array.from(files || []).slice(0, Math.max(0, remaining));
+      if(!pick.length) return urls;
+
+      for(const f of pick){
+        const safeName = `${Date.now()}_${Math.random().toString(16).slice(2)}_${(f.name||"photo").replaceAll(" ","_")}`;
+        const path = `missionPhotos/${prestationId}/${missionType}/${token}/${safeName}`;
+        const r = sRef(storage, path);
+        await uploadBytes(r, f, { contentType: f.type || "image/jpeg" });
+        const dl = await getDownloadURL(r);
+        urls.push(dl);
       }
+      return urls.slice(0,3);
     }
 
     async function load(){
@@ -363,7 +373,7 @@
         return;
       }
 
-      // 1) dayToken
+      // 1) token doc
       const tSnap = await getDoc(doc(db, "dayTokens", token));
       if(!tSnap.exists()){
         showAlert("⛔ Token invalide.");
@@ -372,13 +382,10 @@
       tokenDoc = tSnap.data() || {};
 
       chipToken.textContent = "token: " + token;
-
-      const expMs = toMsFromToken(tokenDoc);
-      chipExpiry.textContent = "expire: " + prettyExpiryFromMs(expMs);
+      chipExpiry.textContent = "expire: " + prettyExpiryFromMs(tokenDoc.expiresAtMs);
 
       if(String(tokenDoc.prestationId) !== String(prestationId)){
         showAlert("⛔ Token ≠ prestation.");
-        chipStatus.innerHTML = `<span class="chip bad">REFUSÉ</span>`;
         return;
       }
 
@@ -389,66 +396,46 @@
       }
 
       chipStatus.innerHTML = `<span class="chip ok">OK</span>`;
-      whoAmI.textContent = `Accès via lien`;
+      whoAmI.textContent = `Agent : ${tokenDoc.agentName || "—"}`;
 
-      // missionTypes = venant du token (IMPORTANT : évite de lire des missions inexistantes)
-      missionTypes = Array.isArray(tokenDoc.missionTypes) && tokenDoc.missionTypes.length
-        ? tokenDoc.missionTypes.map(x=>String(x||"").toUpperCase()).filter(Boolean)
-        : ["MENAGE"]; // fallback minimal
+      // 2) missionTypes depuis token (IMPORTANT)
+      const TYPES = Array.isArray(tokenDoc.missionTypes) && tokenDoc.missionTypes.length
+        ? tokenDoc.missionTypes.map(x => String(x||"").toUpperCase()).filter(Boolean)
+        : ["MENAGE"];
 
-      // 2) event (lecture facultative mais utile pour afficher logement)
-      const eSnap = await getDoc(doc(db, "events", prestationId));
-      if(eSnap.exists()){
-        eventDoc = eSnap.data() || {};
-        homeLine.textContent = `${eventDoc.homeName || "Logement"}${eventDoc.homeCity ? " — " + eventDoc.homeCity : ""}`;
-        metaLine.textContent =
-          `${eventDoc.dateKey || eventDoc.date || "—"}${eventDoc.time ? " à " + eventDoc.time : ""}` +
-          `${eventDoc.homeAddress ? " • " + eventDoc.homeAddress : ""}` +
-          `\nAgent : ${(tokenDoc.agentName || "—")}${tokenDoc.agentEmail ? " • " + tokenDoc.agentEmail : ""}`;
-      }else{
-        homeLine.textContent = "Logement —";
-        metaLine.textContent = `Prestation #${prestationId}`;
-      }
+      prestaLine.textContent = `Prestation #${prestationId}`;
+      metaLine.textContent = `Missions: ${TYPES.join(", ")}\nAgent: ${(tokenDoc.agentName||"—")}${tokenDoc.agentEmail ? " • "+tokenDoc.agentEmail : ""}`;
 
-      // 3) missions (uniquement celles listées)
+      // 3) ensure missions exist + read
+      for(const t of TYPES) await ensureMissionExists(t);
+
       const missions = [];
-      for(const t of missionTypes){
-        const mRef = doc(db, "events", prestationId, "missions", t);
-        const mSnap = await getDoc(mRef);
-        if(mSnap.exists()){
-          missions.push({ id:t, ref:mRef, data:mSnap.data() || {} });
-        }else{
-          missions.push({ id:t, ref:mRef, data:null });
-        }
+      for(const t of TYPES){
+        const mSnap = await getDoc(doc(db, "events", prestationId, "missions", t));
+        if(mSnap.exists()) missions.push({ id:t, ref: mSnap.ref, data: mSnap.data() || {} });
       }
 
       subLine.textContent = `Prestation #${prestationId} — ${missions.length} mission(s)`;
 
+      if(!missions.length){
+        missionsWrap.innerHTML = `
+          <div class="mcard">
+            <div class="mtitle">Aucune mission</div>
+            <div class="msub">Vérifie que intervention.html a créé les missions nécessaires.</div>
+          </div>`;
+        return;
+      }
+
       missionsWrap.innerHTML = "";
       for(const m of missions){
-        if(!m.data){
-          const missing = document.createElement("div");
-          missing.className = "mcard";
-          missing.innerHTML = `
-            <div class="mhead">
-              <div>
-                <div class="mtitle">${missionTitle(m.id)}</div>
-                <div class="msub">Mission absente côté Firestore. (Elle doit être créée par intervention.html)</div>
-              </div>
-              <div><span class="chip bad">ABSENTE</span></div>
-            </div>
-          `;
-          missionsWrap.appendChild(missing);
-          continue;
-        }
-
         const d = m.data || {};
         const locked = !!d.locked;
         const done = !!d.agentDone;
         const status = (d.status || "").toUpperCase() || "—";
+        const existingPhotos = Array.isArray(d.photos) ? d.photos : [];
 
-        // checklist
         const items = checklistToArray(d.checklist);
+
         const checklistHtml = items.length
           ? items.map((it, idx)=>{
               const id = `chk_${m.id}_${idx}`;
@@ -464,28 +451,18 @@
             }).join("")
           : `
             <div class="mini">
-              Checklist vide. (Normal si la conciergerie n’a pas configuré.)<br>
-              Tu peux quand même mettre un commentaire + Terminer.
+              Checklist vide. Tu peux quand même ajouter photos + commentaire + terminer.
             </div>
           `;
 
-        // photos
-        const photos = Array.isArray(d.photos) ? d.photos : [];
-        const remaining = Math.max(0, 3 - photos.length);
-
-        const photosGrid = photos.length
-          ? `
-            <div class="grid">
-              ${photos.map((p, idx)=>`
-                <div class="p">
-                  <img src="${esc(p.url || "")}" alt="photo">
-                  <span class="tag">${idx+1}/3</span>
-                  ${locked ? "" : `<button class="del" type="button" data-del="${idx}">✕</button>`}
-                </div>
-              `).join("")}
-            </div>
-          `
-          : `<div class="mini">Aucune photo.</div>`;
+        const photoCells = [];
+        for(let i=0;i<3;i++){
+          const url = existingPhotos[i];
+          photoCells.push(url
+            ? `<a class="ph" href="${esc(url)}" target="_blank" rel="noopener"><img src="${esc(url)}" alt="photo ${i+1}"/></a>`
+            : `<div class="ph">Photo ${i+1}<br><span class="mini">(vide)</span></div>`
+          );
+        }
 
         const wrap = document.createElement("div");
         wrap.className = "mcard" + (done ? " done" : "") + (locked ? " locked" : "");
@@ -502,25 +479,14 @@
             ${checklistHtml}
           </div>
 
-          <div class="photos" data-pwrap="${esc(m.id)}">
-            <div class="photos-top">
-              <div>
-                <div class="mini" style="margin-bottom:2px;">Photos (max 3)</div>
-                <div class="mini">${locked ? "Mission verrouillée." : (remaining ? `${remaining} slot(s) dispo.` : "Limite atteinte.")}</div>
-              </div>
-              <div>
-                <input
-                  type="file"
-                  accept="image/*"
-                  capture="environment"
-                  data-file="${esc(m.id)}"
-                  ${locked || remaining === 0 ? "disabled" : ""}
-                  multiple
-                  style="max-width:240px;"
-                />
-              </div>
+          <div class="photos">
+            <div class="mini">Photos (3 max) — stockées en Storage</div>
+            <div class="photo-grid">${photoCells.join("")}</div>
+            <div class="fileline">
+              <input type="file" accept="image/*" capture="environment" multiple data-files="${esc(m.id)}" ${locked ? "disabled" : ""}/>
+              <button class="btn ghost" type="button" data-upload="${esc(m.id)}" ${locked ? "disabled" : ""}>Uploader</button>
             </div>
-            <div data-grid="${esc(m.id)}">${photosGrid}</div>
+            <div class="mini">Chemin: <span class="mono">missionPhotos/${esc(prestationId)}/${esc(m.id)}/${esc(token)}/...</span></div>
           </div>
 
           <div>
@@ -541,7 +507,7 @@
           const type = m.id;
 
           const box = wrap.querySelector(`.checklist[data-m="${type}"]`);
-          const checks = Array.from(box.querySelectorAll('input[type="checkbox"][data-k]'));
+          const checks = box ? Array.from(box.querySelectorAll('input[type="checkbox"][data-k]')) : [];
           const newItems = checks.map(ch => {
             const key = ch.getAttribute("data-k");
             const labelEl = box.querySelector(`label[for="${ch.id}"]`);
@@ -562,7 +528,7 @@
             payload.agentDone = true;
             payload.agentDoneAt = serverTimestamp();
             payload.status = "A_VALIDER";
-            payload.locked = true; // ✅ stop
+            payload.locked = true; // stop
           }
 
           try{
@@ -575,111 +541,33 @@
           }
         }
 
-        // upload photos handler
-        const fileInput = wrap.querySelector(`input[data-file="${m.id}"]`);
-        if(fileInput){
-          fileInput.addEventListener("change", async ()=>{
-            hideAlert();
-            const files = Array.from(fileInput.files || []);
-            fileInput.value = "";
+        async function uploadForThisMission(){
+          hideAlert();
+          const type = m.id;
+          const fileInput = wrap.querySelector(`input[type="file"][data-files="${type}"]`);
+          const files = fileInput?.files;
+          try{
+            const freshSnap = await getDoc(doc(db, "events", prestationId, "missions", type));
+            const fresh = freshSnap.exists() ? (freshSnap.data()||{}) : {};
+            const existing = Array.isArray(fresh.photos) ? fresh.photos : [];
 
-            if(!files.length) return;
+            const newUrls = await uploadPhotosForMission(type, existing, files);
+            await updateDoc(doc(db, "events", prestationId, "missions", type), {
+              photos: newUrls,
+              updatedAt: serverTimestamp()
+            });
 
-            // re-read current mission to be safe
-            const freshSnap = await getDoc(doc(db, "events", prestationId, "missions", m.id));
-            const fresh = freshSnap.exists() ? (freshSnap.data() || {}) : {};
-            const curPhotos = Array.isArray(fresh.photos) ? fresh.photos : [];
-            const curLocked = !!fresh.locked;
-
-            if(curLocked){
-              showAlert("Mission verrouillée : photos interdites.", false);
-              return;
-            }
-
-            const slots = Math.max(0, 3 - curPhotos.length);
-            if(slots === 0){
-              showAlert("Limite photos atteinte (3/3).", false);
-              return;
-            }
-
-            const toUpload = files.slice(0, slots);
-
-            try{
-              showAlert("Upload photo…", true);
-
-              const uploaded = [];
-              for(const f of toUpload){
-                // petite barrière anti-fichier énorme
-                if(f.size > 8 * 1024 * 1024){
-                  showAlert("Photo trop lourde (>8Mo).", false);
-                  continue;
-                }
-                const ph = await uploadOnePhoto({ file:f, missionType: m.id });
-                uploaded.push(ph);
-              }
-
-              if(!uploaded.length){
-                showAlert("Aucune photo envoyée.", false);
-                return;
-              }
-
-              const merged = curPhotos.concat(uploaded).slice(0, 3);
-
-              await updateDoc(doc(db, "events", prestationId, "missions", m.id), {
-                photos: merged,
-                updatedAt: serverTimestamp()
-              });
-
-              showAlert("✅ Photo(s) envoyée(s).", true);
-              await load();
-            }catch(err){
-              console.error(err);
-              showAlert("Erreur upload photo : " + (err?.message || "inconnue"));
-            }
-          });
+            showAlert("✅ Photos uploadées.", true);
+            await load();
+          }catch(err){
+            console.error(err);
+            showAlert("Erreur upload photos : " + (err?.message || "inconnue"));
+          }
         }
-
-        // delete photo handler
-        wrap.querySelectorAll('button[data-del]').forEach(btn=>{
-          btn.addEventListener("click", async ()=>{
-            hideAlert();
-            const idx = Number(btn.getAttribute("data-del"));
-            if(!Number.isFinite(idx)) return;
-
-            try{
-              const freshSnap = await getDoc(doc(db, "events", prestationId, "missions", m.id));
-              const fresh = freshSnap.exists() ? (freshSnap.data() || {}) : {};
-              const curPhotos = Array.isArray(fresh.photos) ? fresh.photos : [];
-              const curLocked = !!fresh.locked;
-
-              if(curLocked){
-                showAlert("Mission verrouillée : suppression interdite.", false);
-                return;
-              }
-
-              const target = curPhotos[idx];
-              if(!target) return;
-
-              // delete in storage (best effort), then remove in firestore
-              await deleteOnePhoto(target);
-              const next = curPhotos.filter((_,i)=> i !== idx);
-
-              await updateDoc(doc(db, "events", prestationId, "missions", m.id), {
-                photos: next,
-                updatedAt: serverTimestamp()
-              });
-
-              showAlert("✅ Photo supprimée.", true);
-              await load();
-            }catch(err){
-              console.error(err);
-              showAlert("Erreur suppression : " + (err?.message || "inconnue"));
-            }
-          });
-        });
 
         wrap.querySelector(`button[data-save="${m.id}"]`)?.addEventListener("click", ()=> saveMission(false));
         wrap.querySelector(`button[data-done="${m.id}"]`)?.addEventListener("click", ()=> saveMission(true));
+        wrap.querySelector(`button[data-upload="${m.id}"]`)?.addEventListener("click", uploadForThisMission);
       }
     }
 
@@ -688,7 +576,7 @@
       showAlert("Erreur reload : " + (err?.message || "inconnue"));
     }));
 
-    // boot
+    // Boot direct, sans auth
     (async ()=>{
       try{
         await load();
