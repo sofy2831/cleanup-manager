@@ -1,10 +1,6 @@
 // docs/firebase-init.js
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
-import {
-  getAuth,
-  setPersistence,
-  browserLocalPersistence
-} from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+import { getAuth, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
 import { getFirestore } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 import { getStorage } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js";
 
@@ -17,15 +13,12 @@ const firebaseConfig = {
   appId: "1:616451512758:web:9252d85102030092664917"
 };
 
-// ✅ ONE app only
 export const app = initializeApp(firebaseConfig);
 
-// ✅ services
 export const auth = getAuth(app);
 export const db = getFirestore(app);
 export const storage = getStorage(app);
 
-// ✅ persistence (best effort)
 setPersistence(auth, browserLocalPersistence).catch((e) => {
   console.warn("Auth persistence non appliquée:", e?.code || e);
 });
