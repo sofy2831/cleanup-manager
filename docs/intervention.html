@@ -346,37 +346,79 @@
     }
 
     async function ensureMissionsExist(event){
-      const missionTypes = computeMissionTypesFromEventLines(event);
+  const missionTypes = computeMissionTypesFromEventLines(event);
 
-      const base = {
-        conciergerieUid: event.conciergerieUid,
-        prestationId: prestationId,
-        dateKey: event.dateKey || event.date || "",
-        time: event.time || "",
-        homeName: event.homeName || "",
-        homeCity: event.homeCity || "",
-        homeAddress: event.homeAddress || "",
-        assignedToEmail: event.assignedToEmail || "",
-        assignedToName: event.assignedToName || "",
-        locked: false,
-        status: "ASSIGNEE",
-        agentDone: false,
-        agentDoneAt: null,
-        agentComment: "",
-        photos: [],
-        checklist: {},
-        updatedAt: serverTimestamp(),
-        createdAt: serverTimestamp()
-      };
+  const base = {
+    conciergerieUid: event.conciergerieUid,
+    prestationId: prestationId,
+    dateKey: event.dateKey || event.date || "",
+    time: event.time || "",
+    homeName: event.homeName || "",
+    homeCity: event.homeCity || "",
+    homeAddress: event.homeAddress || "",
+    assignedToEmail: event.assignedToEmail || "",
+    assignedToName: event.assignedToName || "",
+    locked: false,
+    status: "ASSIGNEE",
+    agentDone: false,
+    agentDoneAt: null,
+    agentComment: "",
+    photos: [],
+    checklist: {},
+    updatedAt: serverTimestamp(),
+    createdAt: serverTimestamp()
+  };
 
-      // créer uniquement ce qui est nécessaire
-      for(const mid of missionTypes){
-        const m = await readMission(mid);
-        if(!m.exists){
-          const checklist = checklistArrayToObj(DEFAULT_CHECKLIST[mid] || []);
-          await setDoc(m.ref, { ...base, type: mid, checklist });
-        }
-      }
+  for(const mid of missionTypes){
+    const m = await readMission(mid);
+    const defaultChecklist = checklistArrayToObj(DEFAULT_CHECKLIST[mid] || []);
+
+    if(!m.exists){
+      // ✅ mission manquante : on la crée avec checklist par défaut
+      await setDoc(m.ref, { ...base, type: mid, checklist: defaultChecklist });
+      continue;
+    }
+
+    // ✅ mission existe : si checklist vide => on backfill
+    const d = m.data || {};
+    const cl = d.checklist;
+
+    const isEmptyObject =
+      cl && typeof cl === "object" && !Array.isArray(cl) && Object.keys(cl).length === 0;
+
+    if(!cl || isEmptyObject){
+      await updateDoc(m.ref, {
+        checklist: defaultChecklist,
+        updatedAt: serverTimestamp()
+      });
+    }
+  for(const mid of missionTypes){
+  const m = await readMission(mid);
+  const defaultChecklist = checklistArrayToObj(DEFAULT_CHECKLIST[mid] || []);
+
+  // 1) create si absent
+  if(!m.exists){
+    await setDoc(m.ref, { ...base, type: mid, checklist: defaultChecklist });
+    continue;
+  }
+
+  // 2) backfill si existe mais checklist vide
+  const d = m.data || {};
+  const cl = d.checklist;
+
+  const isEmptyObject =
+    cl && typeof cl === "object" && !Array.isArray(cl) && Object.keys(cl).length === 0;
+
+  if(!cl || isEmptyObject){
+    await updateDoc(m.ref, {
+      checklist: defaultChecklist,
+      updatedAt: serverTimestamp()
+    });
+  }
+}
+
+
+      
 
       return missionTypes;
     }
@@ -586,3 +628,4 @@
   </script>
 </body>
 </html>
+
