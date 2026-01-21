@@ -22,7 +22,7 @@
     body{ margin:0; background:linear-gradient(180deg,var(--bg1) 0%, var(--bg2) 80%); color:var(--text); }
     .page{ min-height:100vh; display:flex; flex-direction:column; align-items:center; padding:14px 14px 26px; }
     .topbar{ width:100%; max-width:980px; display:flex; justify-content:space-between; gap:10px; position:sticky; top:0; z-index:10; padding:10px 0; background:rgba(248,244,255,.85); backdrop-filter:blur(6px); }
-    .pill{ display:inline-flex; align-items:center; gap:8px; padding:8px 12px; border-radius:999px; background:#fff; border:2px solid var(--violet); color:var(--violet); text-decoration:none; font-weight:900; font-size:13px; cursor:pointer; box-shadow:0 3px 10px rgba(0,0,0,.06); white-space:nowrap; }
+    .pill{ display:inline-flex; align-items:center; gap:8px; padding:8px 12px; border-radius:999px; background:#fff; border:2px solid var(--violet); color:var(--violet); text-decoration:none; font-weight:900; font-size:13px; cursor:pointer; box-shadow:0 3px 10px rgba(0,0,0,.06); }
     .wrap{ width:100%; max-width:980px; margin-top:10px; display:grid; grid-template-columns:1fr; gap:10px; }
     @media(min-width:900px){ .wrap{ grid-template-columns: 1.2fr .8fr; } }
     .card{ background:rgba(255,255,255,0.86); border:1px solid var(--border); border-radius:18px; box-shadow:var(--shadow); backdrop-filter:blur(10px); padding:12px; }
@@ -70,7 +70,7 @@
     </div>
 
     <div class="wrap">
-      <!-- LEFT -->
+      <!-- LEFT: prestation + missions -->
       <section class="card">
         <div class="row" style="align-items:flex-end;">
           <div style="flex:1;min-width:280px;">
@@ -87,15 +87,15 @@
         <div class="list" id="missionsList"></div>
 
         <div style="margin-top:10px;" class="mini">
-          Missions : <span class="mono">events/{eventId}/missions/{CHECKIN|MENAGE|CHECKOUT}</span>
+          Missions stockées ici : <span class="mono">events/{eventId}/missions/{CHECKIN|MENAGE|CHECKOUT}</span>
         </div>
       </section>
 
-      <!-- RIGHT -->
+      <!-- RIGHT: assign agent + generate link -->
       <aside class="card">
-        <div style="font-weight:900;">Agent (lien)</div>
+        <div style="font-weight:900;">Agent (lien email)</div>
         <div class="mini" style="margin-top:4px;">
-          Token 24h. Côté agent : ouverture directe + auth anonyme auto (aucun écran).
+          Token 24h. (bearer token) : si le lien fuit, quelqu’un peut cocher pendant 24h — accepté.
         </div>
 
         <div class="row">
@@ -125,9 +125,9 @@
         </div>
 
         <div class="mini" style="margin-top:10px;">
-          Si “Missing or insufficient permissions” :
-          <br>• pas connectée conciergerie
-          <br>• ou rules non publiées / cache navigateur
+          Si tu as “Missing or insufficient permissions” :
+          <br>• tu n’es pas connectée conciergerie
+          <br>• ou les rules dayTokens/create ne matchent pas (expiresAt timestamp / expiresAtMs int)
         </div>
       </aside>
     </div>
@@ -215,74 +215,71 @@
       return `<span class="chip">${s || "—"}</span>`;
     }
 
+    // ===== Checklist templates (IMPORTANT) =====
+    function checklistTemplate(type){
+      const t = (type||"").toUpperCase();
+      const mk = (arr) => {
+        const o = {};
+        arr.forEach((label, i)=> o[String(i+1).padStart(2,"0")] = { label, done:false });
+        return o;
+      };
+
+      if(t==="CHECKIN"){
+        return mk([
+          "Arrivée : confirmer heure + contact",
+          "Ouvrir / aérer 10 min",
+          "Photo entrée + salon",
+          "Vérifier lits faits / linge OK",
+          "Vérifier propreté globale",
+          "Vérifier consommables (papier, savon)",
+          "Clés / boîte à clés OK",
+          "Message “OK” à la conciergerie"
+        ]);
+      }
+
+      if(t==="MENAGE"){
+        return mk([
+          "Poubelles vidées + sacs remis",
+          "Cuisine : plan de travail + évier",
+          "Frigo vérifié / nettoyé si besoin",
+          "Salle de bain : douche/baignoire + lavabo",
+          "WC : nettoyé + désinfecté",
+          "Sols : aspirer + serpiller",
+          "Vitres/miroirs si traces",
+          "Linge : retirer / préparer selon consigne",
+          "Photos fin (cuisine + sdb + séjour)"
+        ]);
+      }
+
+      if(t==="CHECKOUT"){
+        return mk([
+          "État des lieux rapide + photos",
+          "Vérifier fenêtres/portes fermées",
+          "Couper lumières / chauffage si besoin",
+          "Récupérer clés / remettre boîte",
+          "Poubelles OK",
+          "Message “Check-out OK” à la conciergerie"
+        ]);
+      }
+
+      return {};
+    }
+
+    function isEmptyChecklist(cl){
+      if(!cl) return true;
+      if(Array.isArray(cl)) return cl.length === 0;
+      if(typeof cl === "object") return Object.keys(cl).length === 0;
+      return true;
+    }
+
     async function readMission(mid){
       const mRef = doc(db, "events", prestationId, "missions", mid);
       const mSnap = await getDoc(mRef);
       return { id: mid, ref: mRef, exists: mSnap.exists(), data: mSnap.exists() ? (mSnap.data()||{}) : null };
     }
 
-    function checklistTemplate(type){
-  const t = (type||"").toUpperCase();
-
-  // format "map" compatible avec ton agent.html :
-  // { key: { label, done } }
-  const mk = (arr) => {
-    const o = {};
-    arr.forEach((label, i)=> o[String(i+1).padStart(2,"0")] = { label, done:false });
-    return o;
-  };
-
-  if(t==="CHECKIN"){
-    return mk([
-      "Arrivée : confirmer heure + contact",
-      "Ouvrir / aérer 10 min",
-      "Photo entrée + salon",
-      "Vérifier lits faits / linge OK",
-      "Vérifier propreté globale",
-      "Vérifier consommables (papier, savon)",
-      "Clés / boîte à clés OK",
-      "Message “OK” à la conciergerie"
-    ]);
-  }
-
-  if(t==="MENAGE"){
-    return mk([
-      "Poubelles vidées + sacs remis",
-      "Cuisine : plan de travail + évier",
-      "Frigo vérifié / nettoyé si besoin",
-      "Salle de bain : douche/baignoire + lavabo",
-      "WC : nettoyé + désinfecté",
-      "Sols : aspirer + serpiller",
-      "Vitres/miroirs si traces",
-      "Linge : retirer / préparer selon consigne",
-      "Photos fin (cuisine + sdb + séjour)"
-    ]);
-  }
-
-  if(t==="CHECKOUT"){
-    return mk([
-      "État des lieux rapide + photos",
-      "Vérifier fenêtres/portes fermées",
-      "Couper lumières / chauffage si besoin",
-      "Récupérer clés / remettre boîte",
-      "Poubelles OK",
-      "Message “Check-out OK” à la conciergerie"
-    ]);
-  }
-
-  return {};
-}
-
-function isEmptyChecklist(cl){
-  if(!cl) return true;
-  if(Array.isArray(cl)) return cl.length === 0;
-  if(typeof cl === "object") return Object.keys(cl).length === 0;
-  return true;
-}
-
-
-    
     async function ensureMissionsExist(event){
+      // On FORCE ces 3 missions
       const base = {
         conciergerieUid: event.conciergerieUid,
         prestationId: prestationId,
@@ -295,16 +292,26 @@ function isEmptyChecklist(cl){
         assignedToName: event.assignedToName || "",
         locked: false,
         status: "ASSIGNEE",
-        checklist: {},
         updatedAt: serverTimestamp(),
         createdAt: serverTimestamp()
       };
 
       const ids = ["CHECKIN","MENAGE","CHECKOUT"];
+
       for(const mid of ids){
+        // 1) create if missing (WITH checklist template)
         const m = await readMission(mid);
         if(!m.exists){
-          await setDoc(m.ref, { ...base, type: mid });
+          await setDoc(m.ref, { ...base, type: mid, checklist: checklistTemplate(mid) });
+        }else{
+          // 2) repair existing missions with empty checklist
+          const d = m.data || {};
+          if(isEmptyChecklist(d.checklist)){
+            await updateDoc(m.ref, {
+              checklist: checklistTemplate(mid),
+              updatedAt: serverTimestamp()
+            });
+          }
         }
       }
     }
@@ -343,6 +350,7 @@ function isEmptyChecklist(cl){
       agentEmail.value = e.assignedToEmail || agentEmail.value || "";
       conciergerieName.value = e.conciergerieName || conciergerieName.value || "";
 
+      // create/repair missions (WITH checklist)
       await ensureMissionsExist(e);
 
       const ms = await Promise.all(["CHECKIN","MENAGE","CHECKOUT"].map(readMission));
@@ -350,6 +358,8 @@ function isEmptyChecklist(cl){
       missionsList.innerHTML = "";
       for(const m of ms){
         const d = m.data || {};
+        const clCount = d.checklist && typeof d.checklist === "object" ? Object.keys(d.checklist).length : 0;
+
         const html = `
           <div class="item">
             <div class="item-top">
@@ -360,7 +370,8 @@ function isEmptyChecklist(cl){
               <div>${chipForStatus(d.status)}</div>
             </div>
             <div class="item-sub" style="margin-top:8px;">
-              Token : ${d.dayToken ? "<span class='mono'>"+d.dayToken+"</span>" : "—"}
+              Checklist : ${clCount} item(s)
+              \nToken : ${d.dayToken ? "<span class='mono'>"+d.dayToken+"</span>" : "—"}
               \nLocked : ${String(!!d.locked)}
             </div>
           </div>
@@ -385,10 +396,13 @@ function isEmptyChecklist(cl){
       if(!/^\S+@\S+\.\S+$/.test(aEmail)) return showAlert("Email agent invalide.");
       if(!aName) return showAlert("Nom agent obligatoire.");
 
-      // 1) create token doc (expiresAt Timestamp + expiresAtMs int)
+      // 1) create dayToken doc (Timestamp + ms)
       const tokenId = randomToken(20);
-      const expiresAtMs = Math.floor(Date.now() + 24*60*60*1000);
-      const expiresAt = Timestamp.fromMillis(expiresAtMs);
+
+      const expiresAtMs = Date.now() + 24*60*60*1000;
+      const expiresAtDate = new Date(expiresAtMs);
+      const expiresAt = Timestamp.fromDate(expiresAtDate); // Firestore Timestamp
+      const expiresAtIso = expiresAtDate.toISOString();    // debug / compat
 
       await setDoc(doc(db, "dayTokens", tokenId), {
         conciergerieUid: currentUser.uid,
@@ -396,8 +410,14 @@ function isEmptyChecklist(cl){
         agentEmail: aEmail,
         agentName: aName,
         active: true,
-        expiresAt: expiresAt,
-        expiresAtMs: expiresAtMs,
+
+        // ✅ robust fields for rules
+        expiresAt: expiresAt,           // timestamp
+        expiresAtMs: expiresAtMs,       // int/number
+
+        // (optionnel) compat/debug
+        expiresAtIso: expiresAtIso,
+
         createdAt: serverTimestamp()
       });
 
@@ -409,18 +429,44 @@ function isEmptyChecklist(cl){
         updatedAt: serverTimestamp()
       });
 
-      // 3) update missions with token + agent
+      // 3) update missions with token + agent (and ensure checklists exist)
       const mids = ["CHECKIN","MENAGE","CHECKOUT"];
       for(const mid of mids){
-        await updateDoc(doc(db, "events", prestationId, "missions", mid), {
-          dayToken: tokenId,
-          assignedToEmail: aEmail,
-          assignedToName: aName,
-          updatedAt: serverTimestamp()
-        });
+        // ensure mission exists + has checklist
+        const m = await readMission(mid);
+        if(!m.exists){
+          await setDoc(doc(db, "events", prestationId, "missions", mid), {
+            conciergerieUid: currentUser.uid,
+            prestationId: prestationId,
+            type: mid,
+            dateKey: currentEvent?.dateKey || currentEvent?.date || "",
+            time: currentEvent?.time || "",
+            homeName: currentEvent?.homeName || "",
+            homeCity: currentEvent?.homeCity || "",
+            homeAddress: currentEvent?.homeAddress || "",
+            locked: false,
+            status: "ASSIGNEE",
+            checklist: checklistTemplate(mid),
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+
+            dayToken: tokenId,
+            assignedToEmail: aEmail,
+            assignedToName: aName
+          });
+        }else{
+          const d = m.data || {};
+          await updateDoc(doc(db, "events", prestationId, "missions", mid), {
+            dayToken: tokenId,
+            assignedToEmail: aEmail,
+            assignedToName: aName,
+            checklist: isEmptyChecklist(d.checklist) ? checklistTemplate(mid) : d.checklist,
+            updatedAt: serverTimestamp()
+          });
+        }
       }
 
-      // 4) link vers agent.html (liste des missions)
+      // 4) link vers agent.html
       const params = new URLSearchParams();
       params.set("token", tokenId);
       params.set("prestationId", prestationId);
@@ -432,7 +478,7 @@ function isEmptyChecklist(cl){
       copyBtn.disabled = false;
       mailtoBtn.disabled = false;
 
-      showAlert("✅ Lien agent généré + token enregistré.", true);
+      showAlert("✅ Lien agent généré + token enregistré (expiresAt Timestamp + expiresAtMs).", true);
     }
 
     copyBtn.addEventListener("click", async ()=>{
@@ -453,7 +499,7 @@ function isEmptyChecklist(cl){
         `Bonjour ${agentName.value || ""},\n\n` +
         `Voici ton lien pour exécuter la mission :\n\n` +
         `${linkBox.value}\n\n` +
-        `Le lien/token expire sous 24h.\n\n` +
+        `⚠️ Le lien/token expire sous 24h.\n\n` +
         `— ${cName}`
       );
 
@@ -506,4 +552,3 @@ function isEmptyChecklist(cl){
   </script>
 </body>
 </html>
-
