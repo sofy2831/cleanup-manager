@@ -1,3 +1,4 @@
+<!-- docs/logements.html -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -343,7 +344,7 @@
 <body>
   <div class="page">
     <div class="topbar">
-      <a class="pill-link" href="conciergerie.html">← Tableau de bord</a>
+      <a class="pill-link" href="planning.html">← Planning</a>
       <div style="display:flex; gap:8px; align-items:center;">
         <button class="pill-link" id="logoutBtn" type="button">Déconnexion</button>
       </div>
@@ -367,7 +368,7 @@
 
       <div class="toolbar">
         <div class="search">
-          <input id="searchInput" type="search" placeholder="Recherche : nom, ville, propriétaire, type, équipe…" />
+          <input id="searchInput" type="search" placeholder="Recherche : nom, ville, adresse, propriétaire, type, équipe…" />
         </div>
         <div class="actions" style="display:flex; gap:8px; flex-wrap:wrap;">
           <button class="btn primary" type="button" id="addBtn">+ Ajouter</button>
@@ -382,7 +383,7 @@
       <a href="planning.html">Planning</a>
       <a href="import-ical.html">iCal</a>
       <a href="messagerie.html">Messages</a>
-      <a href="prestation-detail.html">Catalogue</a>
+      <a href="catalogue.html">Catalogue</a>
       <a href="logements.html" class="active">Logements</a>
     </nav>
   </div>
@@ -390,6 +391,7 @@
   <div class="modal-backdrop" id="modalBackdrop" aria-hidden="true">
     <div class="modal" role="dialog" aria-modal="true">
       <h2 id="modalTitle">Ajouter un logement</h2>
+      <p>Adresse obligatoire si tu veux que l’agent sache où aller (intervention).</p>
 
       <form id="homeForm">
         <div style="display:flex; gap:8px; flex-wrap:wrap;">
@@ -402,6 +404,9 @@
             <input id="homeCity" type="text" placeholder="Ex. Muret" required />
           </div>
         </div>
+
+        <label for="homeAddress">Adresse (pour interventions)</label>
+        <input id="homeAddress" type="text" placeholder="Ex. 12 rue Victor Hugo, 31600 Muret" required />
 
         <label for="ownerEmail">Email du propriétaire</label>
         <input id="ownerEmail" type="email" placeholder="ex. proprietaire@email.com" required />
@@ -457,6 +462,7 @@
     const homeForm = document.getElementById("homeForm");
     const homeName = document.getElementById("homeName");
     const homeCity = document.getElementById("homeCity");
+    const homeAddress = document.getElementById("homeAddress");
     const ownerEmailEl = document.getElementById("ownerEmail");
     const homeOwner = document.getElementById("homeOwner");
     const homeType = document.getElementById("homeType");
@@ -562,6 +568,7 @@
 
       homeName.value = home.name || "";
       homeCity.value = home.city || "";
+      homeAddress.value = home.homeAddress || home.address || "";
       ownerEmailEl.value = home.ownerEmail || "";
       homeOwner.value = home.ownerName || "";
       homeType.value = home.type || "Studio";
@@ -586,7 +593,8 @@
 
       const filtered = !q ? homes : homes.filter(h=>{
         const hay = [
-          h.name, h.city, h.ownerName, h.ownerEmail, h.type, h.team
+          h.name, h.city, h.homeAddress, h.address,
+          h.ownerName, h.ownerEmail, h.type, h.team
         ].map(norm).join(" ");
         return hay.includes(q);
       });
@@ -610,6 +618,7 @@
 
         const ownerLabel = h.ownerName || h.ownerEmail || "—";
         const statusChip = isArchived(h) ? `<span class="chip">Archivé</span>` : "";
+        const addr = (h.homeAddress || h.address || "").trim();
 
         const createBookingBtn = isArchived(h)
           ? `<span class="mini-btn disabled">Créer une réservation</span>`
@@ -619,10 +628,16 @@
           <div class="item-top">
             <div>
               <div class="item-title">${escapeHtml(h.name || "Logement")}</div>
-              <div class="item-meta">${escapeHtml(h.city || "—")} • Propriétaire : <b>${escapeHtml(ownerLabel)}</b></div>
+              <div class="item-meta">
+                ${escapeHtml(h.city || "—")}
+                ${addr ? ` • <b>${escapeHtml(addr)}</b>` : ""}
+                <br/>Propriétaire : <b>${escapeHtml(ownerLabel)}</b>
+                ${h.ownerEmail ? ` • ${escapeHtml(h.ownerEmail)}` : ""}
+              </div>
               <div class="chips">
                 <span class="chip">${escapeHtml(h.type || "Type")}</span>
                 <span class="chip">${escapeHtml(h.team || "—")}</span>
+                ${addr ? `<span class="chip">Adresse OK</span>` : `<span class="chip">Adresse manquante</span>`}
                 ${statusChip}
               </div>
             </div>
@@ -712,7 +727,7 @@
             );
             const sEv = await getDocs(qEv);
             if(!sEv.empty){
-              showAlert("⛔ Suppression bloquée : ce logement a déjà des prestations rattachées. Utilise “Archiver” pour le masquer tout en gardant l’historique.");
+              showAlert("⛔ Suppression bloquée : ce logement a déjà des prestations rattachées. Utilise “Archiver”.");
               return;
             }
 
@@ -724,7 +739,7 @@
             );
             const sIc = await getDocs(qIc);
             if(!sIc.empty){
-              showAlert("⛔ Suppression bloquée : ce logement a des réservations iCal rattachées. Utilise “Archiver” pour le masquer tout en gardant l’historique.");
+              showAlert("⛔ Suppression bloquée : ce logement a des réservations iCal rattachées. Utilise “Archiver”.");
               return;
             }
 
@@ -757,13 +772,14 @@
 
       const name = homeName.value.trim();
       const city = homeCity.value.trim();
+      const addr = homeAddress.value.trim();
       const ownerName = homeOwner.value.trim();
       const ownerEmail = normalizeEmail(ownerEmailEl.value);
       const type = homeType.value;
       const team = (homeTeam.value || "").trim();
 
-      if(!name || !city || !ownerName || !ownerEmail){
-        showAlert("Champs manquants : nom + ville + email propriétaire + nom propriétaire.");
+      if(!name || !city || !addr || !ownerName || !ownerEmail){
+        showAlert("Champs manquants : nom + ville + adresse + email propriétaire + nom propriétaire.");
         return;
       }
       if(!/^\S+@\S+\.\S+$/.test(ownerEmail)){
@@ -774,7 +790,13 @@
       try{
         if(editingHomeId){
           await updateDoc(doc(db,"homes", editingHomeId), {
-            name, city, ownerName, ownerEmail, type, team,
+            name,
+            city,
+            homeAddress: addr,
+            ownerName,
+            ownerEmail,
+            type,
+            team,
             updatedAt: serverTimestamp()
           });
           closeModal();
@@ -785,6 +807,7 @@
             conciergerieUid: auth.currentUser.uid,
             name,
             city,
+            homeAddress: addr,
             ownerName,
             ownerEmail,
             type,
@@ -841,4 +864,3 @@
   </script>
 </body>
 </html>
-
