@@ -75,7 +75,7 @@
       width:44px;height:44px;border-radius:50%;
       background:#fff;border:2px solid var(--violet-main);
       display:flex;align-items:center;justify-content:center;
-      color: var(--violet-main); /* ✅ FIX */
+      color: var(--violet-main);
       font-size:22px;font-weight:800;
       position:relative;flex-shrink:0;
     }
@@ -491,7 +491,7 @@
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
-      doc, getDoc, setDoc, addDoc, updateDoc, writeBatch,
+      doc, getDoc, addDoc, updateDoc, writeBatch,
       collection, serverTimestamp
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
@@ -641,16 +641,31 @@
 
     function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
 
+    // ✅ INTÉGRATION LOGEMENT (sans changer le reste)
+    // On charge le logement et on backfill : owner, team, type, adresse.
     async function loadHome(){
-      if(!homeId) throw new Error("homeId manquant.");
+      if(!homeId) throw new Error("homeId manquant (URL). Exemple : nouvelle-prestation.html?homeId=XXXX");
       const snap = await getDoc(doc(db, "homes", homeId));
       if(!snap.exists()) throw new Error("Logement introuvable (homeId).");
       const d = snap.data() || {};
+
+      // ⚠️ on n'impose pas un schéma : on lit plusieurs clés possibles + fallback
+      const address =
+        (d.address || d.homeAddress || d.adresse || d.locationAddress || "").toString().trim();
+
       currentHome = {
         id: snap.id,
         ...d,
-        homeType: (d.homeType || d.type || d.kind || homeTypeParam || "").toString().trim()
+        homeType: (d.homeType || d.type || d.kind || homeTypeParam || "").toString().trim(),
+        homeAddress: address
       };
+
+      // backfill champs formulaire seulement si vides
+      if(!ownerNameEl.value.trim() && (currentHome.ownerName || "").trim()) ownerNameEl.value = currentHome.ownerName;
+      if(!ownerEmailEl.value.trim() && (currentHome.ownerEmail || "").trim()) ownerEmailEl.value = currentHome.ownerEmail;
+
+      // team = agent/équipe (si tu as "team" dans homes)
+      if(!teamEl.value.trim() && (currentHome.team || "").trim()) teamEl.value = currentHome.team;
     }
 
     function buildProductSelect(){
@@ -837,8 +852,11 @@
       const ownerEmail = ownerEmailEl.value ? escapeHtml(ownerEmailEl.value) : escapeHtml(currentHome?.ownerEmail || "—");
       const ownerName  = ownerNameEl.value  ? escapeHtml(ownerNameEl.value)  : escapeHtml(currentHome?.ownerName  || "—");
 
+      const addr = (currentHome?.homeAddress || "").trim();
+
       const rows = [];
       rows.push(`<div><b>Logement</b> : ${escapeHtml(homeText)}</div>`);
+      if(addr) rows.push(`<div><b>Adresse</b> : ${escapeHtml(addr)}</div>`);
       if(ht) rows.push(`<div><b>Type</b> : ${escapeHtml(ht)}</div>`);
       rows.push(`<div><b>Propriétaire</b> : ${ownerName} • ${ownerEmail}</div>`);
       rows.push(`<div><b>Date</b> : ${escapeHtml(dateKeyInput.value || "—")}</div>`);
@@ -847,11 +865,10 @@
       if(noteParam)rows.push(`<div><b>Note</b> : ${escapeHtml(noteParam)}</div>`);
       contextKv.innerHTML = rows.join("");
 
-      homeLabel.textContent = homeText;
+      homeLabel.textContent = homeText + (addr ? " • " + addr : "");
     }
 
     function setBillingButtonsAvailability(){
-      // Tu rediriges après création => ces boutons servent surtout si tu réutilises la page en édition.
       const billingMode = currentHome?.billingMode || "";
       const firstDone = !!(currentHome?.firstQuoteDone || currentHome?.hasFirstApproval || currentHome?.firstApprovalDone);
       const canDirect = (billingMode === "facture_directe") || firstDone;
@@ -886,16 +903,13 @@
       const s = (raw || "").trim();
       if(!s) return { name:"", email:"" };
 
-      // si on a un email quelque part, on l’extrait
       const emailMatch = s.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
       const email = (emailMatch ? emailMatch[0] : "").toLowerCase();
 
-      // le nom = ce qui reste sans email / séparateurs
       let name = s;
       if(email) name = name.replace(email, "").replace(/[•|()]/g, " ").trim();
       name = name.replace(/\s+/g, " ").trim();
 
-      // si l'utilisateur n’a mis QUE l’email, on laisse name vide
       if(email && (name === "" || name === email)) name = "";
       return { name, email };
     }
@@ -914,10 +928,10 @@
           type: mid,
           status: "A_FAIRE",
           locked: false,
-          // contexte utile
           homeId: payloadForMissions.homeId,
           homeName: payloadForMissions.homeName,
           homeCity: payloadForMissions.homeCity,
+          homeAddress: payloadForMissions.homeAddress || "",
           dateKey: payloadForMissions.dateKey,
           time: payloadForMissions.time || "",
           assignedToName: payloadForMissions.assignedToName || "",
@@ -927,7 +941,6 @@
         }, { merge: true });
       }
 
-      // petit marqueur au niveau event (pratique pour UI)
       const eRef = doc(db, "events", eventId);
       batch.update(eRef, {
         missionTypes: ids,
@@ -1010,6 +1023,8 @@
         homeName: currentHome.name || "",
         homeCity: currentHome.city || "",
         homeType: (currentHome.homeType || ""),
+        // ✅ INTÉGRATION LOGEMENT : adresse poussée au niveau event (utile intervention/agent)
+        homeAddress: (currentHome.homeAddress || "").trim(),
 
         dateKey: dateKeyInput.value,
         date:    dateKeyInput.value,
@@ -1019,11 +1034,11 @@
         ownerName: ownerName || "",
         ownerEmail:ownerEmail || "",
 
-        // tes champs existants
+        // existant
         team: agentRaw,
         meta: (jobNoteEl.value || "").trim(),
 
-        // ✅ utilisés par planning.html “À valider”
+        // utilisé planning À valider / intervention
         assignedToName: agentParsed.name || "",
         assignedToEmail: agentParsed.email || "",
 
@@ -1051,19 +1066,17 @@
       try{
         if(!createdEventId){
           basePayload.createdAt = serverTimestamp();
-          basePayload.missionTypes = ["CHECKIN","MENAGE","CHECKOUT"]; // ✅ cohérence
+          basePayload.missionTypes = ["CHECKIN","MENAGE","CHECKOUT"];
           basePayload.missionsInitialized = false;
 
           const ref = await addDoc(collection(db,"events"), basePayload);
           createdEventId = ref.id;
           createdEventRef = doc(db,"events",createdEventId);
 
-          // ✅ create subcollection missions (sinon “À valider” ne verra jamais rien)
           await createDefaultMissions(createdEventId, basePayload);
 
           showAlert("✅ Prestation enregistrée (EN_COURS) + missions créées.", true);
 
-          // ✅ REDIRECT (comme tu avais mis)
           location.href = "planning.html";
           return;
         }else{
@@ -1095,7 +1108,7 @@
       emailLine.textContent = user.email || user.uid;
 
       try{
-        await loadHome();
+        await loadHome(); // ✅ ici : integration logement
       }catch(e){
         showAlert("⛔ " + (e.message || "Erreur logement"));
         return;
@@ -1108,8 +1121,8 @@
         dateKeyInput.value = `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
       }
       timeEl.value = timeParam || "";
-      ownerNameEl.value  = ownerNameParam  || currentHome.ownerName  || "";
-      ownerEmailEl.value = ownerEmailParam || currentHome.ownerEmail || "";
+      ownerNameEl.value  = ownerNameParam  || ownerNameEl.value || "";
+      ownerEmailEl.value = ownerEmailParam || ownerEmailEl.value || "";
       if(noteParam) jobNoteEl.value = noteParam;
 
       buildProductSelect();
