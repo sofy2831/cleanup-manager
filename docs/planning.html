@@ -477,16 +477,32 @@
           <option value="">— Choisir un logement —</option>
         </select>
 
+        <div id="homeInfoBox" class="tiny" style="margin-top:8px; padding:10px 10px; border-radius:12px; background:#fff; border:1px solid rgba(122,92,255,0.14);">
+  Sélectionne un logement pour voir l’adresse et le propriétaire.
+</div>
+
         <div class="row">
-          <div>
-            <label for="dateKeyInput">Date (YYYY-MM-DD)</label>
-            <input id="dateKeyInput" type="text" placeholder="2026-01-23" required />
-          </div>
-          <div>
-            <label for="timeInput">Heure (optionnel)</label>
-            <input id="timeInput" type="text" placeholder="10:00" />
-          </div>
-        </div>
+  <div>
+    <label for="arrivalDateInput">Arrivée (YYYY-MM-DD)</label>
+    <input id="arrivalDateInput" type="text" placeholder="2026-01-23" required />
+  </div>
+  <div>
+    <label for="arrivalTimeInput">Heure arrivée (optionnel)</label>
+    <input id="arrivalTimeInput" type="text" placeholder="16:00" />
+  </div>
+</div>
+
+<div class="row">
+  <div>
+    <label for="departureDateInput">Départ (YYYY-MM-DD)</label>
+    <input id="departureDateInput" type="text" placeholder="2026-01-24" required />
+  </div>
+  <div>
+    <label for="departureTimeInput">Heure départ (optionnel)</label>
+    <input id="departureTimeInput" type="text" placeholder="10:00" />
+  </div>
+</div>
+
 
         <div class="row">
           <div>
@@ -615,8 +631,35 @@
     const cancelModalBtn = document.getElementById("cancelModalBtn");
     const bookingForm = document.getElementById("bookingForm");
     const homeSelect = document.getElementById("homeSelect");
-    const dateKeyInput = document.getElementById("dateKeyInput");
-    const timeInput = document.getElementById("timeInput");
+    const homeInfoBox = document.getElementById("homeInfoBox");
+
+function renderHomeInfo(homeId){
+  const h = allHomes.find(x => x.id === homeId);
+  if(!h){
+    homeInfoBox.textContent = "Sélectionne un logement pour voir l’adresse et le propriétaire.";
+    return;
+  }
+
+  const addr = (h.homeAddress || h.address || "").trim();
+  const owner = (h.ownerName || "").trim();
+  const ownerEmail = (h.ownerEmail || "").trim();
+
+  homeInfoBox.innerHTML = `
+    <b>${esc(h.name || "Logement")}</b>${h.city ? " — " + esc(h.city) : ""}<br/>
+    ${addr ? ("📍 " + esc(addr) + "<br/>") : ""}
+    ${owner || ownerEmail ? ("👤 " + esc(owner || "Propriétaire") + (ownerEmail ? " • " + esc(ownerEmail) : "")) : ""}
+  `;
+}
+
+homeSelect.addEventListener("change", ()=>{
+  renderHomeInfo(homeSelect.value);
+});
+    
+    const arrivalDateInput = document.getElementById("arrivalDateInput");
+const arrivalTimeInput = document.getElementById("arrivalTimeInput");
+const departureDateInput = document.getElementById("departureDateInput");
+const departureTimeInput = document.getElementById("departureTimeInput");
+
     const typeInput = document.getElementById("typeInput");
     const agentEmailInput = document.getElementById("agentEmailInput");
     const agentNameInput = document.getElementById("agentNameInput");
@@ -1448,8 +1491,12 @@
       modalBackdrop.style.display = "flex";
       modalBackdrop.setAttribute("aria-hidden","false");
 
-      dateKeyInput.value = selectedDateKey || toDateKey(new Date());
-      timeInput.value = "";
+      const base = selectedDateKey || toDateKey(new Date());
+arrivalDateInput.value = base;
+arrivalTimeInput.value = "";
+departureDateInput.value = base;     // tu peux mettre +1 jour si tu veux
+departureTimeInput.value = "";
+
 
       const urlHomeId = new URLSearchParams(location.search).get("homeId") || "";
       const finalHomeId = prefHomeId || urlHomeId;
@@ -1475,15 +1522,18 @@
       hideAlert();
 
       const homeId = homeSelect.value;
-      const dk = (dateKeyInput.value || "").trim();
-      const tt = (timeInput.value || "").trim();
+      const arrivalDate = (arrivalDateInput.value || "").trim();
+const arrivalTime = (arrivalTimeInput.value || "").trim();
+const departureDate = (departureDateInput.value || "").trim();
+const departureTime = (departureTimeInput.value || "").trim();
       const type = (typeInput.value || "Prestation").trim();
       const aEmail = normalizeEmail(agentEmailInput.value);
       const aName = (agentNameInput.value || "").trim();
       const meta = (metaInput.value || "").trim();
 
       if(!homeId) return showAlert("Choisis un logement.");
-      if(!parseDateKey(dk)) return showAlert("Date invalide. Format attendu : YYYY-MM-DD");
+      if(!parseDateKey(arrivalDate)) return showAlert("Arrivée invalide. Format attendu : YYYY-MM-DD");
+if(!parseDateKey(departureDate)) return showAlert("Départ invalide. Format attendu : YYYY-MM-DD");
 
       const home = allHomes.find(h=>h.id===homeId);
       if(!home) return showAlert("Logement introuvable (recharge la page).");
@@ -1496,8 +1546,15 @@
         const payload = {
           conciergerieUid: currentUser.uid,
 
-          dateKey: dk,
-          time: tt,
+          dateKey: arrivalDate,
+time: arrivalTime, // garde ton champ existant pour la vue "jour"
+
+          arrivalDate: arrivalDate,
+arrivalTime: arrivalTime,
+departureDate: departureDate,
+departureTime: departureTime,
+stayNote: meta, // optionnel si tu veux séparer meta/stayNote (sinon garde meta)
+          
           type: type,
 
           homeId: homeId,
@@ -1525,7 +1582,8 @@
         closeBookingModal();
         showAlert("✅ Réservation créée.", true);
 
-        selectedDateKey = dk;
+        selectedDateKey = arrivalDate;
+
         setSelectedHomeId(homeId);
 
         await loadEventsForMonth();
@@ -1664,20 +1722,27 @@
       selectedDateKey = toDateKey(now);
 
       try{
-        // si homeId dans URL => on le retient pour surlignage + modale booking auto
-        const urlHomeId = new URLSearchParams(location.search).get("homeId") || "";
-        if(urlHomeId) setSelectedHomeId(urlHomeId);
+  const urlHomeId = new URLSearchParams(location.search).get("homeId") || "";
+  if(urlHomeId) setSelectedHomeId(urlHomeId);
 
-        await loadHomes();
-        await loadEventsForMonth();
+  await loadHomes();          // d'abord
+  await loadEventsForMonth(); // ensuite
 
-        if(urlHomeId){
-          openBookingModal(urlHomeId);
-        }
-      }catch(err){
-        console.error(err);
-        showAlert("Erreur initialisation planning : " + (err?.message || "inconnue"));
-      }
+  // maintenant seulement, tu peux afficher les infos logement
+if(urlHomeId){
+  homeSelect.value = urlHomeId;   // si openBookingModal le fait déjà, tu peux enlever
+  renderHomeInfo(urlHomeId);      // ✅ bon id
+  openBookingModal(urlHomeId);    // ouvre + surlignage
+}else{
+  renderHomeInfo(homeSelect.value); // neutre
+}
+
+
+}catch(err){
+  console.error(err);
+  showAlert("Erreur initialisation planning : " + (err?.message || "inconnue"));
+}
+
     });
   </script>
 </body>
