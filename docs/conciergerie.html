@@ -36,7 +36,6 @@
       flex-direction:column;
       align-items:center;
       padding:16px 16px 32px;
-      /* place pour le bandeau */
       padding-bottom: 96px;
     }
 
@@ -177,7 +176,6 @@
     }
     .alert.ok{ border-left-color: var(--ok); }
 
-    /* ====== NEW: Stats badges ====== */
     .stats{
       width:100%;
       max-width:980px;
@@ -232,7 +230,6 @@
       transform: translateY(-1px);
     }
 
-    /* ====== NEW: Legal list ====== */
     .legal-list{
       list-style:none;
       padding:0;
@@ -277,7 +274,6 @@
       line-height:1.3;
     }
 
-    /* ====== NEW: Profile row ====== */
     .row-actions{
       display:flex;
       flex-wrap:wrap;
@@ -302,7 +298,6 @@
       white-space:nowrap;
     }
 
-    /* === Bottom nav === */
     .bottom-nav{
       position: fixed;
       left: 0;
@@ -335,7 +330,6 @@
       box-shadow: 0 10px 22px rgba(0,0,0,0.10);
     }
 
-    /* Desktop : barre */
     @media(min-width: 860px){
       .bottom-nav{
         position: static;
@@ -366,7 +360,6 @@
     <div class="subtitle">Espace conciergerie</div>
     <div class="emailLine" id="emailLine">—</div>
 
-    <!-- ✅ NEW: Badges stats -->
     <section class="stats" aria-label="Indicateurs">
       <div class="stat">
         <div class="label">Clients</div>
@@ -406,7 +399,7 @@
     <div class="grid">
       <div class="card">
         <h2>Planning</h2>
-        <p>Synchronise les réservations iCal. Clique une réservation pour créer la prestation associée.</p>
+        <p>Calendrier + à valider. C’est ici que tu pilotes l’opérationnel.</p>
         <a class="cta" href="planning.html">Planning</a>
       </div>
 
@@ -416,19 +409,14 @@
         <a class="cta" href="invite.html">Inviter un propriétaire</a>
       </div>
 
-      <div class="card">
-        <h2>Ajouter un logement</h2>
-        <p>Crée un logement, rattache un propriétaire, prépare la gestion.</p>
-        <a class="cta" href="logements.html">Ajouter un logement</a>
-      </div>
+      <!-- ✅ SUPPRIMÉ: “Ajouter un logement” (tu le gères via Planning/Logements) -->
 
       <div class="card">
         <h2>Facturation</h2>
-        <p>Retrouve tes prestations en cours / devis / factures. Génère et envoie au propriétaire.</p>
+        <p>Prestations en cours / devis / factures. Génération + envoi.</p>
         <a class="cta" href="prestations.html">Suivi de prestation</a>
       </div>
 
-      <!-- ✅ NEW: Profil conciergerie -->
       <div class="card">
         <h2>Profil conciergerie</h2>
         <p>Infos + paramètres (SIRET, adresse, TVA, logo, emails, etc.).</p>
@@ -438,10 +426,9 @@
         </div>
       </div>
 
-      <!-- ✅ NEW: Légal / Business -->
       <div class="card">
         <h2>Légal / Business (propre) <span class="mini-badge">checklist</span></h2>
-        <p>Ce bloc te sert de contrôle qualité avant mise en prod / vente.</p>
+        <p>Contrôle qualité avant mise en prod / vente.</p>
 
         <ul class="legal-list">
           <li class="legal-item">
@@ -478,12 +465,11 @@
     </div>
   </div>
 
-  <!-- ✅ Bandeau = hors de la grid -->
   <nav class="bottom-nav" aria-label="Navigation">
     <a href="planning.html">Planning</a>
     <a href="import-ical.html">iCal</a>
     <a href="messagerie.html">Messages</a>
-    <a href="prestations-détails.html">Catalogue</a>
+    <a href="catalogue.html">Catalogue</a>
     <a href="logements.html">Logements</a>
   </nav>
 
@@ -492,14 +478,13 @@
     import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
       doc, getDoc,
-      collection, query, where, getCountFromServer
+      collection, query, where, orderBy, limit, getDocs
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const emailLine = document.getElementById("emailLine");
     const alertBox = document.getElementById("alertBox");
     const logoutBtn = document.getElementById("logoutBtn");
 
-    // stats
     const statClients = document.getElementById("statClients");
     const statOwners = document.getElementById("statOwners");
     const statLogements = document.getElementById("statLogements");
@@ -539,62 +524,44 @@
       el.textContent = Number.isFinite(n) ? String(n) : "—";
     }
 
-    // IMPORTANT: ces requêtes supposent des champs standards.
-    // Si tes collections/champs diffèrent, ajuste ici (je te laisse les endroits commentés).
-    async function loadStats(user){
-      // Hypothèse: chaque doc a conciergerieUid == user.uid
-      const conciergerieUid = user.uid;
+    // ✅ Stats robustes: calculées depuis "events" (ce que ton planning utilise déjà)
+    async function loadStatsFromEvents(user){
+      const uid = user.uid;
 
-      try{
-        // Clients (actifs) — collection "clients"
-        // champs supposés: conciergerieUid, active (bool)
-        const qClients = query(
-          collection(db, "clients"),
-          where("conciergerieUid", "==", conciergerieUid),
-          where("active", "==", true)
-        );
+      // on prend un volume raisonnable, ça sert juste à des stats “dashboard”
+      const qEvents = query(
+        collection(db, "events"),
+        where("conciergerieUid", "==", uid),
+        orderBy("createdAt", "desc"),
+        limit(500)
+      );
 
-        // Propriétaires (actifs) — collection "proprietaires"
-        // champs supposés: conciergerieUid, active (bool)
-        const qOwners = query(
-          collection(db, "proprietaires"),
-          where("conciergerieUid", "==", conciergerieUid),
-          where("active", "==", true)
-        );
+      const snap = await getDocs(qEvents);
+      const events = snap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }));
 
-        // Logements (total) — collection "logements"
-        // champs supposés: conciergerieUid
-        const qLogements = query(
-          collection(db, "logements"),
-          where("conciergerieUid", "==", conciergerieUid)
-        );
+      const owners = new Set();
+      const homes = new Set();
+      const agents = new Set();
 
-        // Agents (actifs) — collection "agents"
-        // champs supposés: conciergerieUid, active (bool)
-        const qAgents = query(
-          collection(db, "agents"),
-          where("conciergerieUid", "==", conciergerieUid),
-          where("active", "==", true)
-        );
+      for(const ev of events){
+        const ownerEmail = (ev.ownerEmail || "").toString().trim().toLowerCase();
+        if(ownerEmail) owners.add(ownerEmail);
 
-        const [c1, c2, c3, c4] = await Promise.all([
-          getCountFromServer(qClients),
-          getCountFromServer(qOwners),
-          getCountFromServer(qLogements),
-          getCountFromServer(qAgents),
-        ]);
+        const homeId = (ev.homeId || "").toString().trim();
+        const homeKey = homeId || ((ev.homeName || "Logement") + "|" + (ev.homeCity || ev.city || ""));
+        if(homeKey.trim()) homes.add(homeKey.trim());
 
-        setStat(statClients, c1.data().count);
-        setStat(statOwners, c2.data().count);
-        setStat(statLogements, c3.data().count);
-        setStat(statAgents, c4.data().count);
-      }catch(e){
-        // On n'affiche pas d'erreur bloquante sur le dashboard
-        setStat(statClients, NaN);
-        setStat(statOwners, NaN);
-        setStat(statLogements, NaN);
-        setStat(statAgents, NaN);
+        const agentEmail = (ev.assignedToEmail || ev.agentEmail || "").toString().trim().toLowerCase();
+        const agentName  = (ev.assignedToName || ev.agentName || "").toString().trim();
+        const agentKey = agentEmail || agentName;
+        if(agentKey) agents.add(agentKey);
       }
+
+      // “Clients” = owners (cohérent avec ton fonctionnement actuel)
+      setStat(statClients, owners.size);
+      setStat(statOwners, owners.size);
+      setStat(statLogements, homes.size);
+      setStat(statAgents, agents.size);
     }
 
     logoutBtn.addEventListener("click", async ()=>{
@@ -619,7 +586,16 @@
       }
 
       hideAlert();
-      await loadStats(user);
+
+      try{
+        await loadStatsFromEvents(user);
+      }catch(e){
+        // pas bloquant
+        setStat(statClients, NaN);
+        setStat(statOwners, NaN);
+        setStat(statLogements, NaN);
+        setStat(statAgents, NaN);
+      }
     });
   </script>
 </body>
