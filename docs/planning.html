@@ -20,6 +20,7 @@
       --border: rgba(122,92,255,0.18);
       --shadow: 0 14px 36px rgba(0,0,0,0.08);
       --card: rgba(255,255,255,0.88);
+      --violetLight: rgba(122,92,255,0.12);
     }
     body{ margin:0; background:linear-gradient(180deg,var(--bg1) 0%, var(--bg2) 80%); color:var(--text); }
     .page{ min-height:100vh; display:flex; flex-direction:column; align-items:center; padding:14px 14px 26px; padding-bottom:96px; }
@@ -217,6 +218,7 @@
       gap:10px;
       align-items:flex-start;
     }
+    .item.clickable{ cursor:pointer; }
     .iMain{ min-width:0; }
     .iTop{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
     .iTitle{
@@ -240,6 +242,16 @@
     .mini.ghost{
       background:#fff; color:var(--violet); border:2px solid var(--violet);
       box-shadow:0 3px 10px rgba(0,0,0,.06);
+    }
+    .mini.red{
+      background:#ffe3ec; color:var(--bad);
+      border:2px solid rgba(179,38,30,0.20);
+      box-shadow:0 3px 10px rgba(0,0,0,.06);
+    }
+    .mini.disabled{
+      opacity:.45;
+      pointer-events:none;
+      filter: grayscale(1);
     }
     .mini:disabled{ opacity:.6; cursor:not-allowed; }
 
@@ -394,6 +406,17 @@
           <span class="badge" id="homesCount">—</span>
         </summary>
         <div class="accBody">
+          <div class="row" style="align-items:flex-end;">
+            <div style="flex:1; min-width:220px;">
+              <label for="homesSearchInput" style="margin-top:10px;">Recherche</label>
+              <input id="homesSearchInput" type="search" placeholder="Nom, ville, adresse, propriétaire, type, équipe…" />
+            </div>
+            <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;">
+              <button class="btn primary" type="button" id="addHomeBtn">+ Ajouter</button>
+              <button class="btn" type="button" id="toggleHomesArchivedBtn">Afficher archivés</button>
+            </div>
+          </div>
+
           <div class="list" id="homesList"></div>
         </div>
       </details>
@@ -473,12 +496,61 @@
     </div>
   </div>
 
+  <!-- MODALE AJOUTER / MODIFIER LOGEMENT (copie logique de logements.html) -->
+  <div class="modal-backdrop" id="homeModalBackdrop" aria-hidden="true">
+    <div class="modal" role="dialog" aria-modal="true">
+      <h2 id="homeModalTitle">Ajouter un logement</h2>
+      <p>Adresse obligatoire si tu veux que l’agent sache où aller (intervention).</p>
+
+      <form id="homeForm">
+        <div class="row">
+          <div>
+            <label for="homeName">Nom du logement</label>
+            <input id="homeName" type="text" placeholder="Ex. T2 Centre" required />
+          </div>
+          <div>
+            <label for="homeCity">Ville</label>
+            <input id="homeCity" type="text" placeholder="Ex. Muret" required />
+          </div>
+        </div>
+
+        <label for="homeAddress">Adresse (pour interventions)</label>
+        <input id="homeAddress" type="text" placeholder="Ex. 12 rue Victor Hugo, 31600 Muret" required />
+
+        <label for="ownerEmail">Email du propriétaire</label>
+        <input id="ownerEmail" type="email" placeholder="ex. proprietaire@email.com" required />
+
+        <label for="homeOwner">Nom du propriétaire</label>
+        <input id="homeOwner" type="text" placeholder="Ex. Mme Marie Dupont" required />
+
+        <div class="row">
+          <div>
+            <label for="homeType">Type</label>
+            <select id="homeType">
+              <option>Studio</option><option>T1</option><option>T2</option><option>T3</option>
+              <option>T4 et +</option><option>Maison</option>
+            </select>
+          </div>
+          <div>
+            <label for="homeTeam">Agent / Équipe</label>
+            <input id="homeTeam" type="text" placeholder="Ex. Sarah / Prestataire X" />
+          </div>
+        </div>
+
+        <div class="modal-actions">
+          <button class="btn" type="button" id="cancelHomeModalBtn">Annuler</button>
+          <button class="btn primary" type="submit" id="saveHomeBtn">Enregistrer</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <script type="module">
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
       collection, query, where, orderBy, limit, getDocs,
-      addDoc, doc, getDoc, updateDoc, serverTimestamp
+      addDoc, doc, updateDoc, serverTimestamp, deleteDoc
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     // UI
@@ -508,6 +580,11 @@
     const teamCount = document.getElementById("teamCount");
     const teamList = document.getElementById("teamList");
 
+    // Homes toolbar in accordion
+    const homesSearchInput = document.getElementById("homesSearchInput");
+    const addHomeBtn = document.getElementById("addHomeBtn");
+    const toggleHomesArchivedBtn = document.getElementById("toggleHomesArchivedBtn");
+
     // Modal booking
     const createBookingBtn = document.getElementById("createBookingBtn");
     const modalBackdrop = document.getElementById("modalBackdrop");
@@ -521,6 +598,20 @@
     const agentNameInput = document.getElementById("agentNameInput");
     const metaInput = document.getElementById("metaInput");
     const saveBookingBtn = document.getElementById("saveBookingBtn");
+
+    // Modal home
+    const homeModalBackdrop = document.getElementById("homeModalBackdrop");
+    const homeModalTitle = document.getElementById("homeModalTitle");
+    const cancelHomeModalBtn = document.getElementById("cancelHomeModalBtn");
+    const homeForm = document.getElementById("homeForm");
+    const homeName = document.getElementById("homeName");
+    const homeCity = document.getElementById("homeCity");
+    const homeAddress = document.getElementById("homeAddress");
+    const ownerEmailEl = document.getElementById("ownerEmail");
+    const homeOwner = document.getElementById("homeOwner");
+    const homeType = document.getElementById("homeType");
+    const homeTeam = document.getElementById("homeTeam");
+    const saveHomeBtn = document.getElementById("saveHomeBtn");
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -542,14 +633,13 @@
         .replaceAll("'","&#039;");
     }
     function asRaw(s){ return String(s || "").toUpperCase().trim(); }
+    function norm(s){ return (s||"").toString().toLowerCase().trim(); }
+    function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
 
     // ✅ EN_COURS / A_VALIDER / REALISEE / ANNULEE
     function normalizeOpStatus(s){
       const x = asRaw(s);
-
-      // on tolère TERMINEE/DONE => A_VALIDER (important pour ton bug)
       if(x === "TERMINEE" || x === "TERMINÉE") return "A_VALIDER";
-
       if(x === "DRAFT" || x === "BROUILLON" || x === "EN COURS") return "EN_COURS";
       if(x === "A_VALIDER" || x === "À VALIDER") return "A_VALIDER";
       if(x === "DONE" || x === "REALISEE" || x === "RÉALISÉE") return "REALISEE";
@@ -601,7 +691,6 @@
       }
       return (s.trim()[0] || "").toUpperCase();
     }
-    function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
 
     // Auth
     logoutBtn.addEventListener("click", async ()=>{
@@ -621,11 +710,14 @@
     let eventsByDate = new Map();
     let toValidate = [];
     let ownersMap = new Map();
-    let homesMap = new Map();
     let teamMap = new Map();
 
-    // homes cache (pour modal création)
-    let allHomes = []; // {id,name,city,address,ownerEmail,ownerName,type,team,assignedToEmail?,assignedToName?}
+    // Homes (source of truth homes collection)
+    let allHomes = []; // docs homes
+    let showHomesArchived = false;
+    let editingHomeId = null;
+
+    function isArchivedHome(h){ return (h?.status === "archived"); }
 
     function monthRangeKeys(y, m){
       const start = new Date(y, m, 1);
@@ -638,23 +730,25 @@
       homeSelect.innerHTML = `<option value="">— Choisir un logement —</option>`;
 
       try{
-        const q = query(collection(db,"homes"), where("conciergerieUid","==", currentUser.uid), limit(500));
-        const snap = await getDocs(q);
+        const qH = query(collection(db,"homes"), where("conciergerieUid","==", currentUser.uid), limit(500));
+        const snap = await getDocs(qH);
         allHomes = snap.docs.map(d=>({ id:d.id, ...(d.data()||{}) }));
 
-        // tri simple
         allHomes.sort((a,b)=> String(a.name||"").localeCompare(String(b.name||"")));
 
         for(const h of allHomes){
-          const label = `${h.name || "Logement"}${h.city ? " — "+h.city : ""}`;
+          const label = `${h.name || "Logement"}${h.city ? " — "+h.city : ""}${isArchivedHome(h) ? " (archivé)" : ""}`;
           const opt = document.createElement("option");
           opt.value = h.id;
           opt.textContent = label;
+          if(isArchivedHome(h)) opt.disabled = true;
           homeSelect.appendChild(opt);
         }
+
+        renderHomesSection();
       }catch(err){
         console.warn("loadHomes failed:", err?.message || err);
-        // pas bloquant
+        renderHomesSection();
       }
     }
 
@@ -665,7 +759,6 @@
       allEvents = [];
       eventsByDate = new Map();
       ownersMap = new Map();
-      homesMap = new Map();
       teamMap = new Map();
       toValidate = [];
 
@@ -673,7 +766,6 @@
 
       let docs = [];
 
-      // tentative "propre" (peut demander index)
       try{
         const qMonth = query(
           collection(db,"events"),
@@ -688,7 +780,6 @@
       }catch(err){
         console.warn("qMonth failed (likely index). fallback no-orderBy:", err?.message || err);
 
-        // fallback SANS orderBy (pas d'index composite requis)
         try{
           const qFallback = query(
             collection(db,"events"),
@@ -743,13 +834,6 @@
           ownersMap.set(key, cur);
         }
 
-        const homeKey = (obj.homeId || (obj.homeName + "|" + obj.homeCity)).trim();
-        if(homeKey){
-          const cur = homesMap.get(homeKey) || { homeKey, homeName: obj.homeName, homeCity: obj.homeCity, count:0 };
-          cur.count += 1;
-          homesMap.set(homeKey, cur);
-        }
-
         if(obj.assignedToEmail || obj.assignedToName){
           const key = (obj.assignedToEmail || obj.assignedToName || "").toLowerCase();
           const cur = teamMap.get(key) || { agentEmail: obj.assignedToEmail || "", agentName: obj.assignedToName || "", count:0 };
@@ -795,7 +879,8 @@
       renderCalendar();
       renderDayList();
       renderAccordionsCounts();
-      renderAccordionsLists();
+      renderOwnersAndTeamLists();
+      renderHomesSection(); // homes = Firestore homes, pas events
     }
 
     function renderToValidate(){
@@ -1023,11 +1108,12 @@
 
     function renderAccordionsCounts(){
       ownersCount.textContent = `${ownersMap.size}`;
-      homesCount.textContent = `${homesMap.size}`;
       teamCount.textContent = `${teamMap.size}`;
+      // homesCount géré dans renderHomesSection()
     }
 
-    function renderAccordionsLists(){
+    function renderOwnersAndTeamLists(){
+      // Owners
       ownersList.innerHTML = "";
       const owners = Array.from(ownersMap.values()).sort((a,b)=> (b.count - a.count) || (a.ownerEmail||"").localeCompare(b.ownerEmail||""));
       if(!owners.length){
@@ -1059,37 +1145,7 @@
         }
       }
 
-      homesList.innerHTML = "";
-      const homes = Array.from(homesMap.values()).sort((a,b)=> (b.count-a.count) || (a.homeName||"").localeCompare(b.homeName||""));
-      if(!homes.length){
-        homesList.innerHTML = `<div class="item"><div class="iMain"><div class="iTitle">Aucun logement</div><div class="iSub">Ajoute des prestations avec homeName.</div></div></div>`;
-      }else{
-        for(const h of homes){
-          const div = document.createElement("div");
-          div.className = "item";
-          div.innerHTML = `
-            <div class="iMain">
-              <div class="iTop"><span class="badge">${h.count} prestation(s)</span></div>
-              <div class="iTitle">${esc(h.homeName || "Logement")}${h.homeCity ? " — " + esc(h.homeCity) : ""}</div>
-              <div class="iSub">${esc(h.homeKey)}</div>
-            </div>
-            <div class="iActions">
-              <button class="mini ghost" type="button" data-home="${esc(h.homeKey)}">Voir</button>
-            </div>
-          `;
-          homesList.appendChild(div);
-
-          div.querySelector(`[data-home="${h.homeKey}"]`)?.addEventListener("click", ()=>{
-            const found = allEvents.find(e => (e.homeId || (e.homeName+"|"+e.homeCity)).trim() === h.homeKey);
-            if(found){
-              selectedDateKey = found.dateKey;
-              renderCalendar();
-              renderDayList();
-            }
-          });
-        }
-      }
-
+      // Team
       teamList.innerHTML = "";
       const team = Array.from(teamMap.values()).sort((a,b)=> (b.count-a.count) || (a.agentName||"").localeCompare(b.agentName||""));
       if(!team.length){
@@ -1123,6 +1179,299 @@
       }
     }
 
+    // ----------------------------
+    // LOGEMENTS (planning-centric)
+    // ----------------------------
+    function renderHomesSection(){
+      const q = norm(homesSearchInput?.value || "");
+      const total = allHomes.length;
+      const visibleBase = showHomesArchived ? allHomes.slice() : allHomes.filter(h=> !isArchivedHome(h));
+
+      const filtered = !q ? visibleBase : visibleBase.filter(h=>{
+        const hay = [
+          h.name, h.city, h.homeAddress, h.address,
+          h.ownerName, h.ownerEmail, h.type, h.team
+        ].map(norm).join(" ");
+        return hay.includes(q);
+      });
+
+      // Badge compteur propre
+      const activeCount = allHomes.filter(h=>!isArchivedHome(h)).length;
+      homesCount.textContent = `${activeCount}/${total}`;
+
+      homesList.innerHTML = "";
+
+      if(!filtered.length){
+        const div = document.createElement("div");
+        div.className = "item";
+        div.innerHTML = `
+          <div class="iMain">
+            <div class="iTitle">${total ? "Aucun résultat" : "Aucun logement"}</div>
+            <div class="iSub">${total ? "Change la recherche ou affiche les archivés." : "Clique sur “+ Ajouter”."}</div>
+          </div>
+          <div class="iActions">
+            <button class="mini ghost" type="button" disabled>—</button>
+          </div>
+        `;
+        homesList.appendChild(div);
+        return;
+      }
+
+      for(const h of filtered){
+        const ownerLabel = h.ownerName || h.ownerEmail || "—";
+        const addr = (h.homeAddress || h.address || "").trim();
+        const archived = isArchivedHome(h);
+
+        const div = document.createElement("div");
+        div.className = "item clickable";
+        div.innerHTML = `
+          <div class="iMain">
+            <div class="iTop">
+              <span class="badge">${esc(h.type || "Type")}</span>
+              <span class="badge">${esc(h.team || "—")}</span>
+              ${addr ? `<span class="badge ok">Adresse OK</span>` : `<span class="badge bad">Adresse manquante</span>`}
+              ${archived ? `<span class="badge bad">Archivé</span>` : ``}
+            </div>
+            <div class="iTitle">${esc(h.name || "Logement")}${h.city ? " — " + esc(h.city) : ""}</div>
+            <div class="iSub">
+              ${addr ? esc(addr) + " • " : ""}Propriétaire : ${esc(ownerLabel)}${h.ownerEmail ? " • " + esc(h.ownerEmail) : ""}
+            </div>
+          </div>
+          <div class="iActions">
+            ${
+              archived
+                ? `<span class="mini disabled">Créer réservation</span>`
+                : `<button class="mini" type="button" data-book="${esc(h.id)}">Créer réservation</button>`
+            }
+            <button class="mini red" type="button" data-delete-home="${esc(h.id)}">Supprimer</button>
+            ${
+              archived
+                ? `<button class="mini ghost" type="button" data-restore="${esc(h.id)}">Restaurer</button>`
+                : `<button class="mini ghost" type="button" data-archive="${esc(h.id)}">Archiver</button>`
+            }
+          </div>
+        `;
+        homesList.appendChild(div);
+
+        // Click item = edit
+        div.addEventListener("click", ()=>{
+          openHomeModalEdit(h);
+        });
+
+        // Stop propagation for action buttons
+        div.querySelectorAll(".iActions button, .iActions span").forEach(el=>{
+          el.addEventListener("click", (e)=> e.stopPropagation());
+        });
+
+        // Create reservation
+        div.querySelector(`[data-book="${h.id}"]`)?.addEventListener("click", ()=>{
+          if(isArchivedHome(h)) return showAlert("⛔ Logement archivé : impossible de créer une réservation.", false);
+          openBookingModal(h.id);
+        });
+
+        // Archive
+        div.querySelector(`[data-archive="${h.id}"]`)?.addEventListener("click", async ()=>{
+          hideAlert();
+          const ok = confirm("Archiver ce logement ? (il n’apparaîtra plus par défaut)");
+          if(!ok) return;
+          try{
+            await updateDoc(doc(db,"homes", h.id), { status:"archived", archivedAt: serverTimestamp() });
+            const x = allHomes.find(z=>z.id===h.id);
+            if(x) x.status = "archived";
+            renderHomesSection();
+          }catch(err){
+            console.error(err);
+            showAlert("Erreur archive : " + (err?.message || "inconnue"));
+          }
+        });
+
+        // Restore
+        div.querySelector(`[data-restore="${h.id}"]`)?.addEventListener("click", async ()=>{
+          hideAlert();
+          try{
+            await updateDoc(doc(db,"homes", h.id), { status:"active", unarchivedAt: serverTimestamp() });
+            const x = allHomes.find(z=>z.id===h.id);
+            if(x) x.status = "active";
+            renderHomesSection();
+            // refresh select options disabled
+            await loadHomes();
+          }catch(err){
+            console.error(err);
+            showAlert("Erreur restauration : " + (err?.message || "inconnue"));
+          }
+        });
+
+        // Delete with guards
+        div.querySelector(`[data-delete-home="${h.id}"]`)?.addEventListener("click", async ()=>{
+          hideAlert();
+
+          const label = `${h.name || "Logement"} (${h.city || "—"})`;
+
+          // guards : events + icalEvents
+          try{
+            const hasEvents = await hasAnyDocForHome("events", h.id);
+            if(hasEvents){
+              showAlert("⛔ Suppression bloquée : ce logement a déjà des prestations rattachées. Utilise “Archiver”.");
+              return;
+            }
+            const hasIcal = await hasAnyDocForHome("icalEvents", h.id);
+            if(hasIcal){
+              showAlert("⛔ Suppression bloquée : ce logement a des réservations iCal rattachées. Utilise “Archiver”.");
+              return;
+            }
+          }catch(err){
+            console.error(err);
+            showAlert("Erreur vérification historique : " + (err?.message || "inconnue"));
+            return;
+          }
+
+          const ok = confirm(`Supprimer définitivement ${label} ?\nCette action est irréversible.`);
+          if(!ok) return;
+
+          try{
+            await deleteDoc(doc(db,"homes", h.id));
+            allHomes = allHomes.filter(z=>z.id !== h.id);
+            renderHomesSection();
+            await loadHomes(); // rebuild select
+            showAlert("✅ Logement supprimé définitivement.", true);
+          }catch(err){
+            console.error(err);
+            showAlert("Erreur suppression : " + (err?.message || "inconnue"));
+          }
+        });
+      }
+
+      toggleHomesArchivedBtn.textContent = showHomesArchived ? "Masquer archivés" : "Afficher archivés";
+    }
+
+    async function hasAnyDocForHome(colName, homeId){
+      // tentative propre (2 where)
+      try{
+        const q1 = query(
+          collection(db, colName),
+          where("conciergerieUid","==", currentUser.uid),
+          where("homeId","==", homeId),
+          limit(1)
+        );
+        const s1 = await getDocs(q1);
+        return !s1.empty;
+      }catch(e){
+        // fallback : query homeId only (puis filtre client)
+        const q2 = query(collection(db, colName), where("homeId","==", homeId), limit(5));
+        const s2 = await getDocs(q2);
+        return s2.docs.some(d => (d.data()?.conciergerieUid || "") === currentUser.uid);
+      }
+    }
+
+    // Home modal open/close
+    function openHomeModalCreate(){
+      editingHomeId = null;
+      homeModalTitle.textContent = "Ajouter un logement";
+      homeModalBackdrop.style.display = "flex";
+      homeModalBackdrop.setAttribute("aria-hidden","false");
+      homeForm.reset();
+      homeType.value = "Studio";
+      homeTeam.value = "";
+      setTimeout(()=> homeName.focus(), 0);
+    }
+
+    function openHomeModalEdit(h){
+      editingHomeId = h.id;
+      homeModalTitle.textContent = "Modifier le logement";
+      homeModalBackdrop.style.display = "flex";
+      homeModalBackdrop.setAttribute("aria-hidden","false");
+
+      homeName.value = h.name || "";
+      homeCity.value = h.city || "";
+      homeAddress.value = h.homeAddress || h.address || "";
+      ownerEmailEl.value = h.ownerEmail || "";
+      homeOwner.value = h.ownerName || "";
+      homeType.value = h.type || "Studio";
+      homeTeam.value = h.team || "";
+
+      setTimeout(()=> homeName.focus(), 0);
+    }
+
+    function closeHomeModal(){
+      homeModalBackdrop.style.display = "none";
+      homeModalBackdrop.setAttribute("aria-hidden","true");
+      homeForm.reset();
+      homeType.value = "Studio";
+      homeTeam.value = "";
+      editingHomeId = null;
+    }
+
+    // Create/update home
+    homeForm.addEventListener("submit", async (e)=>{
+      e.preventDefault();
+      hideAlert();
+
+      const name = homeName.value.trim();
+      const city = homeCity.value.trim();
+      const addr = homeAddress.value.trim();
+      const ownerName = homeOwner.value.trim();
+      const ownerEmail = normalizeEmail(ownerEmailEl.value);
+      const type = homeType.value;
+      const team = (homeTeam.value || "").trim();
+
+      if(!name || !city || !addr || !ownerName || !ownerEmail){
+        showAlert("Champs manquants : nom + ville + adresse + email propriétaire + nom propriétaire.");
+        return;
+      }
+      if(!/^\S+@\S+\.\S+$/.test(ownerEmail)){
+        showAlert("Email propriétaire invalide.");
+        return;
+      }
+
+      saveHomeBtn.disabled = true;
+      saveHomeBtn.textContent = "…";
+
+      try{
+        if(editingHomeId){
+          await updateDoc(doc(db,"homes", editingHomeId), {
+            name, city,
+            homeAddress: addr,
+            ownerName, ownerEmail,
+            type, team,
+            updatedAt: serverTimestamp()
+          });
+          closeHomeModal();
+          await loadHomes();
+          showAlert("✅ Logement modifié.", true);
+        }else{
+          await addDoc(collection(db,"homes"), {
+            conciergerieUid: currentUser.uid,
+            name, city,
+            homeAddress: addr,
+            ownerName, ownerEmail,
+            type, team,
+            status: "active",
+            createdAt: serverTimestamp()
+          });
+          closeHomeModal();
+          await loadHomes();
+          showAlert("✅ Logement créé.", true);
+        }
+      }catch(err){
+        console.error(err);
+        showAlert("Erreur enregistrement : " + (err?.message || "inconnue"));
+      }finally{
+        saveHomeBtn.disabled = false;
+        saveHomeBtn.textContent = "Enregistrer";
+      }
+    });
+
+    // UI wiring for homes
+    addHomeBtn.addEventListener("click", openHomeModalCreate);
+    toggleHomesArchivedBtn.addEventListener("click", ()=>{
+      showHomesArchived = !showHomesArchived;
+      renderHomesSection();
+    });
+    homesSearchInput.addEventListener("input", renderHomesSection);
+
+    cancelHomeModalBtn.addEventListener("click", closeHomeModal);
+    homeModalBackdrop.addEventListener("click", (e)=>{ if(e.target === homeModalBackdrop) closeHomeModal(); });
+
     // Nav calendrier
     prevMonthBtn.addEventListener("click", ()=>{
       const d = new Date(viewYear, viewMonth, 1);
@@ -1152,30 +1501,30 @@
     });
 
     // ===== MODALE CRÉER RÉSERVATION =====
-    function openModal(){
+    function openBookingModal(forHomeId=""){
       hideAlert();
       modalBackdrop.style.display = "flex";
       modalBackdrop.setAttribute("aria-hidden","false");
 
-      // pré-remplissage date = date sélectionnée
       dateKeyInput.value = selectedDateKey || toDateKey(new Date());
       timeInput.value = "";
 
-      // si un homeId est passé en URL (logements.html -> planning.html?homeId=...)
-      const urlHomeId = new URLSearchParams(location.search).get("homeId") || "";
-      if(urlHomeId){
-        homeSelect.value = urlHomeId;
+      if(forHomeId){
+        homeSelect.value = forHomeId;
+      }else{
+        const urlHomeId = new URLSearchParams(location.search).get("homeId") || "";
+        if(urlHomeId) homeSelect.value = urlHomeId;
       }
     }
-    function closeModal(){
+    function closeBookingModal(){
       modalBackdrop.style.display = "none";
       modalBackdrop.setAttribute("aria-hidden","true");
       bookingForm.reset();
     }
 
-    createBookingBtn.addEventListener("click", openModal);
-    cancelModalBtn.addEventListener("click", closeModal);
-    modalBackdrop.addEventListener("click", (e)=>{ if(e.target === modalBackdrop) closeModal(); });
+    createBookingBtn.addEventListener("click", ()=> openBookingModal(""));
+    cancelModalBtn.addEventListener("click", closeBookingModal);
+    modalBackdrop.addEventListener("click", (e)=>{ if(e.target === modalBackdrop) closeBookingModal(); });
 
     bookingForm.addEventListener("submit", async (e)=>{
       e.preventDefault();
@@ -1194,12 +1543,12 @@
 
       const home = allHomes.find(h=>h.id===homeId);
       if(!home) return showAlert("Logement introuvable (recharge la page).");
+      if(isArchivedHome(home)) return showAlert("⛔ Logement archivé : impossible de créer une réservation.");
 
       saveBookingBtn.disabled = true;
       saveBookingBtn.textContent = "…";
 
       try{
-        // backfill depuis homes
         const payload = {
           conciergerieUid: currentUser.uid,
 
@@ -1207,23 +1556,20 @@
           time: tt,
           type: type,
 
-          // lien logement
           homeId: homeId,
           homeName: home.name || "",
           homeCity: home.city || "",
-          homeAddress: home.address || "",
+          // FIX cohérence: homes stocke homeAddress
+          homeAddress: home.homeAddress || home.address || "",
 
-          // lien propriétaire
           ownerEmail: home.ownerEmail || "",
           ownerName: home.ownerName || "",
 
-          // agent (soit saisi, soit home.team si tu veux — ici on garde simple)
           assignedToEmail: aEmail || "",
           assignedToName: aName || "",
 
           meta: meta,
 
-          // status flux
           status: "EN_COURS",
           opStatus: "EN_COURS",
 
@@ -1231,16 +1577,12 @@
           updatedAt: serverTimestamp()
         };
 
-        const ref = await addDoc(collection(db,"events"), payload);
+        await addDoc(collection(db,"events"), payload);
 
-        closeModal();
+        closeBookingModal();
         showAlert("✅ Réservation créée.", true);
 
-        // refresh planning + focus jour + open prestations direct si tu veux
         selectedDateKey = dk;
-
-        // option: ouvrir prestations sur la ligne créée
-        // location.href = `prestations.html?open=${encodeURIComponent(ref.id)}`;
 
         await loadEventsForMonth();
         renderCalendar();
@@ -1272,10 +1614,10 @@
         await loadHomes();
         await loadEventsForMonth();
 
-        // si un homeId est passé => ouvre modal (pratique depuis logements)
         const urlHomeId = new URLSearchParams(location.search).get("homeId") || "";
         if(urlHomeId){
-          openModal();
+          // ouvre modal réservation direct si on arrive depuis logements.html
+          openBookingModal(urlHomeId);
         }
       }catch(err){
         console.error(err);
