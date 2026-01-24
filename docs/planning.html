@@ -466,7 +466,7 @@
   <!-- MODALE CRÉER RÉSERVATION -->
   <div class="modal-backdrop" id="modalBackdrop" aria-hidden="true">
     <div class="modal" role="dialog" aria-modal="true" aria-label="Créer une réservation">
-      <h2>Créer une réservation</h2>
+      <h2 id="bookingModalTitle">Créer une réservation</h2>
       <p>Réservation rattachée au logement sélectionné. L’adresse est reprise automatiquement.</p>
 
       <form id="bookingForm" autocomplete="off">
@@ -617,6 +617,7 @@
     const modalBackdrop = document.getElementById("modalBackdrop");
     const cancelModalBtn = document.getElementById("cancelModalBtn");
     const bookingForm = document.getElementById("bookingForm");
+    const bookingModalTitle = document.getElementById("bookingModalTitle");
     const homeSelect = document.getElementById("homeSelect");
     const homeSelectLabel = document.getElementById("homeSelectLabel");
     const homeInfoBox = document.getElementById("homeInfoBox");
@@ -815,7 +816,6 @@
         const snap = await getDocs(qH);
         allHomes = snap.docs.map(d=>({ id:d.id, ...(d.data()||{}) }));
 
-        // ✅ tri: nouveaux en haut (createdAt desc), sinon updatedAt desc, sinon nom
         allHomes.sort((a,b)=>{
           const aA = tsToMs(a.createdAt) || tsToMs(a.updatedAt);
           const bA = tsToMs(b.createdAt) || tsToMs(b.updatedAt);
@@ -834,7 +834,6 @@
     function renderHomesAccordion(){
       const q = norm(homesSearchInput?.value || "");
 
-      // ✅ active d'abord, puis archived (si on les affiche)
       const visibleHomes = allHomes
         .filter(h=>{
           if(!showHomesArchived && isArchivedHome(h)) return false;
@@ -1031,7 +1030,6 @@
       toValidate = [];
 
       const { startKey, endKey } = monthRangeKeys(viewYear, viewMonth);
-
       let docs = [];
 
       try{
@@ -1079,6 +1077,7 @@
           id: ev.id,
           dateKey: dk,
           time: (ev.time || ev.arrivalTime || "").toString(),
+
           homeId: ev.homeId || "",
           homeName: ev.homeName || h?.name || "Logement",
           homeCity: ev.homeCity || ev.city || h?.city || "",
@@ -1089,6 +1088,7 @@
           ownerEmail: (ev.ownerEmail || h?.ownerEmail || "").toString(),
           assignedToName: ev.assignedToName || ev.agentName || "",
           assignedToEmail: (ev.assignedToEmail || ev.agentEmail || "").toString().toLowerCase(),
+
           meta: ev.meta || ev.summary || ev.stayNote || "",
           opStatus: normalizeOpStatus(ev.opStatus || ev.status || "EN_COURS"),
           type: ev.type || "Prestation",
@@ -1319,7 +1319,6 @@
       const list = (eventsByDate.get(selectedDateKey) || []).slice();
       list.sort((a,b)=> (a.time||"").localeCompare(b.time||""));
 
-      // affichage "count" = nombre de logements concernés (pas le nombre d'events)
       const groups = new Map();
 
       for(const ev of list){
@@ -1335,11 +1334,12 @@
           items: []
         };
         g.items.push(ev);
-        // garde les infos non vides
+
         if(!g.ownerEmail && ev.ownerEmail) g.ownerEmail = ev.ownerEmail;
         if(!g.ownerName && ev.ownerName) g.ownerName = ev.ownerName;
         if(!g.agentName && ev.assignedToName) g.agentName = ev.assignedToName;
         if(!g.agentEmail && ev.assignedToEmail) g.agentEmail = ev.assignedToEmail;
+
         groups.set(key, g);
       }
 
@@ -1370,16 +1370,14 @@
       for(const g of merged){
         const title = `${g.homeName}${g.homeCity ? " — " + g.homeCity : ""}`;
 
-        // détecte booking vs prestation
         const itemsSorted = g.items.slice().sort((a,b)=>(a.time||"").localeCompare(b.time||""));
+
         const isBooking = (x) => !!(x.arrivalDate || x.departureDate || x.stayNote);
-const isPrestation = (x) => !isBooking(x) && /presta|prestation/.test(String(x.type || "").toLowerCase());
+        const isPrestation = (x) => !isBooking(x) && /presta|prestation/.test(String(x.type || "").toLowerCase());
 
-const booking = itemsSorted.find(isBooking);
-const prestation = itemsSorted.find(isPrestation);
+        const booking = itemsSorted.find(isBooking);
+        const prestation = itemsSorted.find(isPrestation);
 
-
-        // statut global : priorités A_VALIDER > EN_COURS > REALISEE > ANNULEE
         const statuses = itemsSorted.map(x=>normalizeOpStatus(x.opStatus));
         let globalSt = "EN_COURS";
         if(statuses.includes("A_VALIDER")) globalSt = "A_VALIDER";
@@ -1412,34 +1410,31 @@ const prestation = itemsSorted.find(isPrestation);
             <div class="iTitle">${esc(title)}</div>
             <div class="iSub">${esc(sub || booking?.meta || prestation?.meta || "—")}</div>
           </div>
-          
-         <div class="iActions">
-  ${
-    globalSt === "A_VALIDER"
-      ? `<button class="mini" type="button" data-validate="${esc(itemsSorted.find(x=>normalizeOpStatus(x.opStatus)==="A_VALIDER")?.id || "")}">Valider</button>`
-      : (
-          booking?.id
-            ? `<button class="mini ghost" type="button" data-edit-booking="${esc(booking.id)}">Modifier</button>`
-            : `<button class="mini ghost" type="button" disabled>Modifier</button>`
-        )
-  }
 
-  ${
-    globalSt !== "A_VALIDER"
-      ? (
-          prestation?.id
-            ? `<button class="mini ghost" type="button" data-production-open="${esc(prestation.id)}">Production</button>`
-            : `<button class="mini" type="button" data-create-presta="${esc(g.homeId)}">Créer une prestation</button>`
-        )
-      : ``
-  }
-</div>
+          <div class="iActions">
+            ${
+              globalSt === "A_VALIDER"
+                ? `<button class="mini" type="button" data-validate="${esc(itemsSorted.find(x=>normalizeOpStatus(x.opStatus)==="A_VALIDER")?.id || "")}">Valider</button>`
+                : (booking?.id
+                    ? `<button class="mini ghost" type="button" data-edit-booking="${esc(booking.id)}">Modifier</button>`
+                    : `<button class="mini ghost" type="button" disabled>Modifier</button>`
+                  )
+            }
 
-          
+            ${
+              globalSt !== "A_VALIDER"
+                ? (
+                    prestation?.id
+                      ? `<button class="mini ghost" type="button" data-production-open="${esc(prestation.id)}">Production</button>`
+                      : `<button class="mini" type="button" data-create-presta="${esc(g.homeId)}">Créer une prestation</button>`
+                  )
+                : ``
+            }
+          </div>
         `;
         dayList.appendChild(div);
 
-        // Valider : on prend l’event A_VALIDER s’il existe
+        // Valider
         div.querySelector(`[data-validate]`)?.addEventListener("click", (e)=>{
           e.stopPropagation();
           const id = e.currentTarget.getAttribute("data-validate");
@@ -1447,99 +1442,60 @@ const prestation = itemsSorted.find(isPrestation);
           if(ev) validateEvent(ev);
         });
 
-// ✅ Modifier (Réservation) -> on ré-ouvre la modale booking avec les champs pré-remplis
-div.querySelector(`[data-edit-booking="${booking?.id || ""}"]`)?.addEventListener("click", (e)=>{
-  e.stopPropagation();
-  if(!booking?.id) return;
+        // ✅ Modifier réservation : ouvre modale en mode EDIT
+        div.querySelector(`[data-edit-booking="${booking?.id || ""}"]`)?.addEventListener("click", (e)=>{
+          e.stopPropagation();
+          if(!booking?.id) return;
 
-  // homeId du groupe (logement)
-  if(!g.homeId){
-    showAlert("⛔ homeId manquant pour modifier la réservation.");
-    return;
-  }
+          if(!g.homeId){
+            showAlert("⛔ homeId manquant pour modifier la réservation.");
+            return;
+          }
 
-  // Ouvre la modale booking (déjà existante)
-  openBookingModal(g.homeId);
+          openBookingModal(g.homeId);
 
-  // ✅ pré-remplissage avec la réservation existante
-  arrivalDateInput.value = booking.arrivalDate || booking.dateKey || selectedDateKey || "";
-  arrivalTimeInput.value = booking.arrivalTime || booking.time || "";
-  departureDateInput.value = booking.departureDate || addDays(arrivalDateInput.value || selectedDateKey, 1);
-  departureTimeInput.value = booking.departureTime || "";
-  metaInput.value = booking.stayNote || booking.meta || "";
+          arrivalDateInput.value = booking.arrivalDate || booking.dateKey || selectedDateKey || "";
+          arrivalTimeInput.value = booking.arrivalTime || booking.time || "";
+          departureDateInput.value = booking.departureDate || addDays(arrivalDateInput.value || selectedDateKey, 1);
+          departureTimeInput.value = booking.departureTime || "";
 
-  agentEmailInput.value = booking.assignedToEmail || booking.agentEmail || "";
-  agentNameInput.value = booking.assignedToName || booking.agentName || "";
+          metaInput.value = booking.stayNote || booking.meta || "";
+          agentEmailInput.value = booking.assignedToEmail || booking.agentEmail || "";
+          agentNameInput.value = booking.assignedToName || booking.agentName || "";
 
-  // ✅ on passe en mode "édition réservation"
-  bookingForm.dataset.editEventId = booking.id;
+          bookingForm.dataset.editEventId = booking.id;
+          bookingModalTitle.textContent = "Modifier la réservation";
+          saveBookingBtn.textContent = "Enregistrer";
+        });
 
-  // bouton
-  saveBookingBtn.textContent = "Enregistrer";
-});
-
-
-        
-        // ✅ Production : ouvrir prestations.html sur la prestation existante
-if(prestation?.id){
-  div.querySelector(`[data-production-open="${prestation.id}"]`)?.addEventListener("click", (e)=>{
-    e.stopPropagation();
-    location.href = `prestations.html?open=${encodeURIComponent(prestation.id)}`;
-  });
-}
-
-// ✅ Créer une prestation : ouvrir nouvelle-prestation.html (avec homeId)
-div.querySelector(`[data-create-presta="${g.homeId}"]`)?.addEventListener("click", (e)=>{
-  e.stopPropagation();
-
-  const effectiveHomeId = g.homeId || booking?.homeId || "";
-  if(!effectiveHomeId){
-    showAlert("⛔ homeId manquant : impossible de créer une prestation.");
-    return;
-  }
-
-  const firstTime = itemsSorted.find(x=>x.time)?.time || "";
-  const params = new URLSearchParams();
-  params.set("homeId", effectiveHomeId);
-  params.set("from", "planning");
-  params.set("dateKey", selectedDateKey || "");
-  params.set("time", booking?.time || firstTime || "");
-  params.set("ownerName", g.ownerName || "");
-  params.set("ownerEmail", g.ownerEmail || "");
-  params.set("note", booking?.meta || booking?.stayNote || "");
-
-  location.href = `nouvelle-prestation.html?${params.toString()}`;
-});
-
-
-        
-        // Prestations : si prestation existe => ouvrir prestation ; sinon => créer depuis booking
-        div.querySelectorAll(`[data-open-group="${g.homeId}"]`)?.forEach(btn=>{
-          btn.addEventListener("click", (e)=>{
+        // ✅ Production
+        if(prestation?.id){
+          div.querySelector(`[data-production-open="${prestation.id}"]`)?.addEventListener("click", (e)=>{
             e.stopPropagation();
-
-            if(prestation?.id){
-              location.href = `prestations.html?open=${encodeURIComponent(prestation.id)}`;
-              return;
-            }
-
-            // pas de prestation => ouvrir nouvelle-prestation avec infos booking
-            if(!g.homeId){
-              showAlert("⛔ homeId manquant sur cet event.");
-              return;
-            }
-
-            const params = new URLSearchParams();
-            params.set("homeId", g.homeId);
-            params.set("from", "planning");
-            params.set("dateKey", selectedDateKey || "");
-            params.set("time", booking?.time || firstTime || "");
-            params.set("ownerName", g.ownerName || "");
-            params.set("ownerEmail", g.ownerEmail || "");
-            params.set("note", booking?.meta || booking?.stayNote || "");
-
-            location.href = `nouvelle-prestation.html?${params.toString()}`;
+            location.href = `prestations.html?open=${encodeURIComponent(prestation.id)}`;
           });
+        }
+
+        // ✅ Créer une prestation
+        div.querySelector(`[data-create-presta="${g.homeId}"]`)?.addEventListener("click", (e)=>{
+          e.stopPropagation();
+
+          const effectiveHomeId = g.homeId || booking?.homeId || "";
+          if(!effectiveHomeId){
+            showAlert("⛔ homeId manquant : impossible de créer une prestation.");
+            return;
+          }
+
+          const params = new URLSearchParams();
+          params.set("homeId", effectiveHomeId);
+          params.set("from", "planning");
+          params.set("dateKey", selectedDateKey || "");
+          params.set("time", booking?.time || firstTime || "");
+          params.set("ownerName", g.ownerName || "");
+          params.set("ownerEmail", g.ownerEmail || "");
+          params.set("note", booking?.meta || booking?.stayNote || "");
+
+          location.href = `nouvelle-prestation.html?${params.toString()}`;
         });
       }
     }
@@ -1668,11 +1624,20 @@ div.querySelector(`[data-create-presta="${g.homeId}"]`)?.addEventListener("click
       modalBackdrop.style.display = "flex";
       modalBackdrop.setAttribute("aria-hidden","false");
 
-      const base = selectedDateKey || toDateKey(new Date());
-      arrivalDateInput.value = base;
-      arrivalTimeInput.value = "";
-      departureDateInput.value = addDays(base, 1);
-      departureTimeInput.value = "";
+      // si pas en mode edit => valeurs par défaut
+      if(!bookingForm.dataset.editEventId){
+        const base = selectedDateKey || toDateKey(new Date());
+        arrivalDateInput.value = base;
+        arrivalTimeInput.value = "";
+        departureDateInput.value = addDays(base, 1);
+        departureTimeInput.value = "";
+        metaInput.value = "";
+        agentEmailInput.value = "";
+        agentNameInput.value = "";
+
+        bookingModalTitle.textContent = "Créer une réservation";
+        saveBookingBtn.textContent = "Créer";
+      }
 
       homeSelect.value = finalHomeId;
       homeSelectLabel.value = `${h.name || "Logement"}${h.city ? " — " + h.city : ""}`;
@@ -1688,9 +1653,10 @@ div.querySelector(`[data-create-presta="${g.homeId}"]`)?.addEventListener("click
       modalBackdrop.style.display = "none";
       modalBackdrop.setAttribute("aria-hidden","true");
       bookingForm.reset();
-        delete bookingForm.dataset.editEventId;
-  saveBookingBtn.textContent = "Créer";
-    
+
+      delete bookingForm.dataset.editEventId;
+      bookingModalTitle.textContent = "Créer une réservation";
+      saveBookingBtn.textContent = "Créer";
     }
 
     cancelModalBtn.addEventListener("click", closeBookingModal);
@@ -1730,54 +1696,60 @@ div.querySelector(`[data-create-presta="${g.homeId}"]`)?.addEventListener("click
       saveBookingBtn.disabled = true;
       saveBookingBtn.textContent = "…";
 
-      // ✅ ICI TU COLLES (juste sous le payload)
-    const editId = bookingForm.dataset.editEventId || "";
+      try{
+        const payload = {
+          conciergerieUid: currentUser.uid,
 
-    if(editId){
-      // UPDATE réservation existante
-      await updateDoc(doc(db,"events", editId), {
-        dateKey: arrivalDate,
-        time: arrivalTime,
+          dateKey: arrivalDate,
+          time: arrivalTime,
 
-        arrivalDate,
-        arrivalTime,
-        departureDate,
-        departureTime,
+          arrivalDate,
+          arrivalTime,
+          departureDate,
+          departureTime,
+          stayNote: meta,
 
-        stayNote: meta,
-        meta,
+          homeId,
+          homeName: home.name || "",
+          homeCity: home.city || "",
+          homeAddress: (home.homeAddress || home.address || ""),
 
-        assignedToEmail: aEmail || "",
-        assignedToName: aName || "",
+          ownerEmail: home.ownerEmail || "",
+          ownerName: home.ownerName || "",
 
-        updatedAt: serverTimestamp()
-      });
+          assignedToEmail: aEmail || "",
+          assignedToName: aName || "",
 
-      // nettoyage mode edit
-      delete bookingForm.dataset.editEventId;
-      saveBookingBtn.textContent = "Créer";
+          meta,
 
-      closeBookingModal();
-      showAlert("✅ Réservation modifiée.", true);
+          status: "EN_COURS",
+          opStatus: "EN_COURS",
 
-      selectedDateKey = arrivalDate;
-      setSelectedHomeId(homeId);
+          updatedAt: serverTimestamp()
+        };
 
-      await loadEventsForMonth();
-      return;
-    }
+        const editId = bookingForm.dataset.editEventId || "";
 
-    // CREATE réservation (comportement normal)
-    await addDoc(collection(db,"events"), payload);
+        // ✅ UPDATE réservation existante
+        if(editId){
+          await updateDoc(doc(db,"events", editId), payload);
 
-    closeBookingModal();
-    showAlert("✅ Réservation créée.", true);
+          delete bookingForm.dataset.editEventId;
+          closeBookingModal();
+          showAlert("✅ Réservation modifiée.", true);
 
-    selectedDateKey = arrivalDate;
-    setSelectedHomeId(homeId);
+          selectedDateKey = arrivalDate;
+          setSelectedHomeId(homeId);
 
-    await loadEventsForMonth();
-        await addDoc(collection(db,"events"), payload);
+          await loadEventsForMonth();
+          return;
+        }
+
+        // ✅ CREATE réservation (comportement normal)
+        await addDoc(collection(db,"events"), {
+          ...payload,
+          createdAt: serverTimestamp()
+        });
 
         closeBookingModal();
         showAlert("✅ Réservation créée.", true);
@@ -1786,12 +1758,13 @@ div.querySelector(`[data-create-presta="${g.homeId}"]`)?.addEventListener("click
         setSelectedHomeId(homeId);
 
         await loadEventsForMonth();
+
       }catch(err){
         console.error(err);
-        showAlert("Erreur création réservation : " + (err?.message || "inconnue"));
+        showAlert("Erreur réservation : " + (err?.message || "inconnue"));
       }finally{
         saveBookingBtn.disabled = false;
-        saveBookingBtn.textContent = "Créer";
+        saveBookingBtn.textContent = bookingForm.dataset.editEventId ? "Enregistrer" : "Créer";
       }
     });
 
