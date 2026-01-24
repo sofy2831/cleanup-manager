@@ -1062,7 +1062,6 @@
         }
       }
 
-      // ✅ anti doublon par sécurité (au cas où)
       const seen = new Set();
 
       for(const ev of docs){
@@ -1092,7 +1091,11 @@
           assignedToEmail: (ev.assignedToEmail || ev.agentEmail || "").toString().toLowerCase(),
           meta: ev.meta || ev.summary || ev.stayNote || "",
           opStatus: normalizeOpStatus(ev.opStatus || ev.status || "EN_COURS"),
-          type: ev.type || "Prestation"
+          type: ev.type || "Prestation",
+
+          arrivalDate: ev.arrivalDate || "",
+          departureDate: ev.departureDate || "",
+          stayNote: ev.stayNote || ""
         };
 
         allEvents.push(obj);
@@ -1142,7 +1145,6 @@
           updatedAt: serverTimestamp()
         });
 
-        // ✅ après validation, on ouvre Prestations sur l'event
         location.href = `prestations.html?open=${encodeURIComponent(ev.id)}`;
       }catch(err){
         console.error(err);
@@ -1310,14 +1312,46 @@
       dayTitle.textContent = `Jour — ${selectedDateKey}`;
     }
 
+    // ✅ FUSION 1 ligne / logement / jour
     function renderDayList(){
       dayList.innerHTML = "";
+
       const list = (eventsByDate.get(selectedDateKey) || []).slice();
       list.sort((a,b)=> (a.time||"").localeCompare(b.time||""));
 
-      dayCount.textContent = `${list.length}`;
+      // affichage "count" = nombre de logements concernés (pas le nombre d'events)
+      const groups = new Map();
 
-      if(!list.length){
+      for(const ev of list){
+        const key = ev.homeId || ("NOHOME|" + ev.id);
+        const g = groups.get(key) || {
+          homeId: ev.homeId || "",
+          homeName: ev.homeName || "Logement",
+          homeCity: ev.homeCity || "",
+          ownerEmail: ev.ownerEmail || "",
+          ownerName: ev.ownerName || "",
+          agentName: ev.assignedToName || "",
+          agentEmail: ev.assignedToEmail || "",
+          items: []
+        };
+        g.items.push(ev);
+        // garde les infos non vides
+        if(!g.ownerEmail && ev.ownerEmail) g.ownerEmail = ev.ownerEmail;
+        if(!g.ownerName && ev.ownerName) g.ownerName = ev.ownerName;
+        if(!g.agentName && ev.assignedToName) g.agentName = ev.assignedToName;
+        if(!g.agentEmail && ev.assignedToEmail) g.agentEmail = ev.assignedToEmail;
+        groups.set(key, g);
+      }
+
+      const merged = Array.from(groups.values()).sort((a,b)=>{
+        const at = (a.items[0]?.time || "");
+        const bt = (b.items[0]?.time || "");
+        return at.localeCompare(bt);
+      });
+
+      dayCount.textContent = `${merged.length}`;
+
+      if(!merged.length){
         const div = document.createElement("div");
         div.className = "item";
         div.innerHTML = `
@@ -1333,17 +1367,35 @@
         return;
       }
 
-      for(const ev of list){
-        const title = `${ev.homeName}${ev.homeCity ? " — " + ev.homeCity : ""}`;
-        const sub = [
-          ev.time ? `Heure: ${ev.time}` : null,
-          ev.ownerEmail ? `Propriétaire: ${ev.ownerEmail}` : null,
-          ev.assignedToName ? `Agent: ${ev.assignedToName}` : null,
-        ].filter(Boolean).join(" • ");
+      for(const g of merged){
+        const title = `${g.homeName}${g.homeCity ? " — " + g.homeCity : ""}`;
 
-        const st = normalizeOpStatus(ev.opStatus);
-        const bCls = opBadgeClass(st);
-        const bTxt = opLabel(st);
+        // détecte booking vs prestation
+        const itemsSorted = g.items.slice().sort((a,b)=>(a.time||"").localeCompare(b.time||""));
+        const booking = itemsSorted.find(x => (x.arrivalDate || x.departureDate || x.stayNote));
+        const prestation = itemsSorted.find(x => !x.arrivalDate && !x.departureDate && (x.type || "").toLowerCase().includes("presta")) || itemsSorted.find(x => (x.type || "").toLowerCase().includes("prestation"));
+
+        // statut global : priorités A_VALIDER > EN_COURS > REALISEE > ANNULEE
+        const statuses = itemsSorted.map(x=>normalizeOpStatus(x.opStatus));
+        let globalSt = "EN_COURS";
+        if(statuses.includes("A_VALIDER")) globalSt = "A_VALIDER";
+        else if(statuses.includes("EN_COURS")) globalSt = "EN_COURS";
+        else if(statuses.includes("REALISEE")) globalSt = "REALISEE";
+        else if(statuses.includes("ANNULEE")) globalSt = "ANNULEE";
+
+        const bCls = opBadgeClass(globalSt);
+        const bTxt = opLabel(globalSt);
+
+        const tags = [];
+        if(booking) tags.push(`<span class="badge">Réservation</span>`);
+        if(prestation) tags.push(`<span class="badge">Prestation</span>`);
+
+        const firstTime = itemsSorted.find(x=>x.time)?.time || "";
+        const sub = [
+          firstTime ? `Heure: ${firstTime}` : null,
+          g.ownerEmail ? `Propriétaire: ${g.ownerEmail}` : null,
+          g.agentName ? `Agent: ${g.agentName}` : null,
+        ].filter(Boolean).join(" • ");
 
         const div = document.createElement("div");
         div.className = "item";
@@ -1351,48 +1403,57 @@
           <div class="iMain">
             <div class="iTop">
               <span class="badge ${esc(bCls)}">${esc(bTxt)}</span>
-              <span class="badge">${esc(ev.type || "Prestation")}</span>
+              ${tags.join("")}
             </div>
             <div class="iTitle">${esc(title)}</div>
-            <div class="iSub">${esc(sub || ev.meta || "—")}</div>
+            <div class="iSub">${esc(sub || booking?.meta || prestation?.meta || "—")}</div>
           </div>
           <div class="iActions">
             ${
-              st === "A_VALIDER"
-                ? `<button class="mini" type="button" data-validate="${esc(ev.id)}">Valider</button>`
-                : `<button class="mini ghost" type="button" data-open="${esc(ev.id)}">Prestations</button>`
+              globalSt === "A_VALIDER"
+                ? `<button class="mini" type="button" data-validate="${esc(itemsSorted.find(x=>normalizeOpStatus(x.opStatus)==="A_VALIDER")?.id || "")}">Valider</button>`
+                : `<button class="mini ghost" type="button" data-open-group="${esc(g.homeId)}">Prestations</button>`
             }
-            <button class="mini ghost" type="button" data-inter="${esc(ev.id)}">Intervention</button>
+            <button class="mini ghost" type="button" data-open-group="${esc(g.homeId)}">Prestations</button>
           </div>
         `;
         dayList.appendChild(div);
 
-        div.querySelector(`[data-validate="${ev.id}"]`)?.addEventListener("click", (e)=>{
+        // Valider : on prend l’event A_VALIDER s’il existe
+        div.querySelector(`[data-validate]`)?.addEventListener("click", (e)=>{
           e.stopPropagation();
-          validateEvent(ev);
+          const id = e.currentTarget.getAttribute("data-validate");
+          const ev = itemsSorted.find(x=>x.id===id) || itemsSorted.find(x=>normalizeOpStatus(x.opStatus)==="A_VALIDER");
+          if(ev) validateEvent(ev);
         });
 
-        div.querySelector(`[data-open="${ev.id}"]`)?.addEventListener("click", (e)=>{
-          e.stopPropagation();
-          if(!ev.homeId){
-            showAlert("⛔ homeId manquant sur cet event.");
-            return;
-          }
-          const params = new URLSearchParams();
-          params.set("homeId", ev.homeId);
-          params.set("from", "planning");
-          params.set("dateKey", ev.dateKey || "");
-          params.set("time", ev.time || ev.arrivalTime || "");
-          params.set("ownerName", ev.ownerName || "");
-          params.set("ownerEmail", ev.ownerEmail || "");
-          params.set("note", ev.meta || ev.stayNote || "");
+        // Prestations : si prestation existe => ouvrir prestation ; sinon => créer depuis booking
+        div.querySelectorAll(`[data-open-group="${g.homeId}"]`)?.forEach(btn=>{
+          btn.addEventListener("click", (e)=>{
+            e.stopPropagation();
 
-          location.href = `nouvelle-prestation.html?${params.toString()}`;
-        });
+            if(prestation?.id){
+              location.href = `prestations.html?open=${encodeURIComponent(prestation.id)}`;
+              return;
+            }
 
-        div.querySelector(`[data-inter="${ev.id}"]`)?.addEventListener("click", (e)=>{
-          e.stopPropagation();
-          location.href = `intervention.html?prestationId=${encodeURIComponent(ev.id)}`;
+            // pas de prestation => ouvrir nouvelle-prestation avec infos booking
+            if(!g.homeId){
+              showAlert("⛔ homeId manquant sur cet event.");
+              return;
+            }
+
+            const params = new URLSearchParams();
+            params.set("homeId", g.homeId);
+            params.set("from", "planning");
+            params.set("dateKey", selectedDateKey || "");
+            params.set("time", booking?.time || firstTime || "");
+            params.set("ownerName", g.ownerName || "");
+            params.set("ownerEmail", g.ownerEmail || "");
+            params.set("note", booking?.meta || booking?.stayNote || "");
+
+            location.href = `nouvelle-prestation.html?${params.toString()}`;
+          });
         });
       }
     }
