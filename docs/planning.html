@@ -370,7 +370,7 @@
           <span class="tiny" id="toValidateCount">—</span>
         </div>
         <div class="tiny" style="margin-top:6px;">
-          Règle : <b>Valider</b> = mettre la prestation en <b>RÉALISÉE</b> + ouvrir <b>Prestations</b> sur la bonne ligne.
+          Règle : <b>Valider</b> = mettre la prestation en <b>RÉALISÉE</b> + ouvrir <b>Prestations</b>.
         </div>
         <div class="list" id="toValidateList" style="margin-top:10px;"></div>
       </section>
@@ -418,7 +418,10 @@
           <span class="badge" id="ownersCount">—</span>
         </summary>
         <div class="accBody">
-          <div class="list" id="ownersList"></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap; margin-top:10px;">
+            <button class="btn primary" type="button" id="inviteOwnerBtn">+ Inviter un propriétaire</button>
+          </div>
+          <div class="list" id="ownersList" style="margin-top:10px;"></div>
         </div>
       </details>
 
@@ -603,7 +606,9 @@
     const teamCount = document.getElementById("teamCount");
     const teamList = document.getElementById("teamList");
 
-    // Homes toolbar in accordion
+    const inviteOwnerBtn = document.getElementById("inviteOwnerBtn");
+
+    // Homes toolbar
     const homesSearchInput = document.getElementById("homesSearchInput");
     const addHomeBtn = document.getElementById("addHomeBtn");
     const toggleHomesArchivedBtn = document.getElementById("toggleHomesArchivedBtn");
@@ -612,8 +617,8 @@
     const modalBackdrop = document.getElementById("modalBackdrop");
     const cancelModalBtn = document.getElementById("cancelModalBtn");
     const bookingForm = document.getElementById("bookingForm");
-    const homeSelect = document.getElementById("homeSelect"); // hidden (homeId)
-    const homeSelectLabel = document.getElementById("homeSelectLabel"); // readonly label
+    const homeSelect = document.getElementById("homeSelect");
+    const homeSelectLabel = document.getElementById("homeSelectLabel");
     const homeInfoBox = document.getElementById("homeInfoBox");
 
     const arrivalDateInput = document.getElementById("arrivalDateInput");
@@ -729,9 +734,12 @@
     // Auth
     logoutBtn.addEventListener("click", async ()=>{
       await signOut(auth);
-      // (cm_auth n'est pas fiable côté sécurité; FireAuth fait foi)
       localStorage.removeItem("cm_auth");
       location.href = "index.html";
+    });
+
+    inviteOwnerBtn?.addEventListener("click", ()=>{
+      location.href = "invite.html";
     });
 
     // State
@@ -753,7 +761,6 @@
     let showHomesArchived = false;
     let editingHomeId = null;
 
-   
     // ✅ sélection logement (surlignage)
     let selectedHomeId = localStorage.getItem("cm_selected_home_id") || "";
     function setSelectedHomeId(id){
@@ -774,7 +781,6 @@
         homeInfoBox.textContent = "Sélectionne un logement pour voir l’adresse et le propriétaire.";
         return;
       }
-
       const addr = (h.homeAddress || h.address || "").trim();
       const owner = (h.ownerName || "").trim();
       const ownerEmail = (h.ownerEmail || "").trim();
@@ -786,10 +792,20 @@
       `;
     }
 
+    function tsToMs(t){
+      if(!t) return 0;
+      if(typeof t === "number") return t;
+      if(typeof t === "string") return Date.parse(t) || 0;
+      if(t.toMillis) return t.toMillis();
+      if(Number.isFinite(t.seconds)) return t.seconds * 1000;
+      return 0;
+    }
+
     // ===== HOMES =====
     async function loadHomes(){
       allHomes = [];
       homesById = new Map();
+
       try{
         const qH = query(
           collection(db,"homes"),
@@ -799,26 +815,15 @@
         const snap = await getDocs(qH);
         allHomes = snap.docs.map(d=>({ id:d.id, ...(d.data()||{}) }));
 
-        function tsToMs(t){
-  if(!t) return 0;
-  if(typeof t === "number") return t;
-  if(typeof t === "string") return Date.parse(t) || 0;
-  if(t.toMillis) return t.toMillis();            // Firestore Timestamp
-  if(Number.isFinite(t.seconds)) return t.seconds * 1000;
-  return 0;
-}
-// ✅ TRI: nouveaux en haut (updatedAt sinon createdAt)
-allHomes.sort((a,b)=>{
-  const ta = tsToMs(a.updatedAt || a.createdAt);
-  const tb = tsToMs(b.updatedAt || b.createdAt);
-  if(tb !== ta) return tb - ta;
-  // fallback stable si dates égales / manquantes
-  return String(a.name||"").localeCompare(String(b.name||""));
-});
+        // ✅ tri: nouveaux en haut (createdAt desc), sinon updatedAt desc, sinon nom
+        allHomes.sort((a,b)=>{
+          const aA = tsToMs(a.createdAt) || tsToMs(a.updatedAt);
+          const bA = tsToMs(b.createdAt) || tsToMs(b.updatedAt);
+          if(bA !== aA) return bA - aA;
+          return String(a.name||"").localeCompare(String(b.name||""));
+        });
 
-homesById = new Map(allHomes.map(h => [h.id, h]));
-
-
+        homesById = new Map(allHomes.map(h => [h.id, h]));
         renderHomesAccordion();
       }catch(err){
         console.warn("loadHomes failed:", err?.message || err);
@@ -828,19 +833,32 @@ homesById = new Map(allHomes.map(h => [h.id, h]));
 
     function renderHomesAccordion(){
       const q = norm(homesSearchInput?.value || "");
-      const visibleHomes = allHomes.filter(h=>{
-        if(!showHomesArchived && isArchivedHome(h)) return false;
-        if(!q) return true;
-        const hay = [
-          h.name, h.city, h.homeAddress, h.address,
-          h.ownerName, h.ownerEmail, h.type, h.team
-        ].map(norm).join(" ");
-        return hay.includes(q);
-      });
+
+      // ✅ active d'abord, puis archived (si on les affiche)
+      const visibleHomes = allHomes
+        .filter(h=>{
+          if(!showHomesArchived && isArchivedHome(h)) return false;
+          if(!q) return true;
+          const hay = [
+            h.name, h.city, h.homeAddress, h.address,
+            h.ownerName, h.ownerEmail, h.type, h.team
+          ].map(norm).join(" ");
+          return hay.includes(q);
+        })
+        .sort((a,b)=>{
+          const aa = isArchivedHome(a) ? 1 : 0;
+          const bb = isArchivedHome(b) ? 1 : 0;
+          if(aa !== bb) return aa - bb;
+
+          const aA = tsToMs(a.createdAt) || tsToMs(a.updatedAt);
+          const bA = tsToMs(b.createdAt) || tsToMs(b.updatedAt);
+          if(bA !== aA) return bA - aA;
+
+          return String(a.name||"").localeCompare(String(b.name||""));
+        });
 
       const activeCount = allHomes.filter(h=>!isArchivedHome(h)).length;
-      const totalCount = allHomes.length;
-      homesCount.textContent = totalCount ? `${activeCount}` : "0";
+      homesCount.textContent = activeCount ? `${activeCount}` : "0";
 
       homesList.innerHTML = "";
 
@@ -849,8 +867,8 @@ homesById = new Map(allHomes.map(h => [h.id, h]));
         div.className = "item";
         div.innerHTML = `
           <div class="iMain">
-            <div class="iTitle">${totalCount ? "Aucun résultat" : "Aucun logement"}</div>
-            <div class="iSub">${totalCount ? "Change la recherche ou affiche les archivés." : "Clique sur “+ Ajouter”."}</div>
+            <div class="iTitle">${allHomes.length ? "Aucun résultat" : "Aucun logement"}</div>
+            <div class="iSub">${allHomes.length ? "Change la recherche ou affiche les archivés." : "Clique sur “+ Ajouter”."}</div>
           </div>
         `;
         homesList.appendChild(div);
@@ -900,32 +918,27 @@ homesById = new Map(allHomes.map(h => [h.id, h]));
 
         homesList.appendChild(div);
 
-        // clic sur la ligne = sélection
         div.addEventListener("click", ()=>{
           setSelectedHomeId(h.id);
           renderHomesAccordion();
         });
 
-        // stopPropagation boutons
         div.querySelectorAll("button").forEach(el=>{
           el.addEventListener("click", (e)=> e.stopPropagation());
         });
 
-        // Créer réservation
         div.querySelector(`[data-book="${h.id}"]`)?.addEventListener("click", ()=>{
           setSelectedHomeId(h.id);
           openBookingModal(h.id);
           renderHomesAccordion();
         });
 
-        // Modifier
         div.querySelector(`[data-edit="${h.id}"]`)?.addEventListener("click", ()=>{
           setSelectedHomeId(h.id);
           openHomeModalEdit(h);
           renderHomesAccordion();
         });
 
-        // Archiver / Restaurer
         div.querySelector(`[data-archive="${h.id}"]`)?.addEventListener("click", async ()=>{
           hideAlert();
           if(!confirm("Archiver ce logement ? (il n’apparaîtra plus par défaut)")) return;
@@ -957,7 +970,6 @@ homesById = new Map(allHomes.map(h => [h.id, h]));
           }
         });
 
-        // Supprimer (guard events + icalEvents)
         div.querySelector(`[data-delete="${h.id}"]`)?.addEventListener("click", async ()=>{
           hideAlert();
           const label = `${h.name || "Logement"}${h.city ? " ("+h.city+")" : ""}`;
@@ -972,18 +984,6 @@ homesById = new Map(allHomes.map(h => [h.id, h]));
             const sEv = await getDocs(qEv);
             if(!sEv.empty){
               showAlert("⛔ Suppression bloquée : ce logement a déjà des prestations/réservations rattachées. Utilise “Archiver”.");
-              return;
-            }
-
-            const qIc = query(
-              collection(db,"icalEvents"),
-              where("conciergerieUid","==", currentUser.uid),
-              where("homeId","==", h.id),
-              limit(1)
-            );
-            const sIc = await getDocs(qIc);
-            if(!sIc.empty){
-              showAlert("⛔ Suppression bloquée : ce logement a des réservations iCal rattachées. Utilise “Archiver”.");
               return;
             }
           }catch(err){
@@ -1062,11 +1062,17 @@ homesById = new Map(allHomes.map(h => [h.id, h]));
         }
       }
 
+      // ✅ anti doublon par sécurité (au cas où)
+      const seen = new Set();
+
       for(const ev of docs){
         const dk = (ev.dateKey || ev.date || "").toString();
         const d = parseDateKey(dk);
         if(!d) continue;
         if(d.getFullYear() !== viewYear || d.getMonth() !== viewMonth) continue;
+
+        if(seen.has(ev.id)) continue;
+        seen.add(ev.id);
 
         const h = (ev.homeId ? homesById.get(ev.homeId) : null);
 
@@ -1136,6 +1142,7 @@ homesById = new Map(allHomes.map(h => [h.id, h]));
           updatedAt: serverTimestamp()
         });
 
+        // ✅ après validation, on ouvre Prestations sur l'event
         location.href = `prestations.html?open=${encodeURIComponent(ev.id)}`;
       }catch(err){
         console.error(err);
@@ -1350,13 +1357,13 @@ homesById = new Map(allHomes.map(h => [h.id, h]));
             <div class="iSub">${esc(sub || ev.meta || "—")}</div>
           </div>
           <div class="iActions">
-  ${
-    st === "A_VALIDER"
-      ? `<button class="mini" type="button" data-validate="${esc(ev.id)}">Valider</button>`
-      : `<button class="mini ghost" type="button" data-open="${esc(ev.id)}">Prestations</button>`
-  }
-</div>
-
+            ${
+              st === "A_VALIDER"
+                ? `<button class="mini" type="button" data-validate="${esc(ev.id)}">Valider</button>`
+                : `<button class="mini ghost" type="button" data-open="${esc(ev.id)}">Prestations</button>`
+            }
+            <button class="mini ghost" type="button" data-inter="${esc(ev.id)}">Intervention</button>
+          </div>
         `;
         dayList.appendChild(div);
 
@@ -1365,15 +1372,13 @@ homesById = new Map(allHomes.map(h => [h.id, h]));
           validateEvent(ev);
         });
 
-div.querySelector(`[data-open="${ev.id}"]`)?.addEventListener("click", (e)=>{
+        div.querySelector(`[data-open="${ev.id}"]`)?.addEventListener("click", (e)=>{
           e.stopPropagation();
-
           if(!ev.homeId){
-            showAlert("⛔ homeId manquant sur cet event. Impossible d’ouvrir la création de prestation.");
+            showAlert("⛔ homeId manquant sur cet event.");
             return;
           }
-
-  const params = new URLSearchParams();
+          const params = new URLSearchParams();
           params.set("homeId", ev.homeId);
           params.set("from", "planning");
           params.set("dateKey", ev.dateKey || "");
@@ -1384,19 +1389,23 @@ div.querySelector(`[data-open="${ev.id}"]`)?.addEventListener("click", (e)=>{
 
           location.href = `nouvelle-prestation.html?${params.toString()}`;
         });
-      } // ← fin du for(ev of list)
-    }   // ← fin de renderDayList()
 
-    
+        div.querySelector(`[data-inter="${ev.id}"]`)?.addEventListener("click", (e)=>{
+          e.stopPropagation();
+          location.href = `intervention.html?prestationId=${encodeURIComponent(ev.id)}`;
+        });
+      }
+    }
+
     function renderAccordionsCounts(){
       ownersCount.textContent = `${ownersMap.size}`;
       teamCount.textContent = `${teamMap.size}`;
     }
 
     function renderAccordionsLists(){
-      // Owners
       ownersList.innerHTML = "";
       const owners = Array.from(ownersMap.values()).sort((a,b)=> (b.count - a.count) || (a.ownerEmail||"").localeCompare(b.ownerEmail||""));
+
       if(!owners.length){
         ownersList.innerHTML = `<div class="item"><div class="iMain"><div class="iTitle">Aucun propriétaire</div><div class="iSub">Ajoute des prestations avec ownerEmail.</div></div></div>`;
       }else{
@@ -1410,7 +1419,7 @@ div.querySelector(`[data-open="${ev.id}"]`)?.addEventListener("click", (e)=>{
               <div class="iSub">${esc(o.ownerEmail)}</div>
             </div>
             <div class="iActions">
-              <button class="mini ghost" type="button" data-owner="${esc(o.ownerEmail)}">Filtrer</button>
+              <button class="mini ghost" type="button" data-owner="${esc(o.ownerEmail)}">Voir</button>
             </div>
           `;
           ownersList.appendChild(div);
@@ -1426,7 +1435,6 @@ div.querySelector(`[data-open="${ev.id}"]`)?.addEventListener("click", (e)=>{
         }
       }
 
-      // Team
       teamList.innerHTML = "";
       const team = Array.from(teamMap.values()).sort((a,b)=> (b.count-a.count) || (a.agentName||"").localeCompare(b.agentName||""));
       if(!team.length){
@@ -1516,7 +1524,7 @@ div.querySelector(`[data-open="${ev.id}"]`)?.addEventListener("click", (e)=>{
       const base = selectedDateKey || toDateKey(new Date());
       arrivalDateInput.value = base;
       arrivalTimeInput.value = "";
-      departureDateInput.value = addDays(base, 1); // ✅ plus logique / évite 0 nuit
+      departureDateInput.value = addDays(base, 1);
       departureTimeInput.value = "";
 
       homeSelect.value = finalHomeId;
@@ -1533,7 +1541,6 @@ div.querySelector(`[data-open="${ev.id}"]`)?.addEventListener("click", (e)=>{
       modalBackdrop.style.display = "none";
       modalBackdrop.setAttribute("aria-hidden","true");
       bookingForm.reset();
-      // ne touche pas homeSelectLabel/homeSelect: ça évite un "clignotement" si tu rouvres
     }
 
     cancelModalBtn.addEventListener("click", closeBookingModal);
@@ -1554,22 +1561,21 @@ div.querySelector(`[data-open="${ev.id}"]`)?.addEventListener("click", (e)=>{
       const meta = (metaInput.value || "").trim();
 
       if(!homeId) return showAlert("Choisis un logement.");
-      if(!parseDateKey(arrivalDate)) return showAlert("Arrivée invalide. Format attendu : YYYY-MM-DD");
-      if(!parseDateKey(departureDate)) return showAlert("Départ invalide. Format attendu : YYYY-MM-DD");
+      if(!parseDateKey(arrivalDate)) return showAlert("Arrivée invalide.");
+      if(!parseDateKey(departureDate)) return showAlert("Départ invalide.");
 
       const arrD = parseDateKey(arrivalDate);
       const depD = parseDateKey(departureDate);
       if(depD.getTime() < arrD.getTime()){
         return showAlert("Départ doit être le même jour ou après l’arrivée.");
       }
-
       if(aEmail && !isEmailValid(aEmail)){
         return showAlert("Email agent invalide.");
       }
 
       const home = homesById.get(homeId) || allHomes.find(h=>h.id===homeId);
-      if(!home) return showAlert("Logement introuvable (recharge la page).");
-      if(isArchivedHome(home)) return showAlert("Ce logement est archivé. Restaure-le pour créer une réservation.");
+      if(!home) return showAlert("Logement introuvable.");
+      if(isArchivedHome(home)) return showAlert("Ce logement est archivé.");
 
       saveBookingBtn.disabled = true;
       saveBookingBtn.textContent = "…";
@@ -1578,11 +1584,9 @@ div.querySelector(`[data-open="${ev.id}"]`)?.addEventListener("click", (e)=>{
         const payload = {
           conciergerieUid: currentUser.uid,
 
-          // ✅ compat planning
           dateKey: arrivalDate,
           time: arrivalTime,
 
-          // ✅ détails séjour
           arrivalDate,
           arrivalTime,
           departureDate,
@@ -1627,7 +1631,7 @@ div.querySelector(`[data-open="${ev.id}"]`)?.addEventListener("click", (e)=>{
       }
     });
 
-    // ===== MODALE HOME (Ajouter / Modifier) =====
+    // ===== MODALE HOME =====
     function openHomeModalCreate(){
       hideAlert();
       editingHomeId = null;
@@ -1738,7 +1742,6 @@ div.querySelector(`[data-open="${ev.id}"]`)?.addEventListener("click", (e)=>{
       }
     });
 
-    // ✅ ESC ferme les modales (plus propre, moins “piège”)
     document.addEventListener("keydown", (e)=>{
       if(e.key !== "Escape") return;
       if(modalBackdrop.style.display === "flex") closeBookingModal();
@@ -1763,13 +1766,12 @@ div.querySelector(`[data-open="${ev.id}"]`)?.addEventListener("click", (e)=>{
         const urlHomeId = new URLSearchParams(location.search).get("homeId") || "";
         if(urlHomeId) setSelectedHomeId(urlHomeId);
 
-        await loadHomes();          // 1) homes
-        await loadEventsForMonth(); // 2) events
+        await loadHomes();
+        await loadEventsForMonth();
 
         if(urlHomeId){
           openBookingModal(urlHomeId);
         }else{
-          // affiche infos du logement sélectionné si existant (sans ouvrir de modale)
           if(selectedHomeId) renderHomeInfo(selectedHomeId);
         }
       }catch(err){
