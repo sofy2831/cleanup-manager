@@ -43,6 +43,7 @@
       padding:10px 12px; border-radius:999px; border:1px solid rgba(122,92,255,0.35);
       background:#fff; font-weight:800; color:#222; outline:none; min-width:210px;
     }
+
     .card{
       background: rgba(255,255,255,0.86);
       border:1px solid var(--border);
@@ -111,7 +112,7 @@
 
     <div class="title">
       <h1>Devis</h1>
-      <div class="subtitle">Liste des devis (events avec quoteStatus)</div>
+      <div class="subtitle">Liste des devis • export CSV</div>
       <div class="emailLine" id="emailLine">—</div>
     </div>
 
@@ -129,6 +130,8 @@
         </select>
 
         <input class="input" id="searchInput" placeholder="Rechercher logement / propriétaire..." />
+
+        <button class="btn primary" id="exportBtn" type="button">Exporter CSV</button>
       </div>
 
       <div id="listBox" style="display:flex; flex-direction:column; gap:12px;"></div>
@@ -155,6 +158,7 @@
     const filterStatus = document.getElementById("filterStatus");
     const searchInput = document.getElementById("searchInput");
     const listBox = document.getElementById("listBox");
+    const exportBtn = document.getElementById("exportBtn");
 
     let all = [];
 
@@ -176,6 +180,24 @@
         .replaceAll(">","&gt;")
         .replaceAll('"',"&quot;")
         .replaceAll("'","&#039;");
+    }
+
+    function fmtMoney(v){
+      const n = Number(v);
+      if(!Number.isFinite(n)) return "—";
+      return n.toLocaleString("fr-FR",{minimumFractionDigits:2, maximumFractionDigits:2})+" €";
+    }
+
+    function computeTotalFromLines(lines){
+      if(!Array.isArray(lines)) return 0;
+      return lines.reduce((s,l)=> s + (Number(l?.qty)||0) * (Number(l?.unitPrice)||0), 0);
+    }
+
+    function getQuoteTotal(ev){
+      // priorités : quoteAmount (si saisi) sinon total (event.total) sinon calcul lignes
+      if(ev?.quoteAmount != null && ev.quoteAmount !== "") return Number(ev.quoteAmount);
+      if(ev?.total != null && ev.total !== "") return Number(ev.total);
+      return computeTotalFromLines(ev?.lines);
     }
 
     function badgeForQuoteStatus(s){
@@ -202,13 +224,17 @@
       const hay = [
         item.homeName, item.homeCity,
         item.ownerName, item.ownerEmail,
-        item.summary
+        item.summary, item.invoiceNumber
       ].filter(Boolean).join(" ").toLowerCase();
       return hay.includes(q);
     }
 
+    function getFiltered(){
+      return all.filter(e => matchesFilter(e) && matchesSearch(e));
+    }
+
     function render(){
-      const filtered = all.filter(e => matchesFilter(e) && matchesSearch(e));
+      const filtered = getFiltered();
       listBox.innerHTML = "";
 
       if(!filtered.length){
@@ -221,24 +247,75 @@
         const owner = (ev.ownerName||"—") + (ev.ownerEmail ? (" • " + ev.ownerEmail) : "");
         const date = ev.dateKey || ev.date || "—";
         const time = ev.time || "—";
+        const amount = getQuoteTotal(ev);
+
+        const hasInvoice = !!String(ev.invoiceStatus||"").trim() || !!String(ev.invoiceNumber||"").trim();
 
         const div = document.createElement("div");
         div.className = "card";
         div.innerHTML = `
           <div class="row">
             <div class="k"><div class="t">Logement</div><div class="v">${esc(home)}</div></div>
-            <div class="k"><div class="t">Propriétaire</div><div class="v">${esc(owner)}</div></div>
+            <div class="k"><div class="t">Client</div><div class="v">${esc(owner)}</div></div>
             <div class="k"><div class="t">Date</div><div class="v">${esc(date)} • ${esc(time)}</div></div>
           </div>
+
           <div class="row" style="margin-top:10px;">
             <div class="k"><div class="t">Statut devis</div><div class="v">${badgeForQuoteStatus(ev.quoteStatus)}</div></div>
+            <div class="k"><div class="t">Montant</div><div class="v">${fmtMoney(amount)}</div></div>
+
             <div class="k" style="align-items:flex-end;">
-              <a class="btn primary" href="devis.html?eventId=${encodeURIComponent(ev.id)}">Ouvrir devis</a>
+              <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;">
+                <a class="btn primary" href="devis.html?eventId=${encodeURIComponent(ev.id)}">Ouvrir devis</a>
+                ${hasInvoice ? `<a class="btn" href="facture.html?eventId=${encodeURIComponent(ev.id)}">Ouvrir facture</a>` : ""}
+              </div>
             </div>
           </div>
         `;
         listBox.appendChild(div);
       }
+    }
+
+    function toCsvValue(v){
+      const s = String(v ?? "");
+      return `"${s.replaceAll('"','""')}"`;
+    }
+
+    function exportCsv(){
+      const rows = getFiltered();
+      const header = [
+        "eventId","date","heure","logement","ville","client","email",
+        "quoteStatus","commercialStatus","montant"
+      ];
+      const lines = [header.join(";")];
+
+      for(const r of rows){
+        const amount = getQuoteTotal(r);
+        const line = [
+          r.id,
+          (r.dateKey || r.date || ""),
+          (r.time || ""),
+          (r.homeName || ""),
+          (r.homeCity || ""),
+          (r.ownerName || ""),
+          (r.ownerEmail || ""),
+          (r.quoteStatus || ""),
+          (r.commercialStatus || ""),
+          (Number.isFinite(Number(amount)) ? Number(amount).toFixed(2) : "")
+        ].map(toCsvValue).join(";");
+
+        lines.push(line);
+      }
+
+      const blob = new Blob([lines.join("\n")], { type:"text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `devis_${new Date().toISOString().slice(0,10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
     }
 
     async function loadQuotes(uid){
@@ -268,6 +345,7 @@
 
     filterStatus.addEventListener("change", render);
     searchInput.addEventListener("input", render);
+    exportBtn.addEventListener("click", exportCsv);
 
     onAuthStateChanged(auth, async (user)=>{
       if(!user){
