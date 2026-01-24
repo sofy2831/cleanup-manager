@@ -617,10 +617,11 @@
     const modalBackdrop = document.getElementById("modalBackdrop");
     const cancelModalBtn = document.getElementById("cancelModalBtn");
     const bookingForm = document.getElementById("bookingForm");
-    const bookingModalTitle = document.getElementById("bookingModalTitle");
     const homeSelect = document.getElementById("homeSelect");
     const homeSelectLabel = document.getElementById("homeSelectLabel");
     const homeInfoBox = document.getElementById("homeInfoBox");
+
+    const bookingModalTitle = document.getElementById("bookingModalTitle");
 
     const arrivalDateInput = document.getElementById("arrivalDateInput");
     const arrivalTimeInput = document.getElementById("arrivalTimeInput");
@@ -1030,6 +1031,7 @@
       toValidate = [];
 
       const { startKey, endKey } = monthRangeKeys(viewYear, viewMonth);
+
       let docs = [];
 
       try{
@@ -1077,7 +1079,6 @@
           id: ev.id,
           dateKey: dk,
           time: (ev.time || ev.arrivalTime || "").toString(),
-
           homeId: ev.homeId || "",
           homeName: ev.homeName || h?.name || "Logement",
           homeCity: ev.homeCity || ev.city || h?.city || "",
@@ -1088,13 +1089,14 @@
           ownerEmail: (ev.ownerEmail || h?.ownerEmail || "").toString(),
           assignedToName: ev.assignedToName || ev.agentName || "",
           assignedToEmail: (ev.assignedToEmail || ev.agentEmail || "").toString().toLowerCase(),
-
           meta: ev.meta || ev.summary || ev.stayNote || "",
           opStatus: normalizeOpStatus(ev.opStatus || ev.status || "EN_COURS"),
           type: ev.type || "Prestation",
 
           arrivalDate: ev.arrivalDate || "",
+          arrivalTime: ev.arrivalTime || "",
           departureDate: ev.departureDate || "",
+          departureTime: ev.departureTime || "",
           stayNote: ev.stayNote || ""
         };
 
@@ -1334,12 +1336,10 @@
           items: []
         };
         g.items.push(ev);
-
         if(!g.ownerEmail && ev.ownerEmail) g.ownerEmail = ev.ownerEmail;
         if(!g.ownerName && ev.ownerName) g.ownerName = ev.ownerName;
         if(!g.agentName && ev.assignedToName) g.agentName = ev.assignedToName;
         if(!g.agentEmail && ev.assignedToEmail) g.agentEmail = ev.assignedToEmail;
-
         groups.set(key, g);
       }
 
@@ -1378,6 +1378,7 @@
         const booking = itemsSorted.find(isBooking);
         const prestation = itemsSorted.find(isPrestation);
 
+        // statut global : priorités A_VALIDER > EN_COURS > REALISEE > ANNULEE
         const statuses = itemsSorted.map(x=>normalizeOpStatus(x.opStatus));
         let globalSt = "EN_COURS";
         if(statuses.includes("A_VALIDER")) globalSt = "A_VALIDER";
@@ -1415,9 +1416,10 @@
             ${
               globalSt === "A_VALIDER"
                 ? `<button class="mini" type="button" data-validate="${esc(itemsSorted.find(x=>normalizeOpStatus(x.opStatus)==="A_VALIDER")?.id || "")}">Valider</button>`
-                : (booking?.id
-                    ? `<button class="mini ghost" type="button" data-edit-booking="${esc(booking.id)}">Modifier</button>`
-                    : `<button class="mini ghost" type="button" disabled>Modifier</button>`
+                : (
+                    booking?.id
+                      ? `<button class="mini ghost" type="button" data-edit-booking="${esc(booking.id)}">Modifier</button>`
+                      : `<button class="mini ghost" type="button" disabled>Modifier</button>`
                   )
             }
 
@@ -1434,7 +1436,7 @@
         `;
         dayList.appendChild(div);
 
-        // Valider
+        // Valider : on prend l’event A_VALIDER s’il existe
         div.querySelector(`[data-validate]`)?.addEventListener("click", (e)=>{
           e.stopPropagation();
           const id = e.currentTarget.getAttribute("data-validate");
@@ -1442,7 +1444,7 @@
           if(ev) validateEvent(ev);
         });
 
-        // ✅ Modifier réservation : ouvre modale en mode EDIT
+        // ✅ Modifier (Réservation)
         div.querySelector(`[data-edit-booking="${booking?.id || ""}"]`)?.addEventListener("click", (e)=>{
           e.stopPropagation();
           if(!booking?.id) return;
@@ -1458,17 +1460,17 @@
           arrivalTimeInput.value = booking.arrivalTime || booking.time || "";
           departureDateInput.value = booking.departureDate || addDays(arrivalDateInput.value || selectedDateKey, 1);
           departureTimeInput.value = booking.departureTime || "";
-
           metaInput.value = booking.stayNote || booking.meta || "";
-          agentEmailInput.value = booking.assignedToEmail || booking.agentEmail || "";
-          agentNameInput.value = booking.assignedToName || booking.agentName || "";
+
+          agentEmailInput.value = booking.assignedToEmail || "";
+          agentNameInput.value = booking.assignedToName || "";
 
           bookingForm.dataset.editEventId = booking.id;
           bookingModalTitle.textContent = "Modifier la réservation";
           saveBookingBtn.textContent = "Enregistrer";
         });
 
-        // ✅ Production
+        // ✅ Production : ouvrir prestations.html sur la prestation existante
         if(prestation?.id){
           div.querySelector(`[data-production-open="${prestation.id}"]`)?.addEventListener("click", (e)=>{
             e.stopPropagation();
@@ -1476,7 +1478,7 @@
           });
         }
 
-        // ✅ Créer une prestation
+        // ✅ Créer une prestation : ouvrir nouvelle-prestation.html (avec homeId)
         div.querySelector(`[data-create-presta="${g.homeId}"]`)?.addEventListener("click", (e)=>{
           e.stopPropagation();
 
@@ -1486,6 +1488,7 @@
             return;
           }
 
+          const firstTime = itemsSorted.find(x=>x.time)?.time || "";
           const params = new URLSearchParams();
           params.set("homeId", effectiveHomeId);
           params.set("from", "planning");
@@ -1599,7 +1602,7 @@
       loadEventsForMonth().catch(e=> showAlert("Erreur rafraîchir : " + (e?.message || "inconnue")));
     });
 
-    // ===== MODALE CRÉER RÉSERVATION =====
+    // ===== MODALE CRÉER / MODIFIER RÉSERVATION =====
     function openBookingModal(prefHomeId=""){
       hideAlert();
 
@@ -1624,17 +1627,16 @@
       modalBackdrop.style.display = "flex";
       modalBackdrop.setAttribute("aria-hidden","false");
 
-      // si pas en mode edit => valeurs par défaut
+      // base par défaut uniquement si pas en mode edit
       if(!bookingForm.dataset.editEventId){
         const base = selectedDateKey || toDateKey(new Date());
         arrivalDateInput.value = base;
         arrivalTimeInput.value = "";
         departureDateInput.value = addDays(base, 1);
         departureTimeInput.value = "";
-        metaInput.value = "";
         agentEmailInput.value = "";
         agentNameInput.value = "";
-
+        metaInput.value = "";
         bookingModalTitle.textContent = "Créer une réservation";
         saveBookingBtn.textContent = "Créer";
       }
@@ -1653,7 +1655,6 @@
       modalBackdrop.style.display = "none";
       modalBackdrop.setAttribute("aria-hidden","true");
       bookingForm.reset();
-
       delete bookingForm.dataset.editEventId;
       bookingModalTitle.textContent = "Créer une réservation";
       saveBookingBtn.textContent = "Créer";
@@ -1707,7 +1708,9 @@
           arrivalTime,
           departureDate,
           departureTime,
+
           stayNote: meta,
+          meta,
 
           homeId,
           homeName: home.name || "",
@@ -1720,8 +1723,6 @@
           assignedToEmail: aEmail || "",
           assignedToName: aName || "",
 
-          meta,
-
           status: "EN_COURS",
           opStatus: "EN_COURS",
 
@@ -1730,7 +1731,7 @@
 
         const editId = bookingForm.dataset.editEventId || "";
 
-        // ✅ UPDATE réservation existante
+        // ✅ MODE EDIT
         if(editId){
           await updateDoc(doc(db,"events", editId), payload);
 
@@ -1745,7 +1746,27 @@
           return;
         }
 
-        // ✅ CREATE réservation (comportement normal)
+        // ✅ MODE CREATE : 1 réservation max / homeId / dateKey
+        const qDup = query(
+          collection(db,"events"),
+          where("conciergerieUid","==", currentUser.uid),
+          where("homeId","==", homeId),
+          where("dateKey","==", arrivalDate),
+          limit(20)
+        );
+        const dupSnap = await getDocs(qDup);
+
+        const existingBooking = dupSnap.docs
+          .map(d=>({ id:d.id, ...(d.data()||{}) }))
+          .find(x => !!(x.arrivalDate || x.departureDate || x.stayNote));
+
+        if(existingBooking){
+          showAlert("⛔ Déjà une réservation ce jour pour ce logement.\nUtilise “Modifier” sur la ligne du jour.");
+          saveBookingBtn.disabled = false;
+          saveBookingBtn.textContent = "Créer";
+          return;
+        }
+
         await addDoc(collection(db,"events"), {
           ...payload,
           createdAt: serverTimestamp()
@@ -1758,13 +1779,12 @@
         setSelectedHomeId(homeId);
 
         await loadEventsForMonth();
-
       }catch(err){
         console.error(err);
         showAlert("Erreur réservation : " + (err?.message || "inconnue"));
       }finally{
         saveBookingBtn.disabled = false;
-        saveBookingBtn.textContent = bookingForm.dataset.editEventId ? "Enregistrer" : "Créer";
+        saveBookingBtn.textContent = "Créer";
       }
     });
 
