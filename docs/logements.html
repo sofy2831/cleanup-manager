@@ -339,7 +339,6 @@
     .page{ padding-bottom: 90px; }
   </style>
 </head>
-
 <body>
   <div class="page">
     <div class="topbar">
@@ -390,7 +389,6 @@
   <div class="modal-backdrop" id="modalBackdrop" aria-hidden="true">
     <div class="modal" role="dialog" aria-modal="true">
       <h2 id="modalTitle">Ajouter un logement</h2>
-     
 
       <form id="homeForm">
         <div style="display:flex; gap:8px; flex-wrap:wrap;">
@@ -404,14 +402,33 @@
           </div>
         </div>
 
-        <label for="homeAddress">Adresse (pour interventions)</label>
-        <input id="homeAddress" type="text" placeholder="Ex. 12 rue Victor Hugo, 31600 Muret" required />
+        <label for="homeAddress">Adresse (pour interventions / devis)</label>
+        <input id="homeAddress" type="text" placeholder="Ex. 12 rue Victor Hugo" required />
+
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <div style="flex:1; min-width:160px;">
+            <label for="homeZip">Code postal</label>
+            <input id="homeZip" type="text" inputmode="numeric" maxlength="5" placeholder="Ex. 31600" required />
+          </div>
+          <div style="flex:1; min-width:160px;">
+            <label for="ownerPhone">Téléphone propriétaire</label>
+            <input id="ownerPhone" type="tel" inputmode="tel" placeholder="Ex. 06 12 34 56 78" required />
+          </div>
+        </div>
 
         <label for="ownerEmail">Email du propriétaire</label>
         <input id="ownerEmail" type="email" placeholder="ex. proprietaire@email.com" required />
 
-        <label for="homeOwner">Nom du propriétaire</label>
-        <input id="homeOwner" type="text" placeholder="Ex. Mme Marie Dupont" required />
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <div style="flex:1; min-width:180px;">
+            <label for="ownerFirstName">Prénom du propriétaire</label>
+            <input id="ownerFirstName" type="text" placeholder="Ex. Marie" required />
+          </div>
+          <div style="flex:1; min-width:180px;">
+            <label for="ownerLastName">Nom du propriétaire</label>
+            <input id="ownerLastName" type="text" placeholder="Ex. Dupont" required />
+          </div>
+        </div>
 
         <div style="display:flex; gap:8px; flex-wrap:wrap;">
           <div style="flex:1; min-width:180px;">
@@ -434,7 +451,6 @@
       </form>
     </div>
   </div>
-
   <script type="module">
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
@@ -462,8 +478,13 @@
     const homeName = document.getElementById("homeName");
     const homeCity = document.getElementById("homeCity");
     const homeAddress = document.getElementById("homeAddress");
+    const homeZip = document.getElementById("homeZip");
+
     const ownerEmailEl = document.getElementById("ownerEmail");
-    const homeOwner = document.getElementById("homeOwner");
+    const ownerPhoneEl = document.getElementById("ownerPhone");
+    const ownerFirstNameEl = document.getElementById("ownerFirstName");
+    const ownerLastNameEl = document.getElementById("ownerLastName");
+
     const homeType = document.getElementById("homeType");
     const homeTeam = document.getElementById("homeTeam");
     const saveBtn = document.getElementById("saveBtn");
@@ -489,6 +510,19 @@
         .replaceAll(">","&gt;")
         .replaceAll('"',"&quot;")
         .replaceAll("'","&#039;");
+    }
+
+    function cleanPhone(s){
+      return (s||"").toString().trim().replace(/\s+/g," ");
+    }
+
+    function cleanZip(s){
+      const z = (s||"").toString().trim().replace(/\D/g,"");
+      return z.slice(0,5);
+    }
+
+    function validateZip(zip){
+      return /^\d{5}$/.test(zip);
     }
 
     // ===== Abonnement guard =====
@@ -566,10 +600,32 @@
       modalBackdrop.style.display = "flex";
 
       homeName.value = home.name || "";
-      homeCity.value = home.city || "";
+      homeCity.value = home.homeCity || home.city || "";
       homeAddress.value = (home.homeAddress || home.address || "").trim();
+      homeZip.value = (home.homeZip || home.zip || "").toString();
+
       ownerEmailEl.value = home.ownerEmail || "";
-      homeOwner.value = home.ownerName || "";
+      ownerPhoneEl.value = home.ownerPhone || "";
+
+      // compat : si anciens logements => ownerName
+      const ofn = home.ownerFirstName || "";
+      const oln = home.ownerLastName || "";
+      if(ofn || oln){
+        ownerFirstNameEl.value = ofn;
+        ownerLastNameEl.value = oln;
+      }else{
+        // tentative split sur ownerName "Prénom Nom"
+        const raw = (home.homeOwner || home.ownerName || "").trim();
+        if(raw){
+          const parts = raw.split(" ");
+          ownerFirstNameEl.value = parts.slice(0,1).join(" ");
+          ownerLastNameEl.value = parts.slice(1).join(" ");
+        }else{
+          ownerFirstNameEl.value = "";
+          ownerLastNameEl.value = "";
+        }
+      }
+
       homeType.value = (home.homeType || home.type || "Studio");
       homeTeam.value = home.team || "";
 
@@ -591,8 +647,15 @@
 
       const filtered = !q ? homes : homes.filter(h=>{
         const hay = [
-          h.name, h.city, h.homeAddress, h.address,
-          h.ownerName, h.ownerEmail, h.type, h.homeType, h.team
+          h.name,
+          h.homeCity, h.city,
+          h.homeZip, h.zip,
+          h.homeAddress, h.address,
+          h.homeOwner, h.ownerName, h.ownerFirstName, h.ownerLastName,
+          h.ownerEmail,
+          h.ownerPhone,
+          h.type, h.homeType,
+          h.team
         ].map(norm).join(" ");
         return hay.includes(q);
       });
@@ -614,9 +677,15 @@
         const item = document.createElement("div");
         item.className = "item";
 
-        const ownerLabel = h.ownerName || h.ownerEmail || "—";
+        const ownerLabel =
+          (h.homeOwner || h.ownerName || "").trim()
+          || h.ownerEmail
+          || "—";
+
         const statusChip = isArchived(h) ? `<span class="chip">Archivé</span>` : "";
         const addr = (h.homeAddress || h.address || "").trim();
+        const zip = (h.homeZip || h.zip || "").toString().trim();
+        const city = (h.homeCity || h.city || "").toString().trim();
 
         const createBookingBtn = isArchived(h)
           ? `<span class="mini-btn disabled">Créer une réservation</span>`
@@ -627,19 +696,20 @@
             <div style="min-width:0;">
               <div class="item-title">${escapeHtml(h.name || "Logement")}</div>
               <div class="item-meta">
-                ${escapeHtml(h.city || "—")}
+                ${escapeHtml(city || "—")}${zip ? ` (${escapeHtml(zip)})` : ""}
                 ${addr ? ` • <b>${escapeHtml(addr)}</b>` : ""}
                 <br/>Propriétaire : <b>${escapeHtml(ownerLabel)}</b>
                 ${h.ownerEmail ? ` • ${escapeHtml(h.ownerEmail)}` : ""}
+                ${h.ownerPhone ? `<br/>📞 ${escapeHtml(h.ownerPhone)}` : ""}
               </div>
               <div class="chips">
                 <span class="chip">${escapeHtml(h.homeType || h.type || "Type")}</span>
                 <span class="chip">${escapeHtml(h.team || "—")}</span>
                 ${addr ? `<span class="chip">Adresse OK</span>` : `<span class="chip">Adresse manquante</span>`}
+                ${zip ? `<span class="chip">CP OK</span>` : `<span class="chip">CP manquant</span>`}
+                ${(h.ownerPhone ? `<span class="chip">Tel OK</span>` : `<span class="chip">Tel manquant</span>`)}
                 ${statusChip}
               </div>
-
-            
             </div>
 
             <div class="item-actions">
@@ -657,7 +727,6 @@
 
         homesListEl.appendChild(item);
 
-        // STOP propagation pour éviter que summary/details gêne les actions
         item.querySelectorAll(".item-actions a, .item-actions button").forEach(el=>{
           el.addEventListener("click", (e)=> e.stopPropagation());
         });
@@ -721,9 +790,8 @@
           hideAlert();
           const id = btn.getAttribute("data-delete");
           const home = allHomes.find(x=>x.id===id);
-          const label = home ? `${home.name || "Logement"} (${home.city || "—"})` : "ce logement";
+          const label = home ? `${home.name || "Logement"} (${home.city || home.homeCity || "—"})` : "ce logement";
 
-          // check events + icalEvents liés
           try{
             const qEv = query(
               collection(db,"events"),
@@ -779,13 +847,24 @@
       const name = homeName.value.trim();
       const city = homeCity.value.trim();
       const addr = homeAddress.value.trim();
-      const ownerName = homeOwner.value.trim();
+
+      const zip = cleanZip(homeZip.value);
       const ownerEmail = normalizeEmail(ownerEmailEl.value);
+      const ownerPhone = cleanPhone(ownerPhoneEl.value);
+
+      const ownerFirstName = ownerFirstNameEl.value.trim();
+      const ownerLastName = ownerLastNameEl.value.trim();
+      const homeOwnerFull = `${ownerFirstName} ${ownerLastName}`.trim();
+
       const type = homeType.value;
       const team = (homeTeam.value || "").trim();
 
-      if(!name || !city || !addr || !ownerName || !ownerEmail){
-        showAlert("Champs manquants : nom + ville + adresse + email propriétaire + nom propriétaire.");
+      if(!name || !city || !addr || !zip || !ownerEmail || !ownerFirstName || !ownerLastName || !ownerPhone){
+        showAlert("Champs obligatoires manquants : nom logement, adresse, ville, code postal, email/téléphone propriétaire, prénom + nom propriétaire.");
+        return;
+      }
+      if(!validateZip(zip)){
+        showAlert("Code postal invalide (attendu : 5 chiffres).");
         return;
       }
       if(!/^\S+@\S+\.\S+$/.test(ownerEmail)){
@@ -799,12 +878,24 @@
         if(editingHomeId){
           await updateDoc(doc(db,"homes", editingHomeId), {
             name,
-            city,
+
+            // Pour devis/facture
             homeAddress: addr,
-            ownerName,
+            homeCity: city,
+            homeZip: zip,
+            homeOwner: homeOwnerFull,
+            ownerFirstName,
+            ownerLastName,
+            ownerPhone,
             ownerEmail,
+
+            // Compat + recherche existante
+            city,
+            zip,
+            ownerName: homeOwnerFull,
             type,
             team,
+
             updatedAt: serverTimestamp()
           });
           closeModal();
@@ -814,12 +905,24 @@
           const payload = {
             conciergerieUid: auth.currentUser.uid,
             name,
-            city,
+
+            // Pour devis/facture
             homeAddress: addr,
-            ownerName,
+            homeCity: city,
+            homeZip: zip,
+            homeOwner: homeOwnerFull,
+            ownerFirstName,
+            ownerLastName,
+            ownerPhone,
             ownerEmail,
+
+            // Compat + UI actuelle
+            city,
+            zip,
+            ownerName: homeOwnerFull,
             type,
             team,
+
             status: "active",
             createdAt: serverTimestamp()
           };
@@ -874,5 +977,3 @@
   </script>
 </body>
 </html>
-
-
