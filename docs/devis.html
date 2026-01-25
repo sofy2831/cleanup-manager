@@ -116,6 +116,7 @@
       box-shadow:0 3px 10px rgba(0,0,0,.06);
       text-align:center;
       font-weight:800;
+      white-space:pre-wrap;
     }
 
     .layout{
@@ -331,7 +332,7 @@
 <body>
   <div class="page">
     <div class="topbar">
-      <a class="pill-link" href="devis-liste.html">← Retour liste devis</a>
+      <a class="pill-link" href="devis-liste.html">← Retour devis</a>
       <button class="pill-link" type="button" id="logoutBtn">Déconnexion</button>
     </div>
 
@@ -404,6 +405,10 @@
             <button class="btn" type="button" id="markSentBtn" disabled>Marquer “devis envoyé”</button>
             <button class="btn" type="button" id="markAcceptedBtn" disabled>Marquer “accepté”</button>
           </div>
+
+          <div class="small" style="margin-top:8px;">
+            Numéro devis obligatoire : il est attribué automatiquement au 1er enregistrement (séquentiel par année).
+          </div>
         </form>
       </div>
     </div>
@@ -420,9 +425,10 @@
   <script type="module">
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-    import { doc, getDoc, updateDoc, serverTimestamp, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import {
+      doc, getDoc, serverTimestamp, runTransaction
+    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
-    // UI
     const logoutBtn = document.getElementById("logoutBtn");
     const alertBox = document.getElementById("alertBox");
     const recapKv = document.getElementById("recapKv");
@@ -442,33 +448,6 @@
     const saveBtn = document.getElementById("saveBtn");
     const markSentBtn = document.getElementById("markSentBtn");
     const markAcceptedBtn = document.getElementById("markAcceptedBtn");
-
-    function pad6(n){ return String(n).padStart(6, "0"); }
-    function currentYear(){ return new Date().getFullYear(); }
-
-    async function nextChronoNumber({ conciergerieUid, type }) {
-      const year = currentYear();
-      const counterId = `${conciergerieUid}_${year}`;
-      const counterRef = doc(db, "counters", counterId);
-
-      const prefix = (type === "QUOTE") ? "D" : (type === "INVOICE") ? "F" : "A";
-      const field  = (type === "QUOTE") ? "quoteSeq" : (type === "INVOICE") ? "invoiceSeq" : "creditSeq";
-
-      const seq = await runTransaction(db, async (tx) => {
-        const snap = await tx.get(counterRef);
-        const data = snap.exists() ? (snap.data() || {}) : {};
-        const next = Number(data[field] || 0) + 1;
-
-        if(!snap.exists()){
-          tx.set(counterRef, { quoteSeq: 0, invoiceSeq: 0, creditSeq: 0, updatedAt: serverTimestamp() });
-        }
-        tx.update(counterRef, { [field]: next, updatedAt: serverTimestamp() });
-
-        return next;
-      });
-
-      return `${prefix}-${year}-${pad6(seq)}`;
-    }
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -544,6 +523,24 @@
       return x;
     }
 
+    function pad4(n){ return String(n).padStart(4,"0"); }
+
+    function getYearForSequence(d){
+      const s = String(d?.dateKey || d?.date || "").trim();
+      const y = (s.length >= 4) ? s.slice(0,4) : "";
+      return (/^[0-9]{4}$/.test(y)) ? y : String(new Date().getFullYear());
+    }
+
+    function canMarkSent(d){
+      const qs = String(d?.quoteStatus || "").toUpperCase();
+      return qs === "DRAFT";
+    }
+
+    function canMarkAccepted(d){
+      const qs = String(d?.quoteStatus || "").toUpperCase();
+      return qs === "SENT";
+    }
+
     function renderLines(){
       const d = eventData || {};
       const lines = Array.isArray(d.lines) ? d.lines : [];
@@ -572,7 +569,6 @@
 
     function renderRecap(){
       const d = eventData || {};
-
       const computedTotal = computeTotalFromLines(d.lines);
       const total = (d.total != null) ? Number(d.total) : computedTotal;
       totalLabel.textContent = fmtMoney(total);
@@ -586,12 +582,13 @@
       }
       if(d.summary) rows.push(`<div><b>Réservation</b> : ${escapeHtml(d.summary)}</div>`);
       if(d.meta) rows.push(`<div><b>Note</b> : ${escapeHtml(d.meta)}</div>`);
-      if(d.quoteNumber) rows.push(`<div><b>N° devis</b> : ${escapeHtml(d.quoteNumber)}</div>`);
+      if(d.quoteNumber) rows.push(`<div><b>Numéro devis</b> : ${escapeHtml(d.quoteNumber)}</div>`);
       recapKv.innerHTML = rows.join("");
 
       const op = opStatusLabel(d.status);
       const qs = quoteStatusLabel(d.quoteStatus);
-      statusBadge.textContent = `Op: ${op} • Devis: ${qs}`;
+      const qn = d.quoteNumber ? (" • " + d.quoteNumber) : "";
+      statusBadge.textContent = `Op: ${op} • Devis: ${qs}${qn}`;
 
       if(amountEl.value === ""){
         if(d.quoteAmount != null && d.quoteAmount !== ""){
@@ -623,15 +620,70 @@
       if(eventData.conciergerieUid && currentUser?.uid && eventData.conciergerieUid !== currentUser.uid){
         throw new Error("Accès refusé (event d’une autre conciergerie).");
       }
+
       renderRecap();
     }
 
     function lockUI(locked){
       saveBtn.disabled = !!locked || !eventRef;
-      const qs = String(eventData?.quoteStatus || "").toUpperCase();
-      markSentBtn.disabled = !!locked || !eventRef || qs !== "DRAFT";
-      markAcceptedBtn.disabled = !!locked || !eventRef || qs !== "SENT";
+      markSentBtn.disabled = !!locked || !eventRef || !canMarkSent(eventData);
+      markAcceptedBtn.disabled = !!locked || !eventRef || !canMarkAccepted(eventData);
       saveBtn.style.opacity = locked ? "0.75" : "1";
+    }
+
+    async function saveQuoteWithSequentialNumber({ quoteAmount, quoteNotes, quoteTerms }){
+      const uid = currentUser.uid;
+
+      await runTransaction(db, async (tx)=>{
+        const evSnap = await tx.get(eventRef);
+        if(!evSnap.exists()) throw new Error("Event introuvable (transaction).");
+        const d = evSnap.data() || {};
+
+        if(d.conciergerieUid && d.conciergerieUid !== uid){
+          throw new Error("Accès refusé (event d’une autre conciergerie).");
+        }
+
+        const year = d.quoteYear ? String(d.quoteYear) : getYearForSequence(d);
+
+        const patch = {
+          quoteAmount,
+          quoteNotes,
+          quoteTerms,
+          quoteUpdatedAt: serverTimestamp(),
+          commercialStatus: "DEVIS",
+          commercialUpdatedAt: serverTimestamp()
+        };
+
+        const qs = String(d.quoteStatus || "").toUpperCase().trim();
+        if(qs === "SENT" || qs === "ACCEPTED" || qs === "REFUSED"){
+          patch.quoteStatus = qs;
+        }else{
+          patch.quoteStatus = "DRAFT";
+        }
+
+        let quoteNumber = d.quoteNumber;
+
+        if(!quoteNumber){
+          const counterId = `${uid}_${year}`;
+          const counterRef = doc(db, "counters", counterId);
+          const cSnap = await tx.get(counterRef);
+
+          const cur = cSnap.exists() ? Number(cSnap.data()?.quoteSeq || 0) : 0;
+          const next = cur + 1;
+
+          tx.set(counterRef, { quoteSeq: next }, { merge:true });
+
+          quoteNumber = `D-${year}-${pad4(next)}`;
+          patch.quoteNumber = quoteNumber;
+          patch.quoteSeq = next;
+          patch.quoteYear = year;
+        }
+
+        tx.update(eventRef, patch);
+      });
+
+      const snap = await getDoc(eventRef);
+      eventData = { id: snap.id, ...snap.data() };
     }
 
     form.addEventListener("submit", async (e)=>{
@@ -650,27 +702,8 @@
 
       lockUI(true);
       try{
-        const patch = {
-          quoteAmount,
-          quoteNotes,
-          quoteTerms,
-          quoteUpdatedAt: serverTimestamp(),
-          commercialStatus: "DEVIS",
-          quoteStatus: "DRAFT",
-          commercialUpdatedAt: serverTimestamp()
-        };
-
-        const qs = String(eventData?.quoteStatus || "").toUpperCase();
-        if(qs === "SENT" || qs === "ACCEPTED" || qs === "REFUSED"){
-          patch.quoteStatus = qs;
-        }
-
-        await updateDoc(eventRef, patch);
-
-        const snap = await getDoc(eventRef);
-        eventData = { id: snap.id, ...snap.data() };
-
-        showAlert("✅ Devis enregistré.", true);
+        await saveQuoteWithSequentialNumber({ quoteAmount, quoteNotes, quoteTerms });
+        showAlert("✅ Devis enregistré (numéro attribué si absent).", true);
         renderRecap();
       }catch(err){
         console.error(err);
@@ -691,27 +724,33 @@
 
       lockUI(true);
       try{
-        let quoteNumber = (eventData?.quoteNumber || "").trim();
-        if(!quoteNumber){
-          quoteNumber = await nextChronoNumber({ conciergerieUid: currentUser.uid, type: "QUOTE" });
-        }
+        await runTransaction(db, async (tx)=>{
+          const evSnap = await tx.get(eventRef);
+          if(!evSnap.exists()) throw new Error("Event introuvable (transaction).");
+          const d = evSnap.data() || {};
+          if(d.conciergerieUid && d.conciergerieUid !== currentUser.uid){
+            throw new Error("Accès refusé (event d’une autre conciergerie).");
+          }
+          if(!d.quoteNumber){
+            throw new Error("Numéro devis manquant. Fais 'Enregistrer' d'abord.");
+          }
 
-        await updateDoc(eventRef, {
-          quoteNumber,
-          commercialStatus: "DEVIS_ENVOYE",
-          quoteStatus: "SENT",
-          quoteSentAt: serverTimestamp(),
-          commercialUpdatedAt: serverTimestamp()
+          tx.update(eventRef, {
+            commercialStatus: "DEVIS_ENVOYE",
+            quoteStatus: "SENT",
+            quoteSentAt: serverTimestamp(),
+            commercialUpdatedAt: serverTimestamp()
+          });
         });
 
         const snap = await getDoc(eventRef);
         eventData = { id: snap.id, ...snap.data() };
 
-        showAlert("✅ Devis envoyé (numéro attribué).", true);
+        showAlert("✅ Statut mis à jour : devis envoyé.", true);
         renderRecap();
       }catch(err){
         console.error(err);
-        showAlert("Erreur statut devis : " + (err?.message || "inconnue"));
+        showAlert("Erreur statut : " + (err?.message || "inconnue"));
       }finally{
         lockUI(false);
       }
@@ -731,11 +770,23 @@
 
       lockUI(true);
       try{
-        await updateDoc(eventRef, {
-          commercialStatus: "DEVIS_ACCEPTE",
-          quoteStatus: "ACCEPTED",
-          quoteAcceptedAt: serverTimestamp(),
-          commercialUpdatedAt: serverTimestamp()
+        await runTransaction(db, async (tx)=>{
+          const evSnap = await tx.get(eventRef);
+          if(!evSnap.exists()) throw new Error("Event introuvable (transaction).");
+          const d = evSnap.data() || {};
+          if(d.conciergerieUid && d.conciergerieUid !== currentUser.uid){
+            throw new Error("Accès refusé (event d’une autre conciergerie).");
+          }
+          if(!d.quoteNumber){
+            throw new Error("Numéro devis manquant. Fais 'Enregistrer' d'abord.");
+          }
+
+          tx.update(eventRef, {
+            commercialStatus: "DEVIS_ACCEPTE",
+            quoteStatus: "ACCEPTED",
+            quoteAcceptedAt: serverTimestamp(),
+            commercialUpdatedAt: serverTimestamp()
+          });
         });
 
         const snap = await getDoc(eventRef);
