@@ -283,7 +283,6 @@
       font-weight:900;
     }
 
-    /* Bottom nav */
     .bottom-nav{
       position: fixed;
       left: 0;
@@ -332,7 +331,7 @@
 <body>
   <div class="page">
     <div class="topbar">
-      <a class="pill-link" href="prestations.html">← Retour prestations</a>
+      <a class="pill-link" href="devis-liste.html">← Retour devis</a>
       <button class="pill-link" type="button" id="logoutBtn">Déconnexion</button>
     </div>
 
@@ -385,7 +384,7 @@
               <label for="amount">Montant (€) (optionnel)</label>
               <input id="amount" type="number" step="0.01" min="0" placeholder="Auto = total des lignes">
               <div class="small" style="margin-top:6px;">
-                Laisse vide pour utiliser le total calculé depuis les lignes.
+                Vide = total calculé depuis les lignes.
               </div>
             </div>
             <div>
@@ -405,10 +404,6 @@
             <button class="btn" type="button" id="markSentBtn" disabled>Marquer “devis envoyé”</button>
             <button class="btn" type="button" id="markAcceptedBtn" disabled>Marquer “accepté”</button>
           </div>
-
-          <div class="small" style="margin-top:8px;">
-            Astuce : Enregistre d’abord, puis “devis envoyé”. “Accepté” est un clic manuel V1.
-          </div>
         </form>
       </div>
     </div>
@@ -427,7 +422,6 @@
     import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import { doc, getDoc, updateDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
-    // UI
     const logoutBtn = document.getElementById("logoutBtn");
     const alertBox = document.getElementById("alertBox");
     const recapKv = document.getElementById("recapKv");
@@ -478,7 +472,7 @@
     });
 
     backBtn.addEventListener("click", ()=>{
-      location.href = "prestations.html";
+      location.href = "devis-liste.html";
     });
 
     openEventBtn.addEventListener("click", ()=>{
@@ -523,14 +517,22 @@
     }
 
     function canMarkSent(d){
-      // envoyé possible si devis existant (au moins enregistré) et pas déjà envoyé/accepté
       const qs = String(d?.quoteStatus || "").toUpperCase();
       return qs === "DRAFT";
     }
-
     function canMarkAccepted(d){
       const qs = String(d?.quoteStatus || "").toUpperCase();
       return qs === "SENT";
+    }
+
+    function buildQuoteNumber(d){
+      // simple et stable : D-YYYYMMDD-<last4 eventId>
+      const today = new Date();
+      const y = today.getFullYear();
+      const m = String(today.getMonth()+1).padStart(2,"0");
+      const dd = String(today.getDate()).padStart(2,"0");
+      const tail = String(d?.id || eventId || "").slice(-4).toUpperCase() || "XXXX";
+      return `D-${y}${m}${dd}-${tail}`;
     }
 
     function renderLines(){
@@ -562,7 +564,6 @@
     function renderRecap(){
       const d = eventData || {};
 
-      // total calculé
       const computedTotal = computeTotalFromLines(d.lines);
       const total = (d.total != null) ? Number(d.total) : computedTotal;
       totalLabel.textContent = fmtMoney(total);
@@ -582,25 +583,20 @@
       const qs = quoteStatusLabel(d.quoteStatus);
       statusBadge.textContent = `Op: ${op} • Devis: ${qs}`;
 
-      // Préfill : si quoteAmount existe -> l'afficher, sinon proposer total event
       if(amountEl.value === ""){
         if(d.quoteAmount != null && d.quoteAmount !== ""){
           amountEl.value = d.quoteAmount;
-        }else if(total != null && Number.isFinite(Number(total))){
-          amountEl.value = ""; // on laisse vide volontairement (auto=total)
         }
       }
       if(d.quoteNotes && notesEl.value === "") notesEl.value = d.quoteNotes;
       if(d.quoteTerms && termsEl.value === "") termsEl.value = d.quoteTerms;
 
-      // boutons
       openEventBtn.disabled = !eventRef;
       saveBtn.disabled = !eventRef;
 
-      // si quoteStatus absent, on le considère DRAFT après 1er save
       const qStatus = String(d.quoteStatus || "").toUpperCase();
-      markSentBtn.disabled = !(eventRef && (qStatus === "DRAFT"));
-      markAcceptedBtn.disabled = !(eventRef && (qStatus === "SENT"));
+      markSentBtn.disabled = !(eventRef && qStatus === "DRAFT");
+      markAcceptedBtn.disabled = !(eventRef && qStatus === "SENT");
 
       renderLines();
     }
@@ -612,12 +608,10 @@
       if(!snap.exists()) throw new Error("Event introuvable.");
       eventData = { id: snap.id, ...snap.data() };
 
-      // Sécurité minimale : l'event doit appartenir à l'utilisateur connecté
       if(eventData.conciergerieUid && currentUser?.uid && eventData.conciergerieUid !== currentUser.uid){
         throw new Error("Accès refusé (event d’une autre conciergerie).");
       }
 
-      // Init soft : si pas de quoteStatus, on n'écrit rien ici (pas d'écriture en lecture)
       renderRecap();
     }
 
@@ -633,7 +627,6 @@
       hideAlert();
       if(!eventRef) return showAlert("Event non chargé.");
 
-      // Montant : optionnel (si vide => total lignes)
       const amountRaw = (amountEl.value || "").trim();
       const quoteAmount = amountRaw === "" ? null : Number(amountRaw);
       if(quoteAmount != null && (!Number.isFinite(quoteAmount) || quoteAmount < 0)){
@@ -645,20 +638,24 @@
 
       lockUI(true);
       try{
+        const currentQs = String(eventData?.quoteStatus || "").toUpperCase().trim();
+
+        // Patch de base
         const patch = {
           quoteAmount,
           quoteNotes,
           quoteTerms,
           quoteUpdatedAt: serverTimestamp(),
-          commercialStatus: "DEVIS",
-          quoteStatus: "DRAFT",
-          commercialUpdatedAt: serverTimestamp()
+          commercialUpdatedAt: serverTimestamp(),
         };
 
-        // si déjà un statut devis, on ne le downgrade pas
-        const qs = String(eventData?.quoteStatus || "").toUpperCase();
-        if(qs === "SENT" || qs === "ACCEPTED" || qs === "REFUSED"){
-          patch.quoteStatus = qs;
+        // set devis / draft uniquement si pas déjà plus avancé
+        if(!currentQs || currentQs === "DRAFT"){
+          patch.commercialStatus = "DEVIS";
+          patch.quoteStatus = "DRAFT";
+        }else{
+          // ne downgrade jamais
+          patch.quoteStatus = currentQs;
         }
 
         await updateDoc(eventRef, patch);
@@ -680,18 +677,20 @@
       hideAlert();
       if(!eventRef) return showAlert("Event non chargé.");
 
-      // garde-fou : exige au moins un save
-      const qs = String(eventData?.quoteStatus || "").toUpperCase();
+      const qs = String(eventData?.quoteStatus || "").toUpperCase().trim();
       if(qs !== "DRAFT"){
         return showAlert("⛔ Action impossible : le devis n'est pas en brouillon.");
       }
 
       lockUI(true);
       try{
+        const quoteNumber = eventData?.quoteNumber || buildQuoteNumber(eventData);
+
         await updateDoc(eventRef, {
           commercialStatus: "DEVIS_ENVOYE",
           quoteStatus: "SENT",
           quoteSentAt: serverTimestamp(),
+          quoteNumber,
           commercialUpdatedAt: serverTimestamp()
         });
 
@@ -712,7 +711,7 @@
       hideAlert();
       if(!eventRef) return showAlert("Event non chargé.");
 
-      const qs = String(eventData?.quoteStatus || "").toUpperCase();
+      const qs = String(eventData?.quoteStatus || "").toUpperCase().trim();
       if(qs !== "SENT"){
         return showAlert("⛔ Action impossible : le devis doit être “envoyé”.");
       }
