@@ -66,12 +66,6 @@
       white-space:nowrap;
       cursor:pointer;
     }
-    .pill-link.primary{
-      background:linear-gradient(90deg,var(--violet-main),var(--violet-dark));
-      border-color:transparent;
-      color:#fff;
-      box-shadow:0 4px 12px rgba(0,0,0,.15);
-    }
 
     .logo-title{
       display:flex;
@@ -213,6 +207,16 @@
       box-shadow:0 0 0 2px rgba(122,92,255,.15);
     }
 
+    .row{
+      display:flex;
+      gap:10px;
+      flex-wrap:wrap;
+    }
+    .row > div{
+      flex:1;
+      min-width:220px;
+    }
+
     .actions{
       display:flex;
       gap:8px;
@@ -334,7 +338,7 @@
 <body>
   <div class="page">
     <div class="topbar">
-      <a class="pill-link" href="compta.html">← Comptabilité</a>
+      <a class="pill-link" href="facture-liste.html">← Retour liste factures</a>
       <button class="pill-link" type="button" id="logoutBtn">Déconnexion</button>
     </div>
 
@@ -381,24 +385,25 @@
           <span class="small">V1</span>
         </div>
 
-        <div class="hintBox" id="hintBox">
-          V1 : statuts facture (brouillon → envoyée → payée).
-          PDF plus tard (Storage).
+        <div class="hintBox">
+          V1 : facture = statuts (brouillon → envoyée → payée).
+          Numéro chrono obligatoire au moment “envoyée”.
         </div>
 
         <form id="invoiceForm">
-          <label for="invoiceNumber">Numéro facture (optionnel V1)</label>
-          <input id="invoiceNumber" placeholder="Ex. F-2026-0001 (auto au moment “envoyée” si vide)">
-
           <label for="invoiceNotes">Notes internes (optionnel)</label>
           <textarea id="invoiceNotes" rows="4" placeholder="Ex : payé par virement, relance le 20…"></textarea>
 
           <div class="actions">
-            <button class="btn primary" type="button" id="createInvoiceBtn" disabled>Créer / brouillon</button>
+            <button class="btn primary" type="button" id="createInvoiceBtn" disabled>Créer / mettre en brouillon</button>
             <button class="btn" type="button" id="markSentBtn" disabled>Marquer “envoyée”</button>
             <button class="btn" type="button" id="markPaidBtn" disabled>Marquer “payée”</button>
           </div>
         </form>
+
+        <div class="hintBox">
+          Note : le numéro se génère automatiquement, tu ne le saisis pas.
+        </div>
       </div>
     </div>
   </div>
@@ -414,8 +419,9 @@
   <script type="module">
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-    import { doc, getDoc, updateDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import { doc, getDoc, updateDoc, serverTimestamp, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
+    // UI
     const logoutBtn = document.getElementById("logoutBtn");
     const alertBox = document.getElementById("alertBox");
     const recapKv = document.getElementById("recapKv");
@@ -428,12 +434,37 @@
     const linesBox = document.getElementById("linesBox");
     const totalLabel = document.getElementById("totalLabel");
 
-    const invoiceNumberEl = document.getElementById("invoiceNumber");
     const invoiceNotesEl = document.getElementById("invoiceNotes");
-
     const createInvoiceBtn = document.getElementById("createInvoiceBtn");
     const markSentBtn = document.getElementById("markSentBtn");
     const markPaidBtn = document.getElementById("markPaidBtn");
+
+    function pad6(n){ return String(n).padStart(6, "0"); }
+    function currentYear(){ return new Date().getFullYear(); }
+
+    async function nextChronoNumber({ conciergerieUid, type }) {
+      const year = currentYear();
+      const counterId = `${conciergerieUid}_${year}`;
+      const counterRef = doc(db, "counters", counterId);
+
+      const prefix = (type === "QUOTE") ? "D" : (type === "INVOICE") ? "F" : "A";
+      const field  = (type === "QUOTE") ? "quoteSeq" : (type === "INVOICE") ? "invoiceSeq" : "creditSeq";
+
+      const seq = await runTransaction(db, async (tx) => {
+        const snap = await tx.get(counterRef);
+        const data = snap.exists() ? (snap.data() || {}) : {};
+        const next = Number(data[field] || 0) + 1;
+
+        if(!snap.exists()){
+          tx.set(counterRef, { quoteSeq: 0, invoiceSeq: 0, creditSeq: 0, updatedAt: serverTimestamp() });
+        }
+        tx.update(counterRef, { [field]: next, updatedAt: serverTimestamp() });
+
+        return next;
+      });
+
+      return `${prefix}-${year}-${pad6(seq)}`;
+    }
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -465,7 +496,7 @@
     });
 
     backBtn.addEventListener("click", ()=>{
-      location.href = "compta.html";
+      location.href = "facture-liste.html";
     });
 
     openEventBtn.addEventListener("click", ()=>{
@@ -508,30 +539,6 @@
       return x;
     }
 
-    function buildInvoiceNumber(d){
-      // F-YYYYMMDD-<last4 eventId>
-      const today = new Date();
-      const y = today.getFullYear();
-      const m = String(today.getMonth()+1).padStart(2,"0");
-      const dd = String(today.getDate()).padStart(2,"0");
-      const tail = String(d?.id || eventId || "").slice(-4).toUpperCase() || "XXXX";
-      return `F-${y}${m}${dd}-${tail}`;
-    }
-
-    function canCreateInvoice(d){
-      const inv = String(d?.invoiceStatus || "").toUpperCase().trim();
-      // on autorise création si pas encore créée ou brouillon (et pas envoyée/payée)
-      return (inv === "" || inv === "DRAFT");
-    }
-    function canMarkSent(d){
-      const inv = String(d?.invoiceStatus || "").toUpperCase().trim();
-      return inv === "DRAFT";
-    }
-    function canMarkPaid(d){
-      const inv = String(d?.invoiceStatus || "").toUpperCase().trim();
-      return inv === "SENT";
-    }
-
     function renderLines(){
       const d = eventData || {};
       const lines = Array.isArray(d.lines) ? d.lines : [];
@@ -558,6 +565,19 @@
       }
     }
 
+    function canCreateInvoice(d){
+      const inv = String(d?.invoiceStatus || "").toUpperCase();
+      return inv === "" || inv === "DRAFT";
+    }
+    function canMarkSent(d){
+      const inv = String(d?.invoiceStatus || "").toUpperCase();
+      return inv === "DRAFT";
+    }
+    function canMarkPaid(d){
+      const inv = String(d?.invoiceStatus || "").toUpperCase();
+      return inv === "SENT";
+    }
+
     function renderRecap(){
       const d = eventData || {};
 
@@ -572,20 +592,17 @@
       if(d.assignedToName || d.assignedToEmail){
         rows.push(`<div><b>Agent</b> : ${escapeHtml(d.assignedToName||"—")} • ${escapeHtml(d.assignedToEmail||"—")}</div>`);
       }
-      if(d.summary) rows.push(`<div><b>Réservation</b> : ${escapeHtml(d.summary)}</div>`);
-      if(d.meta) rows.push(`<div><b>Note</b> : ${escapeHtml(d.meta)}</div>`);
+      if(d.invoiceNumber) rows.push(`<div><b>N° facture</b> : ${escapeHtml(d.invoiceNumber)}</div>`);
       recapKv.innerHTML = rows.join("");
 
       const op = opStatusLabel(d.status);
       const inv = invoiceStatusLabel(d.invoiceStatus);
-      const qs = String(d.quoteStatus||"").toUpperCase().trim();
-      const qsl = qs ? (" • Devis: " + qs) : "";
-      statusBadge.textContent = `Op: ${op}${qsl} • Facture: ${inv}`;
+      statusBadge.textContent = `Op: ${op} • Facture: ${inv}`;
 
-      if(invoiceNumberEl.value === "" && d.invoiceNumber) invoiceNumberEl.value = d.invoiceNumber;
       if(invoiceNotesEl.value === "" && d.invoiceNotes) invoiceNotesEl.value = d.invoiceNotes;
 
       openEventBtn.disabled = !eventRef;
+
       createInvoiceBtn.disabled = !(eventRef && canCreateInvoice(d));
       markSentBtn.disabled = !(eventRef && canMarkSent(d));
       markPaidBtn.disabled = !(eventRef && canMarkPaid(d));
@@ -621,17 +638,14 @@
       hideAlert();
       if(!eventRef) return showAlert("Event non chargé.");
 
-      const inv = String(eventData?.invoiceStatus || "").toUpperCase().trim();
-      if(inv === "SENT") return showAlert("⛔ Déjà envoyée.");
-      if(inv === "PAID") return showAlert("⛔ Déjà payée.");
+      const inv = String(eventData?.invoiceStatus || "").toUpperCase();
+      if(inv && inv !== "DRAFT") return showAlert("⛔ Déjà créée.");
 
-      const invoiceNumber = (invoiceNumberEl.value || "").trim();
       const invoiceNotes = (invoiceNotesEl.value || "").trim();
 
       lockUI(true);
       try{
         await updateDoc(eventRef, {
-          invoiceNumber: invoiceNumber || null,
           invoiceNotes: invoiceNotes || "",
           invoiceStatus: "DRAFT",
           invoiceCreatedAt: serverTimestamp(),
@@ -656,12 +670,15 @@
       hideAlert();
       if(!eventRef) return showAlert("Event non chargé.");
 
-      const inv = String(eventData?.invoiceStatus || "").toUpperCase().trim();
+      const inv = String(eventData?.invoiceStatus || "").toUpperCase();
       if(inv !== "DRAFT") return showAlert("⛔ La facture doit être en brouillon.");
 
       lockUI(true);
       try{
-        const invoiceNumber = (eventData?.invoiceNumber || "").trim() || buildInvoiceNumber(eventData);
+        let invoiceNumber = (eventData?.invoiceNumber || "").trim();
+        if(!invoiceNumber){
+          invoiceNumber = await nextChronoNumber({ conciergerieUid: currentUser.uid, type: "INVOICE" });
+        }
 
         await updateDoc(eventRef, {
           invoiceNumber,
@@ -674,7 +691,7 @@
         const snap = await getDoc(eventRef);
         eventData = { id: snap.id, ...snap.data() };
 
-        showAlert("✅ Facture marquée comme envoyée.", true);
+        showAlert("✅ Facture envoyée (numéro attribué).", true);
         renderRecap();
       }catch(err){
         console.error(err);
@@ -688,7 +705,7 @@
       hideAlert();
       if(!eventRef) return showAlert("Event non chargé.");
 
-      const inv = String(eventData?.invoiceStatus || "").toUpperCase().trim();
+      const inv = String(eventData?.invoiceStatus || "").toUpperCase();
       if(inv !== "SENT") return showAlert("⛔ La facture doit être “envoyée” avant de la marquer payée.");
 
       const ok = confirm("Marquer cette facture comme PAYÉE ?");
