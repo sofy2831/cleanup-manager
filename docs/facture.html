@@ -66,6 +66,12 @@
       white-space:nowrap;
       cursor:pointer;
     }
+    .pill-link.primary{
+      background:linear-gradient(90deg,var(--violet-main),var(--violet-dark));
+      border-color:transparent;
+      color:#fff;
+      box-shadow:0 4px 12px rgba(0,0,0,.15);
+    }
 
     .logo-title{
       display:flex;
@@ -110,6 +116,7 @@
       box-shadow:0 3px 10px rgba(0,0,0,.06);
       text-align:center;
       font-weight:800;
+      white-space:pre-wrap;
     }
 
     .layout{
@@ -193,7 +200,7 @@
       margin:10px 0 4px;
       text-align:left;
     }
-    input, textarea{
+    input, textarea, select{
       width:100%;
       padding:10px 12px;
       border-radius:12px;
@@ -202,7 +209,7 @@
       outline:none;
       background:#fff;
     }
-    input:focus, textarea:focus{
+    input:focus, textarea:focus, select:focus{
       border-color:var(--violet-main);
       box-shadow:0 0 0 2px rgba(122,92,255,.15);
     }
@@ -338,7 +345,7 @@
 <body>
   <div class="page">
     <div class="topbar">
-      <a class="pill-link" href="factures-liste.html">← Retour liste factures</a>
+      <a class="pill-link" href="factures-liste.html">← Retour factures</a>
       <button class="pill-link" type="button" id="logoutBtn">Déconnexion</button>
     </div>
 
@@ -385,9 +392,8 @@
           <span class="small">V1</span>
         </div>
 
-        <div class="hintBox">
-          V1 : facture = statuts (brouillon → envoyée → payée).
-          Numéro chrono obligatoire au moment “envoyée”.
+        <div class="hintBox" id="hintBox">
+          Numéro facture obligatoire : attribué automatiquement à la création (séquentiel par année).
         </div>
 
         <form id="invoiceForm">
@@ -401,8 +407,8 @@
           </div>
         </form>
 
-        <div class="hintBox">
-          Note : le numéro se génère automatiquement, tu ne le saisis pas.
+        <div class="hintBox" id="legalHint">
+          Le PDF + mentions légales détaillées arrivent après (Storage + profil conciergerie).
         </div>
       </div>
     </div>
@@ -419,9 +425,8 @@
   <script type="module">
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-    import { doc, getDoc, updateDoc, serverTimestamp, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import { doc, getDoc, serverTimestamp, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
-    // UI
     const logoutBtn = document.getElementById("logoutBtn");
     const alertBox = document.getElementById("alertBox");
     const recapKv = document.getElementById("recapKv");
@@ -435,36 +440,10 @@
     const totalLabel = document.getElementById("totalLabel");
 
     const invoiceNotesEl = document.getElementById("invoiceNotes");
+
     const createInvoiceBtn = document.getElementById("createInvoiceBtn");
     const markSentBtn = document.getElementById("markSentBtn");
     const markPaidBtn = document.getElementById("markPaidBtn");
-
-    function pad6(n){ return String(n).padStart(6, "0"); }
-    function currentYear(){ return new Date().getFullYear(); }
-
-    async function nextChronoNumber({ conciergerieUid, type }) {
-      const year = currentYear();
-      const counterId = `${conciergerieUid}_${year}`;
-      const counterRef = doc(db, "counters", counterId);
-
-      const prefix = (type === "QUOTE") ? "D" : (type === "INVOICE") ? "F" : "A";
-      const field  = (type === "QUOTE") ? "quoteSeq" : (type === "INVOICE") ? "invoiceSeq" : "creditSeq";
-
-      const seq = await runTransaction(db, async (tx) => {
-        const snap = await tx.get(counterRef);
-        const data = snap.exists() ? (snap.data() || {}) : {};
-        const next = Number(data[field] || 0) + 1;
-
-        if(!snap.exists()){
-          tx.set(counterRef, { quoteSeq: 0, invoiceSeq: 0, creditSeq: 0, updatedAt: serverTimestamp() });
-        }
-        tx.update(counterRef, { [field]: next, updatedAt: serverTimestamp() });
-
-        return next;
-      });
-
-      return `${prefix}-${year}-${pad6(seq)}`;
-    }
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -539,6 +518,30 @@
       return x;
     }
 
+    function pad4(n){ return String(n).padStart(4,"0"); }
+
+    function getYearForSequence(d){
+      const s = String(d?.dateKey || d?.date || "").trim();
+      const y = (s.length >= 4) ? s.slice(0,4) : "";
+      return (/^[0-9]{4}$/.test(y)) ? y : String(new Date().getFullYear());
+    }
+
+    function canCreateInvoice(d){
+      const inv = String(d?.invoiceStatus || "").toUpperCase();
+      if(inv === "DRAFT" || inv === "SENT" || inv === "PAID") return true;
+      return true;
+    }
+
+    function canMarkSent(d){
+      const inv = String(d?.invoiceStatus || "").toUpperCase();
+      return inv === "DRAFT";
+    }
+
+    function canMarkPaid(d){
+      const inv = String(d?.invoiceStatus || "").toUpperCase();
+      return inv === "SENT";
+    }
+
     function renderLines(){
       const d = eventData || {};
       const lines = Array.isArray(d.lines) ? d.lines : [];
@@ -565,19 +568,6 @@
       }
     }
 
-    function canCreateInvoice(d){
-      const inv = String(d?.invoiceStatus || "").toUpperCase();
-      return inv === "" || inv === "DRAFT";
-    }
-    function canMarkSent(d){
-      const inv = String(d?.invoiceStatus || "").toUpperCase();
-      return inv === "DRAFT";
-    }
-    function canMarkPaid(d){
-      const inv = String(d?.invoiceStatus || "").toUpperCase();
-      return inv === "SENT";
-    }
-
     function renderRecap(){
       const d = eventData || {};
 
@@ -592,17 +582,19 @@
       if(d.assignedToName || d.assignedToEmail){
         rows.push(`<div><b>Agent</b> : ${escapeHtml(d.assignedToName||"—")} • ${escapeHtml(d.assignedToEmail||"—")}</div>`);
       }
-      if(d.invoiceNumber) rows.push(`<div><b>N° facture</b> : ${escapeHtml(d.invoiceNumber)}</div>`);
+      if(d.summary) rows.push(`<div><b>Réservation</b> : ${escapeHtml(d.summary)}</div>`);
+      if(d.meta) rows.push(`<div><b>Note</b> : ${escapeHtml(d.meta)}</div>`);
+      if(d.invoiceNumber) rows.push(`<div><b>Numéro facture</b> : ${escapeHtml(d.invoiceNumber)}</div>`);
       recapKv.innerHTML = rows.join("");
 
       const op = opStatusLabel(d.status);
       const inv = invoiceStatusLabel(d.invoiceStatus);
-      statusBadge.textContent = `Op: ${op} • Facture: ${inv}`;
+      const inum = d.invoiceNumber ? (" • " + d.invoiceNumber) : "";
+      statusBadge.textContent = `Op: ${op} • Facture: ${inv}${inum}`;
 
       if(invoiceNotesEl.value === "" && d.invoiceNotes) invoiceNotesEl.value = d.invoiceNotes;
 
       openEventBtn.disabled = !eventRef;
-
       createInvoiceBtn.disabled = !(eventRef && canCreateInvoice(d));
       markSentBtn.disabled = !(eventRef && canMarkSent(d));
       markPaidBtn.disabled = !(eventRef && canMarkPaid(d));
@@ -625,7 +617,7 @@
     }
 
     function lockUI(locked){
-      createInvoiceBtn.disabled = !!locked || !eventRef || !canCreateInvoice(eventData);
+      createInvoiceBtn.disabled = !!locked || !eventRef;
       markSentBtn.disabled = !!locked || !eventRef || !canMarkSent(eventData);
       markPaidBtn.disabled = !!locked || !eventRef || !canMarkPaid(eventData);
 
@@ -634,29 +626,67 @@
       markPaidBtn.style.opacity = locked ? "0.75" : "1";
     }
 
-    createInvoiceBtn.addEventListener("click", async ()=>{
-      hideAlert();
-      if(!eventRef) return showAlert("Event non chargé.");
+    async function createInvoiceWithSequentialNumber({ invoiceNotes }){
+      const uid = currentUser.uid;
 
-      const inv = String(eventData?.invoiceStatus || "").toUpperCase();
-      if(inv && inv !== "DRAFT") return showAlert("⛔ Déjà créée.");
+      await runTransaction(db, async (tx)=>{
+        const evSnap = await tx.get(eventRef);
+        if(!evSnap.exists()) throw new Error("Event introuvable (transaction).");
+        const d = evSnap.data() || {};
 
-      const invoiceNotes = (invoiceNotesEl.value || "").trim();
+        if(d.conciergerieUid && d.conciergerieUid !== uid){
+          throw new Error("Accès refusé (event d’une autre conciergerie).");
+        }
 
-      lockUI(true);
-      try{
-        await updateDoc(eventRef, {
+        const year = d.invoiceYear ? String(d.invoiceYear) : getYearForSequence(d);
+
+        const invStatus = String(d.invoiceStatus || "").toUpperCase().trim();
+        if(invStatus === "PAID") throw new Error("Déjà payée.");
+        if(invStatus === "SENT") throw new Error("Déjà envoyée (passe en payée si besoin).");
+
+        let invoiceNumber = d.invoiceNumber;
+
+        const patch = {
           invoiceNotes: invoiceNotes || "",
           invoiceStatus: "DRAFT",
           invoiceCreatedAt: serverTimestamp(),
           commercialStatus: "FACTURE",
           commercialUpdatedAt: serverTimestamp()
-        });
+        };
 
-        const snap = await getDoc(eventRef);
-        eventData = { id: snap.id, ...snap.data() };
+        if(!invoiceNumber){
+          const counterId = `${uid}_${year}`;
+          const counterRef = doc(db, "counters", counterId);
+          const cSnap = await tx.get(counterRef);
 
-        showAlert("✅ Facture créée / en brouillon.", true);
+          const cur = cSnap.exists() ? Number(cSnap.data()?.invoiceSeq || 0) : 0;
+          const next = cur + 1;
+
+          tx.set(counterRef, { invoiceSeq: next }, { merge:true });
+
+          invoiceNumber = `F-${year}-${pad4(next)}`;
+          patch.invoiceNumber = invoiceNumber;
+          patch.invoiceSeq = next;
+          patch.invoiceYear = year;
+        }
+
+        tx.update(eventRef, patch);
+      });
+
+      const snap = await getDoc(eventRef);
+      eventData = { id: snap.id, ...snap.data() };
+    }
+
+    createInvoiceBtn.addEventListener("click", async ()=>{
+      hideAlert();
+      if(!eventRef) return showAlert("Event non chargé.");
+
+      const invoiceNotes = (invoiceNotesEl.value || "").trim();
+
+      lockUI(true);
+      try{
+        await createInvoiceWithSequentialNumber({ invoiceNotes });
+        showAlert("✅ Facture créée (numéro attribué si absent).", true);
         renderRecap();
       }catch(err){
         console.error(err);
@@ -672,26 +702,31 @@
 
       const inv = String(eventData?.invoiceStatus || "").toUpperCase();
       if(inv !== "DRAFT") return showAlert("⛔ La facture doit être en brouillon.");
+      if(!eventData?.invoiceNumber) return showAlert("⛔ Numéro facture manquant. Clique d'abord sur 'Créer / mettre en brouillon'.");
 
       lockUI(true);
       try{
-        let invoiceNumber = (eventData?.invoiceNumber || "").trim();
-        if(!invoiceNumber){
-          invoiceNumber = await nextChronoNumber({ conciergerieUid: currentUser.uid, type: "INVOICE" });
-        }
+        await runTransaction(db, async (tx)=>{
+          const evSnap = await tx.get(eventRef);
+          if(!evSnap.exists()) throw new Error("Event introuvable (transaction).");
+          const d = evSnap.data() || {};
+          if(d.conciergerieUid && d.conciergerieUid !== currentUser.uid){
+            throw new Error("Accès refusé (event d’une autre conciergerie).");
+          }
+          if(!d.invoiceNumber) throw new Error("Numéro facture manquant.");
 
-        await updateDoc(eventRef, {
-          invoiceNumber,
-          invoiceStatus: "SENT",
-          invoiceSentAt: serverTimestamp(),
-          commercialStatus: "FACTURE_ENVOYEE",
-          commercialUpdatedAt: serverTimestamp()
+          tx.update(eventRef, {
+            invoiceStatus: "SENT",
+            invoiceSentAt: serverTimestamp(),
+            commercialStatus: "FACTURE",
+            commercialUpdatedAt: serverTimestamp()
+          });
         });
 
         const snap = await getDoc(eventRef);
         eventData = { id: snap.id, ...snap.data() };
 
-        showAlert("✅ Facture envoyée (numéro attribué).", true);
+        showAlert("✅ Facture marquée comme envoyée.", true);
         renderRecap();
       }catch(err){
         console.error(err);
@@ -707,17 +742,28 @@
 
       const inv = String(eventData?.invoiceStatus || "").toUpperCase();
       if(inv !== "SENT") return showAlert("⛔ La facture doit être “envoyée” avant de la marquer payée.");
+      if(!eventData?.invoiceNumber) return showAlert("⛔ Numéro facture manquant (anormal).");
 
       const ok = confirm("Marquer cette facture comme PAYÉE ?");
       if(!ok) return;
 
       lockUI(true);
       try{
-        await updateDoc(eventRef, {
-          invoiceStatus: "PAID",
-          invoicePaidAt: serverTimestamp(),
-          commercialStatus: "PAYE",
-          commercialUpdatedAt: serverTimestamp()
+        await runTransaction(db, async (tx)=>{
+          const evSnap = await tx.get(eventRef);
+          if(!evSnap.exists()) throw new Error("Event introuvable (transaction).");
+          const d = evSnap.data() || {};
+          if(d.conciergerieUid && d.conciergerieUid !== currentUser.uid){
+            throw new Error("Accès refusé (event d’une autre conciergerie).");
+          }
+          if(!d.invoiceNumber) throw new Error("Numéro facture manquant.");
+
+          tx.update(eventRef, {
+            invoiceStatus: "PAID",
+            invoicePaidAt: serverTimestamp(),
+            commercialStatus: "PAYE",
+            commercialUpdatedAt: serverTimestamp()
+          });
         });
 
         const snap = await getDoc(eventRef);
@@ -749,4 +795,3 @@
   </script>
 </body>
 </html>
-
