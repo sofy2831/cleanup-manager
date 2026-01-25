@@ -199,7 +199,7 @@
       margin:10px 0 4px;
       text-align:left;
     }
-    input, textarea, select{
+    input, textarea{
       width:100%;
       padding:10px 12px;
       border-radius:12px;
@@ -208,19 +208,9 @@
       outline:none;
       background:#fff;
     }
-    input:focus, textarea:focus, select:focus{
+    input:focus, textarea:focus{
       border-color:var(--violet-main);
       box-shadow:0 0 0 2px rgba(122,92,255,.15);
-    }
-
-    .row{
-      display:flex;
-      gap:10px;
-      flex-wrap:wrap;
-    }
-    .row > div{
-      flex:1;
-      min-width:220px;
     }
 
     .actions{
@@ -296,7 +286,6 @@
       white-space:pre-wrap;
     }
 
-    /* Bottom nav */
     .bottom-nav{
       position: fixed;
       left: 0;
@@ -345,7 +334,7 @@
 <body>
   <div class="page">
     <div class="topbar">
-      <a class="pill-link" href="prestations.html">← Retour prestations</a>
+      <a class="pill-link" href="compta.html">← Comptabilité</a>
       <button class="pill-link" type="button" id="logoutBtn">Déconnexion</button>
     </div>
 
@@ -358,7 +347,6 @@
     <div class="badge" id="statusBadge">—</div>
 
     <div class="layout">
-      <!-- LEFT: recap + lines -->
       <div class="card left">
         <div class="card-title">
           <span>Récapitulatif</span>
@@ -387,7 +375,6 @@
         </div>
       </div>
 
-      <!-- RIGHT: invoice actions -->
       <div class="card right">
         <div class="card-title">
           <span>Gestion facture</span>
@@ -395,27 +382,23 @@
         </div>
 
         <div class="hintBox" id="hintBox">
-          V1 : on gère la facture en statuts (brouillon → envoyée → payée).
-          Le PDF viendra plus tard (Storage).
+          V1 : statuts facture (brouillon → envoyée → payée).
+          PDF plus tard (Storage).
         </div>
 
         <form id="invoiceForm">
           <label for="invoiceNumber">Numéro facture (optionnel V1)</label>
-          <input id="invoiceNumber" placeholder="Ex. F-2026-0001 (plus tard automatique)">
+          <input id="invoiceNumber" placeholder="Ex. F-2026-0001 (auto au moment “envoyée” si vide)">
 
           <label for="invoiceNotes">Notes internes (optionnel)</label>
           <textarea id="invoiceNotes" rows="4" placeholder="Ex : payé par virement, relance le 20…"></textarea>
 
           <div class="actions">
-            <button class="btn primary" type="button" id="createInvoiceBtn" disabled>Créer / mettre en brouillon</button>
+            <button class="btn primary" type="button" id="createInvoiceBtn" disabled>Créer / brouillon</button>
             <button class="btn" type="button" id="markSentBtn" disabled>Marquer “envoyée”</button>
             <button class="btn" type="button" id="markPaidBtn" disabled>Marquer “payée”</button>
           </div>
         </form>
-
-        <div class="hintBox" id="legalHint">
-          À prévoir (plus tard) : SIRET / APE / TVA ou franchise, adresse émetteur + client, mentions légales.
-        </div>
       </div>
     </div>
   </div>
@@ -433,7 +416,6 @@
     import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import { doc, getDoc, updateDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
-    // UI
     const logoutBtn = document.getElementById("logoutBtn");
     const alertBox = document.getElementById("alertBox");
     const recapKv = document.getElementById("recapKv");
@@ -483,7 +465,7 @@
     });
 
     backBtn.addEventListener("click", ()=>{
-      location.href = "prestations.html";
+      location.href = "compta.html";
     });
 
     openEventBtn.addEventListener("click", ()=>{
@@ -526,25 +508,27 @@
       return x;
     }
 
-    function canCreateInvoice(d){
-      // on autorise facture si devis accepté OU si event est déjà BON_A_FACTURER/DEVIS/FACTURE (compat avec ton flow)
-      const qs = String(d?.quoteStatus || "").toUpperCase();
-      const op = String(d?.status || "").toUpperCase();
-      const inv = String(d?.invoiceStatus || "").toUpperCase();
-
-      if(inv === "DRAFT" || inv === "SENT" || inv === "PAID") return true; // déjà créée
-      if(qs === "ACCEPTED") return true;
-      if(op === "BON_A_FACTURER" || op === "DEVIS" || op === "FACTURE") return true;
-      return true; // V1 permissif (tu peux durcir après)
+    function buildInvoiceNumber(d){
+      // F-YYYYMMDD-<last4 eventId>
+      const today = new Date();
+      const y = today.getFullYear();
+      const m = String(today.getMonth()+1).padStart(2,"0");
+      const dd = String(today.getDate()).padStart(2,"0");
+      const tail = String(d?.id || eventId || "").slice(-4).toUpperCase() || "XXXX";
+      return `F-${y}${m}${dd}-${tail}`;
     }
 
+    function canCreateInvoice(d){
+      const inv = String(d?.invoiceStatus || "").toUpperCase().trim();
+      // on autorise création si pas encore créée ou brouillon (et pas envoyée/payée)
+      return (inv === "" || inv === "DRAFT");
+    }
     function canMarkSent(d){
-      const inv = String(d?.invoiceStatus || "").toUpperCase();
+      const inv = String(d?.invoiceStatus || "").toUpperCase().trim();
       return inv === "DRAFT";
     }
-
     function canMarkPaid(d){
-      const inv = String(d?.invoiceStatus || "").toUpperCase();
+      const inv = String(d?.invoiceStatus || "").toUpperCase().trim();
       return inv === "SENT";
     }
 
@@ -594,17 +578,14 @@
 
       const op = opStatusLabel(d.status);
       const inv = invoiceStatusLabel(d.invoiceStatus);
-      const qs = String(d.quoteStatus||"").toUpperCase();
+      const qs = String(d.quoteStatus||"").toUpperCase().trim();
       const qsl = qs ? (" • Devis: " + qs) : "";
       statusBadge.textContent = `Op: ${op}${qsl} • Facture: ${inv}`;
 
-      // préfill champs facture
       if(invoiceNumberEl.value === "" && d.invoiceNumber) invoiceNumberEl.value = d.invoiceNumber;
       if(invoiceNotesEl.value === "" && d.invoiceNotes) invoiceNotesEl.value = d.invoiceNotes;
 
-      // boutons
       openEventBtn.disabled = !eventRef;
-
       createInvoiceBtn.disabled = !(eventRef && canCreateInvoice(d));
       markSentBtn.disabled = !(eventRef && canMarkSent(d));
       markPaidBtn.disabled = !(eventRef && canMarkPaid(d));
@@ -619,7 +600,6 @@
       if(!snap.exists()) throw new Error("Event introuvable.");
       eventData = { id: snap.id, ...snap.data() };
 
-      // sécurité minimale
       if(eventData.conciergerieUid && currentUser?.uid && eventData.conciergerieUid !== currentUser.uid){
         throw new Error("Accès refusé (event d’une autre conciergerie).");
       }
@@ -628,7 +608,7 @@
     }
 
     function lockUI(locked){
-      createInvoiceBtn.disabled = !!locked || !eventRef;
+      createInvoiceBtn.disabled = !!locked || !eventRef || !canCreateInvoice(eventData);
       markSentBtn.disabled = !!locked || !eventRef || !canMarkSent(eventData);
       markPaidBtn.disabled = !!locked || !eventRef || !canMarkPaid(eventData);
 
@@ -641,10 +621,9 @@
       hideAlert();
       if(!eventRef) return showAlert("Event non chargé.");
 
-      // Garde-fou : on conseille devis accepté, mais V1 permissif
-      const inv = String(eventData?.invoiceStatus || "").toUpperCase();
+      const inv = String(eventData?.invoiceStatus || "").toUpperCase().trim();
+      if(inv === "SENT") return showAlert("⛔ Déjà envoyée.");
       if(inv === "PAID") return showAlert("⛔ Déjà payée.");
-      if(inv === "SENT") return showAlert("⛔ Déjà envoyée (passe en payée si besoin).");
 
       const invoiceNumber = (invoiceNumberEl.value || "").trim();
       const invoiceNotes = (invoiceNotesEl.value || "").trim();
@@ -677,15 +656,18 @@
       hideAlert();
       if(!eventRef) return showAlert("Event non chargé.");
 
-      const inv = String(eventData?.invoiceStatus || "").toUpperCase();
+      const inv = String(eventData?.invoiceStatus || "").toUpperCase().trim();
       if(inv !== "DRAFT") return showAlert("⛔ La facture doit être en brouillon.");
 
       lockUI(true);
       try{
+        const invoiceNumber = (eventData?.invoiceNumber || "").trim() || buildInvoiceNumber(eventData);
+
         await updateDoc(eventRef, {
+          invoiceNumber,
           invoiceStatus: "SENT",
           invoiceSentAt: serverTimestamp(),
-          commercialStatus: "FACTURE",
+          commercialStatus: "FACTURE_ENVOYEE",
           commercialUpdatedAt: serverTimestamp()
         });
 
@@ -706,7 +688,7 @@
       hideAlert();
       if(!eventRef) return showAlert("Event non chargé.");
 
-      const inv = String(eventData?.invoiceStatus || "").toUpperCase();
+      const inv = String(eventData?.invoiceStatus || "").toUpperCase().trim();
       if(inv !== "SENT") return showAlert("⛔ La facture doit être “envoyée” avant de la marquer payée.");
 
       const ok = confirm("Marquer cette facture comme PAYÉE ?");
@@ -720,9 +702,6 @@
           commercialStatus: "PAYE",
           commercialUpdatedAt: serverTimestamp()
         });
-
-        // optionnel : aligner ton status opérationnel existant si tu veux (sans forcer)
-        // await updateDoc(eventRef, { status: "PAYEE", statusUpdatedAt: serverTimestamp() });
 
         const snap = await getDoc(eventRef);
         eventData = { id: snap.id, ...snap.data() };
