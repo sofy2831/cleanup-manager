@@ -1323,74 +1323,73 @@
   }
 
   bookingForm?.addEventListener("submit", async (e)=>{
-    e.preventDefault();
-    hideBookingAlert();
+  e.preventDefault();
+  hideBookingAlert();
 
-    if(!currentUser){
-      showBookingAlert("Non connecté.");
-      return;
-    }
+  if(!currentUser){
+    showBookingAlert("Non connecté.");
+    return;
+  }
 
-    const homeId = (homeSelect?.value || "").trim();
-    const aDate = (arrivalDateInput?.value || "").trim();
-    const dDate = (departureDateInput?.value || "").trim();
+  const homeId = (homeSelect?.value || "").trim();
+  const aDate = (arrivalDateInput?.value || "").trim();
+  const dDate = (departureDateInput?.value || "").trim();
 
-    if(!homeId) return showBookingAlert("Choisis un logement.");
-    if(!aDate || !dDate) return showBookingAlert("Dates arrivée + départ obligatoires.");
+  if(!homeId) return showBookingAlert("Choisis un logement.");
+  if(!aDate || !dDate) return showBookingAlert("Dates arrivée + départ obligatoires.");
 
-    const h = allHomes.find(x=>x.id === homeId);
-    if(!h) return showBookingAlert("Logement introuvable. Recharge la page.");
+  const h = allHomes.find(x=>x.id === homeId);
+  if(!h) return showBookingAlert("Logement introuvable. Recharge la page.");
 
-    const agentName = (agentNameInput?.value || "").trim();
-    const agentEmail = normalizeEmail(agentEmailInput?.value || "");
-    if(agentEmail && !isEmailValid(agentEmail)) return showBookingAlert("Email agent invalide.");
+  const agentName = (agentNameInput?.value || "").trim();
+  const agentEmail = normalizeEmail(agentEmailInput?.value || "");
+  if(agentEmail && !isEmailValid(agentEmail)) return showBookingAlert("Email agent invalide.");
 
-    const meta = (metaInput?.value || "").trim();
+  const meta = (metaInput?.value || "").trim();
 
-    const dateKeys = buildDateKeys(aDate, dDate);
-    if(!dateKeys.length) return showBookingAlert("Erreur dates. Vérifie le format.");
+  const dateKeys = buildDateKeys(aDate, dDate);
+  if(!dateKeys.length) return showBookingAlert("Erreur dates. Vérifie le format.");
 
-    saveBookingBtn.disabled = true;
-    saveBookingBtn.style.opacity = "0.75";
+  saveBookingBtn.disabled = true;
+  saveBookingBtn.style.opacity = "0.75";
 
-    try{
-      // création icalEvents “manual”
-      // NB: addDoc non importé ici volontairement? -> on l’importe juste dessous
-      // => on l’importe maintenant proprement :
-      const { addDoc } = await import("https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js");
+  try{
+    await addDoc(collection(db,"icalEvents"), {
+      conciergerieUid: currentUser.uid,
+      homeId: h.id,
+      homeName: h.name || "Logement",
+      homeCity: h.city || "",
+      homeAddress: h.homeAddress || h.address || "",
+      ownerName: h.ownerName || "",
+      ownerEmail: (h.ownerEmail || "").toString(),
 
-      await addDoc(collection(db,"icalEvents"), {
-        conciergerieUid: currentUser.uid,
-        homeId: h.id,
-        homeName: h.name || "Logement",
-        homeCity: h.city || "",
-        homeAddress: h.homeAddress || h.address || "",
-        ownerName: h.ownerName || "",
-        ownerEmail: (h.ownerEmail || "").toString(),
-        agentName,
-        agentEmail,
-        meta,
-        arrivalDateKey: aDate,
-        departureDateKey: dDate,
-        dateKey: aDate,
-        dateKeys,
-        source: "manual",
-        createdAt: serverTimestamp()
-      });
+      agentName,
+      agentEmail: (agentEmail || "").trim().toLowerCase(), // ✅ propre
 
-      showBookingAlert("✅ Réservation créée (manual).", true);
-      closeBookingModal();
+      meta,
 
-      // recharge mois + jour
-      await loadAllForMonth();
-    }catch(err){
-      console.error(err);
-      showBookingAlert("Erreur création réservation : " + (err?.message || "inconnue"));
-    }finally{
-      saveBookingBtn.disabled = false;
-      saveBookingBtn.style.opacity = "1";
-    }
-  });
+      arrivalDateKey: aDate,
+      departureDateKey: dDate,
+
+      dateKey: aDate, // ✅ AJOUT ICI (pour compat / rules / index)
+
+      dateKeys,
+      source: "manual",
+      createdAt: serverTimestamp()
+    });
+
+    showBookingAlert("✅ Réservation enregistrée.", true);
+    closeBookingModal?.(); // si tu as ta fonction
+    await loadIcalEventsForMonth?.(); // si tu reload le calendrier après
+
+  }catch(err){
+    console.error(err);
+    showBookingAlert("Erreur création réservation : " + (err?.message || "inconnue"));
+  }finally{
+    saveBookingBtn.disabled = false;
+    saveBookingBtn.style.opacity = "1";
+  }
+});
 
   // ===== URL: ?homeId=... ouvre la modale réservation direct =====
   function getParam(name){
