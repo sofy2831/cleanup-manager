@@ -208,7 +208,6 @@
       border-left:5px solid var(--violet-main);
       text-align:left;
     }
-    .item.clickable{ cursor:pointer; }
 
     .item-top{
       display:flex;
@@ -255,6 +254,31 @@
       opacity:.45;
       pointer-events:none;
       filter: grayscale(1);
+    }
+
+    .details{
+      margin-top:8px;
+      border-top:1px dashed rgba(122,92,255,.25);
+      padding-top:8px;
+    }
+    details summary{
+      cursor:pointer;
+      font-weight:900;
+      font-size:12px;
+      color:#444;
+      list-style:none;
+    }
+    details summary::-webkit-details-marker{ display:none; }
+    .owner-box{
+      margin-top:8px;
+      font-size:12px;
+      font-weight:800;
+      color:#444;
+      line-height:1.35;
+      background: rgba(122,92,255,0.06);
+      border:1px solid rgba(122,92,255,0.14);
+      padding:10px;
+      border-radius:12px;
     }
 
     .empty{
@@ -430,7 +454,7 @@
 
         <div class="modal-actions">
           <button class="btn" type="button" id="cancelBtn">Annuler</button>
-          <button class="btn primary" type="submit">Enregistrer</button>
+          <button class="btn primary" type="submit" id="saveBtn">Enregistrer</button>
         </div>
       </form>
     </div>
@@ -467,6 +491,7 @@
     const homeOwner = document.getElementById("homeOwner");
     const homeType = document.getElementById("homeType");
     const homeTeam = document.getElementById("homeTeam");
+    const saveBtn = document.getElementById("saveBtn");
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -515,7 +540,6 @@
     let currentUid = null;
     let allHomes = [];
     let showArchived = false;
-
     let editingHomeId = null;
 
     function isArchived(h){
@@ -568,10 +592,10 @@
 
       homeName.value = home.name || "";
       homeCity.value = home.city || "";
-      homeAddress.value = home.homeAddress || home.address || "";
+      homeAddress.value = (home.homeAddress || home.address || "").trim();
       ownerEmailEl.value = home.ownerEmail || "";
       homeOwner.value = home.ownerName || "";
-      homeType.value = home.type || "Studio";
+      homeType.value = (home.homeType || home.type || "Studio");
       homeTeam.value = home.team || "";
 
       setTimeout(()=>homeName.focus(), 0);
@@ -588,13 +612,12 @@
     function render(){
       const q = norm(searchInputEl.value);
       let homes = allHomes.slice();
-
       homes = homes.filter(h => showArchived ? true : !isArchived(h));
 
       const filtered = !q ? homes : homes.filter(h=>{
         const hay = [
           h.name, h.city, h.homeAddress, h.address,
-          h.ownerName, h.ownerEmail, h.type, h.team
+          h.ownerName, h.ownerEmail, h.type, h.homeType, h.team
         ].map(norm).join(" ");
         return hay.includes(q);
       });
@@ -614,7 +637,7 @@
 
       filtered.forEach(h=>{
         const item = document.createElement("div");
-        item.className = "item clickable";
+        item.className = "item";
 
         const ownerLabel = h.ownerName || h.ownerEmail || "—";
         const statusChip = isArchived(h) ? `<span class="chip">Archivé</span>` : "";
@@ -626,7 +649,7 @@
 
         item.innerHTML = `
           <div class="item-top">
-            <div>
+            <div style="min-width:0;">
               <div class="item-title">${escapeHtml(h.name || "Logement")}</div>
               <div class="item-meta">
                 ${escapeHtml(h.city || "—")}
@@ -635,14 +658,26 @@
                 ${h.ownerEmail ? ` • ${escapeHtml(h.ownerEmail)}` : ""}
               </div>
               <div class="chips">
-                <span class="chip">${escapeHtml(h.type || "Type")}</span>
+                <span class="chip">${escapeHtml(h.homeType || h.type || "Type")}</span>
                 <span class="chip">${escapeHtml(h.team || "—")}</span>
                 ${addr ? `<span class="chip">Adresse OK</span>` : `<span class="chip">Adresse manquante</span>`}
                 ${statusChip}
               </div>
+
+              <div class="details">
+                <details>
+                  <summary>👤 Voir propriétaire</summary>
+                  <div class="owner-box">
+                    <div><b>Nom :</b> ${escapeHtml(h.ownerName || "—")}</div>
+                    <div><b>Email :</b> ${escapeHtml(h.ownerEmail || "—")}</div>
+                  </div>
+                </details>
+              </div>
             </div>
+
             <div class="item-actions">
               ${createBookingBtn}
+              <button class="mini-btn" type="button" data-edit="${h.id}">✏️ Modifier</button>
               <button class="mini-btn red" type="button" data-delete="${h.id}">Supprimer</button>
               ${
                 isArchived(h)
@@ -655,14 +690,18 @@
 
         homesListEl.appendChild(item);
 
-        // clic item -> edit
-        item.addEventListener("click", ()=>{
-          openModalEdit(h);
-        });
-
-        // éviter que clic sur boutons déclenche edit
-        item.querySelectorAll(".item-actions a, .item-actions button, .item-actions span").forEach(el=>{
+        // STOP propagation pour éviter que summary/details gêne les actions
+        item.querySelectorAll(".item-actions a, .item-actions button").forEach(el=>{
           el.addEventListener("click", (e)=> e.stopPropagation());
+        });
+      });
+
+      // Modifier
+      homesListEl.querySelectorAll("button[data-edit]").forEach(btn=>{
+        btn.addEventListener("click", ()=>{
+          const id = btn.getAttribute("data-edit");
+          const h = allHomes.find(x=>x.id===id);
+          if(h) openModalEdit(h);
         });
       });
 
@@ -787,6 +826,8 @@
         return;
       }
 
+      saveBtn.disabled = true;
+
       try{
         if(editingHomeId){
           await updateDoc(doc(db,"homes", editingHomeId), {
@@ -823,6 +864,8 @@
       }catch(err){
         console.error(err);
         showAlert("Erreur enregistrement : " + (err?.message || "inconnue"));
+      }finally{
+        saveBtn.disabled = false;
       }
     });
 
