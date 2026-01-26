@@ -1,4 +1,4 @@
-<!-- docs/planning.html -->
+<!-- docs/planning.html (COMPLET) — SANS MODALE RÉSERVATION -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -133,10 +133,6 @@
       background:#fff; color:var(--violet-main);
       border:2px solid var(--violet-main);
       box-shadow:0 3px 10px rgba(0,0,0,.06);
-      text-decoration:none;
-      display:inline-flex;
-      align-items:center;
-      justify-content:center;
     }
     .btn.primary{
       background:linear-gradient(90deg,var(--violet-main),var(--violet-dark));
@@ -235,10 +231,6 @@
       cursor:pointer; white-space:nowrap;
       background:linear-gradient(90deg,var(--violet-main),var(--violet-dark)); color:#fff;
       box-shadow:0 10px 22px rgba(0,0,0,0.10);
-      text-decoration:none;
-      display:inline-flex;
-      align-items:center;
-      justify-content:center;
     }
     .mini.ghost{
       background:#fff; color:var(--violet-main); border:2px solid var(--violet-main);
@@ -246,7 +238,6 @@
     }
     .mini:disabled{ opacity:.55; cursor:not-allowed; }
 
-    /* Quick actions */
     .quick-actions{
       display:grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -275,7 +266,6 @@
     }
     .qa-btn:active{ transform: translateY(1px); }
 
-    /* Bottom nav */
     .bottom-nav{
       position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
       display: flex; gap: 6px; justify-content: space-around; align-items: center;
@@ -311,7 +301,6 @@
     }
   </style>
 </head>
-
 <body>
   <div class="page">
     <div class="topbar">
@@ -370,6 +359,7 @@
 
           <div class="calGrid" id="calendarGrid"></div>
 
+          <!-- Accès rapides -->
           <div style="margin-top:10px;">
             <div class="quick-actions">
               <a class="qa-btn" href="clients.html">👥 Clients</a>
@@ -456,7 +446,6 @@
         .replaceAll("'","&#039;");
     }
     function asRaw(s){ return String(s || "").toUpperCase().trim(); }
-    function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
 
     function pad2(n){ return String(n).padStart(2,"0"); }
     function toDateKey(d){ return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`; }
@@ -514,7 +503,6 @@
       return "";
     }
 
-    // Réservations (icalEvents) : couleur point
     function dotClassForIcal(source){
       const s = (source || "").toString().toLowerCase();
       if(s === "manual") return "manual";
@@ -535,10 +523,12 @@
     let selectedDateKey = toDateKey(new Date());
 
     // prestations (events)
+    let allEvents = [];
     let eventsByDate = new Map();
     let toValidate = [];
 
     // reservations (icalEvents)
+    let allBookings = [];
     let bookingsByDate = new Map();
 
     function monthRangeKeys(y, m){
@@ -549,11 +539,10 @@
 
     // ===== BOOKINGS (icalEvents) =====
     async function loadBookingsForMonth(){
+      allBookings = [];
       bookingsByDate = new Map();
 
       const { startKey, endKey } = monthRangeKeys(viewYear, viewMonth);
-      const start = parseDateKey(startKey);
-      const end = parseDateKey(endKey);
 
       let docs = [];
       try{
@@ -570,11 +559,13 @@
         return;
       }
 
+      const start = parseDateKey(startKey);
+      const end = parseDateKey(endKey);
+
       for(const b of docs){
         const keys = Array.isArray(b.dateKeys) ? b.dateKeys : [];
         if(!keys.length) continue;
 
-        // garde seulement les dateKeys dans le mois
         const monthKeys = keys.filter(k=>{
           const d = parseDateKey(k);
           return d && start && end && d >= start && d <= end;
@@ -589,11 +580,13 @@
           ownerEmail: (b.ownerEmail || "").toString(),
           ownerName: (b.ownerName || "").toString(),
           agentName: (b.agentName || "").toString(),
-          agentEmail: normalizeEmail(b.agentEmail || ""),
+          agentEmail: (b.agentEmail || "").toString().toLowerCase(),
           meta: b.meta || b.summary || "",
           source: (b.source || "import").toString(),
           dateKeys: monthKeys
         };
+
+        allBookings.push(obj);
 
         for(const dk of monthKeys){
           const arr = bookingsByDate.get(dk) || [];
@@ -605,6 +598,7 @@
 
     // ===== EVENTS (prestations) =====
     async function loadEventsForMonth(){
+      allEvents = [];
       eventsByDate = new Map();
       toValidate = [];
 
@@ -652,14 +646,20 @@
           homeId: ev.homeId || "",
           homeName: ev.homeName || "Logement",
           homeCity: ev.homeCity || ev.city || "",
-          ownerEmail: (ev.ownerEmail || "").toString(),
+          homeAddress: ev.homeAddress || ev.address || "",
+          homeType: (ev.homeType || ev.typeLogement || "").toString(),
+
           ownerName: ev.ownerName || "",
+          ownerEmail: (ev.ownerEmail || "").toString(),
           assignedToName: ev.assignedToName || ev.agentName || "",
-          assignedToEmail: normalizeEmail(ev.assignedToEmail || ev.agentEmail || ""),
+          assignedToEmail: (ev.assignedToEmail || ev.agentEmail || "").toString().toLowerCase(),
+
           meta: ev.meta || ev.summary || "",
           opStatus: normalizeOpStatus(ev.opStatus || ev.status || "EN_COURS"),
           type: ev.type || "Prestation"
         };
+
+        allEvents.push(obj);
 
         const arr = eventsByDate.get(obj.dateKey) || [];
         arr.push(obj);
@@ -856,7 +856,9 @@
           </div>
 
           <div class="dots">
-            ${dotsArr.slice(0,6).map(cls=> `<span class="dot ${esc(cls)}"></span>`).join("")}
+            ${
+              dotsArr.slice(0,6).map(cls=> `<span class="dot ${esc(cls)}"></span>`).join("")
+            }
           </div>
 
           <div class="initialsRow" aria-label="Agents">
@@ -876,8 +878,6 @@
         });
       }
 
-      const list = eventsByDate.get(selectedDateKey) || [];
-      dayCount.textContent = `${list.length}`;
       dayTitle.textContent = `Jour — ${selectedDateKey}`;
     }
 
@@ -892,7 +892,7 @@
       dayCount.textContent = `${presta.length}`;
       dayTitle.textContent = `Jour — ${selectedDateKey}`;
 
-      // Réservations
+      // Réservations (read-only)
       const block = document.createElement("div");
       block.className = "item";
       block.innerHTML = `
@@ -901,54 +901,49 @@
             <span class="badge">Réservations</span>
             <span class="badge">${books.length}</span>
           </div>
-          <div class="iSub" style="margin-top:6px;">
-            Saisie réservation uniquement depuis <b>Logements</b>.
-          </div>
+          <div class="iSub" style="margin-top:6px;">Création des réservations depuis Logements uniquement.</div>
         </div>
         <div class="iActions">
-          <a class="mini ghost" href="logements.html">Créer via Logements</a>
+          <a class="mini ghost" href="logements.html">+ Réservation</a>
         </div>
       `;
       dayList.appendChild(block);
 
-      if(books.length){
-        for(const b of books.slice(0,8)){
-          const div = document.createElement("div");
-          div.className = "item";
+      for(const b of books.slice(0,6)){
+        const div = document.createElement("div");
+        div.className = "item";
+        const src = (b.source || "import").toLowerCase();
+        const badge = (src === "manual") ? `<span class="badge blue">MANUEL</span>` : `<span class="badge">iCAL</span>`;
+        const title = `${b.homeName}${b.homeCity ? " — " + b.homeCity : ""}`;
+        const sub = [
+          b.ownerEmail ? `Propriétaire: ${b.ownerEmail}` : null,
+          b.agentName ? `Agent: ${b.agentName}` : null,
+          b.meta ? b.meta : null
+        ].filter(Boolean).join(" • ");
 
-          const src = (b.source || "import").toLowerCase();
-          const badge = (src === "manual") ? `<span class="badge blue">MANUEL</span>` : `<span class="badge">iCAL</span>`;
-          const title = `${b.homeName}${b.homeCity ? " — " + b.homeCity : ""}`;
-          const sub = [
-            b.ownerEmail ? `Propriétaire: ${b.ownerEmail}` : null,
-            b.agentName ? `Agent: ${b.agentName}` : null,
-            b.meta ? b.meta : null
-          ].filter(Boolean).join(" • ");
-
-          div.innerHTML = `
-            <div class="iMain">
-              <div class="iTop">
-                ${badge}
-                <span class="badge">Réservation</span>
-              </div>
-              <div class="iTitle">${esc(title)}</div>
-              <div class="iSub">${esc(sub || "—")}</div>
+        div.innerHTML = `
+          <div class="iMain">
+            <div class="iTop">
+              ${badge}
+              <span class="badge">Réservation</span>
             </div>
-            <div class="iActions">
-              <button class="mini ghost" type="button" data-booking-add-presta="${esc(b.homeId)}">Prestation</button>
-            </div>
-          `;
-          dayList.appendChild(div);
+            <div class="iTitle">${esc(title)}</div>
+            <div class="iSub">${esc(sub || "—")}</div>
+          </div>
+          <div class="iActions">
+            <button class="mini ghost" type="button" data-booking-add-presta="${esc(b.homeId)}">Prestation</button>
+          </div>
+        `;
+        dayList.appendChild(div);
 
-          div.querySelector(`[data-booking-add-presta="${b.homeId}"]`)?.addEventListener("click", (e)=>{
-            e.stopPropagation();
-            const params = new URLSearchParams();
-            if(b.homeId) params.set("homeId", b.homeId);
-            params.set("dateKey", selectedDateKey);
-            params.set("from", "planning");
-            location.href = `nouvelle-prestation.html?${params.toString()}`;
-          });
-        }
+        div.querySelector(`[data-booking-add-presta="${b.homeId}"]`)?.addEventListener("click", (e)=>{
+          e.stopPropagation();
+          const params = new URLSearchParams();
+          if(b.homeId) params.set("homeId", b.homeId);
+          params.set("dateKey", selectedDateKey);
+          params.set("from", "planning");
+          location.href = `nouvelle-prestation.html?${params.toString()}`;
+        });
       }
 
       // Prestations
@@ -958,10 +953,10 @@
         div.innerHTML = `
           <div class="iMain">
             <div class="iTitle">Aucune prestation ce jour</div>
-            <div class="iSub">Tu peux en créer depuis une réservation (bouton “Prestation”) ou via Prestations.</div>
+            <div class="iSub">Tu peux en créer depuis une réservation (bouton “Prestation”), ou via la page Prestations.</div>
           </div>
           <div class="iActions">
-            <a class="mini ghost" href="prestations.html">Prestations</a>
+            <button class="mini ghost" type="button" disabled>—</button>
           </div>
         `;
         dayList.appendChild(div);
@@ -1027,23 +1022,6 @@
       return new URLSearchParams(location.search).get(name) || "";
     }
 
-    function applyDateParam(){
-      const qDate = getParam("date");
-      const d = parseDateKey(qDate);
-      if(!d) return;
-
-      viewYear = d.getFullYear();
-      viewMonth = d.getMonth();
-      selectedDateKey = toDateKey(d);
-
-      // nettoie l'URL (optionnel)
-      try{
-        const url = new URL(location.href);
-        url.searchParams.delete("date");
-        history.replaceState({}, "", url.toString());
-      }catch(e){}
-    }
-
     // Nav calendrier
     prevMonthBtn.addEventListener("click", ()=>{
       const d = new Date(viewYear, viewMonth, 1);
@@ -1072,7 +1050,6 @@
       loadAllForMonth().catch(e=> showAlert("Erreur rafraîchir : " + (e?.message || "inconnue")));
     });
 
-    // Boot
     onAuthStateChanged(auth, async (user)=>{
       if(!user){
         location.href = "login.html?role=conciergerie";
@@ -1084,9 +1061,18 @@
       const now = new Date();
       viewYear = now.getFullYear();
       viewMonth = now.getMonth();
-      selectedDateKey = toDateKey(now);
 
-      applyDateParam();
+      // ✅ support URL ?date=YYYY-MM-DD
+      const urlDate = getParam("date");
+      const dk = parseDateKey(urlDate) ? urlDate : toDateKey(now);
+      selectedDateKey = dk;
+
+      // si on arrive sur une date hors mois courant -> on ajuste le mois affiché
+      const dSel = parseDateKey(selectedDateKey);
+      if(dSel){
+        viewYear = dSel.getFullYear();
+        viewMonth = dSel.getMonth();
+      }
 
       try{
         await loadAllForMonth();
