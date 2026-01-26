@@ -301,6 +301,33 @@
       margin-top:12px;
     }
 
+    /* Modal réservation */
+    .booking-alert{
+      display:none;
+      margin:10px 0 6px;
+      padding:10px 12px;
+      background:#fff;
+      border-radius:14px;
+      border-left:5px solid var(--bad);
+      box-shadow:0 3px 10px rgba(0,0,0,.06);
+      font-size:12px;
+      color:#444;
+      white-space:pre-wrap;
+    }
+    .booking-alert.ok{ border-left-color: var(--ok); }
+
+    .info-box{
+      margin-top:8px;
+      background:#fff;
+      border-radius:14px;
+      padding:10px 12px;
+      box-shadow:0 3px 10px rgba(0,0,0,.06);
+      border:1px solid rgba(0,0,0,0.04);
+      font-size:12px;
+      color:#444;
+      display:none;
+    }
+
     /* Bottom nav */
     .bottom-nav{
       position: fixed;
@@ -386,6 +413,7 @@
     </nav>
   </div>
 
+  <!-- MODALE LOGEMENT (existante) -->
   <div class="modal-backdrop" id="modalBackdrop" aria-hidden="true">
     <div class="modal" role="dialog" aria-modal="true">
       <h2 id="modalTitle">Ajouter un logement</h2>
@@ -451,6 +479,54 @@
       </form>
     </div>
   </div>
+
+  <!-- ✅ MODALE RÉSERVATION (nouvelle) -->
+  <div class="modal-backdrop" id="bookingBackdrop" aria-hidden="true">
+    <div class="modal" role="dialog" aria-modal="true">
+      <h2>Créer une réservation</h2>
+      <p>Réservation = <b>icalEvents</b> (source manual) + <b>dateKeys</b> (jours du séjour).</p>
+
+      <div class="booking-alert" id="bookingAlert"></div>
+
+      <form id="bookingForm">
+        <label for="bookingHomeSelect">Logement</label>
+        <select id="bookingHomeSelect" required></select>
+
+        <div class="info-box" id="bookingHomeInfo"></div>
+
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <div style="flex:1; min-width:180px;">
+            <label for="arrivalDateInput">Arrivée (date)</label>
+            <input id="arrivalDateInput" type="date" required />
+          </div>
+          <div style="flex:1; min-width:180px;">
+            <label for="departureDateInput">Départ (date)</label>
+            <input id="departureDateInput" type="date" required />
+          </div>
+        </div>
+
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <div style="flex:1; min-width:180px;">
+            <label for="agentNameInput">Agent (nom) optionnel</label>
+            <input id="agentNameInput" type="text" placeholder="Ex. Sarah" />
+          </div>
+          <div style="flex:1; min-width:180px;">
+            <label for="agentEmailInput">Agent (email) optionnel</label>
+            <input id="agentEmailInput" type="email" placeholder="sarah@email.com" />
+          </div>
+        </div>
+
+        <label for="metaInput">Note / infos</label>
+        <input id="metaInput" type="text" placeholder="Ex. back-to-back, voyageurs exigeants…" />
+
+        <div class="modal-actions">
+          <button class="btn" type="button" id="cancelBookingBtn">Annuler</button>
+          <button class="btn primary" type="submit" id="saveBookingBtn">Enregistrer</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <script type="module">
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
@@ -489,6 +565,20 @@
     const homeTeam = document.getElementById("homeTeam");
     const saveBtn = document.getElementById("saveBtn");
 
+    // ===== Booking modal UI (nouveau) =====
+    const bookingBackdrop = document.getElementById("bookingBackdrop");
+    const bookingForm = document.getElementById("bookingForm");
+    const bookingHomeSelect = document.getElementById("bookingHomeSelect");
+    const bookingHomeInfo = document.getElementById("bookingHomeInfo");
+    const arrivalDateInput = document.getElementById("arrivalDateInput");
+    const departureDateInput = document.getElementById("departureDateInput");
+    const agentNameInput = document.getElementById("agentNameInput");
+    const agentEmailInput = document.getElementById("agentEmailInput");
+    const metaInput = document.getElementById("metaInput");
+    const cancelBookingBtn = document.getElementById("cancelBookingBtn");
+    const saveBookingBtn = document.getElementById("saveBookingBtn");
+    const bookingAlert = document.getElementById("bookingAlert");
+
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
       alertBox.classList.toggle("ok", !!ok);
@@ -500,8 +590,20 @@
       alertBox.textContent = "";
     }
 
+    function showBookingAlert(msg, ok=false){
+      bookingAlert.style.display = "block";
+      bookingAlert.classList.toggle("ok", !!ok);
+      bookingAlert.textContent = msg;
+    }
+    function hideBookingAlert(){
+      bookingAlert.style.display = "none";
+      bookingAlert.classList.remove("ok");
+      bookingAlert.textContent = "";
+    }
+
     function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
     function norm(s){ return (s||"").toString().toLowerCase().trim(); }
+    function isEmailValid(s){ return /^\S+@\S+\.\S+$/.test(String(s||"").trim()); }
 
     function escapeHtml(str){
       return String(str ?? "")
@@ -523,6 +625,40 @@
 
     function validateZip(zip){
       return /^\d{5}$/.test(zip);
+    }
+
+    // ===== date utils (réservations) =====
+    function pad2(n){ return String(n).padStart(2,"0"); }
+    function toDateKey(d){ return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`; }
+    function parseDateKey(s){
+      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s||""));
+      if(!m) return null;
+      const y = Number(m[1]), mo = Number(m[2])-1, da = Number(m[3]);
+      const d = new Date(y, mo, da);
+      return Number.isFinite(d.getTime()) ? d : null;
+    }
+    function addDays(dateKey, days){
+      const d = parseDateKey(dateKey);
+      if(!d) return dateKey;
+      d.setDate(d.getDate() + (Number(days)||0));
+      return toDateKey(d);
+    }
+    function buildDateKeys(startKey, endKey){
+      const d1 = parseDateKey(startKey);
+      const d2 = parseDateKey(endKey);
+      if(!d1 || !d2) return [];
+      const a = (d1 <= d2) ? startKey : endKey;
+      const b = (d1 <= d2) ? endKey : startKey;
+
+      const out = [];
+      let cur = a;
+      out.push(cur);
+      while(cur !== b){
+        cur = addDays(cur, 1);
+        out.push(cur);
+        if(out.length > 90) break; // sécurité
+      }
+      return out;
     }
 
     // ===== Abonnement guard =====
@@ -607,14 +743,12 @@
       ownerEmailEl.value = home.ownerEmail || "";
       ownerPhoneEl.value = home.ownerPhone || "";
 
-      // compat : si anciens logements => ownerName
       const ofn = home.ownerFirstName || "";
       const oln = home.ownerLastName || "";
       if(ofn || oln){
         ownerFirstNameEl.value = ofn;
         ownerLastNameEl.value = oln;
       }else{
-        // tentative split sur ownerName "Prénom Nom"
         const raw = (home.homeOwner || home.ownerName || "").trim();
         if(raw){
           const parts = raw.split(" ");
@@ -640,6 +774,75 @@
       editingHomeId = null;
     }
 
+    // ===== Booking modal helpers =====
+    function renderBookingHomeInfo(homeId){
+      const h = allHomes.find(x=>x.id === homeId);
+      if(!h){
+        bookingHomeInfo.style.display = "none";
+        bookingHomeInfo.innerHTML = "";
+        return;
+      }
+      const addr = (h.homeAddress || h.address || "").trim();
+      const ownerLabel =
+        (h.homeOwner || h.ownerName || "").trim()
+        || h.ownerEmail
+        || "—";
+
+      bookingHomeInfo.style.display = "block";
+      bookingHomeInfo.innerHTML = `
+        <div><b>Adresse :</b> ${escapeHtml(addr || "—")}</div>
+        <div><b>Propriétaire :</b> ${escapeHtml(ownerLabel)}${h.ownerEmail ? ` • ${escapeHtml(h.ownerEmail)}` : ""}</div>
+      `;
+    }
+
+    function fillBookingHomeSelect(selectedId=""){
+      bookingHomeSelect.innerHTML = `<option value="">— Choisir —</option>`;
+      for(const h of allHomes){
+        if(isArchived(h)) continue;
+        const opt = document.createElement("option");
+        opt.value = h.id;
+        opt.textContent = `${h.name || "Logement"}${(h.homeCity||h.city) ? " — " + (h.homeCity||h.city) : ""}`;
+        bookingHomeSelect.appendChild(opt);
+      }
+      if(selectedId){
+        bookingHomeSelect.value = selectedId;
+        renderBookingHomeInfo(selectedId);
+      }else{
+        renderBookingHomeInfo("");
+      }
+    }
+
+    function openBookingModal(homeId=""){
+      hideBookingAlert();
+
+      fillBookingHomeSelect(homeId);
+
+      const today = toDateKey(new Date());
+      arrivalDateInput.value = today;
+      departureDateInput.value = today;
+
+      agentNameInput.value = "";
+      agentEmailInput.value = "";
+      metaInput.value = "";
+
+      bookingBackdrop.style.display = "flex";
+      setTimeout(()=>bookingHomeSelect.focus(), 0);
+    }
+
+    function closeBookingModal(){
+      bookingBackdrop.style.display = "none";
+      bookingForm.reset();
+      bookingHomeSelect.innerHTML = "";
+      bookingHomeInfo.style.display = "none";
+      bookingHomeInfo.innerHTML = "";
+      hideBookingAlert();
+    }
+
+    bookingBackdrop.addEventListener("click", (e)=>{ if(e.target === bookingBackdrop) closeBookingModal(); });
+    cancelBookingBtn.addEventListener("click", closeBookingModal);
+    bookingHomeSelect.addEventListener("change", ()=> renderBookingHomeInfo(bookingHomeSelect.value));
+
+    // ===== Render list =====
     function render(){
       const q = norm(searchInputEl.value);
       let homes = allHomes.slice();
@@ -687,9 +890,10 @@
         const zip = (h.homeZip || h.zip || "").toString().trim();
         const city = (h.homeCity || h.city || "").toString().trim();
 
+        // ✅ Remplacé : on ouvre la modale réservation depuis logements.html
         const createBookingBtn = isArchived(h)
           ? `<span class="mini-btn disabled">Créer une réservation</span>`
-          : `<a class="mini-btn primary" href="planning.html?homeId=${encodeURIComponent(h.id)}">Créer une réservation</a>`;
+          : `<button class="mini-btn primary" type="button" data-booking="${escapeHtml(h.id)}">Créer une réservation</button>`;
 
         item.innerHTML = `
           <div class="item-top">
@@ -714,12 +918,12 @@
 
             <div class="item-actions">
               ${createBookingBtn}
-              <button class="mini-btn" type="button" data-edit="${h.id}">✏️ Modifier</button>
-              <button class="mini-btn red" type="button" data-delete="${h.id}">Supprimer</button>
+              <button class="mini-btn" type="button" data-edit="${escapeHtml(h.id)}">✏️ Modifier</button>
+              <button class="mini-btn red" type="button" data-delete="${escapeHtml(h.id)}">Supprimer</button>
               ${
                 isArchived(h)
-                  ? `<button class="mini-btn" type="button" data-unarchive="${h.id}">Restaurer</button>`
-                  : `<button class="mini-btn" type="button" data-archive="${h.id}">Archiver</button>`
+                  ? `<button class="mini-btn" type="button" data-unarchive="${escapeHtml(h.id)}">Restaurer</button>`
+                  : `<button class="mini-btn" type="button" data-archive="${escapeHtml(h.id)}">Archiver</button>`
               }
             </div>
           </div>
@@ -729,6 +933,14 @@
 
         item.querySelectorAll(".item-actions a, .item-actions button").forEach(el=>{
           el.addEventListener("click", (e)=> e.stopPropagation());
+        });
+      });
+
+      // ✅ Ouvrir modale réservation
+      homesListEl.querySelectorAll("button[data-booking]").forEach(btn=>{
+        btn.addEventListener("click", ()=>{
+          const id = btn.getAttribute("data-booking") || "";
+          openBookingModal(id);
         });
       });
 
@@ -879,7 +1091,6 @@
           await updateDoc(doc(db,"homes", editingHomeId), {
             name,
 
-            // Pour devis/facture
             homeAddress: addr,
             homeCity: city,
             homeZip: zip,
@@ -889,7 +1100,6 @@
             ownerPhone,
             ownerEmail,
 
-            // Compat + recherche existante
             city,
             zip,
             ownerName: homeOwnerFull,
@@ -906,7 +1116,6 @@
             conciergerieUid: auth.currentUser.uid,
             name,
 
-            // Pour devis/facture
             homeAddress: addr,
             homeCity: city,
             homeZip: zip,
@@ -916,7 +1125,6 @@
             ownerPhone,
             ownerEmail,
 
-            // Compat + UI actuelle
             city,
             zip,
             ownerName: homeOwnerFull,
@@ -936,6 +1144,84 @@
         showAlert("Erreur enregistrement : " + (err?.message || "inconnue"));
       }finally{
         saveBtn.disabled = false;
+      }
+    });
+
+    // ===== CREATE booking (icalEvents) depuis logements =====
+    bookingForm.addEventListener("submit", async (e)=>{
+      e.preventDefault();
+      hideBookingAlert();
+
+      const user = auth.currentUser;
+      if(!user){
+        showBookingAlert("Non connecté.");
+        return;
+      }
+
+      const homeId = (bookingHomeSelect.value || "").trim();
+      const aDate = (arrivalDateInput.value || "").trim();
+      const dDate = (departureDateInput.value || "").trim();
+
+      if(!homeId) return showBookingAlert("Choisis un logement.");
+      if(!aDate || !dDate) return showBookingAlert("Dates arrivée + départ obligatoires.");
+
+      const h = allHomes.find(x=>x.id === homeId);
+      if(!h) return showBookingAlert("Logement introuvable. Recharge la page.");
+
+      const agentName = (agentNameInput.value || "").trim();
+      const agentEmail = normalizeEmail(agentEmailInput.value || "");
+      if(agentEmail && !isEmailValid(agentEmail)) return showBookingAlert("Email agent invalide.");
+
+      const meta = (metaInput.value || "").trim();
+
+      const dateKeys = buildDateKeys(aDate, dDate);
+      if(!dateKeys.length) return showBookingAlert("Erreur dates. Vérifie le format.");
+
+      saveBookingBtn.disabled = true;
+      saveBookingBtn.style.opacity = "0.75";
+
+      try{
+        await addDoc(collection(db,"icalEvents"), {
+          conciergerieUid: user.uid,
+          homeId: String(h.id),
+
+          // requis rules
+          dateKey: String(aDate),
+          dateKeys: dateKeys.map(String),
+          source: "manual",
+
+          // infos utiles
+          homeName: h.name || "Logement",
+          homeCity: h.homeCity || h.city || "",
+          homeAddress: h.homeAddress || h.address || "",
+          ownerName: h.homeOwner || h.ownerName || "",
+          ownerEmail: String(h.ownerEmail || ""),
+
+          agentName: String(agentName || ""),
+          agentEmail: String(agentEmail || "").trim().toLowerCase(),
+
+          meta: String(meta || ""),
+
+          // optionnel séjour
+          arrivalDateKey: String(aDate),
+          departureDateKey: String(dDate),
+
+          createdAt: serverTimestamp()
+        });
+
+        showBookingAlert("✅ Réservation enregistrée.", true);
+
+        // redirection planning sur la date d'arrivée
+        setTimeout(()=>{
+          location.href = `planning.html?date=${encodeURIComponent(aDate)}&homeId=${encodeURIComponent(homeId)}`;
+        }, 250);
+
+      }catch(err){
+        console.error(err);
+        showBookingAlert("Erreur création réservation : " + (err?.message || "inconnue"));
+      }finally{
+        saveBookingBtn.disabled = false;
+        saveBookingBtn.style.opacity = "1";
       }
     });
 
