@@ -1,4 +1,4 @@
-<!-- docs/logements.html -->
+<!-- docs/logements.html (COMPLET) — + OUVERTURE MODALE RÉSERVATION EN DÉTAIL / MODIF via URL -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -184,6 +184,17 @@
       color:#fff;
       box-shadow:0 4px 12px rgba(0,0,0,.15);
     }
+    .btn.danger{
+      color:var(--bad);
+      border-color: rgba(179,38,30,0.45);
+      background:#fff;
+    }
+    .btn.ok{
+      color:var(--ok);
+      border-color: rgba(27,143,77,0.35);
+      background:#fff;
+    }
+    .btn:disabled{ opacity:.55; cursor:not-allowed; }
 
     .alert{
       display:none;
@@ -470,8 +481,8 @@
   <!-- MODALE RÉSERVATION (icalEvents) -->
   <div class="modal-backdrop" id="bookingBackdrop" aria-hidden="true">
     <div class="modal" role="dialog" aria-modal="true" aria-label="Créer une réservation">
-      <h2>Créer une réservation</h2>
-      <p>Écrit dans <b>icalEvents</b> avec <b>source=manual</b> + <b>dateKeys</b> (jours du séjour).</p>
+      <h2 id="bookingModalTitle">Créer une réservation</h2>
+      <p id="bookingModalHint">Écrit dans <b>icalEvents</b> avec <b>source=manual</b> + <b>dateKeys</b> (jours du séjour).</p>
 
       <div class="b-alert" id="bookingAlert"></div>
 
@@ -491,16 +502,17 @@
             <input id="departureDateInput" type="date" required />
           </div>
         </div>
-<div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;">
-  <div style="flex:1; min-width:160px;">
-    <label for="arrivalTimeInput">Heure arrivée</label>
-    <input id="arrivalTimeInput" type="time" value="16:00" required />
-  </div>
-  <div style="flex:1; min-width:160px;">
-    <label for="departureTimeInput">Heure départ</label>
-    <input id="departureTimeInput" type="time" value="10:00" required />
-  </div>
-</div>
+
+        <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;">
+          <div style="flex:1; min-width:160px;">
+            <label for="arrivalTimeInput">Heure arrivée</label>
+            <input id="arrivalTimeInput" type="time" value="16:00" required />
+          </div>
+          <div style="flex:1; min-width:160px;">
+            <label for="departureTimeInput">Heure départ</label>
+            <input id="departureTimeInput" type="time" value="10:00" required />
+          </div>
+        </div>
 
         <div style="display:flex; gap:10px; flex-wrap:wrap;">
           <div style="flex:1; min-width:160px;">
@@ -518,6 +530,11 @@
 
         <div class="modal-actions">
           <button class="btn" type="button" id="cancelBookingBtn">Annuler</button>
+
+          <!-- visibles seulement en mode edit -->
+          <button class="btn danger" type="button" id="deleteBookingBtn" style="display:none;">Supprimer</button>
+          <button class="btn ok" type="button" id="archiveBookingBtn" style="display:none;">Archiver</button>
+
           <button class="btn primary" type="submit" id="saveBookingBtn">Enregistrer</button>
         </div>
       </form>
@@ -526,7 +543,8 @@
 
   <script type="module">
   import { auth, db, app } from "./firebase-init.js";
-    console.log("PROJECT_ID", app.options.projectId);
+  console.log("PROJECT_ID", app.options.projectId);
+
   import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
   import {
     collection, query, where, getDocs,
@@ -566,19 +584,24 @@
 
   // booking modal
   const bookingBackdrop = document.getElementById("bookingBackdrop");
+  const bookingModalTitle = document.getElementById("bookingModalTitle");
+  const bookingModalHint = document.getElementById("bookingModalHint");
+
   const bookingForm = document.getElementById("bookingForm");
   const bookingAlert = document.getElementById("bookingAlert");
   const bookingHomeSelect = document.getElementById("bookingHomeSelect");
   const bookingHomeInfo = document.getElementById("bookingHomeInfo");
   const arrivalDateInput = document.getElementById("arrivalDateInput");
   const departureDateInput = document.getElementById("departureDateInput");
-const arrivalTimeInput = document.getElementById("arrivalTimeInput");
-const departureTimeInput = document.getElementById("departureTimeInput");
+  const arrivalTimeInput = document.getElementById("arrivalTimeInput");
+  const departureTimeInput = document.getElementById("departureTimeInput");
   const agentNameInput = document.getElementById("agentNameInput");
   const agentEmailInput = document.getElementById("agentEmailInput");
   const metaInput = document.getElementById("metaInput");
   const saveBookingBtn = document.getElementById("saveBookingBtn");
   const cancelBookingBtn = document.getElementById("cancelBookingBtn");
+  const deleteBookingBtn = document.getElementById("deleteBookingBtn");
+  const archiveBookingBtn = document.getElementById("archiveBookingBtn");
 
   function showAlert(msg, ok=false){
     alertBox.style.display = "block";
@@ -650,9 +673,14 @@ const departureTimeInput = document.getElementById("departureTimeInput");
     while(cur !== b){
       cur = addDays(cur, 1);
       out.push(cur);
-      if(out.length > 60) break;
+      if(out.length > 120) break;
     }
     return out;
+  }
+
+  // ===== URL helpers (pour ouverture depuis planning) =====
+  function getParam(name){
+    return new URLSearchParams(location.search).get(name) || "";
   }
 
   // ===== Abonnement guard =====
@@ -680,6 +708,10 @@ const departureTimeInput = document.getElementById("departureTimeInput");
   let allHomes = [];
   let showArchived = false;
   let editingHomeId = null;
+
+  // booking state
+  let editingBookingId = null; // null => create
+  let editingBookingSource = "manual"; // gardé au load
 
   function isArchived(h){ return h?.status === "archived"; }
 
@@ -801,22 +833,53 @@ const departureTimeInput = document.getElementById("departureTimeInput");
     `;
   }
 
-  function openBookingModal(homeId){
+  function setBookingMode(mode){
+    const readonly = (mode === "view");
+    [
+      bookingHomeSelect,
+      arrivalDateInput,
+      departureDateInput,
+      arrivalTimeInput,
+      departureTimeInput,
+      agentNameInput,
+      agentEmailInput,
+      metaInput
+    ].forEach(el => el.disabled = readonly);
+
+    saveBookingBtn.style.display = readonly ? "none" : "inline-flex";
+
+    const showEditActions = !!editingBookingId && !readonly;
+    deleteBookingBtn.style.display = showEditActions ? "inline-flex" : "none";
+    archiveBookingBtn.style.display = showEditActions ? "inline-flex" : "none";
+
+    bookingModalTitle.textContent =
+      readonly ? "Détail réservation" : (editingBookingId ? "Modifier une réservation" : "Créer une réservation");
+
+    bookingModalHint.innerHTML =
+      readonly
+        ? `Lecture seule • iCal: <b>icalEvents/${escapeHtml(editingBookingId || "")}</b>`
+        : `Écrit dans <b>icalEvents</b> avec <b>source=manual</b> + <b>dateKeys</b> (jours du séjour).`;
+  }
+
+  function openBookingModal(homeId=null){
     hideBookingAlert();
-
-    const todayKey = toDateKey(new Date());
-    arrivalDateInput.value = todayKey;
-    departureDateInput.value = todayKey;
-    arrivalTimeInput.value = "16:00";
-departureTimeInput.value = "10:00";
-    agentNameInput.value = "";
-    agentEmailInput.value = "";
-    metaInput.value = "";
-
-    fillBookingHomeSelect(homeId);
 
     bookingBackdrop.style.display = "flex";
     bookingBackdrop.setAttribute("aria-hidden","false");
+
+    // si on ouvre en "create", on met des defaults (sinon le loadBooking remplit)
+    if(!editingBookingId){
+      const todayKey = toDateKey(new Date());
+      arrivalDateInput.value = todayKey;
+      departureDateInput.value = todayKey;
+      arrivalTimeInput.value = "16:00";
+      departureTimeInput.value = "10:00";
+      agentNameInput.value = "";
+      agentEmailInput.value = "";
+      metaInput.value = "";
+      fillBookingHomeSelect(homeId);
+    }
+
     setTimeout(()=> bookingHomeSelect.focus(), 0);
   }
 
@@ -825,11 +888,63 @@ departureTimeInput.value = "10:00";
     bookingBackdrop.setAttribute("aria-hidden","true");
     bookingForm.reset();
     hideBookingAlert();
+    editingBookingId = null;
+    editingBookingSource = "manual";
+    deleteBookingBtn.style.display = "none";
+    archiveBookingBtn.style.display = "none";
+    saveBookingBtn.style.display = "inline-flex";
+    setBookingMode("edit");
   }
 
   bookingHomeSelect.addEventListener("change", ()=> renderBookingHomeInfo(bookingHomeSelect.value));
   cancelBookingBtn.addEventListener("click", closeBookingModal);
   bookingBackdrop.addEventListener("click", (e)=>{ if(e.target === bookingBackdrop) closeBookingModal(); });
+
+  // ===== load booking by id into modal (pour planning) =====
+  async function loadBookingIntoModal(bookingId, mode="view"){
+    hideBookingAlert();
+
+    const user = auth.currentUser;
+    if(!user?.uid) {
+      showBookingAlert("Non connecté.");
+      return;
+    }
+
+    const snap = await getDoc(doc(db, "icalEvents", bookingId));
+    if(!snap.exists()){
+      showBookingAlert("Réservation introuvable.");
+      return;
+    }
+
+    const b = snap.data() || {};
+
+    // sécurité : on n’ouvre pas la réservation d’un autre compte
+    if((b.conciergerieUid || "") !== user.uid){
+      showBookingAlert("Accès refusé (réservation autre conciergerie).");
+      mode = "view";
+    }
+
+    editingBookingId = bookingId;
+    editingBookingSource = (b.source || "import").toString();
+
+    // Remplissage
+    fillBookingHomeSelect(b.homeId || "");
+    arrivalDateInput.value = b.arrivalDateKey || b.dateKey || "";
+    departureDateInput.value = b.departureDateKey || (Array.isArray(b.dateKeys) ? (b.dateKeys[b.dateKeys.length-1] || "") : "");
+    arrivalTimeInput.value = b.arrivalTime || "16:00";
+    departureTimeInput.value = b.departureTime || "10:00";
+    agentNameInput.value = b.agentName || "";
+    agentEmailInput.value = b.agentEmail || "";
+    metaInput.value = b.meta || b.summary || "";
+
+    // si c’est un import iCal, on interdit l’édition (sinon tu modifies l’import et c’est le bordel)
+    if(editingBookingSource !== "manual"){
+      mode = "view";
+      showBookingAlert("Réservation iCal importée : lecture seule.", true);
+    }
+
+    setBookingMode(mode);
+  }
 
   // ===== Render list =====
   function render(){
@@ -928,7 +1043,10 @@ departureTimeInput.value = "10:00";
     homesListEl.querySelectorAll("button[data-book]").forEach(btn=>{
       btn.addEventListener("click", ()=>{
         const homeId = btn.getAttribute("data-book");
+        editingBookingId = null;
+        editingBookingSource = "manual";
         openBookingModal(homeId);
+        setBookingMode("edit");
       });
     });
 
@@ -1135,91 +1253,143 @@ departureTimeInput.value = "10:00";
     }
   });
 
- // ===== Create booking (icalEvents) =====
-bookingForm.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  hideBookingAlert();
+  // ===== Create / Update booking (icalEvents) =====
+  bookingForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    hideBookingAlert();
 
-  const user = auth.currentUser;
-  if (!user?.uid) {
-    showBookingAlert("Non connecté. Recharge la page.");
-    return;
-  }
+    const user = auth.currentUser;
+    if (!user?.uid) {
+      showBookingAlert("Non connecté. Recharge la page.");
+      return;
+    }
 
-  const homeId = (bookingHomeSelect.value || "").trim();
-  const aDate  = (arrivalDateInput.value || "").trim();      // YYYY-MM-DD
-  const dDate  = (departureDateInput.value || "").trim();    // YYYY-MM-DD
-  const aTime  = (arrivalTimeInput.value || "").trim();      // HH:MM
-  const dTime  = (departureTimeInput.value || "").trim();    // HH:MM
+    if(editingBookingId && editingBookingSource !== "manual"){
+      showBookingAlert("Réservation iCal importée : modification interdite.", false);
+      return;
+    }
 
-  if (!homeId) return showBookingAlert("Choisis un logement.");
-  if (!aDate || !dDate) return showBookingAlert("Dates arrivée + départ obligatoires.");
-  if (!aTime || !dTime) return showBookingAlert("Heures arrivée + départ obligatoires.");
+    const homeId = (bookingHomeSelect.value || "").trim();
+    const aDate  = (arrivalDateInput.value || "").trim();
+    const dDate  = (departureDateInput.value || "").trim();
+    const aTime  = (arrivalTimeInput.value || "").trim();
+    const dTime  = (departureTimeInput.value || "").trim();
 
-  const h = allHomes.find(x => x.id === homeId);
-  if (!h) return showBookingAlert("Logement introuvable. Recharge la page.");
+    if (!homeId) return showBookingAlert("Choisis un logement.");
+    if (!aDate || !dDate) return showBookingAlert("Dates arrivée + départ obligatoires.");
+    if (!aTime || !dTime) return showBookingAlert("Heures arrivée + départ obligatoires.");
 
-  const agentName = (agentNameInput.value || "").trim();
-  const agentEmail = normalizeEmail(agentEmailInput.value || "");
-  if (agentEmail && !isEmailValid(agentEmail)) return showBookingAlert("Email agent invalide.");
+    const h = allHomes.find(x => x.id === homeId);
+    if (!h) return showBookingAlert("Logement introuvable. Recharge la page.");
 
-  const meta = (metaInput.value || "").trim();
+    const agentName = (agentNameInput.value || "").trim();
+    const agentEmail = normalizeEmail(agentEmailInput.value || "");
+    if (agentEmail && !isEmailValid(agentEmail)) return showBookingAlert("Email agent invalide.");
 
-  const dateKeys = buildDateKeys(aDate, dDate);
-  if (!dateKeys.length) return showBookingAlert("Erreur dates (YYYY-MM-DD).");
+    const meta = (metaInput.value || "").trim();
 
-  saveBookingBtn.disabled = true;
-  saveBookingBtn.style.opacity = "0.75";
+    const dateKeys = buildDateKeys(aDate, dDate);
+    if (!dateKeys.length) return showBookingAlert("Erreur dates (YYYY-MM-DD).");
 
-  try {
-    const payload = {
-      conciergerieUid: user.uid,
-      homeId: String(h.id),
+    saveBookingBtn.disabled = true;
+    saveBookingBtn.style.opacity = "0.75";
 
-      dateKey: String(aDate),
-      dateKeys: dateKeys.map(String),
-      source: "manual",
+    try {
+      const payloadBase = {
+        conciergerieUid: user.uid,
+        homeId: String(h.id),
 
-      homeName: String(h?.name || "Logement"),
-      homeCity: String(h?.homeCity || h?.city || ""),
-      homeAddress: String(h?.homeAddress || h?.address || ""),
-      ownerName: String(h?.ownerName || h?.homeOwner || ""),
-      ownerEmail: String(h?.ownerEmail || ""),
+        dateKey: String(aDate),
+        dateKeys: dateKeys.map(String),
 
-      agentName: String(agentName || ""),
-      agentEmail: String(agentEmail || ""),   // ✅ normalisé plus haut
-      meta: String(meta || ""),
+        homeName: String(h?.name || "Logement"),
+        homeCity: String(h?.homeCity || h?.city || ""),
+        homeAddress: String(h?.homeAddress || h?.address || ""),
+        ownerName: String(h?.ownerName || h?.homeOwner || ""),
+        ownerEmail: String(h?.ownerEmail || ""),
 
-      arrivalDateKey: String(aDate),
-      departureDateKey: String(dDate),
-      arrivalTime: String(aTime),
-      departureTime: String(dTime),
-      timezone: "Europe/Paris",
+        agentName: String(agentName || ""),
+        agentEmail: String(agentEmail || ""),
+        meta: String(meta || ""),
 
-      createdAt: serverTimestamp()
-    };
+        arrivalDateKey: String(aDate),
+        departureDateKey: String(dDate),
+        arrivalTime: String(aTime),
+        departureTime: String(dTime),
+        timezone: "Europe/Paris",
+      };
 
-    console.log("AUTH UID (icalEvents)", user.uid);
-    console.log("ICAL PAYLOAD", payload);
+      if(editingBookingId){
+        await updateDoc(doc(db, "icalEvents", editingBookingId), {
+          ...payloadBase,
+          // on force le status “manual” uniquement si c’était déjà manual
+          source: "manual",
+          updatedAt: serverTimestamp()
+        });
+        showBookingAlert("✅ Réservation modifiée.", true);
+      }else{
+        await addDoc(collection(db, "icalEvents"), {
+          ...payloadBase,
+          source: "manual",
+          createdAt: serverTimestamp()
+        });
+        showBookingAlert("✅ Réservation enregistrée.", true);
+      }
 
-    await addDoc(collection(db, "icalEvents"), payload);
+      const params = new URLSearchParams();
+      params.set("date", aDate);
+      params.set("homeId", homeId);
+      setTimeout(() => { location.href = `planning.html?${params.toString()}`; }, 350);
 
-    showBookingAlert("✅ Réservation enregistrée.", true);
+    } catch (err) {
+      console.error(err);
+      showBookingAlert("Erreur réservation : " + (err?.message || "inconnue"));
+    } finally {
+      saveBookingBtn.disabled = false;
+      saveBookingBtn.style.opacity = "1";
+    }
+  });
 
-    const params = new URLSearchParams();
-    params.set("date", aDate);
-    params.set("homeId", homeId);
-    setTimeout(() => { location.href = `planning.html?${params.toString()}`; }, 350);
+  // ===== Delete / Archive booking (uniquement manual) =====
+  deleteBookingBtn.addEventListener("click", async ()=>{
+    hideBookingAlert();
+    const user = auth.currentUser;
+    if(!user?.uid) return showBookingAlert("Non connecté.");
+    if(!editingBookingId) return;
+    if(editingBookingSource !== "manual") return showBookingAlert("Suppression interdite (import iCal).");
 
-  } catch (err) {
-    console.error(err);
-    showBookingAlert("Erreur création réservation : " + (err?.message || "inconnue"));
-  } finally {
-    saveBookingBtn.disabled = false;
-    saveBookingBtn.style.opacity = "1";
-  }
-});
+    if(!confirm("Supprimer définitivement cette réservation ?")) return;
+    try{
+      await deleteDoc(doc(db,"icalEvents", editingBookingId));
+      showBookingAlert("✅ Réservation supprimée.", true);
+      setTimeout(()=> location.href = "planning.html", 300);
+    }catch(err){
+      console.error(err);
+      showBookingAlert("Erreur suppression : " + (err?.message || "inconnue"));
+    }
+  });
 
+  archiveBookingBtn.addEventListener("click", async ()=>{
+    hideBookingAlert();
+    const user = auth.currentUser;
+    if(!user?.uid) return showBookingAlert("Non connecté.");
+    if(!editingBookingId) return;
+    if(editingBookingSource !== "manual") return showBookingAlert("Archivage interdit (import iCal).");
+
+    if(!confirm("Archiver cette réservation ?")) return;
+    try{
+      await updateDoc(doc(db,"icalEvents", editingBookingId), {
+        archived: true,
+        archivedAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+      showBookingAlert("✅ Réservation archivée.", true);
+      setTimeout(()=> location.href = "planning.html", 300);
+    }catch(err){
+      console.error(err);
+      showBookingAlert("Erreur archivage : " + (err?.message || "inconnue"));
+    }
+  });
 
   // ===== Events =====
   addBtn.addEventListener("click", openHomeModalCreate);
@@ -1255,19 +1425,20 @@ bookingForm.addEventListener("submit", async (e) => {
 
     badgeLine.textContent = "Gestion des logements • " + (user.email || user.uid);
     await loadHomes();
+
+    // ✅ ouverture modale depuis URL (planning)
+    // logements.html?bookingId=XXX&mode=view|edit
+    const bookingId = getParam("bookingId");
+    const mode = (getParam("mode") || "view").toLowerCase();
+
+    if(bookingId){
+      // on ouvre puis on charge
+      editingBookingId = bookingId;
+      openBookingModal();
+      await loadBookingIntoModal(bookingId, (mode === "edit" ? "edit" : "view"));
+    }
   });
 </script>
 
-
 </body>
 </html>
-
-
-
-
-
-
-
-
-
-
