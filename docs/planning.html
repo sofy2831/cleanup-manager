@@ -1,4 +1,4 @@
-<!-- docs/planning.html (COMPLET) — RÉSERVATIONS + ACTIONS -->
+<!-- docs/planning.html (COMPLET) — Réservations: Détail/Modifier/Supprimer/Archiver + bouton "+ prestations" -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -225,6 +225,7 @@
       white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:680px;
     }
     .iActions{ display:flex; flex-direction:column; gap:6px; align-items:flex-end; flex-shrink:0; }
+
     .mini{
       border:none; border-radius:999px;
       padding:9px 10px; font-size:12px; font-weight:900;
@@ -236,12 +237,14 @@
       background:#fff; color:var(--violet-main); border:2px solid var(--violet-main);
       box-shadow:0 3px 10px rgba(0,0,0,.06);
     }
-    .mini.danger{
-      background:#fff; color:var(--bad); border:2px solid rgba(179,38,30,0.35);
+    .mini.red{
+      background:#ffe3ec; color:var(--bad);
+      border:2px solid rgba(179,38,30,0.35);
       box-shadow:0 3px 10px rgba(0,0,0,.06);
     }
     .mini.ok{
-      background:#fff; color:var(--ok); border:2px solid rgba(27,143,77,0.28);
+      background:#e7fff1; color:var(--ok);
+      border:2px solid rgba(27,143,77,0.25);
       box-shadow:0 3px 10px rgba(0,0,0,.06);
     }
     .mini:disabled{ opacity:.55; cursor:not-allowed; }
@@ -280,6 +283,7 @@
       background: rgba(255,255,255,0.92);
       border-top: 1px solid rgba(122,92,255,0.18);
       backdrop-filter: blur(10px);
+      padding: 10px 10px calc(10px + env(safe-area-inset-bottom));
     }
     .bottom-nav a{
       flex: 1; text-align: center; text-decoration: none;
@@ -305,6 +309,14 @@
     @media(max-width: 520px){
       .iTitle,.iSub{ max-width: 220px; }
       html, body{ overflow-x:hidden; }
+    }
+
+    /* actions row inside booking item */
+    .actionsRow{
+      display:flex;
+      gap:6px;
+      flex-wrap:wrap;
+      justify-content:flex-end;
     }
   </style>
 </head>
@@ -515,68 +527,6 @@
       return "ical";
     }
 
-    // ===== BOOKING ACTIONS =====
-    function bookingDetail(b){
-      hideAlert();
-      const payload = {
-        id: b.id,
-        homeId: b.homeId,
-        homeName: b.homeName,
-        homeCity: b.homeCity,
-        ownerEmail: b.ownerEmail,
-        ownerName: b.ownerName,
-        agentName: b.agentName,
-        agentEmail: b.agentEmail,
-        source: b.source,
-        meta: b.meta,
-        dateKeys: b.dateKeys
-      };
-      showAlert("Détail réservation:\n" + JSON.stringify(payload, null, 2), true);
-      window.scrollTo({ top: 0, behavior: "smooth" });
-    }
-
-    function bookingModify(b){
-      // Réservations créées depuis Logements : on redirige là-bas avec un hint.
-      // (Si tu as un flow d’édition dédié plus tard, tu remplaces juste cette URL.)
-      const p = new URLSearchParams();
-      if(b.id) p.set("bookingId", b.id);
-      if(b.homeId) p.set("homeId", b.homeId);
-      p.set("from", "planning");
-      location.href = `logements.html?${p.toString()}`;
-    }
-
-    async function bookingDelete(b){
-      if(!b?.id) return;
-      hideAlert();
-      if(!confirm("Supprimer définitivement cette réservation ?")) return;
-      try{
-        await deleteDoc(doc(db, "icalEvents", b.id));
-        showAlert("Réservation supprimée.", true);
-        await loadAllForMonth();
-      }catch(err){
-        console.error(err);
-        showAlert("Erreur suppression réservation : " + (err?.message || "inconnue"));
-      }
-    }
-
-    async function bookingArchive(b){
-      if(!b?.id) return;
-      hideAlert();
-      if(!confirm("Archiver cette réservation ?")) return;
-      try{
-        await updateDoc(doc(db, "icalEvents", b.id), {
-          archived: true,
-          archivedAt: serverTimestamp(),
-          updatedAt: serverTimestamp()
-        });
-        showAlert("Réservation archivée.", true);
-        await loadAllForMonth();
-      }catch(err){
-        console.error(err);
-        showAlert("Erreur archivage réservation : " + (err?.message || "inconnue"));
-      }
-    }
-
     // Auth
     logoutBtn.addEventListener("click", async ()=>{
       await signOut(auth);
@@ -617,7 +567,7 @@
         const qb = query(
           collection(db,"icalEvents"),
           where("conciergerieUid","==", currentUser.uid),
-          limit(1200)
+          limit(1600)
         );
         const snap = await getDocs(qb);
         docs = snap.docs.map(d=>({ id:d.id, ...(d.data()||{}) }));
@@ -631,7 +581,7 @@
       const end = parseDateKey(endKey);
 
       for(const b of docs){
-        // ✅ on retire du planning les réservations archivées
+        // ✅ filtre archivés (archived true)
         if(b?.archived === true) continue;
 
         const keys = Array.isArray(b.dateKeys) ? b.dateKeys : [];
@@ -654,7 +604,9 @@
           agentEmail: (b.agentEmail || "").toString().toLowerCase(),
           meta: b.meta || b.summary || "",
           source: (b.source || "import").toString(),
-          dateKeys: monthKeys
+          dateKeys: monthKeys,
+          arrivalDateKey: (b.arrivalDateKey || b.dateKey || (monthKeys[0]||"")).toString(),
+          departureDateKey: (b.departureDateKey || (monthKeys[monthKeys.length-1]||"")).toString()
         };
 
         allBookings.push(obj);
@@ -769,6 +721,64 @@
       }catch(err){
         console.error(err);
         showAlert("Erreur validation : " + (err?.message || "inconnue"));
+      }
+    }
+
+    // ===== Booking actions (detail/edit/delete/archive) =====
+    function openBookingDetail(b){
+      const p = new URLSearchParams();
+      p.set("bookingId", b.id);
+      p.set("mode", "view");
+      location.href = `logements.html?${p.toString()}`;
+    }
+    function openBookingEdit(b){
+      const p = new URLSearchParams();
+      p.set("bookingId", b.id);
+      p.set("mode", "edit");
+      location.href = `logements.html?${p.toString()}`;
+    }
+
+    async function deleteBooking(b){
+      hideAlert();
+      if(!b?.id) return;
+      const src = (b.source || "import").toLowerCase();
+      if(src !== "manual"){
+        showAlert("Réservation iCal importée : suppression interdite. (lecture seule)");
+        return;
+      }
+      if(!confirm("Supprimer définitivement cette réservation ?")) return;
+
+      try{
+        await deleteDoc(doc(db,"icalEvents", b.id));
+        showAlert("✅ Réservation supprimée.", true);
+        await loadAllForMonth();
+      }catch(err){
+        console.error(err);
+        showAlert("Erreur suppression réservation : " + (err?.message || "inconnue"));
+      }
+    }
+
+    async function archiveBooking(b){
+      hideAlert();
+      if(!b?.id) return;
+      const src = (b.source || "import").toLowerCase();
+      if(src !== "manual"){
+        showAlert("Réservation iCal importée : archivage interdit. (lecture seule)");
+        return;
+      }
+      if(!confirm("Archiver cette réservation ?")) return;
+
+      try{
+        await updateDoc(doc(db,"icalEvents", b.id), {
+          archived: true,
+          archivedAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        });
+        showAlert("✅ Réservation archivée.", true);
+        await loadAllForMonth();
+      }catch(err){
+        console.error(err);
+        showAlert("Erreur archivage réservation : " + (err?.message || "inconnue"));
       }
     }
 
@@ -927,9 +937,7 @@
           </div>
 
           <div class="dots">
-            ${
-              dotsArr.slice(0,6).map(cls=> `<span class="dot ${esc(cls)}"></span>`).join("")
-            }
+            ${dotsArr.slice(0,6).map(cls=> `<span class="dot ${esc(cls)}"></span>`).join("")}
           </div>
 
           <div class="initialsRow" aria-label="Agents">
@@ -960,11 +968,11 @@
 
       const books = (bookingsByDate.get(selectedDateKey) || []).slice();
 
-      // ✅ compteur du jour = prestations + réservations (plus cohérent)
+      // ✅ ici on affiche le total (réservations + presta) mais ton compteur presta reste plus bas
       dayCount.textContent = `${presta.length + books.length}`;
       dayTitle.textContent = `Jour — ${selectedDateKey}`;
 
-      // Réservations (bloc titre)
+      // Bloc Réservations
       const block = document.createElement("div");
       block.className = "item";
       block.innerHTML = `
@@ -973,7 +981,7 @@
             <span class="badge">Réservations</span>
             <span class="badge">${books.length}</span>
           </div>
-          <div class="iSub" style="margin-top:6px;">Création des réservations depuis Logements uniquement.</div>
+          <div class="iSub" style="margin-top:6px;">Créées depuis Logements (icalEvents). Détail / Modif / Suppression / Archivage dispo si source=manual.</div>
         </div>
         <div class="iActions">
           <a class="mini ghost" href="logements.html">+ Réservation</a>
@@ -981,18 +989,22 @@
       `;
       dayList.appendChild(block);
 
-      // ✅ Réservations : actions en bout de ligne (Détail / Modifier / Supprimer / Archiver) + bouton "+ prestations"
-      for(const b of books.slice(0,6)){
+      for(const b of books.slice(0,50)){
         const div = document.createElement("div");
         div.className = "item";
+
         const src = (b.source || "import").toLowerCase();
         const badge = (src === "manual") ? `<span class="badge blue">MANUEL</span>` : `<span class="badge">iCAL</span>`;
         const title = `${b.homeName}${b.homeCity ? " — " + b.homeCity : ""}`;
         const sub = [
+          b.arrivalDateKey ? `Arrivée: ${b.arrivalDateKey}` : null,
+          b.departureDateKey ? `Départ: ${b.departureDateKey}` : null,
           b.ownerEmail ? `Propriétaire: ${b.ownerEmail}` : null,
           b.agentName ? `Agent: ${b.agentName}` : null,
           b.meta ? b.meta : null
         ].filter(Boolean).join(" • ");
+
+        const allowEdit = (src === "manual");
 
         div.innerHTML = `
           <div class="iMain">
@@ -1004,33 +1016,34 @@
             <div class="iSub">${esc(sub || "—")}</div>
           </div>
           <div class="iActions">
-            <button class="mini ghost" type="button" data-booking-detail="${esc(b.id)}">Détail</button>
-            <button class="mini ghost" type="button" data-booking-edit="${esc(b.id)}">Modifier</button>
-            <button class="mini danger" type="button" data-booking-del="${esc(b.id)}">Supprimer</button>
-            <button class="mini ok" type="button" data-booking-arc="${esc(b.id)}">Archiver</button>
-            <button class="mini ghost" type="button" data-booking-add-presta="${esc(b.id)}">+ prestations</button>
+            <div class="actionsRow">
+              <button class="mini ghost" type="button" data-b-detail="${esc(b.id)}">Détail</button>
+              <button class="mini ghost" type="button" data-b-edit="${esc(b.id)}" ${allowEdit ? "" : "disabled"}>Modifier</button>
+              <button class="mini red" type="button" data-b-del="${esc(b.id)}" ${allowEdit ? "" : "disabled"}>Supprimer</button>
+              <button class="mini ok" type="button" data-b-arch="${esc(b.id)}" ${allowEdit ? "" : "disabled"}>Archiver</button>
+              <button class="mini ghost" type="button" data-b-add-presta="${esc(b.homeId)}">+ prestations</button>
+            </div>
           </div>
         `;
         dayList.appendChild(div);
 
-        div.querySelector(`[data-booking-detail="${b.id}"]`)?.addEventListener("click", (e)=>{
+        div.querySelector(`[data-b-detail="${b.id}"]`)?.addEventListener("click", (e)=>{
           e.stopPropagation();
-          bookingDetail(b);
+          openBookingDetail(b);
         });
-        div.querySelector(`[data-booking-edit="${b.id}"]`)?.addEventListener("click", (e)=>{
+        div.querySelector(`[data-b-edit="${b.id}"]`)?.addEventListener("click", (e)=>{
           e.stopPropagation();
-          bookingModify(b);
+          openBookingEdit(b);
         });
-        div.querySelector(`[data-booking-del="${b.id}"]`)?.addEventListener("click", async (e)=>{
+        div.querySelector(`[data-b-del="${b.id}"]`)?.addEventListener("click", async (e)=>{
           e.stopPropagation();
-          await bookingDelete(b);
+          await deleteBooking(b);
         });
-        div.querySelector(`[data-booking-arc="${b.id}"]`)?.addEventListener("click", async (e)=>{
+        div.querySelector(`[data-b-arch="${b.id}"]`)?.addEventListener("click", async (e)=>{
           e.stopPropagation();
-          await bookingArchive(b);
+          await archiveBooking(b);
         });
-
-        div.querySelector(`[data-booking-add-presta="${b.id}"]`)?.addEventListener("click", (e)=>{
+        div.querySelector(`[data-b-add-presta="${b.homeId}"]`)?.addEventListener("click", (e)=>{
           e.stopPropagation();
           const params = new URLSearchParams();
           if(b.homeId) params.set("homeId", b.homeId);
