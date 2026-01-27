@@ -1,4 +1,4 @@
-<!-- docs/planning.html (COMPLET) — SANS MODALE RÉSERVATION -->
+<!-- docs/planning.html (COMPLET) — RÉSERVATIONS + ACTIONS -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -236,6 +236,14 @@
       background:#fff; color:var(--violet-main); border:2px solid var(--violet-main);
       box-shadow:0 3px 10px rgba(0,0,0,.06);
     }
+    .mini.danger{
+      background:#fff; color:var(--bad); border:2px solid rgba(179,38,30,0.35);
+      box-shadow:0 3px 10px rgba(0,0,0,.06);
+    }
+    .mini.ok{
+      background:#fff; color:var(--ok); border:2px solid rgba(27,143,77,0.28);
+      box-shadow:0 3px 10px rgba(0,0,0,.06);
+    }
     .mini:disabled{ opacity:.55; cursor:not-allowed; }
 
     .quick-actions{
@@ -348,7 +356,6 @@
             </div>
             <div style="display:flex;gap:8px;flex-wrap:wrap;">
               <button class="btn" id="refreshBtn" type="button">Rafraîchir</button>
-              
             </div>
           </div>
 
@@ -403,7 +410,7 @@
     import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
       collection, query, where, orderBy, limit, getDocs,
-      doc, updateDoc, serverTimestamp
+      doc, updateDoc, deleteDoc, serverTimestamp
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     // ========= UI =========
@@ -508,6 +515,68 @@
       return "ical";
     }
 
+    // ===== BOOKING ACTIONS =====
+    function bookingDetail(b){
+      hideAlert();
+      const payload = {
+        id: b.id,
+        homeId: b.homeId,
+        homeName: b.homeName,
+        homeCity: b.homeCity,
+        ownerEmail: b.ownerEmail,
+        ownerName: b.ownerName,
+        agentName: b.agentName,
+        agentEmail: b.agentEmail,
+        source: b.source,
+        meta: b.meta,
+        dateKeys: b.dateKeys
+      };
+      showAlert("Détail réservation:\n" + JSON.stringify(payload, null, 2), true);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+
+    function bookingModify(b){
+      // Réservations créées depuis Logements : on redirige là-bas avec un hint.
+      // (Si tu as un flow d’édition dédié plus tard, tu remplaces juste cette URL.)
+      const p = new URLSearchParams();
+      if(b.id) p.set("bookingId", b.id);
+      if(b.homeId) p.set("homeId", b.homeId);
+      p.set("from", "planning");
+      location.href = `logements.html?${p.toString()}`;
+    }
+
+    async function bookingDelete(b){
+      if(!b?.id) return;
+      hideAlert();
+      if(!confirm("Supprimer définitivement cette réservation ?")) return;
+      try{
+        await deleteDoc(doc(db, "icalEvents", b.id));
+        showAlert("Réservation supprimée.", true);
+        await loadAllForMonth();
+      }catch(err){
+        console.error(err);
+        showAlert("Erreur suppression réservation : " + (err?.message || "inconnue"));
+      }
+    }
+
+    async function bookingArchive(b){
+      if(!b?.id) return;
+      hideAlert();
+      if(!confirm("Archiver cette réservation ?")) return;
+      try{
+        await updateDoc(doc(db, "icalEvents", b.id), {
+          archived: true,
+          archivedAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        });
+        showAlert("Réservation archivée.", true);
+        await loadAllForMonth();
+      }catch(err){
+        console.error(err);
+        showAlert("Erreur archivage réservation : " + (err?.message || "inconnue"));
+      }
+    }
+
     // Auth
     logoutBtn.addEventListener("click", async ()=>{
       await signOut(auth);
@@ -562,6 +631,9 @@
       const end = parseDateKey(endKey);
 
       for(const b of docs){
+        // ✅ on retire du planning les réservations archivées
+        if(b?.archived === true) continue;
+
         const keys = Array.isArray(b.dateKeys) ? b.dateKeys : [];
         if(!keys.length) continue;
 
@@ -888,10 +960,11 @@
 
       const books = (bookingsByDate.get(selectedDateKey) || []).slice();
 
-      dayCount.textContent = `${presta.length}`;
+      // ✅ compteur du jour = prestations + réservations (plus cohérent)
+      dayCount.textContent = `${presta.length + books.length}`;
       dayTitle.textContent = `Jour — ${selectedDateKey}`;
 
-      // Réservations (read-only)
+      // Réservations (bloc titre)
       const block = document.createElement("div");
       block.className = "item";
       block.innerHTML = `
@@ -908,6 +981,7 @@
       `;
       dayList.appendChild(block);
 
+      // ✅ Réservations : actions en bout de ligne (Détail / Modifier / Supprimer / Archiver) + bouton "+ prestations"
       for(const b of books.slice(0,6)){
         const div = document.createElement("div");
         div.className = "item";
@@ -930,12 +1004,33 @@
             <div class="iSub">${esc(sub || "—")}</div>
           </div>
           <div class="iActions">
-            <button class="mini ghost" type="button" data-booking-add-presta="${esc(b.homeId)}">Prestation</button>
+            <button class="mini ghost" type="button" data-booking-detail="${esc(b.id)}">Détail</button>
+            <button class="mini ghost" type="button" data-booking-edit="${esc(b.id)}">Modifier</button>
+            <button class="mini danger" type="button" data-booking-del="${esc(b.id)}">Supprimer</button>
+            <button class="mini ok" type="button" data-booking-arc="${esc(b.id)}">Archiver</button>
+            <button class="mini ghost" type="button" data-booking-add-presta="${esc(b.id)}">+ prestations</button>
           </div>
         `;
         dayList.appendChild(div);
 
-        div.querySelector(`[data-booking-add-presta="${b.homeId}"]`)?.addEventListener("click", (e)=>{
+        div.querySelector(`[data-booking-detail="${b.id}"]`)?.addEventListener("click", (e)=>{
+          e.stopPropagation();
+          bookingDetail(b);
+        });
+        div.querySelector(`[data-booking-edit="${b.id}"]`)?.addEventListener("click", (e)=>{
+          e.stopPropagation();
+          bookingModify(b);
+        });
+        div.querySelector(`[data-booking-del="${b.id}"]`)?.addEventListener("click", async (e)=>{
+          e.stopPropagation();
+          await bookingDelete(b);
+        });
+        div.querySelector(`[data-booking-arc="${b.id}"]`)?.addEventListener("click", async (e)=>{
+          e.stopPropagation();
+          await bookingArchive(b);
+        });
+
+        div.querySelector(`[data-booking-add-presta="${b.id}"]`)?.addEventListener("click", (e)=>{
           e.stopPropagation();
           const params = new URLSearchParams();
           if(b.homeId) params.set("homeId", b.homeId);
@@ -952,7 +1047,7 @@
         div.innerHTML = `
           <div class="iMain">
             <div class="iTitle">Aucune prestation ce jour</div>
-            <div class="iSub">Tu peux en créer depuis une réservation (bouton “Prestation”), ou via la page Prestations.</div>
+            <div class="iSub">Tu peux en créer depuis une réservation (bouton “+ prestations”), ou via la page Prestations.</div>
           </div>
           <div class="iActions">
             <button class="mini ghost" type="button" disabled>—</button>
@@ -989,7 +1084,7 @@
             ${
               st === "A_VALIDER"
                 ? `<button class="mini" type="button" data-validate="${esc(ev.id)}">Valider</button>`
-                : `<button class="mini ghost" type="button" data-presta="${esc(ev.id)}">Prestations</button>`
+                : `<button class="mini ghost" type="button" data-presta="${esc(ev.id)}">+ prestations</button>`
             }
           </div>
         `;
