@@ -432,6 +432,694 @@
       </div>
     </div>
   </div>
+
+    <script type="module">
+    import { auth, db } from "./firebase-init.js";
+    import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+    import {
+      collection, query, where, orderBy, limit, getDocs, startAfter,
+      doc, updateDoc, deleteDoc, serverTimestamp, getDoc
+    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+
+    // ========= UI =========
+    const emailLine = document.getElementById("emailLine");
+    const logoutBtn = document.getElementById("logoutBtn");
+    const alertBox = document.getElementById("alertBox");
+
+    const chips = document.getElementById("chips");
+    const searchInput = document.getElementById("searchInput");
+    const sortSelect = document.getElementById("sortSelect");
+    const refreshBtn = document.getElementById("refreshBtn");
+    const listEl = document.getElementById("list");
+    const countLabel = document.getElementById("countLabel");
+
+    // (panneau détail: on le garde si présent mais on ne l'utilise plus)
+    const detailHint = document.getElementById("detailHint");
+    const detailKv = document.getElementById("detailKv");
+    const detailLines = document.getElementById("detailLines");
+    const detailTotalBox = document.getElementById("detailTotalBox");
+    const detailTotalValue = document.getElementById("detailTotalValue");
+    const editQuickBtn = document.getElementById("editQuickBtn");
+    const toRealiseeBtn = document.getElementById("toRealiseeBtn");
+    const deleteBtn = document.getElementById("deleteBtn");
+
+    // detail modal
+    const detailBackdrop = document.getElementById("detailBackdrop");
+    const detailCloseBtn = document.getElementById("detailCloseBtn");
+    const detailModalSub = document.getElementById("detailModalSub");
+    const detailModalContext = document.getElementById("detailModalContext");
+    const detailModalLines = document.getElementById("detailModalLines");
+    const detailModalTotal = document.getElementById("detailModalTotal");
+    const detailModalTotalValue = document.getElementById("detailModalTotalValue");
+
+    const detailEditBtn = document.getElementById("detailEditBtn");
+    const detailDeleteBtn = document.getElementById("detailDeleteBtn");
+    const detailInterventionBtn = document.getElementById("detailInterventionBtn");
+
+    // edit modal
+    const editBackdrop = document.getElementById("editBackdrop");
+    const editModalAlert = document.getElementById("editModalAlert");
+    const editDate = document.getElementById("editDate");
+    const editTime = document.getElementById("editTime");
+    const editAgent = document.getElementById("editAgent");
+    const editAgentEmail = document.getElementById("editAgentEmail");
+    const editNote = document.getElementById("editNote");
+    const editCancelBtn = document.getElementById("editCancelBtn");
+    const editSaveBtn = document.getElementById("editSaveBtn");
+    const editLinesEl = document.getElementById("editLines");
+    const editTotalValue = document.getElementById("editTotalValue");
+    const newLabel = document.getElementById("newLabel");
+    const newQty = document.getElementById("newQty");
+    const newUnit = document.getElementById("newUnit");
+    const newUnitPrice = document.getElementById("newUnitPrice");
+    const addLineBtn = document.getElementById("addLineBtn");
+
+    function showAlert(msg, ok=false){
+      if(!alertBox) return;
+      alertBox.style.display = "block";
+      alertBox.classList.toggle("ok", !!ok);
+      alertBox.textContent = msg;
+    }
+    function hideAlert(){
+      if(!alertBox) return;
+      alertBox.style.display = "none";
+      alertBox.classList.remove("ok");
+      alertBox.textContent = "";
+    }
+    function showEditModalAlert(msg, ok=false){
+      if(!editModalAlert) return;
+      editModalAlert.style.display = "block";
+      editModalAlert.style.borderLeftColor = ok ? "var(--ok)" : "var(--bad)";
+      editModalAlert.textContent = msg;
+    }
+    function hideEditModalAlert(){
+      if(!editModalAlert) return;
+      editModalAlert.style.display = "none";
+      editModalAlert.textContent = "";
+    }
+
+    function esc(s){
+      return String(s ?? "")
+        .replaceAll("&","&amp;")
+        .replaceAll("<","&lt;")
+        .replaceAll(">","&gt;")
+        .replaceAll('"',"&quot;")
+        .replaceAll("'","&#039;");
+    }
+    function money(n){
+      const x = Number(n || 0);
+      return x.toLocaleString("fr-FR",{minimumFractionDigits:2,maximumFractionDigits:2})+" €";
+    }
+    function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
+    function asRaw(s){ return String(s||"").toUpperCase().trim(); }
+    function qs(name){ return new URLSearchParams(location.search).get(name) || ""; }
+
+    // Op status
+    function normalizeOpStatus(s){
+      const x = asRaw(s);
+      if(x === "DRAFT" || x === "BROUILLON" || x === "EN COURS") return "EN_COURS";
+      if(x === "REALISEE" || x === "RÉALISÉE" || x === "DONE") return "REALISEE";
+      if(x === "ANNULEE" || x === "ANNULÉE" || x === "CANCELLED") return "ANNULEE";
+      return "EN_COURS";
+    }
+    function opLabel(st){
+      const s = normalizeOpStatus(st);
+      if(s==="EN_COURS") return "EN COURS";
+      if(s==="REALISEE") return "RÉALISÉE";
+      if(s==="ANNULEE") return "ANNULÉE";
+      return s;
+    }
+
+    // Commercial (simple pour chips)
+    function normQuoteStatus(s){
+      const x = asRaw(s);
+      if(x==="DRAFT") return "DRAFT";
+      if(x==="SENT") return "SENT";
+      if(x==="ACCEPTED") return "ACCEPTED";
+      if(x==="REFUSED" || x==="REFUSEE" || x==="REFUSÉE") return "REFUSED";
+      return "";
+    }
+    function normInvoiceStatus(s){
+      const x = asRaw(s);
+      if(x==="DRAFT") return "DRAFT";
+      if(x==="SENT") return "SENT";
+      if(x==="PAID" || x==="PAYEE" || x==="PAYÉE") return "PAID";
+      return "";
+    }
+
+    function computeTotalFromLines(lines){
+      if(!Array.isArray(lines)) return 0;
+      return lines.reduce((s,l)=> s + (Number(l?.qty)||0)*(Number(l?.unitPrice)||0), 0);
+    }
+
+    function normalizeForSearch(d){
+      const parts = [
+        d.homeName, d.homeCity, d.homeAddress,
+        d.ownerName, d.ownerEmail,
+        d.meta, d.summary,
+        d.assignedToName, d.assignedToEmail,
+        d.arrivalDateKey, d.arrivalTime, d.departureDateKey, d.departureTime,
+        Array.isArray(d.lines) ? d.lines.map(l=>l?.label).join(" ") : ""
+      ];
+      return parts.filter(Boolean).join(" ").toLowerCase();
+    }
+
+    // ========= Produits (suggestions) =========
+    const PRODUCT_TEMPLATES = [
+      { label:"Ménage standard (inter-séjour)", unit:"unité" },
+      { label:"Ménage intermédiaire (long séjour)", unit:"supplément" },
+      { label:"Back-to-back (ménage en urgence)", unit:"supplément" },
+      { label:"Remise en état (logement non conforme)", unit:"supplément" },
+      { label:"Rechange linge (rotation complète)", unit:"passage" },
+      { label:"Collecte + lavage + séchage", unit:"unité" },
+      { label:"Dépose / reprise blanchisserie", unit:"unité" },
+      { label:"Check-in autonome (boîte à clés)", unit:"passage" },
+      { label:"Check-in physique", unit:"passage" },
+      { label:"Check-out", unit:"passage" },
+      { label:"Gestion clés / badges", unit:"unité" },
+      { label:"Récupération clés après sortie", unit:"passage" },
+      { label:"Petite maintenance (ampoule, joint…)", unit:"unité" },
+      { label:"Intervention d’urgence (fuite, serrure)", unit:"unité" },
+      { label:"Coordination artisans", unit:"unité" },
+      { label:"Réponses messages voyageurs", unit:"mois" },
+      { label:"Kit essentiel", unit:"kit" },
+      { label:"Kit cuisine", unit:"kit" },
+      { label:"Kit bain", unit:"kit" },
+      { label:"Kit séjour (Pack 2 pers)", unit:"kit" },
+      { label:"Kit séjour (Pack 4 pers)", unit:"kit" },
+      { label:"Kit séjour (Pack 6 pers)", unit:"kit" },
+      { label:"Kit séjour (Pack 8 pers)", unit:"kit" },
+      { label:"Réassort produit unitaire (papier, café…)", unit:"unité" },
+      { label:"Autre (texte libre)", unit:"unité" }
+    ];
+    const LABEL_TO_TEMPLATE = new Map(PRODUCT_TEMPLATES.map(p => [p.label.toLowerCase(), p]));
+    function fillPrestaDatalist(){
+      const dl = document.getElementById("prestaList");
+      if(!dl) return;
+      dl.innerHTML = PRODUCT_TEMPLATES.map(p => `<option value="${esc(p.label)}"></option>`).join("");
+    }
+    newLabel?.addEventListener("input", ()=>{
+      const t = LABEL_TO_TEMPLATE.get((newLabel.value || "").trim().toLowerCase());
+      if(t && t.unit) newUnit.value = t.unit;
+    });
+
+    // ===== Guard placeholder =====
+    async function guardConciergerie(user){ return true; }
+
+    logoutBtn?.addEventListener("click", async ()=>{
+      await signOut(auth);
+      localStorage.removeItem("cm_auth");
+      location.href = "index.html";
+    });
+
+    // ===== State =====
+    let currentUser = null;
+    let statusFilter = "";
+    let lastDoc = null;
+    const PAGE_SIZE = 25;
+
+    let items = [];
+    let selected = null;
+
+    // Edit draft state
+    let editLinesDraft = [];
+
+    // ===== Modales =====
+    function openDetailModal(){
+      if(!selected) return;
+      detailBackdrop.style.display = "flex";
+    }
+    function closeDetailModal(){
+      detailBackdrop.style.display = "none";
+    }
+    detailBackdrop?.addEventListener("click",(e)=>{ if(e.target===detailBackdrop) closeDetailModal(); });
+    detailCloseBtn?.addEventListener("click", closeDetailModal);
+
+    // ===== Filtering =====
+    function filterByChip(it, chip){
+      if(!chip) return true;
+      const op = normalizeOpStatus(it.opStatus);
+
+      if(["EN_COURS","REALISEE","ANNULEE"].includes(chip)) return op === chip;
+      if(chip === "DEVIS") return normQuoteStatus(it.quoteStatus) !== "";
+      if(chip === "FACTURE") return normInvoiceStatus(it.invoiceStatus) !== "";
+      if(chip === "PAYEE") return normInvoiceStatus(it.invoiceStatus) === "PAID";
+      return true;
+    }
+
+    function getFilteredSorted(){
+      const q = (searchInput?.value || "").trim().toLowerCase();
+      let arr = items.slice();
+
+      if(statusFilter) arr = arr.filter(x => filterByChip(x, statusFilter));
+      if(q) arr = arr.filter(x => (x._search || "").includes(q));
+
+      const sort = sortSelect?.value || "created_desc";
+      const safeDateKey = (x)=> (x.dateKey || "").toString();
+      const safeCreated = (x)=> (x.createdAt?.seconds ? x.createdAt.seconds : 0);
+      const safeTotal = (x)=> Number(x.total || 0);
+
+      if(sort === "created_desc"){
+        arr.sort((a,b)=> safeCreated(b)-safeCreated(a));
+      }else if(sort === "date_desc"){
+        arr.sort((a,b)=> safeDateKey(b).localeCompare(safeDateKey(a)) || (safeCreated(b)-safeCreated(a)));
+      }else if(sort === "date_asc"){
+        arr.sort((a,b)=> safeDateKey(a).localeCompare(safeDateKey(b)) || (safeCreated(b)-safeCreated(a)));
+      }else if(sort === "total_desc"){
+        arr.sort((a,b)=> safeTotal(b)-safeTotal(a) || (safeCreated(b)-safeCreated(a)));
+      }else{
+        arr.sort((a,b)=> safeCreated(b)-safeCreated(a));
+      }
+      return arr;
+    }
+
+    // ===== Render list (actions + devis/facture sur chaque ligne) =====
+    function renderList(){
+      if(!listEl) return;
+      listEl.innerHTML = "";
+      const filtered = getFilteredSorted();
+      if(countLabel) countLabel.textContent = `${filtered.length} affiché(s)`;
+
+      if(!filtered.length){
+        const div = document.createElement("div");
+        div.className = "empty";
+        div.textContent = "Aucune prestation pour ce filtre.";
+        listEl.appendChild(div);
+        return;
+      }
+
+      for(const it of filtered){
+        const op = normalizeOpStatus(it.opStatus);
+        const title = `${it.homeName || "Logement"}${it.homeCity ? " — " + it.homeCity : ""}`;
+
+        const subTop = [
+          it.dateKey ? `Date : ${it.dateKey}` : null,
+          it.time ? `Heure : ${it.time}` : null,
+          it.ownerEmail ? `Propriétaire : ${it.ownerEmail}` : null
+        ].filter(Boolean).join(" • ");
+
+        const total = money(Number(it.total || 0));
+
+        const div = document.createElement("div");
+        div.className = "item";
+        div.innerHTML = `
+          <div class="i-main" style="min-width:0;">
+            <div class="i-title">${esc(title)}</div>
+            <div class="i-sub">${esc(subTop || "—")}</div>
+
+            <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+              <button class="mini" type="button" data-open="${esc(it.id)}">Détails</button>
+              <button class="mini" type="button" data-edit="${esc(it.id)}">Modifier</button>
+              ${ (op==="EN_COURS") ? `<button class="mini danger" type="button" data-del="${esc(it.id)}">Supprimer</button>` : `` }
+
+              <button class="mini" type="button" data-quote="${esc(it.id)}">Devis</button>
+              <button class="mini" type="button" data-invoice="${esc(it.id)}">Facture</button>
+
+              <span class="badge" style="margin-left:auto;">${esc(total)}</span>
+            </div>
+          </div>
+
+          <div class="i-actions" style="justify-content:flex-start;">
+            <button class="mini" type="button" data-program="${esc(it.id)}">Intervention</button>
+          </div>
+        `;
+        listEl.appendChild(div);
+
+        div.querySelector("button[data-open]")?.addEventListener("click",(e)=>{
+          e.stopPropagation();
+          selectItem(it.id);
+          openDetailModal();
+        });
+        div.querySelector("button[data-edit]")?.addEventListener("click",(e)=>{
+          e.stopPropagation();
+          selectItem(it.id);
+          openEditModal();
+        });
+        div.querySelector("button[data-program]")?.addEventListener("click",(e)=>{
+          e.stopPropagation();
+          location.href = `intervention.html?prestationId=${encodeURIComponent(it.id)}`;
+        });
+        div.querySelector("button[data-del]")?.addEventListener("click",(e)=>{
+          e.stopPropagation();
+          selectItem(it.id);
+          deleteSelected();
+        });
+
+        div.querySelector("button[data-quote]")?.addEventListener("click",(e)=>{
+          e.stopPropagation();
+          location.href = `devis.html?eventId=${encodeURIComponent(it.id)}`;
+        });
+        div.querySelector("button[data-invoice]")?.addEventListener("click",(e)=>{
+          e.stopPropagation();
+          location.href = `facture.html?eventId=${encodeURIComponent(it.id)}`;
+        });
+
+        div.addEventListener("click", ()=>{
+          selectItem(it.id);
+          openDetailModal();
+        });
+      }
+    }
+
+    // ===== Detail (alimente la modale avec bloc type “Détail réservation”) =====
+    function resetDetail(){
+      selected = null;
+
+      // panneau (si présent)
+      detailHint && (detailHint.textContent = "Sélectionne une prestation");
+      detailKv && (detailKv.innerHTML = "");
+      detailLines && (detailLines.innerHTML = "");
+      detailTotalBox && (detailTotalBox.style.display = "none");
+      detailTotalValue && (detailTotalValue.textContent = money(0));
+
+      // modale
+      if(detailModalSub) detailModalSub.textContent = "—";
+      if(detailModalContext) detailModalContext.innerHTML = "";
+      if(detailModalLines) detailModalLines.innerHTML = "";
+      if(detailModalTotal) detailModalTotal.style.display = "none";
+      if(detailModalTotalValue) detailModalTotalValue.textContent = money(0);
+
+      [detailEditBtn, detailDeleteBtn, detailInterventionBtn].forEach(b=> b && (b.disabled = true));
+    }
+
+    function renderDetail(){
+      if(!selected){
+        resetDetail();
+        return;
+      }
+
+      const op = normalizeOpStatus(selected.opStatus);
+      const title = `${selected.homeName || "Logement"}${selected.homeCity ? " — " + selected.homeCity : ""}`;
+
+      const arrival = (selected.arrivalDateKey || selected.dateKey) ? `${selected.arrivalDateKey || selected.dateKey}${selected.arrivalTime ? " • " + selected.arrivalTime : (selected.time ? " • " + selected.time : "")}` : "—";
+      const departure = (selected.departureDateKey) ? `${selected.departureDateKey}${selected.departureTime ? " • " + selected.departureTime : ""}` : "—";
+
+      const ctxHtml = `
+        <div style="display:grid;gap:6px;">
+          <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+            <div style="font-weight:900;">Logement :</div>
+            <div style="font-weight:900;text-align:right;">${esc(title)}</div>
+          </div>
+
+          <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+            <div style="font-weight:900;">Arrivée :</div>
+            <div style="font-weight:800;color:#333;text-align:right;">${esc(arrival)}</div>
+          </div>
+
+          <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+            <div style="font-weight:900;">Départ :</div>
+            <div style="font-weight:800;color:#333;text-align:right;">${esc(departure)}</div>
+          </div>
+
+          <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+            <div style="font-weight:900;">Adresse :</div>
+            <div style="font-weight:800;color:#333;text-align:right;">${esc(selected.homeAddress || "—")}</div>
+          </div>
+
+          <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+            <div style="font-weight:900;">Propriétaire :</div>
+            <div style="font-weight:800;color:#333;text-align:right;">
+              ${esc([selected.ownerName, selected.ownerEmail].filter(Boolean).join(" • ") || "—")}
+            </div>
+          </div>
+        </div>
+      `;
+
+      if(detailModalSub) detailModalSub.textContent = `#${selected.id.slice(0,6)} • ${opLabel(op)}`;
+      if(detailModalContext) detailModalContext.innerHTML = ctxHtml;
+
+      // lignes
+      const lines = Array.isArray(selected.lines) ? selected.lines : [];
+      const total = Number(selected.total || computeTotalFromLines(lines));
+
+      if(detailModalLines){
+        detailModalLines.innerHTML = "";
+        if(!lines.length){
+          const e = document.createElement("div");
+          e.className = "empty";
+          e.textContent = "Aucune ligne enregistrée.";
+          detailModalLines.appendChild(e);
+        }else{
+          for(const l of lines){
+            const lineTotal = (Number(l.qty)||0) * (Number(l.unitPrice)||0);
+            const box = document.createElement("div");
+            box.className = "line";
+            box.innerHTML = `
+              <div class="t" style="font-weight:900;">${esc(l.label || "Ligne")}</div>
+              <div class="s" style="margin-top:4px;font-size:12px;font-weight:800;color:#666;">
+                ${esc(`${Number(l.qty||0)} ${l.unit || "unité"} • ${money(l.unitPrice)} / ${l.unit || "unité"} • total ${money(lineTotal)}`)}
+              </div>
+              ${l.note ? `<div class="n" style="margin-top:6px;font-size:12px;font-weight:800;color:#444;white-space:pre-wrap;">${esc(l.note)}</div>` : ``}
+            `;
+            detailModalLines.appendChild(box);
+          }
+        }
+      }
+
+      // total (AFFICHÉ)
+      if(detailModalTotalValue) detailModalTotalValue.textContent = money(total);
+      if(detailModalTotal) detailModalTotal.style.display = "flex";
+
+      // actions
+      if(detailEditBtn) detailEditBtn.disabled = (op !== "EN_COURS");
+      if(detailDeleteBtn) detailDeleteBtn.disabled = (op !== "EN_COURS");
+      if(detailInterventionBtn) detailInterventionBtn.disabled = false;
+
+      // panneau détail (si présent) on le neutralise
+      if(detailHint) detailHint.textContent = "Modale active (panneau non utilisé)";
+    }
+
+    function selectItem(id){
+      selected = items.find(x=>x.id === id) || null;
+      renderDetail();
+    }
+
+    async function patchSelected(data){
+      if(!selected) return;
+      hideAlert();
+
+      const ref = doc(db,"events", selected.id);
+      try{
+        await updateDoc(ref, { ...data, updatedAt: serverTimestamp() });
+
+        const i = items.findIndex(x=>x.id === selected.id);
+        if(i >= 0){
+          items[i] = { ...items[i], ...data };
+          items[i]._search = normalizeForSearch(items[i]);
+          selected = items[i];
+        }
+
+        renderList();
+        renderDetail();
+        showAlert("✅ Mise à jour enregistrée.", true);
+      }catch(err){
+        console.error(err);
+        showAlert("Erreur mise à jour : " + (err?.message || "inconnue"));
+      }
+    }
+
+    async function deleteSelected(){
+      if(!selected) return;
+      const op = normalizeOpStatus(selected.opStatus);
+      if(op !== "EN_COURS"){
+        showAlert("⛔ Suppression refusée : uniquement EN COURS.");
+        return;
+      }
+      const ok = confirm("Supprimer cette prestation ? (irréversible)");
+      if(!ok) return;
+
+      try{
+        await deleteDoc(doc(db,"events", selected.id));
+        items = items.filter(x=>x.id !== selected.id);
+        resetDetail();
+        renderList();
+        showAlert("✅ Prestation supprimée.", true);
+      }catch(err){
+        console.error(err);
+        showAlert("Erreur suppression : " + (err?.message || "inconnue"));
+      }
+    }
+
+    // ===== Edit modal (lines) =====
+    function resetNewLineInputs(){
+      newLabel.value = "";
+      newUnit.value = "unité";
+      newQty.value = "1";
+      newUnitPrice.value = "0";
+    }
+
+    function updateEditTotal(){
+      const total = computeTotalFromLines(editLinesDraft);
+      editTotalValue.textContent = money(total);
+    }
+
+    function renderEditLines(){
+      editLinesEl.innerHTML = "";
+      if(!editLinesDraft.length){
+        const e = document.createElement("div");
+        e.className = "empty";
+        e.textContent = "Aucune ligne. Ajoute-en une ci-dessous.";
+        editLinesEl.appendChild(e);
+        updateEditTotal();
+        return;
+      }
+
+      editLinesDraft.forEach((l, idx)=>{
+        const box = document.createElement("div");
+        box.className = "edit-line";
+        box.innerHTML = `
+          <div class="edit-line-top">
+            <div class="name">${esc(l.label || "Ligne")}</div>
+            <button class="mini danger" type="button" data-del-line="${idx}">Supprimer</button>
+          </div>
+          <div class="edit-line-grid">
+            <div>
+              <label>Quantité</label>
+              <input type="number" min="0" step="0.5" value="${esc(l.qty ?? 0)}" data-qty="${idx}">
+            </div>
+            <div>
+              <label>Unité</label>
+              <input value="${esc(l.unit || "unité")}" data-unit="${idx}">
+            </div>
+            <div>
+              <label>Prix unitaire</label>
+              <input type="number" min="0" step="0.01" value="${esc(l.unitPrice ?? 0)}" data-price="${idx}">
+            </div>
+          </div>
+        `;
+        editLinesEl.appendChild(box);
+
+        box.querySelector(`[data-del-line="${idx}"]`)?.addEventListener("click", ()=>{
+          editLinesDraft.splice(idx, 1);
+          renderEditLines();
+        });
+        box.querySelector(`[data-qty="${idx}"]`)?.addEventListener("input",(e)=>{
+          editLinesDraft[idx].qty = Number(e.target.value || 0);
+          updateEditTotal();
+        });
+        box.querySelector(`[data-unit="${idx}"]`)?.addEventListener("input",(e)=>{
+          editLinesDraft[idx].unit = (e.target.value || "").trim() || "unité";
+        });
+        box.querySelector(`[data-price="${idx}"]`)?.addEventListener("input",(e)=>{
+          editLinesDraft[idx].unitPrice = Number(e.target.value || 0);
+          updateEditTotal();
+        });
+      });
+
+      updateEditTotal();
+    }
+
+    function openEditModal(){
+      if(!selected) return;
+      hideEditModalAlert();
+
+      const op = normalizeOpStatus(selected.opStatus);
+      if(op !== "EN_COURS"){
+        showAlert("⛔ Modification refusée : seulement EN COURS.");
+        return;
+      }
+
+      editDate.value = selected.dateKey || selected.date || "";
+      editTime.value = selected.time || "";
+      editAgent.value = selected.assignedToName || "";
+      editAgentEmail.value = selected.assignedToEmail || "";
+      editNote.value = selected.meta || "";
+
+      editLinesDraft = (Array.isArray(selected.lines) ? selected.lines : []).map(x => ({
+        label: x.label || "",
+        qty: Number(x.qty || 0),
+        unit: x.unit || "unité",
+        unitPrice: Number(x.unitPrice || 0),
+        note: x.note || ""
+      }));
+
+      resetNewLineInputs();
+      renderEditLines();
+      editBackdrop.style.display = "flex";
+      editDate.focus();
+    }
+
+    function closeEditModal(){
+      editBackdrop.style.display = "none";
+      hideEditModalAlert();
+    }
+
+    editBackdrop?.addEventListener("click",(e)=>{ if(e.target===editBackdrop) closeEditModal(); });
+    editCancelBtn?.addEventListener("click", closeEditModal);
+
+    addLineBtn?.addEventListener("click", ()=>{
+      hideEditModalAlert();
+
+      const rawLabel = (newLabel.value || "").trim();
+      const tpl = LABEL_TO_TEMPLATE.get(rawLabel.toLowerCase());
+      const label = tpl ? tpl.label : rawLabel;
+
+      const qty = Number(newQty.value || 0);
+      const unit = (tpl?.unit || newUnit.value || "unité").trim() || "unité";
+      const unitPrice = Number(newUnitPrice.value || 0);
+
+      if(!label){ showEditModalAlert("Choisis une prestation (ou tape un nom)."); return; }
+      if(!(qty > 0)){ showEditModalAlert("Quantité invalide."); return; }
+      if(!(unitPrice >= 0)){ showEditModalAlert("Prix unitaire invalide."); return; }
+
+      editLinesDraft.push({ label, qty, unit, unitPrice });
+      renderEditLines();
+      resetNewLineInputs();
+      newLabel.focus();
+    });
+
+    editSaveBtn?.addEventListener("click", async ()=>{
+      if(!selected) return;
+      hideEditModalAlert();
+
+      const op = normalizeOpStatus(selected.opStatus);
+      if(op !== "EN_COURS"){
+        showEditModalAlert("⛔ Modification refusée : seulement EN COURS.");
+        return;
+      }
+
+      const dk = (editDate.value || "").trim();
+      if(!dk){ showEditModalAlert("Date obligatoire."); return; }
+
+      const tm = (editTime.value || "").trim();
+      const ag = (editAgent.value || "").trim();
+      const agm = normalizeEmail(editAgentEmail.value || "");
+      const note = (editNote.value || "").trim();
+
+      if(!ag){ showEditModalAlert("Nom agent obligatoire."); return; }
+      if(!agm){ showEditModalAlert("Email agent obligatoire."); return; }
+      if(!/^\S+@\S+\.\S+$/.test(agm)){ showEditModalAlert("Email agent invalide."); return; }
+      if(!editLinesDraft.length){ showEditModalAlert("Ajoute au moins une ligne avant d'enregistrer."); return; }
+
+      const total = computeTotalFromLines(editLinesDraft);
+
+      await patchSelected({
+        dateKey: dk,
+        date: dk,
+        time: tm,
+        assignedToName: ag,
+        assignedToEmail: agm,
+        meta: note,
+        lines: editLinesDraft,
+        total
+      });
+
+      closeEditModal();
+    });
+
+    // ===== Detail modal buttons =====
+    detailEditBtn?.addEventListener("click", ()=>{ closeDetailModal(); openEditModal(); });
+    detailDeleteBtn?.addEventListener("click", deleteSelected);
+    detailInterventionBtn?.addEventListener("click", ()=>{
+      if(!selected) return;
+      location.href = `intervention.html?prestationId=${encodeURIComponent(selected.id)}`;
+    });
+
+    // ===== panneau détail (compat) =====
+    editQuickBtn?.addEventListener("click", openEditModal);
+    toRealiseeBtn?.addEventListener("click", ()=> showAlert("Info: passage RÉALISÉE géré ailleurs (désactivé ici).", true));
+    deleteBtn?.addEventListener("click", deleteSelected);
+
     // ===== Open param from planning =====
     async function autoOpenFromQuery(){
       const openId = qs("open");
