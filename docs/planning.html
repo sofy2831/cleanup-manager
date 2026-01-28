@@ -1156,6 +1156,292 @@
 
     dayTitle.textContent = `Jour — ${selectedDateKey}`;
   }
+  // ========= renderDayList =========
+  function renderDayList(){
+    dayList.innerHTML = "";
+
+    const presta = (eventsByDate.get(selectedDateKey) || []).slice();
+    presta.sort((a,b)=> (a.time||"").localeCompare(b.time||""));
+
+    const books = (bookingsByDate.get(selectedDateKey) || []).slice();
+
+    dayCount.textContent = `${presta.length + books.length}`;
+    dayTitle.textContent = `Jour — ${selectedDateKey}`;
+
+    // Header Réservations
+    const block = document.createElement("div");
+    block.className = "item";
+    block.innerHTML = `
+      <div class="iMain">
+        <div class="iTop">
+          <span class="badge">Réservations</span>
+          <span class="badge">${books.length}</span>
+        </div>
+        <div class="iSub" style="margin-top:6px;">
+          Détail via modale. Modif/Supp/Archive uniquement si source=manual.
+        </div>
+      </div>
+      <div class="iActions">
+        <a class="mini ghost" href="logements.html" title="+ Réservation">
+          <span class="ico">➕</span><span class="txt">+ Réservation</span>
+        </a>
+      </div>
+    `;
+    dayList.appendChild(block);
+
+    // Réservations
+    for(const b of books.slice(0, 80)){
+      const src = (b.source || "import").toLowerCase();
+      const allowEdit = (src === "manual");
+
+      const badge = allowEdit
+        ? `<span class="badge blue">MANUEL</span>`
+        : `<span class="badge">iCAL</span>`;
+
+      const title = `${b.homeName}${b.homeCity ? " — " + b.homeCity : ""}`;
+
+      const div = document.createElement("div");
+      div.className = "item bookingRow";
+      div.dataset.bookingItem = b.id;
+
+      // ✅ IMPORTANT : on ne met PAS actionsRow + bookingActions
+      // ✅ On n’a QU’UNE SEULE barre : bookingBar
+      div.innerHTML = `
+        <div class="iMain">
+          <div class="iTop">
+            ${badge}
+            <span class="badge">Réservation</span>
+          </div>
+
+          <div class="iTitle">${esc(title)}</div>
+
+          <div class="bookingBar">
+            <div class="bookingLeft">
+              <button class="mini ghost" type="button" data-b-detail="${esc(b.id)}" title="Détail">
+                <span class="ico">🛈</span><span class="txt">Détail</span>
+              </button>
+              <button class="mini ghost" type="button" data-b-edit="${esc(b.id)}" title="Modifier" ${allowEdit ? "" : "disabled"}>
+                <span class="ico">✏️</span><span class="txt">Modifier</span>
+              </button>
+              <button class="mini red" type="button" data-b-del="${esc(b.id)}" title="Supprimer" ${allowEdit ? "" : "disabled"}>
+                <span class="ico">🗑️</span><span class="txt">Supprimer</span>
+              </button>
+              <button class="mini ok" type="button" data-b-arch="${esc(b.id)}" title="Archiver" ${allowEdit ? "" : "disabled"}>
+                <span class="ico">🗃️</span><span class="txt">Archiver</span>
+              </button>
+            </div>
+
+            <div class="bookingRight">
+              <button class="mini ghost" type="button" data-b-add-presta="${esc(b.id)}" title="+ prestations">
+                <span class="ico">➕</span><span class="txt">+ prestations</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      `;
+
+      dayList.appendChild(div);
+
+      // Bind boutons
+      div.querySelector(`[data-b-detail="${CSS.escape(b.id)}"]`)?.addEventListener("click", (e)=>{
+        e.stopPropagation();
+        openBookingDetail(b);
+      });
+
+      div.querySelector(`[data-b-edit="${CSS.escape(b.id)}"]`)?.addEventListener("click", (e)=>{
+        e.stopPropagation();
+        if(!allowEdit) return;
+        openBookingEdit(b);
+      });
+
+      div.querySelector(`[data-b-del="${CSS.escape(b.id)}"]`)?.addEventListener("click", async (e)=>{
+        e.stopPropagation();
+        if(!allowEdit) return;
+        await deleteBooking(b);
+      });
+
+      div.querySelector(`[data-b-arch="${CSS.escape(b.id)}"]`)?.addEventListener("click", async (e)=>{
+        e.stopPropagation();
+        if(!allowEdit) return;
+        await archiveBooking(b);
+      });
+
+      div.querySelector(`[data-b-add-presta="${CSS.escape(b.id)}"]`)?.addEventListener("click", (e)=>{
+        e.stopPropagation();
+
+        const params = new URLSearchParams();
+        if(b.homeId) params.set("homeId", b.homeId);
+        if(b.homeZip) params.set("homeZip", b.homeZip);
+        if(b.homeCity) params.set("homeCity", b.homeCity);
+
+        params.set("from", "ical");
+        params.set("icalEventId", b.id);
+        params.set("dateKey", selectedDateKey);
+
+        params.set("returnTo", "planning");
+        params.set("returnDate", selectedDateKey);
+        params.set("returnBookingId", b.id);
+
+        location.href = `nouvelle-prestation.html?${params.toString()}`;
+      });
+    }
+
+    // Prestations
+    if(!presta.length){
+      const div = document.createElement("div");
+      div.className = "item";
+      div.innerHTML = `
+        <div class="iMain">
+          <div class="iTitle">Aucune prestation ce jour</div>
+          <div class="iSub">Crée-en via une réservation (bouton “+ prestations”) ou via Prestations.</div>
+        </div>
+        <div class="iActions">
+          <button class="mini ghost" type="button" disabled><span class="ico">—</span><span class="txt">—</span></button>
+        </div>
+      `;
+      dayList.appendChild(div);
+      return;
+    }
+
+    for(const ev of presta){
+      const title = `${ev.homeName}${ev.homeCity ? " — " + ev.homeCity : ""}`;
+      const sub = [
+        ev.time ? `Heure: ${ev.time}` : null,
+        ev.ownerEmail ? `Propriétaire: ${ev.ownerEmail}` : null,
+        ev.assignedToName ? `Agent: ${ev.assignedToName}` : null,
+      ].filter(Boolean).join(" • ");
+
+      const st = normalizeOpStatus(ev.opStatus);
+      const bCls = opBadgeClass(st);
+      const bTxt = opLabel(st);
+
+      const div = document.createElement("div");
+      div.className = "item";
+      div.innerHTML = `
+        <div class="iMain">
+          <div class="iTop">
+            <span class="badge ${esc(bCls)}">${esc(bTxt)}</span>
+            <span class="badge">${esc(ev.type || "Prestation")}</span>
+          </div>
+          <div class="iTitle">${esc(title)}</div>
+          <div class="iSub">${esc(sub || ev.meta || "—")}</div>
+        </div>
+        <div class="iActions">
+          ${
+            st === "A_VALIDER"
+              ? `<button class="mini" type="button" data-validate="${esc(ev.id)}" title="Valider"><span class="ico">✅</span><span class="txt">Valider</span></button>`
+              : `<button class="mini ghost" type="button" data-open-presta="${esc(ev.id)}" title="Ouvrir prestation"><span class="ico">🛈</span><span class="txt">Ouvrir</span></button>`
+          }
+        </div>
+      `;
+      dayList.appendChild(div);
+
+      div.querySelector(`[data-validate="${CSS.escape(ev.id)}"]`)?.addEventListener("click", (e)=>{
+        e.stopPropagation();
+        validateEvent(ev);
+      });
+
+      div.querySelector(`[data-open-presta="${CSS.escape(ev.id)}"]`)?.addEventListener("click", (e)=>{
+        e.stopPropagation();
+        location.href = `prestations.html?open=${encodeURIComponent(ev.id)}`;
+      });
+    }
+  }
+
+  // ========= Focus sur réservation (retour) =========
+  function focusIfNeeded(){
+    const urlDate = getParam("date");
+    if(parseDateKey(urlDate)) selectedDateKey = urlDate;
+
+    const bid = getParam("bookingId");
+    if(!bid) return;
+
+    let found = (bookingsByDate.get(selectedDateKey) || []).find(x=>x.id === bid);
+    if(!found){
+      found = allBookings.find(x=>x.id === bid);
+      if(found){
+        const dk = (found.dateKeys && found.dateKeys[0]) ? found.dateKeys[0] : selectedDateKey;
+        selectedDateKey = dk;
+        setFocusParams(selectedDateKey, bid);
+      }
+    }
+
+    renderCalendar();
+    renderDayList();
+
+    const el = document.querySelector(`[data-booking-item="${CSS.escape(bid)}"]`);
+    if(el){
+      el.classList.add("focused");
+      el.scrollIntoView({ behavior:"smooth", block:"center" });
+      setTimeout(()=> el.classList.remove("focused"), 1800);
+    }
+  }
+
+  // ========= NAV calendrier + BOOT =========
+  prevMonthBtn.addEventListener("click", ()=>{
+    const d = new Date(viewYear, viewMonth, 1);
+    d.setMonth(d.getMonth()-1);
+    viewYear = d.getFullYear();
+    viewMonth = d.getMonth();
+    selectedDateKey = toDateKey(new Date(viewYear, viewMonth, 1));
+    setFocusParams(selectedDateKey, "");
+    loadAllForMonth().catch(e=> showAlert("Erreur chargement mois : " + (e?.message || "inconnue")));
+  });
+
+  nextMonthBtn.addEventListener("click", ()=>{
+    const d = new Date(viewYear, viewMonth, 1);
+    d.setMonth(d.getMonth()+1);
+    viewYear = d.getFullYear();
+    viewMonth = d.getMonth();
+    selectedDateKey = toDateKey(new Date(viewYear, viewMonth, 1));
+    setFocusParams(selectedDateKey, "");
+    loadAllForMonth().catch(e=> showAlert("Erreur chargement mois : " + (e?.message || "inconnue")));
+  });
+
+  todayBtn.addEventListener("click", ()=>{
+    const now = new Date();
+    viewYear = now.getFullYear();
+    viewMonth = now.getMonth();
+    selectedDateKey = toDateKey(now);
+    setFocusParams(selectedDateKey, "");
+    loadAllForMonth().catch(e=> showAlert("Erreur chargement : " + (e?.message || "inconnue")));
+  });
+
+  refreshBtn.addEventListener("click", ()=>{
+    loadAllForMonth().catch(e=> showAlert("Erreur rafraîchir : " + (e?.message || "inconnue")));
+  });
+
+  onAuthStateChanged(auth, async (user)=>{
+    if(!user){
+      location.href = "login.html?role=conciergerie";
+      return;
+    }
+    currentUser = user;
+    emailLine.textContent = user.email || user.uid;
+
+    const now = new Date();
+    viewYear = now.getFullYear();
+    viewMonth = now.getMonth();
+
+    const urlDate = getParam("date");
+    const dk = parseDateKey(urlDate) ? urlDate : toDateKey(now);
+    selectedDateKey = dk;
+
+    const dSel = parseDateKey(selectedDateKey);
+    if(dSel){
+      viewYear = dSel.getFullYear();
+      viewMonth = dSel.getMonth();
+    }
+
+    try{
+      await loadAllForMonth();
+    }catch(err){
+      console.error(err);
+      showAlert("Erreur initialisation planning : " + (err?.message || "inconnue"));
+    }
+  });
 </script>
+
 </body>
 </html>
+
