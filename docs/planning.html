@@ -975,36 +975,75 @@
   }
 
   function openBookingDetail(b){
-    const src = (b.source || "import").toLowerCase();
-    const allowEdit = (src === "manual");
+  const src = (b.source || "import").toLowerCase();
+  const allowEdit = (src === "manual");
 
-    modalTitle.textContent = "Détail réservation";
-    const lines = [];
-    const loc = [b.homeZip, b.homeCity].filter(Boolean).join(" ");
-lines.push(`<div><b>Logement</b> : ${esc(b.homeName || "—")}${loc ? " — " + esc(loc) : ""}</div>`);
+  modalTitle.textContent = "Détails de la réservation";
 
-    lines.push(`<div><b>Arrivée</b> : ${esc(b.arrivalDateKey || "—")}${b.arrivalTime ? " • " + esc(b.arrivalTime) : ""}</div>`);
-    lines.push(`<div><b>Départ</b> : ${esc(b.departureDateKey || "—")}${b.departureTime ? " • " + esc(b.departureTime) : ""}</div>`);
-    if(b.homeAddress) lines.push(`<div><b>Adresse</b> : ${esc(b.homeAddress)}</div>`);
-    if(b.ownerName) lines.push(`<div><b>Propriétaire</b> : ${esc(b.ownerName)}</div>`);
+  const homeName = b.homeName || "—";
+  const addr = b.homeAddress || "—";
+  const zip = b.homeZip || "";
+  const city = b.homeCity || "";
+  const ownerName = b.ownerName || "—";
+  const ownerPhone = b.ownerPhone || ""; // <- seulement si tu l’as dans Firestore
+  const arrDate = b.arrivalDateKey || "—";
+  const arrTime = b.arrivalTime || "—";
+  const depDate = b.departureDateKey || "—";
+  const depTime = b.departureTime || "—";
+  const note = b.meta || "";
 
-    modalBody.innerHTML = lines.join("");
+  modalBody.innerHTML = `
+    <div><b>Logement</b> : ${esc(homeName)}</div>
+    <div><b>Adresse</b> : ${esc(addr)}</div>
+    <div><b>CP</b> : ${esc(zip || "—")} • <b>Ville</b> : ${esc(city || "—")}</div>
+    <div><b>Propriétaire</b> : ${esc(ownerName)}</div>
+    ${ownerPhone ? `<div><b>Téléphone propriétaire</b> : ${esc(ownerPhone)}</div>` : ``}
+    <div><b>Arrivée</b> : ${esc(arrDate)} • ${esc(arrTime)}</div>
+    <div><b>Départ</b> : ${esc(depDate)} • ${esc(depTime)}</div>
+    ${note ? `<div><b>Note</b> : ${esc(note)}</div>` : ``}
+  `;
 
-    modalFoot.innerHTML = `
-      <button class="mini ghost" type="button" id="modalEditBtn" ${allowEdit ? "" : "disabled"} title="${allowEdit ? "Modifier" : "iCal importée : modification interdite"}">
-        <span class="ico">✏️</span><span class="txt">Modifier</span>
-      </button>
-      <button class="mini" type="button" id="modalOkBtn">
-        <span class="ico">✅</span><span class="txt">OK</span>
-      </button>
-    `;
+  modalFoot.innerHTML = `
+    <button class="mini ghost" type="button" id="modalCloseBtn">
+      <span class="ico">✕</span><span class="txt">Fermer</span>
+    </button>
 
-    document.getElementById("modalOkBtn")?.addEventListener("click", closeModal);
-    document.getElementById("modalEditBtn")?.addEventListener("click", ()=>{
-      if(!allowEdit) return;
-      closeModal();
-      openBookingEdit(b);
-    });
+    <button class="mini ghost" type="button" id="modalEditBtn" ${allowEdit ? "" : "disabled"} title="${allowEdit ? "Modifier" : "iCal importée : modification interdite"}">
+      <span class="ico">✏️</span><span class="txt">Modifier</span>
+    </button>
+
+    <button class="mini red" type="button" id="modalDelBtn" ${allowEdit ? "" : "disabled"} title="${allowEdit ? "Supprimer" : "iCal importée : suppression interdite"}">
+      <span class="ico">🗑️</span><span class="txt">Supprimer</span>
+    </button>
+
+    <button class="mini ok" type="button" id="modalArchBtn" ${allowEdit ? "" : "disabled"} title="${allowEdit ? "Archiver" : "iCal importée : archivage interdit"}">
+      <span class="ico">🗃️</span><span class="txt">Archiver</span>
+    </button>
+  `;
+
+  document.getElementById("modalCloseBtn")?.addEventListener("click", closeModal);
+
+  document.getElementById("modalEditBtn")?.addEventListener("click", ()=>{
+    if(!allowEdit) return;
+    closeModal();
+    openBookingEdit(b);
+  });
+
+  document.getElementById("modalDelBtn")?.addEventListener("click", async ()=>{
+    if(!allowEdit) return;
+    closeModal();
+    await deleteBooking(b);
+  });
+
+  document.getElementById("modalArchBtn")?.addEventListener("click", async ()=>{
+    if(!allowEdit) return;
+    closeModal();
+    await archiveBooking(b);
+  });
+
+  setFocusParams(selectedDateKey, b.id);
+  openModal();
+}
 
     // ✅ on reste sur la bonne réservation (URL) sans quitter planning
     setFocusParams(selectedDateKey, b.id);
