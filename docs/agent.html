@@ -685,19 +685,35 @@ Vérifie que intervention.html les crée bien + dayToken bien écrit.</div>
           const commentEl = wrap.querySelector(`textarea[data-comment="${type}"]`);
           const comment = (commentEl?.value || "").trim();
 
-          // ✅ IMPORTANT : token-only => PAS de serverTimestamp() / PAS de Timestamp.now() sur mission,
-          // sinon ça dépend des rules. On envoie juste les champs autorisés.
-          const payload = {
-            checklist: arrayToChecklistObject(newItems),
-            agentComment: comment,
-            status: markDone ? "A_VALIDER" : (d.status || "EN_COURS"),
-            agentDone: markDone ? true : (!!d.agentDone),
-            locked: markDone ? true : (!!d.locked),
-          };
-
+// mission : uniquement champs autorisés par rules
+  const payload = {
+    checklist: arrayToChecklistObject(newItems),
+    agentComment: comment,
+    status: markDone ? "A_VALIDER" : (d.status || "EN_COURS"),
+    agentDone: markDone ? true : (!!d.agentDone),
+    locked: markDone ? true : (!!d.locked),
+  };
           try{
-            await updateDoc(doc(db, "events", prestationId, "missions", type), payload);
+    await updateDoc(doc(db, "events", prestationId, "missions", type), payload);
 
+    if(markDone){
+      // ✅ event : seulement quand l’agent termine
+      await updateDoc(doc(db, "events", prestationId), {
+        opStatus: "A_VALIDER",
+        updatedAt: Timestamp.now()
+      });
+
+       await updateEventProofsFromMissionsBestEffort();
+    }
+
+showAlert(markDone ? "✅ Mission terminée (À VALIDER) + verrouillée." : "✅ Enregistré.", true);
+    await load();
+  }catch(err){
+    console.error(err);
+    showAlert("Erreur enregistrement : " + (err?.code || err?.message || "inconnue"));
+  }
+}
+            
             if(markDone){
               // best effort : tes rules events actuelles bloquent (normal)
               try{
@@ -843,3 +859,4 @@ Vérifie que intervention.html les crée bien + dayToken bien écrit.</div>
   </script>
 </body>
 </html>
+
