@@ -123,9 +123,6 @@
     }
     .addrBox .t{ font-size:12px; font-weight:900; color:#222; }
     .addrBox .v{ margin-top:4px; font-size:12px; font-weight:800; color:#444; white-space:pre-wrap; }
- 
- 
-
   </style>
 </head>
 
@@ -168,8 +165,6 @@
         </div>
 
         <div class="list" id="missionsList"></div>
-
-      
       </section>
 
       <!-- RIGHT -->
@@ -202,8 +197,6 @@
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
           <button class="btn ghost" id="mailtoBtn" type="button" disabled>Ouvrir email</button>
         </div>
-
-       
       </aside>
     </div>
   </div>
@@ -451,6 +444,7 @@
         name: h.name || "",
         city: h.city || "",
         homeAddress: (h.homeAddress || h.address || "").trim(),
+        homeZip: (h.homeZip || h.zip || "").trim(),
         ownerEmail: (h.ownerEmail || "").trim(),
         ownerName: (h.ownerName || "").trim(),
         team: (h.team || "").trim(),
@@ -480,13 +474,15 @@
         return;
       }
 
-      // Resolve missing address / name / city from homes
+      // Resolve missing address / name / city / zip / type from homes
       const needAddr = !String(e.homeAddress || "").trim();
       const needName = !String(e.homeName || "").trim();
       const needCity = !String(e.homeCity || "").trim();
+      const needZip  = !String(e.homeZip || e.zip || "").trim();
+      const needType = !String(e.homeType || "").trim();
 
       let homeFromHomes = null;
-      if(needAddr || needName || needCity){
+      if(needAddr || needName || needCity || needZip || needType){
         try{
           homeFromHomes = await resolveHomeFromHomes(e);
         }catch(err){
@@ -497,30 +493,46 @@
       const finalHomeName = String(e.homeName || "").trim() || (homeFromHomes?.name || "Logement");
       const finalHomeCity = String(e.homeCity || "").trim() || (homeFromHomes?.city || "");
       const finalHomeAddr = String(e.homeAddress || "").trim() || (homeFromHomes?.homeAddress || "");
+      const finalHomeZip  = String(e.homeZip || e.zip || "").trim() || (homeFromHomes?.homeZip || "");
+      const finalHomeType = String(e.homeType || "").trim() || (homeFromHomes?.type || "");
 
-      // Backfill event for stability (so agent/planning won't be blind)
+      // Backfill event for stability
       const backfill = {};
       if(needName && homeFromHomes?.name) backfill.homeName = homeFromHomes.name;
       if(needCity && homeFromHomes?.city) backfill.homeCity = homeFromHomes.city;
       if(needAddr && homeFromHomes?.homeAddress) backfill.homeAddress = homeFromHomes.homeAddress;
+      if(needZip && homeFromHomes?.homeZip) backfill.homeZip = homeFromHomes.homeZip;
+      if(needType && homeFromHomes?.type) backfill.homeType = homeFromHomes.type;
       if(Object.keys(backfill).length){
         try{
           await updateDoc(eRef, { ...backfill, updatedAt: serverTimestamp() });
-          // keep in memory too
           currentEvent = { ...currentEvent, ...backfill };
         }catch(err){
           console.warn("Backfill event failed:", err?.message || err);
         }
       }
 
+      // ✅ Bloc gauche (ce que tu demandes)
       subLine.textContent = "";
 
-      homeLine.textContent = `${finalHomeName}${finalHomeCity ? " — "+finalHomeCity : ""}`;
-      metaLine.textContent =
-        `${(e.dateKey || e.date || "—")}${e.time ? " à "+e.time : ""}` +
-        ` • status: ${(e.status||"").toUpperCase() || "—"}`;
+      // Logement : NAME — CITY (TYPE) + adresse (+ CP)
+      homeLine.textContent = `${finalHomeName}${finalHomeCity ? " — "+finalHomeCity : ""}${finalHomeType ? " ("+finalHomeType+")" : ""}`;
 
-      addrLine.textContent = finalHomeAddr || "Adresse manquante (à compléter dans Logements).";
+      // metaLine : doit afficher Arrivée + Départ (et on ne change pas le reste)
+      const arrivalDate = (e.arrivalDateKey || e.dateKey || e.date || "—");
+      const arrivalTime = (e.arrivalTime || e.time || "");
+      const departDate  = (e.departureDateKey || "—");
+      const departTime  = (e.departureTime || "");
+
+      const arrivalStr = `Arrivée : ${arrivalDate}${arrivalTime ? " • "+arrivalTime : ""}`;
+      const departStr  = `Départ : ${departDate}${departTime ? " • "+departTime : ""}`;
+
+      metaLine.textContent =
+        `${arrivalStr}\n${departStr}` +
+        `\nstatus: ${(e.status||"").toUpperCase() || "—"}`;
+
+      const addrFull = [finalHomeAddr, finalHomeZip].filter(Boolean).join(" ").trim();
+      addrLine.textContent = addrFull || "Adresse manquante (à compléter dans Logements).";
 
       // Agent prefill from event
       agentName.value = e.assignedToName || agentName.value || "";
@@ -528,7 +540,14 @@
       conciergerieName.value = e.conciergerieName || conciergerieName.value || "";
 
       // Ensure missions exist + read
-      const missionTypes = await ensureMissionsExist({ ...e, homeName: finalHomeName, homeCity: finalHomeCity, homeAddress: finalHomeAddr });
+      const missionTypes = await ensureMissionsExist({
+        ...e,
+        homeName: finalHomeName,
+        homeCity: finalHomeCity,
+        homeAddress: finalHomeAddr,
+        homeZip: finalHomeZip
+      });
+
       const ms = await Promise.all(missionTypes.map(readMission));
 
       missionsList.innerHTML = "";
@@ -698,7 +717,3 @@
   </script>
 </body>
 </html>
-
-
-
-
