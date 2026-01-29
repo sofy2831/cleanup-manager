@@ -218,7 +218,7 @@
       </section>
 
       <div class="mini">
-        Token-only (24h). Si le lien fuite, quelqu’un peut cocher à ta place. C’est moche mais c’est la vie.
+        Token-only (24h). Si le lien fuite, quelqu’un peut cocher à ta place.
       </div>
     </div>
   </div>
@@ -421,14 +421,14 @@
 
       const finalName = (/\.(jpg|jpeg)$/i.test(safeName)) ? safeName : (safeName + ".jpg");
 
-      // ✅ doit matcher tes rules STORAGE "ancien format"
+      // IMPORTANT: chemin = ancien format (doit matcher tes rules storage)
       const path = `missionPhotos/${prestationId}/${missionType}/${token}/${finalName}`;
       const ref = sRef(storage, path);
 
       const jpegBlob = await compressToJpegBlob(originalFile);
 
       await uploadBytes(ref, jpegBlob, { contentType: "image/jpeg" });
-      const url = await getDownloadURL(ref);
+      const url = await getDownloadURL(ref); // nécessite read OK sur ce path
       return url;
     }
 
@@ -452,7 +452,7 @@
     }
 
     async function updateEventProofsFromMissionsBestEffort(){
-      // best-effort : tes rules events token-only bloquent (normal), donc on ignore l’échec
+      // On agrège depuis toutes les missions du token. Best-effort : si rules events bloquent, on ignore.
       try{
         const TYPES = Array.isArray(tokenDoc?.missionTypes) && tokenDoc.missionTypes.length
           ? tokenDoc.missionTypes.map(x => String(x||"").toUpperCase()).filter(Boolean)
@@ -521,13 +521,12 @@
       }
       chipStatus.innerHTML = `<span class="chip ok">OK</span>`;
 
-      // event doc (best effort)
+      // event doc (best effort) => tes rules events get/list conciergerie-only, donc ça peut échouer
+      eventDoc = null;
       try{
         const eSnap = await getDoc(doc(db, "events", prestationId));
         if(eSnap.exists()) eventDoc = eSnap.data() || {};
-      }catch(e){
-        eventDoc = null;
-      }
+      }catch(e){}
 
       const homeName = eventDoc?.homeName || "Logement";
       const homeCity = eventDoc?.homeCity ? " — " + eventDoc.homeCity : "";
@@ -544,7 +543,7 @@
         ? tokenDoc.missionTypes.map(x => String(x||"").toUpperCase()).filter(Boolean)
         : ["MENAGE"];
 
-      // lire missions existantes
+      // lire missions existantes (get uniquement)
       const missions = [];
       for(const t of TYPES){
         const mSnap = await getDoc(doc(db, "events", prestationId, "missions", t));
@@ -558,7 +557,7 @@
           <div class="mcard">
             <div class="mtitle">Aucune mission</div>
             <div class="msub">Soit elles n’existent pas, soit les rules bloquent la lecture.
-Vérifie que intervention.html les crée bien + dayToken bien écrit.</div>
+Vérifie que intervention.html crée les missions et écrit dayToken dans chaque mission.</div>
           </div>`;
         return;
       }
@@ -685,43 +684,24 @@ Vérifie que intervention.html les crée bien + dayToken bien écrit.</div>
           const commentEl = wrap.querySelector(`textarea[data-comment="${type}"]`);
           const comment = (commentEl?.value || "").trim();
 
-// mission : uniquement champs autorisés par rules
-  const payload = {
-    checklist: arrayToChecklistObject(newItems),
-    agentComment: comment,
-    status: markDone ? "A_VALIDER" : (d.status || "EN_COURS"),
-    agentDone: markDone ? true : (!!d.agentDone),
-    locked: markDone ? true : (!!d.locked),
-  };
+          // IMPORTANT: token-only => champs autorisés uniquement
+          const payload = {
+            checklist: arrayToChecklistObject(newItems),
+            agentComment: comment,
+            status: markDone ? "A_VALIDER" : (d.status || "EN_COURS"),
+            agentDone: markDone ? true : (!!d.agentDone),
+            locked: markDone ? true : (!!d.locked),
+          };
+
           try{
-    await updateDoc(doc(db, "events", prestationId, "missions", type), payload);
+            await updateDoc(doc(db, "events", prestationId, "missions", type), payload);
 
-    if(markDone){
-      // ✅ event : seulement quand l’agent termine
-      await updateDoc(doc(db, "events", prestationId), {
-        opStatus: "A_VALIDER",
-        updatedAt: Timestamp.now()
-      });
-
-       await updateEventProofsFromMissionsBestEffort();
-    }
-
-showAlert(markDone ? "✅ Mission terminée (À VALIDER) + verrouillée." : "✅ Enregistré.", true);
-    await load();
-  }catch(err){
-    console.error(err);
-    showAlert("Erreur enregistrement : " + (err?.code || err?.message || "inconnue"));
-  }
-}
-            
             if(markDone){
-              // best effort : tes rules events actuelles bloquent (normal)
+              // best-effort: event opStatus (nécessite patch rules + dayToken dans event)
               try{
-                await updateDoc(doc(db, "events", prestationId), {
-                  opStatus: "A_VALIDER"
-                });
+                await updateDoc(doc(db, "events", prestationId), { opStatus: "A_VALIDER" });
               }catch(e){
-                console.warn("event opStatus update blocked:", e?.message || e);
+                console.warn("event opStatus blocked:", e?.message || e);
               }
 
               await updateEventProofsFromMissionsBestEffort();
@@ -754,14 +734,12 @@ showAlert(markDone ? "✅ Mission terminée (À VALIDER) + verrouillée." : "✅
 
             const nextPhotos = mergeUniqueMax(curPhotos, url, MAX_PHOTOS);
 
-            // ✅ update mission (token-only) => pas de updatedAt
+            // token-only => photos uniquement (et éventuellement updatedAt si rules OK)
             await updateDoc(doc(db, "events", prestationId, "missions", type), {
-  photos: nextPhotos,
-  updatedAt: Timestamp.now()
-});
+              photos: nextPhotos
+            });
 
-
-            // best effort: event proofs (rules events token-only bloquent chez toi)
+            // best-effort: event proofs
             try{
               const eSnap = await getDoc(doc(db, "events", prestationId));
               const e = eSnap.exists() ? (eSnap.data()||{}) : {};
@@ -799,13 +777,11 @@ showAlert(markDone ? "✅ Mission terminée (À VALIDER) + verrouillée." : "✅
             const removed = curPhotos[index];
             curPhotos.splice(index, 1);
 
-            // ✅ update mission (token-only) => pas de updatedAt
             await updateDoc(doc(db, "events", prestationId, "missions", type), {
-              photos: curPhotos.slice(0, MAX_PHOTOS),
-              updatedAt: Timestamp.now()
+              photos: curPhotos.slice(0, MAX_PHOTOS)
             });
 
-            // best effort: event proofs
+            // best-effort: event proofs
             if(removed){
               try{
                 const eSnap = await getDoc(doc(db, "events", prestationId));
@@ -862,6 +838,3 @@ showAlert(markDone ? "✅ Mission terminée (À VALIDER) + verrouillée." : "✅
   </script>
 </body>
 </html>
-
-
-
