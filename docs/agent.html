@@ -225,7 +225,7 @@
 
   <script type="module">
     import { storage, db } from "./firebase-init.js";
-    import { doc, getDoc, updateDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import { doc, getDoc, updateDoc, Timestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
     import { ref as sRef, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js";
 
     const MAX_PHOTOS = 20;
@@ -427,7 +427,7 @@
       const jpegBlob = await compressToJpegBlob(originalFile);
 
       await uploadBytes(ref, jpegBlob, { contentType: "image/jpeg" });
-      const url = await getDownloadURL(ref);
+      const url = await getDownloadURL(ref); // nécessite read OK sur Storage
       return url;
     }
 
@@ -451,8 +451,6 @@
     }
 
     async function updateEventProofsFromMissionsBestEffort(){
-      // On agrège depuis TOUTES les missions listées dans le token
-      // (safe, mais on fait best-effort : si event rules bloquent, ça n'empêche pas la mission).
       try{
         const TYPES = Array.isArray(tokenDoc?.missionTypes) && tokenDoc.missionTypes.length
           ? tokenDoc.missionTypes.map(x => String(x||"").toUpperCase()).filter(Boolean)
@@ -474,10 +472,9 @@
         await updateDoc(doc(db, "events", prestationId), {
           proofPhotos: all.slice(0, MAX_PHOTOS),
           proofPhotosPreview: computePreview(all),
-          updatedAt: serverTimestamp()
+          updatedAt: Timestamp.now()
         });
       }catch(e){
-        // pas bloquant
         console.warn("updateEventProofsFromMissionsBestEffort:", e?.message || e);
       }
     }
@@ -495,7 +492,6 @@
       whoAmI.textContent = "Agent (token)";
       chipToken.textContent = "token: " + token;
 
-      // token doc
       const tSnap = await getDoc(doc(db, "dayTokens", token));
       if(!tSnap.exists()){
         showAlert("⛔ Token invalide.");
@@ -523,7 +519,6 @@
       }
       chipStatus.innerHTML = `<span class="chip ok">OK</span>`;
 
-      // event doc (best effort)
       try{
         const eSnap = await getDoc(doc(db, "events", prestationId));
         if(eSnap.exists()) eventDoc = eSnap.data() || {};
@@ -541,12 +536,10 @@
         (eventDoc?.homeAddress ? " • " + eventDoc.homeAddress : "") +
         `\nAgent : ${(tokenDoc.agentName || "—")}${tokenDoc.agentEmail ? " • " + tokenDoc.agentEmail : ""}`;
 
-      // mission types depuis token
       const TYPES = Array.isArray(tokenDoc.missionTypes) && tokenDoc.missionTypes.length
         ? tokenDoc.missionTypes.map(x => String(x||"").toUpperCase()).filter(Boolean)
         : ["MENAGE"];
 
-      // lire missions existantes
       const missions = [];
       for(const t of TYPES){
         const mSnap = await getDoc(doc(db, "events", prestationId, "missions", t));
@@ -554,7 +547,6 @@
       }
 
       subLine.textContent = "";
-
 
       if(!missions.length){
         missionsWrap.innerHTML = `
@@ -694,27 +686,25 @@ Vérifie que intervention.html les crée bien + dayToken bien écrit.</div>
             status: markDone ? "A_VALIDER" : (d.status || "EN_COURS"),
             agentDone: markDone ? true : (!!d.agentDone),
             locked: markDone ? true : (!!d.locked),
-            updatedAt: serverTimestamp()
+            updatedAt: Timestamp.now()
           };
           if(markDone){
-            payload.agentDoneAt = serverTimestamp();
+            payload.agentDoneAt = Timestamp.now();
           }
 
           try{
             await updateDoc(doc(db, "events", prestationId, "missions", type), payload);
 
             if(markDone){
-              // event passe A_VALIDER (pour la conciergerie)
               try{
                 await updateDoc(doc(db, "events", prestationId), {
                   opStatus: "A_VALIDER",
-                  updatedAt: serverTimestamp()
+                  updatedAt: Timestamp.now()
                 });
               }catch(e){
                 console.warn("event opStatus update blocked:", e?.message || e);
               }
 
-              // agrégat photos sur event
               await updateEventProofsFromMissionsBestEffort();
             }
 
@@ -745,13 +735,11 @@ Vérifie que intervention.html les crée bien + dayToken bien écrit.</div>
 
             const nextPhotos = mergeUniqueMax(curPhotos, url, MAX_PHOTOS);
 
-            // 1) mission.photos
             await updateDoc(doc(db, "events", prestationId, "missions", type), {
               photos: nextPhotos,
-              updatedAt: serverTimestamp()
+              updatedAt: Timestamp.now()
             });
 
-            // 2) event.proofPhotos + preview (stratégie 1)
             try{
               const eSnap = await getDoc(doc(db, "events", prestationId));
               const e = eSnap.exists() ? (eSnap.data()||{}) : {};
@@ -761,10 +749,9 @@ Vérifie que intervention.html les crée bien + dayToken bien écrit.</div>
               await updateDoc(doc(db, "events", prestationId), {
                 proofPhotos: merged,
                 proofPhotosPreview: computePreview(merged),
-                updatedAt: serverTimestamp()
+                updatedAt: Timestamp.now()
               });
             }catch(e){
-              // si rules bloquent event update : on ne casse pas la mission
               console.warn("event proofs update blocked:", e?.message || e);
             }
 
@@ -791,13 +778,11 @@ Vérifie que intervention.html les crée bien + dayToken bien écrit.</div>
             const removed = curPhotos[index];
             curPhotos.splice(index, 1);
 
-            // 1) mission.photos
             await updateDoc(doc(db, "events", prestationId, "missions", type), {
               photos: curPhotos.slice(0, MAX_PHOTOS),
-              updatedAt: serverTimestamp()
+              updatedAt: Timestamp.now()
             });
 
-            // 2) event proofs: best-effort (on retire l’URL si elle est présente)
             if(removed){
               try{
                 const eSnap = await getDoc(doc(db, "events", prestationId));
@@ -808,7 +793,7 @@ Vérifie que intervention.html les crée bien + dayToken bien écrit.</div>
                 await updateDoc(doc(db, "events", prestationId), {
                   proofPhotos: merged,
                   proofPhotosPreview: computePreview(merged),
-                  updatedAt: serverTimestamp()
+                  updatedAt: Timestamp.now()
                 });
               }catch(e){
                 console.warn("event proofs delete blocked:", e?.message || e);
@@ -823,7 +808,6 @@ Vérifie que intervention.html les crée bien + dayToken bien écrit.</div>
           }
         }
 
-        // events
         wrap.querySelector(`button[data-save="${m.id}"]`)?.addEventListener("click", ()=> saveMission(false));
         wrap.querySelector(`button[data-done="${m.id}"]`)?.addEventListener("click", ()=> saveMission(true));
         wrap.querySelector(`button[data-phupload="${m.id}"]`)?.addEventListener("click", ()=> addPhoto());
@@ -855,4 +839,3 @@ Vérifie que intervention.html les crée bien + dayToken bien écrit.</div>
   </script>
 </body>
 </html>
-
