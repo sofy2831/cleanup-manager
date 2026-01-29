@@ -2,8 +2,7 @@
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-  <meta charset="Email
-    UTF-8" />
+  <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>CleanUp Manager – Nouvelle prestation</title>
 
@@ -83,7 +82,7 @@
     .logo-icon::after{ content:"✦"; position:absolute; top:-6px; right:-5px; font-size:12px; color:var(--violet-main); }
     h1{ margin:0; font-size:26px; font-weight:900; }
     .subtitle{ margin-top:2px; font-size:14px; color:#444; text-align:center; }
-  
+    .emailLine{ margin-top:4px; font-size:13px; color:var(--muted); font-weight:800; text-align:center; }
 
     .alert{
       width:100%;
@@ -328,7 +327,8 @@
       <h1>CleanUp Manager</h1>
     </div>
     <div class="subtitle">Créer une prestation</div>
-    
+    <div class="emailLine" id="emailLine">—</div>
+
     <div class="alert" id="alertBox"></div>
 
     <div class="layout">
@@ -347,7 +347,6 @@
         </div>
 
         <form id="jobForm" autocomplete="off" novalidate>
-          <!-- ✅ Reorg: on supprime "Heure (prestation)" visible et on évite le doublon -->
           <div class="inline">
             <div>
               <label for="dateKeyInput">Date (prestation)</label>
@@ -380,11 +379,12 @@
               <input id="ownerName" type="text" placeholder="Ex. Mme Dupont" />
             </div>
             <div>
-             
-           
+              <label for="ownerPhone">Téléphone propriétaire</label>
+              <input id="ownerPhone" type="tel" placeholder="Ex. 06 12 34 56 78" />
+            </div>
+          </div>
 
           <div class="inline">
-            
             <div>
               <label for="jobNote">Note globale (optionnel)</label>
               <input id="jobNote" type="text" placeholder="Ex. urgence, voyageurs exigeants…" />
@@ -395,7 +395,6 @@
 
           <div class="card-title" style="margin:0;">
             <span>Lignes</span>
-            
           </div>
 
           <div>
@@ -505,7 +504,7 @@
 
     const formEl = document.getElementById("jobForm");
     const dateKeyInput = document.getElementById("dateKeyInput");
-    const timeEl = document.getElementById("time"); // ✅ caché (compat payload)
+    const timeEl = document.getElementById("time"); // caché (compat payload)
 
     const arrivalTimeInput = document.getElementById("arrivalTimeInput");
     const departureDateKeyInput = document.getElementById("departureDateKeyInput");
@@ -513,7 +512,6 @@
 
     const ownerNameEl = document.getElementById("ownerName");
     const ownerPhoneEl = document.getElementById("ownerPhone");
-    const teamEl = document.getElementById("team");
     const jobNoteEl = document.getElementById("jobNote");
 
     const productSelect = document.getElementById("productSelect");
@@ -578,11 +576,8 @@
     const timeParam       = getParam("time");
     const dateKeyParam    = getParam("dateKey");
     const ownerNameParam  = getParam("ownerName");
-    const ownerEmailParam = getParam("ownerEmail");
     const noteParam       = getParam("note");
     const homeTypeParam   = getParam("homeType");
-
-    const redirect      = getParam("redirect"); // "prestations" ou vide
 
     // ========= Produits (suggestions) =========
     const PRODUCT_TEMPLATES = [
@@ -652,12 +647,14 @@
       return x.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " €";
     }
 
-    function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
-
     function pad2(n){ return String(n).padStart(2,"0"); }
     function todayKey(){
       const d = new Date();
       return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
+    }
+
+    function cleanPhone(s){
+      return (s||"").toString().trim().replace(/\s+/g," ");
     }
 
     // ✅ INTÉGRATION LOGEMENT
@@ -668,21 +665,22 @@
 
       const d = snap.data() || {};
       const address = (d.address || d.homeAddress || d.adresse || d.locationAddress || "").toString().trim();
+      const zip = (d.zip || d.homeZip || d.postalCode || "").toString().trim();
 
       currentHome = {
         id: snap.id,
         ...d,
         homeType: (d.homeType || d.type || d.kind || homeTypeParam || "").toString().trim(),
         homeAddress: address,
+        homeZip: zip,
         city: (d.city || d.homeCity || "").toString().trim(),
-        name: (d.name || d.homeName || "").toString().trim()
-
+        name: (d.name || d.homeName || "").toString().trim(),
+        ownerPhone: cleanPhone(d.ownerPhone || d.phone || d.ownerTel || "")
       };
 
       // backfill champs formulaire si vides
       if(!ownerNameEl.value.trim() && (currentHome.ownerName || "").trim()) ownerNameEl.value = currentHome.ownerName;
-      if(!ownerEmailEl.value.trim() && (currentHome.ownerEmail || "").trim()) ownerEmailEl.value = currentHome.ownerEmail;
-      if(!teamEl.value.trim() && (currentHome.team || "").trim()) teamEl.value = currentHome.team;
+      if(!ownerPhoneEl.value.trim() && (currentHome.ownerPhone || "").trim()) ownerPhoneEl.value = currentHome.ownerPhone;
     }
 
     // ✅ LECTURE ICAL EVENT (source de vérité)
@@ -881,47 +879,34 @@
            + (ht ? ` (${ht})` : ""))
         : "—";
 
-      const ownerEmail = ownerEmailEl.value ? escapeHtml(ownerEmailEl.value) : escapeHtml(currentHome?.ownerEmail || "—");
-      const ownerName  = ownerNameEl.value  ? escapeHtml(ownerNameEl.value)  : escapeHtml(currentHome?.ownerName  || "—");
+      const ownerName = (ownerNameEl.value || currentHome?.ownerName || "—").trim() || "—";
+      const ownerPhone = cleanPhone(ownerPhoneEl.value || currentHome?.ownerPhone || "") || "—";
+
       const addr = (currentHome?.homeAddress || "").trim();
+      const zip = (currentHome?.homeZip || "").trim();
 
       const rows = [];
       rows.push(`<div><b>Logement</b> : ${escapeHtml(homeText)}</div>`);
-      if(addr) rows.push(`<div><b>Adresse</b> : ${escapeHtml(addr)}</div>`);
+      if(addr || zip){
+        const adr = [addr, zip, (currentHome?.city || "").trim()].filter(Boolean).join(", ");
+        rows.push(`<div><b>Adresse</b> : ${escapeHtml(adr || "—")}</div>`);
+      }
       if(ht) rows.push(`<div><b>Type</b> : ${escapeHtml(ht)}</div>`);
-      rows.push(`<div><b>Propriétaire</b> : ${ownerName} • ${ownerEmail}</div>`);
-
-      rows.push(`<div><b>Date prestation</b> : ${escapeHtml(dateKeyInput.value || "—")}</div>`);
-      rows.push(`<div><b>Heure prestation</b> : ${escapeHtml(timeEl.value || "—")}</div>`);
+      rows.push(`<div><b>Propriétaire</b> : ${escapeHtml(ownerName)} • ${escapeHtml(ownerPhone)}</div>`);
 
       rows.push(`<div><b>Arrivée</b> : ${escapeHtml(stay.arrivalDateKey || "—")} • ${escapeHtml(arrivalTimeInput.value || "—")}</div>`);
       rows.push(`<div><b>Départ</b> : ${escapeHtml(departureDateKeyInput.value || "—")} • ${escapeHtml(departureTimeInput.value || "—")}</div>`);
 
-      if(summary)  rows.push(`<div><b>Réservation</b> : ${escapeHtml(summary)}</div>`);
-      if(noteParam)rows.push(`<div><b>Note</b> : ${escapeHtml(noteParam)}</div>`);
-      contextKv.innerHTML = rows.join("");
+      if(summary) rows.push(`<div><b>Réservation</b> : ${escapeHtml(summary)}</div>`);
+      if(noteParam) rows.push(`<div><b>Note</b> : ${escapeHtml(noteParam)}</div>`);
 
+      contextKv.innerHTML = rows.join("");
       homeLabel.textContent = homeText + (addr ? " • " + addr : "");
     }
 
     function lockUI(locked){
       saveBtn.disabled = !!locked;
       addLineBtn.disabled = !!locked;
-    }
-
-    function splitAgentInput(raw){
-      const s = (raw || "").trim();
-      if(!s) return { name:"", email:"" };
-
-      const emailMatch = s.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
-      const email = (emailMatch ? emailMatch[0] : "").toLowerCase();
-
-      let name = s;
-      if(email) name = name.replace(email, "").replace(/[•|()]/g, " ").trim();
-      name = name.replace(/\s+/g, " ").trim();
-
-      if(email && (name === "" || name === email)) name = "";
-      return { name, email };
     }
 
     async function createDefaultMissions(eventId, payloadForMissions){
@@ -947,9 +932,6 @@
           dateKey: payloadForMissions.dateKey,
           time: payloadForMissions.time || "",
 
-          assignedToName: payloadForMissions.assignedToName || "",
-          assignedToEmail: payloadForMissions.assignedToEmail || "",
-
           createdAt: now,
           updatedAt: now
         }, { merge: true });
@@ -968,8 +950,7 @@
     // ========= Events =========
     productSelect.addEventListener("change", refreshSuggest);
 
-    // ✅ IMPORTANT : on écoute AUSSI les champs séjour (sinon “ça remonte pas”)
-    [dateKeyInput, timeEl, arrivalTimeInput, departureDateKeyInput, departureTimeInput, ownerNameEl, ownerEmailEl].forEach(el=>{
+    [dateKeyInput, timeEl, arrivalTimeInput, departureDateKeyInput, departureTimeInput, ownerNameEl, ownerPhoneEl].forEach(el=>{
       el.addEventListener("input", renderContext);
       el.addEventListener("change", renderContext);
     });
@@ -999,16 +980,9 @@
       if(!dateKeyInput.value) return showAlert("Date obligatoire.");
       if(!lines.length) return showAlert("Ajoute au moins une ligne.");
 
-      const ownerEmail = normalizeEmail(ownerEmailEl.value || currentHome.ownerEmail || "");
       const ownerName  = (ownerNameEl.value || currentHome.ownerName || "").trim();
-      if(ownerEmail && !/^\S+@\S+\.\S+$/.test(ownerEmail)){
-        return showAlert("Email propriétaire invalide.");
-      }
+      const ownerPhone = cleanPhone(ownerPhoneEl.value || currentHome.ownerPhone || "");
 
-      const agentRaw = (teamEl.value || "").trim();
-      const agentParsed = splitAgentInput(agentRaw);
-
-      // ✅ on garde la logique existante : time = valeur cachée (remplie au boot)
       const basePayload = {
         conciergerieUid: currentUser.uid,
 
@@ -1017,12 +991,12 @@
         homeCity: currentHome.city || "",
         homeType: (currentHome.homeType || ""),
         homeAddress: (currentHome.homeAddress || "").trim(),
+        homeZip: (currentHome.homeZip || "").trim(),
 
         dateKey: dateKeyInput.value,
         date:    dateKeyInput.value,
         time:    (timeEl.value || "").trim(),
 
-        // ✅ séjour
         arrivalDateKey: stay.arrivalDateKey || "",
         departureDateKey: stay.departureDateKey || "",
         arrivalTime: (arrivalTimeInput.value || "").trim(),
@@ -1031,13 +1005,10 @@
 
         ownerUid:  currentHome.ownerUid || null,
         ownerName: ownerName || "",
-        ownerEmail:ownerEmail || "",
+        ownerPhone: ownerPhone || "",
+        ownerEmail: "",
 
-        team: agentRaw,
         meta: (jobNoteEl.value || "").trim(),
-
-        assignedToName: agentParsed.name || "",
-        assignedToEmail: agentParsed.email || "",
 
         lines: lines.map(l=>({
           label: l.label || "",
@@ -1075,12 +1046,8 @@
           await createDefaultMissions(createdEventId, basePayload);
 
           showAlert("✅ Prestation enregistrée (EN_COURS) + missions créées.", true);
-
-         location.href = `prestations.html?open=${encodeURIComponent(createdEventId)}`;
-return;
-
-
-
+          location.href = `prestations.html?open=${encodeURIComponent(createdEventId)}`;
+          return;
         }else{
           await updateDoc(createdEventRef, basePayload);
           showAlert("✅ Prestation mise à jour (EN_COURS).", true);
@@ -1108,6 +1075,21 @@ return;
       currentUser = user;
       emailLine.textContent = user.email || user.uid;
 
+      // valeurs par défaut
+      const baseDate = dateKeyParam || todayKey();
+      dateKeyInput.value = baseDate;
+
+      // ⚡ source = icalEvents si possible
+      const ical = await loadIcalEventIfAny();
+
+      // 1) cohérence homeId (si on vient d'une résa)
+      if (ical && ical.homeId && homeId && ical.homeId !== homeId) {
+        const p = new URLSearchParams(location.search);
+        p.set("homeId", ical.homeId);
+        location.replace(`nouvelle-prestation.html?${p.toString()}`);
+        return;
+      }
+
       try{
         await loadHome();
       }catch(e){
@@ -1115,50 +1097,28 @@ return;
         return;
       }
 
-      // valeurs par défaut
-      const baseDate = dateKeyParam || todayKey();
-      dateKeyInput.value = baseDate;
-
-      ownerNameEl.value  = ownerNameParam  || ownerNameEl.value || "";
-      ownerEmailEl.value = ownerEmailParam || ownerEmailEl.value || "";
+      // backfill owner depuis params si fournis
+      if(ownerNameParam && !ownerNameEl.value.trim()) ownerNameEl.value = ownerNameParam.trim();
       if(noteParam) jobNoteEl.value = noteParam;
 
-      // ⚡ source = icalEvents si possible
-      const ical = await loadIcalEventIfAny();
-
-      // 1) cohérence homeId (si on vient d'une résa)
-if (ical && ical.homeId && ical.homeId !== homeId) {
-  const p = new URLSearchParams(location.search);
-  p.set("homeId", ical.homeId);
-  location.replace(`nouvelle-prestation.html?${p.toString()}`);
-  return;
-}
-
       // 2) seulement ensuite : appliquer les infos séjour
-if (ical) {
+      if (ical) {
         stay.arrivalDateKey = (ical.arrivalDateKey || ical.dateKey || baseDate || "").trim();
         stay.departureDateKey = (ical.departureDateKey || "").trim();
         stay.arrivalTime = (ical.arrivalTime || "").trim();
         stay.departureTime = (ical.departureTime || "").trim();
         stay.timezone = (ical.timezone || "Europe/Paris");
 
-        // champs affichés (informational)
         arrivalTimeInput.value = stay.arrivalTime;
         departureDateKeyInput.value = stay.departureDateKey;
         departureTimeInput.value = stay.departureTime;
 
-        // presta par défaut : date/heure arrivée
         dateKeyInput.value = stay.arrivalDateKey || baseDate;
-
-        // ✅ time (prestation) n'est plus un champ visible : on le synchronise sur l'arrivée
         timeEl.value = stay.arrivalTime || timeParam || "";
 
-        // petit confort
         if(ical.ownerName && !ownerNameEl.value) ownerNameEl.value = ical.ownerName;
-        if(ical.ownerEmail && !ownerEmailEl.value) ownerEmailEl.value = ical.ownerEmail;
         if(ical.meta && !jobNoteEl.value) jobNoteEl.value = ical.meta;
-      }else{
-        // mode manuel / sans icalEventId
+      } else {
         stay.arrivalDateKey = baseDate;
         stay.departureDateKey = "";
         stay.arrivalTime = "";
@@ -1168,12 +1128,10 @@ if (ical) {
         arrivalTimeInput.value = "";
         departureDateKeyInput.value = "";
         departureTimeInput.value = "";
-
-        // ✅ fallback time param (si planning te passe ?time=)
         timeEl.value = timeParam || "";
       }
 
-      // si tu veux empêcher l’édition manuelle des champs séjour :
+      // champs séjour en lecture seule
       arrivalTimeInput.readOnly = true;
       departureDateKeyInput.readOnly = true;
       departureTimeInput.readOnly = true;
@@ -1189,9 +1147,3 @@ if (ical) {
 
 </body>
 </html>
-
-
-
-
-
-
