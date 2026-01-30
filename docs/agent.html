@@ -263,7 +263,7 @@
         .replaceAll("&","&amp;")
         .replaceAll("<","&lt;")
         .replaceAll(">","&gt;")
-        .replaceAll('"',"&quot;")
+        .replaceAll('"',"quot;")
         .replaceAll("'","&#039;");
     }
 
@@ -427,11 +427,21 @@
 
       const jpegBlob = await compressToJpegBlob(originalFile);
 
-      await uploadBytes(ref, jpegBlob, { contentType: "image/jpeg" });
+      console.log("[UPLOAD] path=", path);
+      try{
+        await uploadBytes(ref, jpegBlob, { contentType: "image/jpeg" });
+      }catch(e){
+        console.error("[UPLOAD] uploadBytes failed:", e);
+        throw e;
+      }
 
-      // si tes rules read sont OK, ça marche. Sinon => permission-denied ici.
-      const url = await getDownloadURL(ref);
-      return url;
+      try{
+        const url = await getDownloadURL(ref);
+        return url;
+      }catch(e){
+        console.error("[UPLOAD] getDownloadURL failed:", e);
+        throw e;
+      }
     }
 
     function buildPreviews(files){
@@ -448,11 +458,6 @@
       return out.slice(0, max);
     }
 
-    function computePreview(arr){
-      const a = Array.isArray(arr) ? arr.filter(Boolean) : [];
-      return a.slice(0, 3);
-    }
-
     async function load(){
       hideAlert();
       missionsWrap.innerHTML = "";
@@ -462,6 +467,11 @@
         showAlert("⛔ Paramètres manquants (token / prestationId).");
         return;
       }
+
+      // 🔍 DEBUG: vérifier bucket/projet
+      try{
+        console.log("[INIT] project=", storage.app?.options?.projectId, "bucket=", storage.app?.options?.storageBucket);
+      }catch{}
 
       whoAmI.textContent = "Agent (token)";
       chipToken.textContent = "token: " + token;
@@ -552,9 +562,9 @@ Vérifie que intervention.html les crée bien + dayToken bien écrit.</div>
               const id = `chk_${m.id}_${idx}`;
               return `
                 <div class="chk">
-                  <input type="checkbox" id="${esc(id)}" data-k="${esc(it.key)}" ${it.done ? "checked" : ""} ${locked ? "disabled" : ""} />
+                  <input type="checkbox" id="${id}" data-k="${esc(it.key)}" ${it.done ? "checked" : ""} ${locked ? "disabled" : ""} />
                   <div>
-                    <label for="${esc(id)}">${esc(it.label)}</label>
+                    <label for="${id}">${esc(it.label)}</label>
                     <div class="hint">${it.done ? "fait" : "à faire"}</div>
                   </div>
                 </div>
@@ -659,7 +669,6 @@ Vérifie que intervention.html les crée bien + dayToken bien écrit.</div>
           const commentEl = wrap.querySelector(`textarea[data-comment="${type}"]`);
           const comment = (commentEl?.value || "").trim();
 
-          // IMPORTANT: token-only => on évite updatedAt / serverTimestamp
           const payload = {
             checklist: arrayToChecklistObject(newItems),
             agentComment: comment,
@@ -667,17 +676,16 @@ Vérifie que intervention.html les crée bien + dayToken bien écrit.</div>
             agentDone: markDone ? true : (!!d.agentDone),
             locked: markDone ? true : (!!d.locked),
 
-             // 🔒 pour satisfaire la rule
-  dayToken: token,
-  assignedToEmail: String(tokenDoc?.agentEmail || ""),
-  assignedToName: String(tokenDoc?.agentName || "")
+            // 🔒 pour satisfaire la rule
+            dayToken: token,
+            assignedToEmail: String(tokenDoc?.agentEmail || ""),
+            assignedToName: String(tokenDoc?.agentName || "")
           };
 
           try{
             await updateDoc(doc(db, "events", prestationId, "missions", type), payload);
 
             if(markDone){
-              // event opStatus : seulement si tes rules events token-only sont OK + event.dayToken existe
               try{
                 await updateDoc(doc(db, "events", prestationId), { opStatus: "A_VALIDER" });
               }catch(e){
@@ -702,15 +710,15 @@ Vérifie que intervention.html les crée bien + dayToken bien écrit.</div>
           if(!file) return showAlert("Choisis une image.");
 
           const fresh = await getDoc(doc(db, "events", prestationId, "missions", type));
-const cur = fresh.exists() ? (fresh.data()||{}) : {};
+          const cur = fresh.exists() ? (fresh.data()||{}) : {};
 
-// 🔍 DEBUG RULES
-console.log("mission assignedToEmail:", cur.assignedToEmail, "token email:", tokenDoc?.agentEmail);
-console.log("mission assignedToName:", cur.assignedToName, "token name:", tokenDoc?.agentName);
-console.log("mission locked:", cur.locked, "dayToken:", cur.dayToken, "token:", token);
+          // 🔍 DEBUG RULES
+          console.log("mission assignedToEmail:", cur.assignedToEmail, "token email:", tokenDoc?.agentEmail);
+          console.log("mission assignedToName:", cur.assignedToName, "token name:", tokenDoc?.agentName);
+          console.log("mission locked:", cur.locked, "dayToken:", cur.dayToken, "token:", token);
 
-const curPhotos = Array.isArray(cur.photos) ? cur.photos.filter(Boolean) : [];
-if(curPhotos.length >= MAX_PHOTOS) return showAlert(`Max ${MAX_PHOTOS} photos.`);
+          const curPhotos = Array.isArray(cur.photos) ? cur.photos.filter(Boolean) : [];
+          if(curPhotos.length >= MAX_PHOTOS) return showAlert(`Max ${MAX_PHOTOS} photos.`);
 
           try{
             setHint("Compression + upload… (ne ferme pas la page)");
@@ -719,16 +727,21 @@ if(curPhotos.length >= MAX_PHOTOS) return showAlert(`Max ${MAX_PHOTOS} photos.`)
             const url = await uploadMissionPhoto(type, file);
 
             // 2) write firestore mission.photos (sans updatedAt)
-const nextPhotos = mergeUniqueMax(curPhotos, url, MAX_PHOTOS);
+            const nextPhotos = mergeUniqueMax(curPhotos, url, MAX_PHOTOS);
 
-await updateDoc(doc(db, "events", prestationId, "missions", type), {
-  photos: nextPhotos,
+            try{
+              await updateDoc(doc(db, "events", prestationId, "missions", type), {
+                photos: nextPhotos,
 
-  // 🔒 champs attendus par les rules (mêmes valeurs => pas “changed”)
-  dayToken: token,
-  assignedToEmail: String(tokenDoc?.agentEmail || ""),
-  assignedToName: String(tokenDoc?.agentName || "")
-});
+                // 🔒 champs attendus par les rules
+                dayToken: token,
+                assignedToEmail: String(tokenDoc?.agentEmail || ""),
+                assignedToName: String(tokenDoc?.agentName || "")
+              });
+            }catch(e){
+              console.error("[FIRESTORE] updateDoc photos failed:", e);
+              throw e;
+            }
 
             showAlert("✅ Photo ajoutée.", true);
             await load();
@@ -752,9 +765,13 @@ await updateDoc(doc(db, "events", prestationId, "missions", type), {
             const curPhotos = Array.isArray(cur.photos) ? cur.photos.filter(Boolean) : [];
             curPhotos.splice(index, 1);
 
-            // mission.photos only
+            // ✅ IMPORTANT: garder les champs verrouillés dans la requête
             await updateDoc(doc(db, "events", prestationId, "missions", type), {
               photos: curPhotos.slice(0, MAX_PHOTOS),
+
+              dayToken: token,
+              assignedToEmail: String(tokenDoc?.agentEmail || ""),
+              assignedToName: String(tokenDoc?.agentName || "")
             });
 
             showAlert("✅ Photo supprimée.", true);
@@ -796,6 +813,3 @@ await updateDoc(doc(db, "events", prestationId, "missions", type), {
   </script>
 </body>
 </html>
-
-
-
