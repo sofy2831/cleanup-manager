@@ -47,6 +47,15 @@
     .chip{ display:inline-flex; align-items:center; gap:6px; padding:4px 9px; border-radius:999px; background:rgba(122,92,255,0.12); color:#5b45c8; font-size:11px; font-weight:900; }
     .chip.ok{ background:rgba(27,143,77,0.16); color:var(--ok); }
     .chip.bad{ background:rgba(179,38,30,0.14); color:var(--bad); }
+
+    label.mini{ display:block; margin-top:10px; }
+    input, textarea{
+      width:100%; padding:10px; border-radius:12px; border:1px solid #D3C7FF; background:#fff;
+      font-size:13px; outline:none;
+    }
+    textarea{ resize:vertical; }
+
+    .btnrow{ display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
   </style>
 </head>
 
@@ -75,17 +84,17 @@
         <div style="font-weight:900;">Lien agent</div>
 
         <label class="mini">Nom agent</label>
-        <input id="agentName" type="text" />
+        <input id="agentName" type="text" placeholder="Ex. Carla" />
 
         <label class="mini">Email agent</label>
-        <input id="agentEmail" type="email" />
+        <input id="agentEmail" type="email" placeholder="ex. agent@email.com" />
 
-        <div style="display:flex;gap:8px;margin-top:10px;">
+        <div class="btnrow">
           <button class="pill" id="genLinkBtn" type="button">Générer lien</button>
           <button class="pill" id="copyBtn" type="button" disabled>Copier</button>
         </div>
 
-        <textarea id="linkBox" rows="4" style="margin-top:8px;" readonly></textarea>
+        <textarea id="linkBox" rows="4" style="margin-top:8px;" readonly placeholder="Le lien apparaîtra ici…"></textarea>
       </aside>
     </div>
   </div>
@@ -125,59 +134,85 @@
     function qs(name){ return new URLSearchParams(location.search).get(name) || ""; }
     function normalizeEmail(s){ return (s||"").trim().toLowerCase(); }
 
+    function randomToken(len=20){
+      const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+      const arr = new Uint32Array(len);
+      crypto.getRandomValues(arr);
+      let out = "";
+      for(const n of arr) out += chars[n % chars.length];
+      return out;
+    }
+
     const prestationId = qs("prestationId");
     let currentUser = null;
     let currentEvent = null;
 
     async function load(){
       hideAlert();
-      if(!prestationId) return showAlert("prestationId manquant");
+      subLine.textContent = "Chargement…";
+      missionsList.innerHTML = "";
+
+      if(!prestationId){
+        subLine.textContent = "";
+        return showAlert("prestationId manquant (URL).");
+      }
 
       const eRef = doc(db, "events", prestationId);
       const eSnap = await getDoc(eRef);
-      if(!eSnap.exists()) return showAlert("Prestation introuvable.");
+      if(!eSnap.exists()){
+        subLine.textContent = "";
+        return showAlert("Prestation introuvable.");
+      }
 
       const e = eSnap.data() || {};
       currentEvent = { id: eSnap.id, ...e };
 
       homeLine.textContent = e.homeName || "Logement";
-      metaLine.textContent = `${e.dateKey || "—"} ${e.time || ""}`;
+      metaLine.textContent = `${e.dateKey || "—"} ${e.time || ""}`.trim();
       addrLine.textContent = e.homeAddress || "";
 
-      // Lire missions existantes
+      // Lire missions existantes (simple)
       missionsList.innerHTML = "";
       const TYPES = ["MENAGE","CHECKIN","CHECKOUT","LINGE","MAINTENANCE","KITS"];
       for(const t of TYPES){
-        const mSnap = await getDoc(doc(db,"events",prestationId,"missions",t));
-        if(mSnap.exists()){
-          const d = mSnap.data() || {};
-          const div = document.createElement("div");
-          div.className = "mini";
-          div.textContent = `• ${t} — token: ${d.dayToken || "—"}`;
-          missionsList.appendChild(div);
+        try{
+          const mSnap = await getDoc(doc(db,"events",prestationId,"missions",t));
+          if(mSnap.exists()){
+            const d = mSnap.data() || {};
+            const div = document.createElement("div");
+            div.className = "mini";
+            div.textContent = `• ${t} — token: ${d.dayToken || "—"} — locked: ${String(!!d.locked)}`;
+            missionsList.appendChild(div);
+          }
+        }catch(err){
+          // si rules bloquent, on n’explose pas la page
         }
       }
 
       agentName.value = e.assignedToName || "";
       agentEmail.value = e.assignedToEmail || "";
+      subLine.textContent = "";
     }
 
     async function generateLink(){
       hideAlert();
-      if(!currentEvent) return;
+
+      if(!currentEvent) return showAlert("Prestation non chargée.");
+      if(!currentUser) return showAlert("Utilisateur non authentifié.");
 
       const email = normalizeEmail(agentEmail.value);
-      const name = agentName.value.trim();
+      const name = (agentName.value || "").trim();
       if(!email || !name) return showAlert("Nom + email agent requis.");
+      if(!/^\S+@\S+\.\S+$/.test(email)) return showAlert("Email agent invalide.");
 
-      const tokenId = Math.random().toString(36).slice(2,10).toUpperCase();
+      const tokenId = randomToken(20);
       const expiresAtMs = Date.now() + 24*60*60*1000;
       const expiresAt = Timestamp.fromMillis(expiresAtMs);
 
       // créer dayToken
       await setDoc(doc(db,"dayTokens",tokenId),{
         conciergerieUid: currentUser.uid,
-        prestationId,
+        prestationId: String(prestationId),
         agentEmail: email,
         agentName: name,
         missionTypes: ["MENAGE","CHECKIN","CHECKOUT","LINGE","MAINTENANCE","KITS"],
@@ -187,7 +222,7 @@
         createdAt: serverTimestamp()
       });
 
-      // backfill event
+      // backfill event (conciergerie)
       await updateDoc(doc(db,"events",prestationId),{
         assignedToEmail: email,
         assignedToName: name,
@@ -195,29 +230,64 @@
         updatedAt: serverTimestamp()
       });
 
-      // backfill missions
-      for(const t of ["MENAGE","CHECKIN","CHECKOUT","LINGE","MAINTENANCE","KITS"]){
-        await updateDoc(doc(db,"events",prestationId,"missions",t),{
+      // ✅ backfill missions : setDoc merge => crée si absent (FINI le "No document to update")
+      for (const t of ["MENAGE","CHECKIN","CHECKOUT","LINGE","MAINTENANCE","KITS"]) {
+        await setDoc(doc(db, "events", prestationId, "missions", t), {
+          type: t,
+          conciergerieUid: currentUser.uid,
+          prestationId: String(prestationId),
+
+          locked: false,
+          agentDone: false,
+          photos: [],
+          status: "ASSIGNEE",
+
           dayToken: tokenId,
           assignedToEmail: email,
           assignedToName: name,
           updatedAt: serverTimestamp()
-        });
+        }, { merge: true });
       }
 
-      const link = location.href.replace("intervention.html","agent.html") + `?token=${tokenId}&prestationId=${prestationId}`;
+      const base = location.href.split("?")[0];
+      const link =
+        base.replace("intervention.html","agent.html")
+        + `?token=${encodeURIComponent(tokenId)}&prestationId=${encodeURIComponent(prestationId)}`;
+
       linkBox.value = link;
       copyBtn.disabled = false;
       showAlert("Lien agent généré.", true);
+
+      await load();
     }
 
     copyBtn.addEventListener("click", async ()=>{
-      await navigator.clipboard.writeText(linkBox.value || "");
-      showAlert("Lien copié.", true);
+      try{
+        await navigator.clipboard.writeText(linkBox.value || "");
+        showAlert("Lien copié.", true);
+      }catch{
+        showAlert("Copie impossible (clipboard). Copie manuelle.");
+      }
     });
 
-    genLinkBtn.addEventListener("click", generateLink);
-    logoutBtn.addEventListener("click", async ()=>{ await signOut(auth); location.href="index.html"; });
+    genLinkBtn.addEventListener("click", async ()=>{
+      genLinkBtn.disabled = true;
+      genLinkBtn.textContent = "…";
+      try{
+        await generateLink();
+      }catch(err){
+        console.error(err);
+        showAlert("Erreur génération lien : " + (err?.code || err?.message || "inconnue"));
+      }finally{
+        genLinkBtn.disabled = false;
+        genLinkBtn.textContent = "Générer lien";
+      }
+    });
+
+    logoutBtn.addEventListener("click", async ()=>{
+      await signOut(auth);
+      location.href="index.html";
+    });
 
     onAuthStateChanged(auth, async (u)=>{
       if(!u) return location.href="login.html";
