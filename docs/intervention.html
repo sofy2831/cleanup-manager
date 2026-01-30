@@ -54,7 +54,6 @@
       font-size:13px; outline:none;
     }
     textarea{ resize:vertical; }
-
     .btnrow{ display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
   </style>
 </head>
@@ -103,9 +102,7 @@
   <script type="module">
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-    import {
-      doc, getDoc, setDoc, updateDoc, serverTimestamp, Timestamp
-    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import { doc, getDoc, setDoc, serverTimestamp, Timestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const alertBox = document.getElementById("alertBox");
     const subLine = document.getElementById("subLine");
@@ -173,7 +170,7 @@
       metaLine.textContent = `${e.dateKey || "—"} ${e.time || ""}`.trim();
       addrLine.textContent = e.homeAddress || "";
 
-      // Lire missions existantes (simple)
+      // Liste missions existantes (affichage simple)
       missionsList.innerHTML = "";
       const TYPES = ["MENAGE","CHECKIN","CHECKOUT","LINGE","MAINTENANCE","KITS"];
       for(const t of TYPES){
@@ -186,14 +183,16 @@
             div.textContent = `• ${t} — token: ${d.dayToken || "—"} — locked: ${String(!!d.locked)}`;
             missionsList.appendChild(div);
           }
-        }catch(err){
-          // si rules bloquent, on n’explose pas la page
-        }
+        }catch(_){}
       }
 
       agentName.value = e.assignedToName || "";
       agentEmail.value = e.assignedToEmail || "";
       subLine.textContent = "";
+
+      // état boutons selon présence du lien
+      copyBtn.disabled = !linkBox.value;
+      mailtoBtn.disabled = !linkBox.value;
     }
 
     async function generateLink(){
@@ -224,15 +223,7 @@
         createdAt: serverTimestamp()
       });
 
-      // backfill event (conciergerie)
-      await updateDoc(doc(db,"events",prestationId),{
-        assignedToEmail: email,
-        assignedToName: name,
-        dayToken: tokenId,
-        updatedAt: serverTimestamp()
-      });
-
-      // ✅ backfill missions : setDoc merge => crée si absent (FINI le "No document to update")
+      // ✅ backfill missions : setDoc merge => crée si absent (pas de "No document to update")
       for (const t of ["MENAGE","CHECKIN","CHECKOUT","LINGE","MAINTENANCE","KITS"]) {
         await setDoc(doc(db, "events", prestationId, "missions", t), {
           type: t,
@@ -251,6 +242,14 @@
         }, { merge: true });
       }
 
+      // event : on met aussi dayToken + agent
+      await setDoc(doc(db,"events",prestationId),{
+        assignedToEmail: email,
+        assignedToName: name,
+        dayToken: tokenId,
+        updatedAt: serverTimestamp()
+      }, { merge:true });
+
       const base = location.href.split("?")[0];
       const link =
         base.replace("intervention.html","agent.html")
@@ -259,39 +258,36 @@
       linkBox.value = link;
       copyBtn.disabled = false;
       mailtoBtn.disabled = false;
-      mailtoBtn.disabled = true;
-
 
       showAlert("Lien agent généré.", true);
-
       await load();
     }
 
     copyBtn.addEventListener("click", async ()=>{
-
-      mailtoBtn.addEventListener("click", ()=>{
-  const to = normalizeEmail(agentEmail.value);
-  const name = (agentName.value || "").trim();
-  if(!to) return showAlert("Email agent manquant.");
-
-  const subject = encodeURIComponent("Mission CleanUp — lien agent");
-  const body = encodeURIComponent(
-    `Bonjour ${name || ""},\n\n` +
-    `Voici ton lien pour exécuter la mission :\n\n` +
-    `${linkBox.value}\n\n` +
-    `⚠️ Le lien/token expire sous 24h.\n\n` +
-    `— CleanUp Manager`
-  );
-
-  window.location.href = `mailto:${to}?subject=${subject}&body=${body}`;
-});
-
       try{
         await navigator.clipboard.writeText(linkBox.value || "");
         showAlert("Lien copié.", true);
       }catch{
         showAlert("Copie impossible (clipboard). Copie manuelle.");
       }
+    });
+
+    mailtoBtn.addEventListener("click", ()=>{
+      const to = normalizeEmail(agentEmail.value);
+      const name = (agentName.value || "").trim();
+      if(!to) return showAlert("Email agent manquant.");
+      if(!linkBox.value) return showAlert("Génère d’abord le lien.");
+
+      const subject = encodeURIComponent("Mission CleanUp — lien agent");
+      const body = encodeURIComponent(
+        `Bonjour ${name || ""},\n\n` +
+        `Voici ton lien pour exécuter la mission :\n\n` +
+        `${linkBox.value}\n\n` +
+        `⚠️ Le lien/token expire sous 24h.\n\n` +
+        `— CleanUp Manager`
+      );
+
+      window.location.href = `mailto:${to}?subject=${subject}&body=${body}`;
     });
 
     genLinkBtn.addEventListener("click", async ()=>{
@@ -321,4 +317,3 @@
   </script>
 </body>
 </html>
-
