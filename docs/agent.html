@@ -109,7 +109,6 @@
       background:linear-gradient(180deg,#ffffff 0%, rgba(122,92,255,0.06) 100%);
     }
 
-    /* Photos */
     .photos{
       border-top:1px dashed rgba(122,92,255,0.25);
       padding-top:10px;
@@ -153,12 +152,12 @@
       overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
     }
 
-    /* Preview (avant upload) */
     .previews{
       display:grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
       gap:8px;
       margin-top:6px;
+      display:none;
     }
     @media(max-width:920px){ .previews{ grid-template-columns: repeat(3, minmax(0, 1fr)); } }
     @media(max-width:720px){ .previews{ grid-template-columns: repeat(2, minmax(0, 1fr)); } }
@@ -225,7 +224,7 @@
 
   <script type="module">
     import { storage, db } from "./firebase-init.js";
-    import { doc, getDoc, updateDoc } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import { doc, getDoc, updateDoc, Timestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
     import { ref as sRef, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js";
 
     const MAX_PHOTOS = 20;
@@ -263,7 +262,7 @@
         .replaceAll("&","&amp;")
         .replaceAll("<","&lt;")
         .replaceAll(">","&gt;")
-        .replaceAll('"',"&quot;")
+        .replaceAll('"',"quot;")
         .replaceAll("'","&#039;");
     }
 
@@ -315,20 +314,10 @@
 
     function checklistToArray(cl){
       if(!cl) return [];
-      if(Array.isArray(cl)){
-        return cl.map((x,i)=>{
-          if(typeof x === "string") return { key:String(i), label:x, done:false };
-          return { key: x.key || String(i), label: x.label || ("Item "+(i+1)), done: !!x.done };
-        });
-      }
-      if(typeof cl === "object"){
+      if(typeof cl === "object" && !Array.isArray(cl)){
         const out = [];
         for(const [k,v] of Object.entries(cl)){
-          if(typeof v === "boolean"){
-            out.push({ key:k, label:k, done:v });
-          }else{
-            out.push({ key:k, label:(v?.label || k), done: !!v?.done });
-          }
+          out.push({ key:k, label:(v?.label || k), done: !!v?.done });
         }
         return out;
       }
@@ -421,27 +410,16 @@
 
       const finalName = (/\.(jpg|jpeg)$/i.test(safeName)) ? safeName : (safeName + ".jpg");
 
-      // doit matcher tes rules STORAGE "ancien format"
+      // FORMAT ANCIEN (aligné storage rules)
       const path = `missionPhotos/${prestationId}/${missionType}/${token}/${finalName}`;
       const ref = sRef(storage, path);
 
       const jpegBlob = await compressToJpegBlob(originalFile);
 
       console.log("[UPLOAD] path=", path);
-      try{
-        await uploadBytes(ref, jpegBlob, { contentType: "image/jpeg" });
-      }catch(e){
-        console.error("[UPLOAD] uploadBytes failed:", e);
-        throw e;
-      }
-
-      try{
-        const url = await getDownloadURL(ref);
-        return url;
-      }catch(e){
-        console.error("[UPLOAD] getDownloadURL failed:", e);
-        throw e;
-      }
+      await uploadBytes(ref, jpegBlob, { contentType: "image/jpeg" });
+      const url = await getDownloadURL(ref);
+      return url;
     }
 
     function buildPreviews(files){
@@ -468,7 +446,6 @@
         return;
       }
 
-      // 🔍 DEBUG: vérifier bucket/projet
       try{
         console.log("[INIT] project=", storage.app?.options?.projectId, "bucket=", storage.app?.options?.storageBucket);
       }catch{}
@@ -495,7 +472,7 @@
       chipExpiry.textContent = "expire: " + (
         Number.isFinite(Number(tokenDoc.expiresAtMs))
           ? prettyExpiryFromMs(tokenDoc.expiresAtMs)
-          : (tokenDoc.expiresAt?.toDate ? prettyExpiryFromMs(tokenDoc.expiresAt.toDate().getTime()) : "—")
+          : "—"
       );
 
       if(!tokenValid(tokenDoc)){
@@ -505,11 +482,11 @@
       }
       chipStatus.innerHTML = `<span class="chip ok">OK</span>`;
 
-      // event doc : conciergerie-only => best effort
+      // event doc (best effort)
       try{
         const eSnap = await getDoc(doc(db, "events", prestationId));
         if(eSnap.exists()) eventDoc = eSnap.data() || {};
-      }catch(e){
+      }catch{
         eventDoc = null;
       }
 
@@ -523,12 +500,11 @@
         (eventDoc?.homeAddress ? " • " + eventDoc.homeAddress : "") +
         `\nAgent : ${(tokenDoc.agentName || "—")}${tokenDoc.agentEmail ? " • " + tokenDoc.agentEmail : ""}`;
 
-      // mission types depuis token
       const TYPES = Array.isArray(tokenDoc.missionTypes) && tokenDoc.missionTypes.length
         ? tokenDoc.missionTypes.map(x => String(x||"").toUpperCase()).filter(Boolean)
         : ["MENAGE"];
 
-      // lire missions existantes
+      // lire missions
       const missions = [];
       for(const t of TYPES){
         const mSnap = await getDoc(doc(db, "events", prestationId, "missions", t));
@@ -620,7 +596,7 @@ Vérifie que intervention.html les crée bien + dayToken bien écrit.</div>
             </div>
 
             <div class="mini" data-phhint="${esc(m.id)}"></div>
-            <div class="previews" data-pv="${esc(m.id)}" style="display:none;"></div>
+            <div class="previews" data-pv="${esc(m.id)}"></div>
           </div>
 
           <div class="actions">
@@ -675,8 +651,10 @@ Vérifie que intervention.html les crée bien + dayToken bien écrit.</div>
             status: markDone ? "A_VALIDER" : (d.status || "EN_COURS"),
             agentDone: markDone ? true : (!!d.agentDone),
             locked: markDone ? true : (!!d.locked),
+            agentDoneAt: markDone ? Timestamp.now() : (d.agentDoneAt || null),
+            updatedAt: Timestamp.now(),
 
-            // 🔒 pour satisfaire la rule
+            // immuables (rules)
             dayToken: token,
             assignedToEmail: String(tokenDoc?.agentEmail || ""),
             assignedToName: String(tokenDoc?.agentName || "")
@@ -684,15 +662,6 @@ Vérifie que intervention.html les crée bien + dayToken bien écrit.</div>
 
           try{
             await updateDoc(doc(db, "events", prestationId, "missions", type), payload);
-
-            if(markDone){
-              try{
-                await updateDoc(doc(db, "events", prestationId), { opStatus: "A_VALIDER" });
-              }catch(e){
-                console.warn("event opStatus blocked:", e?.message || e);
-              }
-            }
-
             showAlert(markDone ? "✅ Mission terminée (À VALIDER) + verrouillée." : "✅ Enregistré.", true);
             await load();
           }catch(err){
@@ -701,7 +670,7 @@ Vérifie que intervention.html les crée bien + dayToken bien écrit.</div>
           }
         }
 
-               async function addPhoto(){
+        async function addPhoto(){
           hideAlert();
           const type = m.id;
 
@@ -709,55 +678,31 @@ Vérifie que intervention.html les crée bien + dayToken bien écrit.</div>
           const file = input?.files?.[0];
           if(!file) return showAlert("Choisis une image.");
 
-          // 1) relire la mission (source de vérité)
-          const fresh = await getDoc(doc(db, "events", prestationId, "missions", type));
-          const cur = fresh.exists() ? (fresh.data()||{}) : {};
-
-          console.log("DEBUG mission:", {
-            locked: cur.locked,
-            dayToken: cur.dayToken,
-            assignedToEmail: cur.assignedToEmail,
-            assignedToName: cur.assignedToName,
-            type
-          });
-          console.log("DEBUG token:", {
-            token,
-            tokenPrestation: tokenDoc?.prestationId,
-            tokenExpMs: tokenDoc?.expiresAtMs,
-            tokenEmail: tokenDoc?.agentEmail,
-            tokenName: tokenDoc?.agentName
-          });
-
-          const curPhotos = Array.isArray(cur.photos) ? cur.photos.filter(Boolean) : [];
-          if(curPhotos.length >= MAX_PHOTOS) return showAlert(`Max ${MAX_PHOTOS} photos.`);
-
           try{
-            setHint("Compression + upload…");
+            const fresh = await getDoc(doc(db, "events", prestationId, "missions", type));
+            const cur = fresh.exists() ? (fresh.data()||{}) : {};
+            const curPhotos = Array.isArray(cur.photos) ? cur.photos.filter(Boolean) : [];
+            if(curPhotos.length >= MAX_PHOTOS) return showAlert(`Max ${MAX_PHOTOS} photos.`);
 
-            console.log("STEP A: before uploadMissionPhoto");
+            setHint("Compression…");
             const url = await uploadMissionPhoto(type, file);
-            console.log("STEP B: upload OK, downloadURL =", url);
+            setHint("Écriture Firestore…");
 
-            console.log("STEP C: firestore update (photos + required fields)");
-              const nextPhotos = mergeUniqueMax(curPhotos, url, MAX_PHOTOS);
+            const nextPhotos = mergeUniqueMax(curPhotos, url, MAX_PHOTOS);
 
-  await updateDoc(doc(db, "events", prestationId, "missions", type), {
-    photos: nextPhotos,
-
-    // 🔒 requis par tes rules
-    dayToken: token,
-    assignedToEmail: String(tokenDoc?.agentEmail || ""),
-    assignedToName: String(tokenDoc?.agentName || "")
-  });
-
-  console.log("STEP D: firestore OK");
-
+            // ✅ IMPORTANT : on envoie aussi les immuables + updatedAt timestamp client
+            await updateDoc(doc(db, "events", prestationId, "missions", type), {
+              photos: nextPhotos,
+              updatedAt: Timestamp.now(),
+              dayToken: token,
+              assignedToEmail: String(tokenDoc?.agentEmail || ""),
+              assignedToName: String(tokenDoc?.agentName || "")
+            });
 
             showAlert("✅ Photo ajoutée.", true);
             await load();
-
           }catch(err){
-            console.error("❌ UPLOAD FAILED:", err);
+            console.error(err);
             showAlert("Erreur upload photo : " + (err?.code || err?.message || "inconnue"));
           }finally{
             if(input) input.value = "";
@@ -765,7 +710,6 @@ Vérifie que intervention.html les crée bien + dayToken bien écrit.</div>
             setHint("");
           }
         }
-
 
         async function deletePhoto(index){
           hideAlert();
@@ -777,10 +721,9 @@ Vérifie que intervention.html les crée bien + dayToken bien écrit.</div>
             const curPhotos = Array.isArray(cur.photos) ? cur.photos.filter(Boolean) : [];
             curPhotos.splice(index, 1);
 
-            // ✅ IMPORTANT: garder les champs verrouillés dans la requête
             await updateDoc(doc(db, "events", prestationId, "missions", type), {
               photos: curPhotos.slice(0, MAX_PHOTOS),
-
+              updatedAt: Timestamp.now(),
               dayToken: token,
               assignedToEmail: String(tokenDoc?.agentEmail || ""),
               assignedToName: String(tokenDoc?.agentName || "")
@@ -825,7 +768,3 @@ Vérifie que intervention.html les crée bien + dayToken bien écrit.</div>
   </script>
 </body>
 </html>
-
-
-
-
