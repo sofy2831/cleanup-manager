@@ -712,6 +712,26 @@ Vérifie que intervention.html les crée bien + dayToken bien écrit.</div>
           const fresh = await getDoc(doc(db, "events", prestationId, "missions", type));
           const cur = fresh.exists() ? (fresh.data()||{}) : {};
 
+const fresh = await getDoc(doc(db, "events", prestationId, "missions", type));
+const cur = fresh.exists() ? (fresh.data()||{}) : {};
+
+// 🔍 DEBUG — ICI
+console.log("DEBUG mission:", {
+  locked: cur.locked,
+  dayToken: cur.dayToken,
+  type,
+  photosCount: Array.isArray(cur.photos) ? cur.photos.length : 0
+});
+console.log("DEBUG token:", {
+  token,
+  tokenExpMs: tokenDoc?.expiresAtMs,
+  tokenPrestation: tokenDoc?.prestationId
+});
+
+const curPhotos = Array.isArray(cur.photos) ? cur.photos.filter(Boolean) : [];
+if(curPhotos.length >= MAX_PHOTOS) return showAlert(`Max ${MAX_PHOTOS} photos.`);
+
+          
           // 🔍 DEBUG RULES
           console.log("mission assignedToEmail:", cur.assignedToEmail, "token email:", tokenDoc?.agentEmail);
           console.log("mission assignedToName:", cur.assignedToName, "token name:", tokenDoc?.agentName);
@@ -720,28 +740,30 @@ Vérifie que intervention.html les crée bien + dayToken bien écrit.</div>
           const curPhotos = Array.isArray(cur.photos) ? cur.photos.filter(Boolean) : [];
           if(curPhotos.length >= MAX_PHOTOS) return showAlert(`Max ${MAX_PHOTOS} photos.`);
 
-          try{
-            setHint("Compression + upload… (ne ferme pas la page)");
+        try{
+  setHint("Compression…");
 
-            // 1) upload storage + getDownloadURL
-            const url = await uploadMissionPhoto(type, file);
+  console.log("STEP A: before uploadMissionPhoto");
+  const url = await uploadMissionPhoto(type, file);
+  console.log("STEP B: upload OK, downloadURL =", url);
 
-            // 2) write firestore mission.photos (sans updatedAt)
-            const nextPhotos = mergeUniqueMax(curPhotos, url, MAX_PHOTOS);
+  console.log("STEP C: firestore update (photos only)");
+  const nextPhotos = mergeUniqueMax(curPhotos, url, MAX_PHOTOS);
 
-            try{
-              await updateDoc(doc(db, "events", prestationId, "missions", type), {
-                photos: nextPhotos,
+  await updateDoc(doc(db, "events", prestationId, "missions", type), {
+    photos: nextPhotos
+  });
 
-                // 🔒 champs attendus par les rules
-                dayToken: token,
-                assignedToEmail: String(tokenDoc?.agentEmail || ""),
-                assignedToName: String(tokenDoc?.agentName || "")
-              });
-            }catch(e){
-              console.error("[FIRESTORE] updateDoc photos failed:", e);
-              throw e;
-            }
+  console.log("STEP D: firestore OK");
+
+  showAlert("✅ Photo ajoutée.", true);
+  await load();
+
+}catch(err){
+  console.error("❌ UPLOAD FAILED:", err);
+  showAlert("Erreur upload photo : " + (err?.code || err?.message || "inconnue"));
+}
+
 
             showAlert("✅ Photo ajoutée.", true);
             await load();
@@ -813,3 +835,4 @@ Vérifie que intervention.html les crée bien + dayToken bien écrit.</div>
   </script>
 </body>
 </html>
+
