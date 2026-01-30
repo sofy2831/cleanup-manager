@@ -262,7 +262,7 @@
         .replaceAll("&","&amp;")
         .replaceAll("<","&lt;")
         .replaceAll(">","&gt;")
-        .replaceAll('"',"quot;")
+        .replaceAll('"',"&quot;")
         .replaceAll("'","&#039;");
     }
 
@@ -409,17 +409,17 @@
         safeFileName(originalFile.name || "photo.jpg").replace(/\.(heic|heif)$/i, ".jpg");
 
       const finalName = (/\.(jpg|jpeg)$/i.test(safeName)) ? safeName : (safeName + ".jpg");
+      const mt = String(missionType || "").toUpperCase(); // IMPORTANT: doit matcher missionTypes
 
-      // FORMAT ANCIEN (aligné storage rules)
-      const path = `missionPhotos/${prestationId}/${missionType}/${token}/${finalName}`;
+      // ===== PATH ALIGNÉ AVEC storage.rules =====
+      const path = `missionPhotos/${prestationId}/${mt}/${token}/${finalName}`;
       const ref = sRef(storage, path);
 
       const jpegBlob = await compressToJpegBlob(originalFile);
 
       console.log("[UPLOAD] path=", path);
       await uploadBytes(ref, jpegBlob, { contentType: "image/jpeg" });
-      const url = await getDownloadURL(ref);
-      return url;
+      return await getDownloadURL(ref);
     }
 
     function buildPreviews(files){
@@ -504,7 +504,7 @@
         ? tokenDoc.missionTypes.map(x => String(x||"").toUpperCase()).filter(Boolean)
         : ["MENAGE"];
 
-      // lire missions
+      // lire missions (getDoc sur ids connus -> pas besoin de list)
       const missions = [];
       for(const t of TYPES){
         const mSnap = await getDoc(doc(db, "events", prestationId, "missions", t));
@@ -652,12 +652,7 @@ Vérifie que intervention.html les crée bien + dayToken bien écrit.</div>
             agentDone: markDone ? true : (!!d.agentDone),
             locked: markDone ? true : (!!d.locked),
             agentDoneAt: markDone ? Timestamp.now() : (d.agentDoneAt || null),
-            updatedAt: Timestamp.now(),
-
-            // immuables (rules)
-            dayToken: token,
-            assignedToEmail: String(tokenDoc?.agentEmail || ""),
-            assignedToName: String(tokenDoc?.agentName || "")
+            updatedAt: Timestamp.now()
           };
 
           try{
@@ -690,10 +685,15 @@ Vérifie que intervention.html les crée bien + dayToken bien écrit.</div>
 
             const nextPhotos = mergeUniqueMax(curPhotos, url, MAX_PHOTOS);
 
-await updateDoc(doc(db, "events", prestationId, "missions", type), {
-  photos: nextPhotos,
-  updatedAt: Timestamp.now()
-});
+            await updateDoc(doc(db, "events", prestationId, "missions", type), {
+              photos: nextPhotos,
+              updatedAt: Timestamp.now(),
+
+              // on les renvoie (inchangés) pour éviter toute surprise rules
+              dayToken: token,
+              assignedToEmail: String(tokenDoc?.agentEmail || ""),
+              assignedToName: String(tokenDoc?.agentName || "")
+            });
 
             showAlert("✅ Photo ajoutée.", true);
             await load();
@@ -718,10 +718,12 @@ await updateDoc(doc(db, "events", prestationId, "missions", type), {
             curPhotos.splice(index, 1);
 
             await updateDoc(doc(db, "events", prestationId, "missions", type), {
-  photos: curPhotos.slice(0, MAX_PHOTOS),
-  updatedAt: Timestamp.now()
-});
-
+              photos: curPhotos.slice(0, MAX_PHOTOS),
+              updatedAt: Timestamp.now(),
+              dayToken: token,
+              assignedToEmail: String(tokenDoc?.agentEmail || ""),
+              assignedToName: String(tokenDoc?.agentName || "")
+            });
 
             showAlert("✅ Photo supprimée.", true);
             await load();
@@ -762,4 +764,3 @@ await updateDoc(doc(db, "events", prestationId, "missions", type), {
   </script>
 </body>
 </html>
-
