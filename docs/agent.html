@@ -36,7 +36,7 @@
 
     .wrap{ width:100%; max-width:980px; margin-top:6px; display:flex; flex-direction:column; gap:10px; }
     h1{ margin:0; font-size:20px; font-weight:900; letter-spacing:-0.2px; }
-    .sub{ margin-top:4px; color:#444; font-size:12px; font-weight:800; }
+    .sub{ margin-top:4px; color:#444; font-size:12px; font-weight:800; white-space:pre-wrap; }
     .alert{
       display:none; margin-top:10px; padding:10px 12px; border-radius:14px; background:#fff;
       border-left:5px solid var(--bad); box-shadow:0 3px 10px rgba(0,0,0,.06);
@@ -109,6 +109,7 @@
       background:linear-gradient(180deg,#ffffff 0%, rgba(122,92,255,0.06) 100%);
     }
 
+    /* Photos */
     .photos{
       border-top:1px dashed rgba(122,92,255,0.25);
       padding-top:10px;
@@ -152,12 +153,12 @@
       overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
     }
 
+    /* Preview */
     .previews{
       display:grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
       gap:8px;
       margin-top:6px;
-      display:none;
     }
     @media(max-width:920px){ .previews{ grid-template-columns: repeat(3, minmax(0, 1fr)); } }
     @media(max-width:720px){ .previews{ grid-template-columns: repeat(2, minmax(0, 1fr)); } }
@@ -217,7 +218,7 @@
       </section>
 
       <div class="mini">
-        Token-only (24h). Si le lien fuite, quelqu’un peut cocher à ta place. C’est moche mais c’est la vie.
+        Token-only (24h). Si le lien fuite, quelqu’un peut agir. Garde-le privé.
       </div>
     </div>
   </div>
@@ -312,12 +313,23 @@
       return false;
     }
 
+    // Checklist helpers
     function checklistToArray(cl){
       if(!cl) return [];
-      if(typeof cl === "object" && !Array.isArray(cl)){
+      if(Array.isArray(cl)){
+        return cl.map((x,i)=>{
+          if(typeof x === "string") return { key:String(i), label:x, done:false };
+          return { key: x.key || String(i), label: x.label || ("Item "+(i+1)), done: !!x.done };
+        });
+      }
+      if(typeof cl === "object"){
         const out = [];
         for(const [k,v] of Object.entries(cl)){
-          out.push({ key:k, label:(v?.label || k), done: !!v?.done });
+          if(typeof v === "boolean"){
+            out.push({ key:k, label:k, done:v });
+          }else{
+            out.push({ key:k, label:(v?.label || k), done: !!v?.done });
+          }
         }
         return out;
       }
@@ -331,12 +343,6 @@
       }
       return obj;
     }
-
-    const token = qs("token");
-    const prestationId = qs("prestationId");
-
-    let tokenDoc = null;
-    let eventDoc = null;
 
     function safeFileName(name){
       return (name || "photo.jpg").replace(/[^\w.\-]+/g, "_");
@@ -402,24 +408,10 @@
       return blob;
     }
 
-    async function uploadMissionPhoto(missionType, originalFile){
-      const safeName =
-        Date.now() + "_" +
-        Math.random().toString(16).slice(2) + "_" +
-        safeFileName(originalFile.name || "photo.jpg").replace(/\.(heic|heif)$/i, ".jpg");
-
-      const finalName = (/\.(jpg|jpeg)$/i.test(safeName)) ? safeName : (safeName + ".jpg");
-      const mt = String(missionType || "").toUpperCase(); // IMPORTANT: doit matcher missionTypes
-
-      // ===== PATH ALIGNÉ AVEC storage.rules =====
-      const path = `missionPhotos/${prestationId}/${mt}/${token}/${finalName}`;
-      const ref = sRef(storage, path);
-
-      const jpegBlob = await compressToJpegBlob(originalFile);
-
-      console.log("[UPLOAD] path=", path);
-      await uploadBytes(ref, jpegBlob, { contentType: "image/jpeg" });
-      return await getDownloadURL(ref);
+    function mergeUniqueMax(arr, add, max){
+      const out = Array.isArray(arr) ? arr.filter(Boolean) : [];
+      if(add && !out.includes(add)) out.push(add);
+      return out.slice(0, max);
     }
 
     function buildPreviews(files){
@@ -430,10 +422,33 @@
       return urls;
     }
 
-    function mergeUniqueMax(arr, add, max){
-      const out = Array.isArray(arr) ? arr.filter(Boolean) : [];
-      if(add && !out.includes(add)) out.push(add);
-      return out.slice(0, max);
+    // =========================
+    // Token + preload
+    // =========================
+    const token = qs("token");
+    const prestationId = qs("prestationId");
+
+    let tokenDoc = null;
+    let eventDoc = null;
+
+    async function uploadMissionPhoto(missionType, originalFile){
+      const safeName =
+        Date.now() + "_" +
+        Math.random().toString(16).slice(2) + "_" +
+        safeFileName(originalFile.name || "photo.jpg").replace(/\.(heic|heif)$/i, ".jpg");
+
+      const finalName = (/\.(jpg|jpeg)$/i.test(safeName)) ? safeName : (safeName + ".jpg");
+
+      // Storage path : ancien format
+      const path = `missionPhotos/${prestationId}/${missionType}/${token}/${finalName}`;
+      const ref = sRef(storage, path);
+
+      const jpegBlob = await compressToJpegBlob(originalFile);
+
+      console.log("[UPLOAD] path=", path);
+      await uploadBytes(ref, jpegBlob, { contentType: "image/jpeg" });
+      const url = await getDownloadURL(ref);
+      return url;
     }
 
     async function load(){
@@ -446,6 +461,7 @@
         return;
       }
 
+      // debug bucket
       try{
         console.log("[INIT] project=", storage.app?.options?.projectId, "bucket=", storage.app?.options?.storageBucket);
       }catch{}
@@ -453,7 +469,6 @@
       whoAmI.textContent = "Agent (token)";
       chipToken.textContent = "token: " + token;
 
-      // token doc
       const tSnap = await getDoc(doc(db, "dayTokens", token));
       if(!tSnap.exists()){
         showAlert("⛔ Token invalide.");
@@ -462,7 +477,6 @@
       }
       tokenDoc = tSnap.data() || {};
 
-      // sécurité : token scope
       if(String(tokenDoc.prestationId) !== String(prestationId)){
         showAlert("⛔ Token ≠ prestation.");
         chipStatus.innerHTML = `<span class="chip bad">SCOPE</span>`;
@@ -472,7 +486,7 @@
       chipExpiry.textContent = "expire: " + (
         Number.isFinite(Number(tokenDoc.expiresAtMs))
           ? prettyExpiryFromMs(tokenDoc.expiresAtMs)
-          : "—"
+          : (tokenDoc.expiresAt?.toDate ? prettyExpiryFromMs(tokenDoc.expiresAt.toDate().getTime()) : "—")
       );
 
       if(!tokenValid(tokenDoc)){
@@ -482,7 +496,7 @@
       }
       chipStatus.innerHTML = `<span class="chip ok">OK</span>`;
 
-      // event doc (best effort)
+      // event doc (souvent bloqué conciergerie-only, donc best effort)
       try{
         const eSnap = await getDoc(doc(db, "events", prestationId));
         if(eSnap.exists()) eventDoc = eSnap.data() || {};
@@ -504,7 +518,6 @@
         ? tokenDoc.missionTypes.map(x => String(x||"").toUpperCase()).filter(Boolean)
         : ["MENAGE"];
 
-      // lire missions (getDoc sur ids connus -> pas besoin de list)
       const missions = [];
       for(const t of TYPES){
         const mSnap = await getDoc(doc(db, "events", prestationId, "missions", t));
@@ -517,8 +530,7 @@
         missionsWrap.innerHTML = `
           <div class="mcard">
             <div class="mtitle">Aucune mission</div>
-            <div class="msub">Soit elles n’existent pas, soit les rules bloquent la lecture.
-Vérifie que intervention.html les crée bien + dayToken bien écrit.</div>
+            <div class="msub">Soit elles n’existent pas, soit les rules bloquent la lecture.</div>
           </div>`;
         return;
       }
@@ -584,7 +596,7 @@ Vérifie que intervention.html les crée bien + dayToken bien écrit.</div>
 
           <div class="photos" data-ph="${esc(m.id)}">
             <div class="ph-row">
-              <div class="mini">Photos (max ${MAX_PHOTOS}) — compression automatique</div>
+              <div class="mini">Photos (max ${MAX_PHOTOS}) — compression auto</div>
               <div class="mini">${photos.length}/${MAX_PHOTOS}</div>
             </div>
 
@@ -596,7 +608,7 @@ Vérifie que intervention.html les crée bien + dayToken bien écrit.</div>
             </div>
 
             <div class="mini" data-phhint="${esc(m.id)}"></div>
-            <div class="previews" data-pv="${esc(m.id)}"></div>
+            <div class="previews" data-pv="${esc(m.id)}" style="display:none;"></div>
           </div>
 
           <div class="actions">
@@ -629,6 +641,7 @@ Vérifie que intervention.html les crée bien + dayToken bien écrit.</div>
           });
         }
 
+        // ✅ CHECKLIST / COMMENT / DONE / LOCK (pas de photos ici)
         async function saveMission(markDone=false){
           hideAlert();
           const type = m.id;
@@ -651,7 +664,6 @@ Vérifie que intervention.html les crée bien + dayToken bien écrit.</div>
             status: markDone ? "A_VALIDER" : (d.status || "EN_COURS"),
             agentDone: markDone ? true : (!!d.agentDone),
             locked: markDone ? true : (!!d.locked),
-            agentDoneAt: markDone ? Timestamp.now() : (d.agentDoneAt || null),
             updatedAt: Timestamp.now()
           };
 
@@ -665,6 +677,7 @@ Vérifie que intervention.html les crée bien + dayToken bien écrit.</div>
           }
         }
 
+        // ✅ PHOTOS ONLY (FireStore update strict)
         async function addPhoto(){
           hideAlert();
           const type = m.id;
@@ -685,14 +698,9 @@ Vérifie que intervention.html les crée bien + dayToken bien écrit.</div>
 
             const nextPhotos = mergeUniqueMax(curPhotos, url, MAX_PHOTOS);
 
+            // 🔒 PHOTOS ONLY
             await updateDoc(doc(db, "events", prestationId, "missions", type), {
-              photos: nextPhotos,
-              updatedAt: Timestamp.now(),
-
-              // on les renvoie (inchangés) pour éviter toute surprise rules
-              dayToken: token,
-              assignedToEmail: String(tokenDoc?.agentEmail || ""),
-              assignedToName: String(tokenDoc?.agentName || "")
+              photos: nextPhotos
             });
 
             showAlert("✅ Photo ajoutée.", true);
@@ -707,6 +715,7 @@ Vérifie que intervention.html les crée bien + dayToken bien écrit.</div>
           }
         }
 
+        // 🔒 PHOTOS ONLY
         async function deletePhoto(index){
           hideAlert();
           const type = m.id;
@@ -718,11 +727,7 @@ Vérifie que intervention.html les crée bien + dayToken bien écrit.</div>
             curPhotos.splice(index, 1);
 
             await updateDoc(doc(db, "events", prestationId, "missions", type), {
-              photos: curPhotos.slice(0, MAX_PHOTOS),
-              updatedAt: Timestamp.now(),
-              dayToken: token,
-              assignedToEmail: String(tokenDoc?.agentEmail || ""),
-              assignedToName: String(tokenDoc?.agentName || "")
+              photos: curPhotos.slice(0, MAX_PHOTOS)
             });
 
             showAlert("✅ Photo supprimée.", true);
