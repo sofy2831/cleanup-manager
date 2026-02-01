@@ -1,4 +1,4 @@
-<!-- docs/agent.html (CHECKLIST ONLY — Enregistrer / Terminer) -->
+<!-- docs/agent.html (CHECKLIST ONLY — Enregistrer / Terminer + remonte opStatus=A_VALIDER sur event parent) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -216,9 +216,7 @@
     import { db } from "./firebase-init.js";
     import { doc, getDoc, updateDoc, Timestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
-    // =========================
     // PHOTOS OFF (on s'en occupe plus tard)
-    // =========================
     const PHOTOS_ENABLED = false;
 
     const alertBox = document.getElementById("alertBox");
@@ -613,64 +611,66 @@
         missionsWrap.appendChild(wrap);
 
         async function saveMission(markDone=false){
-  hideAlert();
-  const type = m.id;
+          hideAlert();
+          const type = m.id;
 
-  const box = wrap.querySelector(`.checklist[data-m="${type}"]`);
-  const checks = Array.from(box.querySelectorAll('input[type="checkbox"][data-k]'));
-  const newItems = checks.map(ch => {
-    const key = ch.getAttribute("data-k");
-    const labelEl = box.querySelector(`label[for="${ch.id}"]`);
-    const label = labelEl ? labelEl.textContent.trim() : key;
-    return { key, label, done: !!ch.checked };
-  });
+          const box = wrap.querySelector(`.checklist[data-m="${type}"]`);
+          const checks = Array.from(box.querySelectorAll('input[type="checkbox"][data-k]'));
+          const newItems = checks.map(ch => {
+            const key = ch.getAttribute("data-k");
+            const labelEl = box.querySelector(`label[for="${ch.id}"]`);
+            const label = labelEl ? labelEl.textContent.trim() : key;
+            return { key, label, done: !!ch.checked };
+          });
 
-  const commentEl = wrap.querySelector(`textarea[data-comment="${type}"]`);
-  const comment = (commentEl?.value || "").trim();
+          const commentEl = wrap.querySelector(`textarea[data-comment="${type}"]`);
+          const comment = (commentEl?.value || "").trim();
 
-  // payload CHECKLIST ONLY
-  const payload = {
-    checklist: arrayToChecklistObject(newItems),
-    agentComment: comment,
-    status: markDone ? "A_VALIDER" : "EN_COURS",
-    agentDone: markDone ? true : false,
-    locked: markDone ? true : false,
-    updatedAt: Timestamp.now()
-  };
-  if(markDone){
-    payload.agentDoneAt = Timestamp.now();
-  }
+          const payload = {
+            checklist: arrayToChecklistObject(newItems),
+            agentComment: comment,
+            status: markDone ? "A_VALIDER" : "EN_COURS",
+            agentDone: markDone ? true : false,
+            locked: markDone ? true : false,
+            updatedAt: Timestamp.now()
+          };
+          if(markDone){
+            payload.agentDoneAt = Timestamp.now();
+          }
 
-  try{
-    // 1) update mission
-    await updateDoc(doc(db, "events", prestationId, "missions", type), payload);
+          try{
+            // 1) update mission
+            await updateDoc(doc(db, "events", prestationId, "missions", type), payload);
 
-    // 2) si Terminer => remonter opStatus sur le parent event
-    if(markDone){
-      try{
-        await updateDoc(doc(db,"events",prestationId),{
-          opStatus: "A_VALIDER",
-          proofToken: token,
-          updatedAt: Timestamp.now()
-        });
-      }catch(e){
-        console.error("update event opStatus", e);
-        // pas bloquant
+            // 2) si Terminer => remonter opStatus sur le parent event
+            if(markDone){
+              try{
+                await updateDoc(doc(db,"events",prestationId),{
+                  opStatus: "A_VALIDER",
+                  proofToken: token,
+                  updatedAt: Timestamp.now()
+                });
+              }catch(e){
+                console.error("update event opStatus", e);
+                // pas bloquant
+              }
+            }
+
+            // 3) feedback + reload UI
+            showAlert(markDone ? "✅ Mission terminée (À VALIDER) + verrouillée." : "✅ Enregistré.", true);
+            await load();
+
+          }catch(err){
+            console.error(err);
+            showAlert("Erreur enregistrement : " + (err?.code || err?.message || "inconnue"));
+          }
+        }
+
+        wrap.querySelector(`button[data-save="${m.id}"]`)?.addEventListener("click", ()=> saveMission(false));
+        wrap.querySelector(`button[data-done="${m.id}"]`)?.addEventListener("click", ()=> saveMission(true));
       }
     }
 
-    // 3) feedback + reload UI
-    showAlert(markDone ? "✅ Mission terminée (À VALIDER) + verrouillée." : "✅ Enregistré.", true);
-    await load();
-
-  }catch(err){
-    console.error(err);
-    showAlert("Erreur enregistrement : " + (err?.code || err?.message || "inconnue"));
-  }
-}
-
-
-    
     refreshBtn.addEventListener("click", ()=> load().catch(err=>{
       console.error(err);
       showAlert("Erreur reload : " + (err?.code || err?.message || "inconnue"));
@@ -683,4 +683,3 @@
   </script>
 </body>
 </html>
-
