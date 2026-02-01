@@ -33,6 +33,13 @@
       text-decoration:none; font-weight:900; font-size:13px; cursor:pointer;
       box-shadow:0 3px 10px rgba(0,0,0,.06); white-space:nowrap;
     }
+    .pill.disabled{
+      opacity:.55;
+      cursor:not-allowed;
+      pointer-events:none;
+      border-color:#bbb;
+      color:#777;
+    }
 
     .wrap{ width:100%; max-width:980px; margin-top:6px; display:flex; flex-direction:column; gap:10px; }
     h1{ margin:0; font-size:20px; font-weight:900; letter-spacing:-0.2px; }
@@ -149,7 +156,7 @@
     <div class="topbar">
       <span class="pill" id="whoAmI">Agent (token)</span>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
-        <a class="pill" id="photosBtn" href="#" role="button">📷 Photos</a>
+        <a class="pill disabled" id="photosBtn" href="#" role="button" aria-disabled="true">📷 Photos (désactivé)</a>
         <button class="pill" id="refreshBtn" type="button">Rafraîchir</button>
       </div>
     </div>
@@ -200,14 +207,21 @@
       </section>
 
       <div class="mini">
-        Token-only (24h). Si le lien fuite, quelqu’un peut agir. Garde-le privé.
+        Mode test : photos désactivées. Valide d’abord checklist → enregistrer → terminer.
       </div>
     </div>
   </div>
 
   <script type="module">
     import { db } from "./firebase-init.js";
-    import { doc, getDoc, setDoc, Timestamp, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import {
+      doc, getDoc, updateDoc, Timestamp
+    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+
+    // =========================
+    // MODE TEST : photos OFF
+    // =========================
+    const PHOTOS_ENABLED = false;
 
     const alertBox = document.getElementById("alertBox");
     const subLine = document.getElementById("subLine");
@@ -290,119 +304,67 @@
       return false;
     }
 
-    // =========================
-    // ✅ inférence depuis lines (pour compléter token)
-    // =========================
-    function normTxt(s){
-      return String(s||"")
-        .toLowerCase()
-        .normalize("NFD").replace(/[\u0300-\u036f]/g,"");
-    }
-    function inferMissionTypesFromEvent(eventDoc){
-      const out = new Set();
-
-      const ft = String(eventDoc?.type || "").toUpperCase().trim();
-      if(["MENAGE","CHECKIN","CHECKOUT","LINGE","MAINTENANCE","KITS"].includes(ft)) out.add(ft);
-
-      const lines = Array.isArray(eventDoc?.lines) ? eventDoc.lines : [];
-      for(const l of lines){
-        const label = normTxt(l?.label || l?.name || l?.title || "");
-        if(!label) continue;
-
-        if(label.includes("check-in") || label.includes("check in") || label.includes("arrivee")) out.add("CHECKIN");
-        if(label.includes("check-out") || label.includes("check out") || label.includes("depart")) out.add("CHECKOUT");
-
-        if(label.includes("menage") || label.includes("nettoyage")) out.add("MENAGE");
-
-        if(
-          label.includes("linge") ||
-          label.includes("drap") ||
-          label.includes("serviette") ||
-          label.includes("blanch") ||
-          label.includes("lavage") ||
-          label.includes("sechage") ||
-          label.includes("collecte") ||
-          label.includes("lessive")
-        ) out.add("LINGE");
-
-        if(label.includes("maintenance") || label.includes("reparation") || label.includes("bricol")) out.add("MAINTENANCE");
-        if(label.includes("kit") || label.includes("consommable") || label.includes("capsule") || label.includes("shampo") || label.includes("savon")) out.add("KITS");
-      }
-
-      if(out.size === 0) out.add("MENAGE");
-
-      const order = ["MENAGE","CHECKIN","CHECKOUT","LINGE","MAINTENANCE","KITS"];
-      return order.filter(x => out.has(x));
-    }
-
-    // ✅ Checklist COMPACTE (5 max) par mission
+    // Checklist compacte stable (pas de write si doc manque)
     function compactChecklistTemplate(type){
       const t = (type||"").toUpperCase();
 
       if(t==="MENAGE"){
         return [
           { key:"sols",      label:"Sols aspirés + lavés" },
-          { key:"sdb",       label:"Salle de bain nettoyée (douche/vasque/WC)" },
-          { key:"cuisine",   label:"Cuisine : plans, évier, électroménager" },
+          { key:"sdb",       label:"Salle de bain (douche/vasque/WC)" },
+          { key:"cuisine",   label:"Cuisine : plans/évier/électroménager" },
           { key:"poubelles", label:"Poubelles vidées + sac neuf" },
           { key:"lit",       label:"Lits faits / mise en place" }
         ];
       }
-
-      if(t==="CHECKIN"){
+      if(t==="LINGE"){
         return [
-          { key:"cles",   label:"Remise des clés / code communiqué" },
-          { key:"etat",   label:"État des lieux rapide (RAS / anomalies)" },
-          { key:"linge",  label:"Linge OK / lit prêt" },
-          { key:"equip",  label:"Équipements ok (eau/élec/chauffage si besoin)" },
-          { key:"infos",  label:"Infos pratiques (wifi / règles / poubelles)" }
+          { key:"collecte", label:"Collecte linge sale" },
+          { key:"propre",   label:"Dépôt linge propre" },
+          { key:"complet",  label:"Set complet (draps/serviettes)" },
+          { key:"sacs",     label:"Sacs / stockage ok" },
+          { key:"signal",   label:"Signaler manque / tâche / déchirure" }
         ];
       }
-
+      if(t==="CHECKIN"){
+        return [
+          { key:"cles",   label:"Remise clés / code communiqué" },
+          { key:"etat",   label:"État rapide (RAS / anomalies)" },
+          { key:"linge",  label:"Linge OK / lit prêt" },
+          { key:"equip",  label:"Équipements ok (eau/élec/chauffage)" },
+          { key:"infos",  label:"Infos pratiques (wifi / règles)" }
+        ];
+      }
       if(t==="CHECKOUT"){
         return [
           { key:"cles",      label:"Récupération clés / fermeture ok" },
-          { key:"etat",      label:"État du logement vérifié (anomalies notées)" },
+          { key:"etat",      label:"État vérifié (anomalies notées)" },
           { key:"linge",     label:"Linge récupéré / sacs déposés" },
           { key:"poubelles", label:"Poubelles sorties (si besoin)" },
           { key:"photos",    label:"Photos si anomalie" }
         ];
       }
-
       if(t==="KITS"){
         return [
           { key:"check",  label:"Vérifier stock kits (base)" },
           { key:"refill", label:"Réassort si nécessaire" },
-          { key:"conso",  label:"Consommables (papier, savon, etc.)" },
+          { key:"conso",  label:"Consommables (papier, savon…)" },
           { key:"signal", label:"Signaler rupture / besoin achat" },
           { key:"range",  label:"Ranger / placer kits" }
         ];
       }
-
-      if(t==="LINGE"){
-        return [
-          { key:"collecte", label:"Collecte linge sale" },
-          { key:"propre",   label:"Dépôt linge propre" },
-          { key:"complet",  label:"Vérifier set complet (draps/serviettes)" },
-          { key:"sacs",     label:"Sacs / stockage ok" },
-          { key:"signal",   label:"Signaler manque / tâche / déchirure" }
-        ];
-      }
-
       if(t==="MAINTENANCE"){
         return [
-          { key:"diag",   label:"Diagnostic rapide (source du problème)" },
-          { key:"action", label:"Action effectuée / tentative de résolution" },
+          { key:"diag",   label:"Diagnostic (source du problème)" },
+          { key:"action", label:"Action effectuée / tentative" },
           { key:"test",   label:"Test fonctionnement" },
-          { key:"secu",   label:"Sécurisation si besoin (couper eau/élec)" },
-          { key:"report", label:"Compte-rendu clair (suite / urgence)" }
+          { key:"secu",   label:"Sécuriser si besoin (eau/élec)" },
+          { key:"report", label:"Compte-rendu clair (suite/urgence)" }
         ];
       }
-
       return [
         { key:"ok",     label:"Mission réalisée" },
-        { key:"signal", label:"Anomalies signalées si besoin" },
-        { key:"photos", label:"Photos si besoin" }
+        { key:"signal", label:"Anomalies signalées si besoin" }
       ];
     }
 
@@ -463,9 +425,9 @@
     const prestationId = qs("prestationId");
 
     let tokenDoc = null;
-    let eventDoc = null;
 
-    function setPrestaHeader(e){
+    function setPrestaHeaderFromToken(presta){
+      const e = presta || {};
       homeLine.textContent = e?.homeName || "Logement";
 
       const aDate = e?.arrivalDateKey || e?.dateKey || e?.date || "";
@@ -490,38 +452,11 @@
       }
     }
 
-    async function ensureMissionDoc(type){
+    async function loadMissionDoc(type){
       const ref = doc(db, "events", prestationId, "missions", type);
       const snap = await getDoc(ref);
-      if(snap.exists()) return { id:type, data: snap.data() || {} };
-
-      const tpl = compactChecklistTemplate(type);
-      const checklistObj = arrayToChecklistObject(tpl.map(x => ({ key:x.key, label:x.label, done:false })));
-
-      const payload = {
-        type,
-        missionId: type,
-        conciergerieUid: tokenDoc?.conciergerieUid || null,
-        prestationId: String(prestationId),
-
-        locked: false,
-        agentDone: false,
-        status: "ASSIGNEE",
-
-        dayToken: token,
-        assignedToEmail: tokenDoc?.agentEmail || null,
-        assignedToName: tokenDoc?.agentName || null,
-
-        checklist: checklistObj,
-        photos: [],
-
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      };
-
-      await setDoc(ref, payload, { merge:true });
-      const snap2 = await getDoc(ref);
-      return { id:type, data: snap2.exists() ? (snap2.data()||{}) : payload };
+      if(!snap.exists()) return null;
+      return { id:type, data: snap.data() || {} };
     }
 
     async function load(){
@@ -535,10 +470,19 @@
         return;
       }
 
-      photosBtn.href = `preuves.html?token=${encodeURIComponent(token)}&prestationId=${encodeURIComponent(prestationId)}`;
-
       whoAmI.textContent = "Agent (token)";
       chipToken.textContent = "token: " + token;
+
+      // Photos OFF (mode test)
+      if(PHOTOS_ENABLED){
+        photosBtn.classList.remove("disabled");
+        photosBtn.textContent = "📷 Photos";
+        photosBtn.href = `preuves.html?token=${encodeURIComponent(token)}&prestationId=${encodeURIComponent(prestationId)}`;
+      }else{
+        photosBtn.classList.add("disabled");
+        photosBtn.textContent = "📷 Photos (désactivé)";
+        photosBtn.href = "#";
+      }
 
       const tSnap = await getDoc(doc(db, "dayTokens", token));
       if(!tSnap.exists()){
@@ -570,51 +514,44 @@
       }
       chipStatus.innerHTML = `<span class="chip ok">OK</span>`;
 
-      // event doc (best effort)
-      try{
-        const eSnap = await getDoc(doc(db, "events", prestationId));
-        if(eSnap.exists()) eventDoc = eSnap.data() || {};
-      }catch{
-        eventDoc = null;
-      }
-
-      // ✅ IMPORTANT : fallback sur snapshot tokenDoc.presta si events bloqué
-      const headerSource = (eventDoc && Object.keys(eventDoc).length) ? eventDoc : (tokenDoc?.presta || {});
-      setPrestaHeader(headerSource);
-
+      // Header depuis dayTokens.safe snapshot
+      setPrestaHeaderFromToken(tokenDoc?.presta || {});
       agentLine.textContent = `Agent : ${(tokenDoc.agentName || "—")}${tokenDoc.agentEmail ? " • " + tokenDoc.agentEmail : ""}`;
 
-      const tokenTypes = Array.isArray(tokenDoc.missionTypes) && tokenDoc.missionTypes.length
+      // Missions : UNIQUEMENT celles du token (pas d'inférence events)
+      const TYPES = (Array.isArray(tokenDoc.missionTypes) && tokenDoc.missionTypes.length)
         ? tokenDoc.missionTypes.map(x => String(x||"").toUpperCase()).filter(Boolean)
-        : [];
-
-      const inferredTypes = inferMissionTypesFromEvent(eventDoc || tokenDoc?.presta || {});
-      const merged = [];
-      const seen = new Set();
-      for(const t of [...tokenTypes, ...inferredTypes]){
-        if(!t) continue;
-        if(seen.has(t)) continue;
-        seen.add(t);
-        merged.push(t);
-      }
-      const TYPES = merged.length ? merged : ["MENAGE"];
+        : ["MENAGE"];
 
       subLine.textContent = "";
 
+      // Charge missions (sans créer)
       const missions = [];
+      const missing = [];
       for(const t of TYPES){
         try{
-          missions.push(await ensureMissionDoc(t));
+          const m = await loadMissionDoc(t);
+          if(m) missions.push(m);
+          else missing.push(t);
         }catch(e){
-          console.error("ensureMissionDoc", t, e);
+          console.error("loadMissionDoc", t, e);
+          missing.push(t);
         }
+      }
+
+      if(missing.length){
+        showAlert(
+          "⚠️ Missions manquantes côté Firestore : " + missing.join(", ") + "\n" +
+          "=> Ça veut dire que la conciergerie n'a pas (ou plus) créé ces docs.\n" +
+          "Retourne dans intervention.html → Générer lien (ça doit créer events/{prestationId}/missions/{TYPE} avec dayToken)."
+        );
       }
 
       if(!missions.length){
         missionsWrap.innerHTML = `
           <div class="mcard">
-            <div class="mtitle">Aucune mission</div>
-            <div class="msub">Les missions ne sont pas disponibles (docs absents ou accès bloqué).</div>
+            <div class="mtitle">Aucune mission disponible</div>
+            <div class="msub">Soit les docs missions n'existent pas, soit l'accès est bloqué.</div>
           </div>`;
         return;
       }
@@ -626,6 +563,7 @@
         const done = !!d.agentDone;
         const status = (d.status || "").toUpperCase() || "—";
 
+        // checklist: on lit la ressource; si vide, on affiche template MAIS sans write
         const tpl = compactChecklistTemplate(m.id);
         const savedItems = checklistToArray(extractChecklistRaw(d));
         const doneByKey = {};
@@ -638,20 +576,18 @@
           done: !!doneByKey[String(x.key)]
         }));
 
-        const checklistHtml = items.length
-          ? items.map((it, idx)=>{
-              const id = `chk_${m.id}_${idx}`;
-              return `
-                <div class="chk">
-                  <input type="checkbox" id="${id}" data-k="${esc(it.key)}" ${it.done ? "checked" : ""} ${locked ? "disabled" : ""} />
-                  <div>
-                    <label for="${id}">${esc(it.label)}</label>
-                    <div class="hint">${it.done ? "fait" : "à faire"}</div>
-                  </div>
-                </div>
-              `;
-            }).join("")
-          : `<div class="mini">Checklist vide.</div>`;
+        const checklistHtml = items.map((it, idx)=>{
+          const id = `chk_${m.id}_${idx}`;
+          return `
+            <div class="chk">
+              <input type="checkbox" id="${id}" data-k="${esc(it.key)}" ${it.done ? "checked" : ""} ${locked ? "disabled" : ""} />
+              <div>
+                <label for="${id}">${esc(it.label)}</label>
+                <div class="hint">${it.done ? "fait" : "à faire"}</div>
+              </div>
+            </div>
+          `;
+        }).join("");
 
         const wrap = document.createElement("div");
         wrap.className = "mcard" + (done ? " done" : "") + (locked ? " locked" : "");
@@ -696,25 +632,22 @@
           const commentEl = wrap.querySelector(`textarea[data-comment="${type}"]`);
           const comment = (commentEl?.value || "").trim();
 
+          // IMPORTANT: updateDoc uniquement sur champs autorisés par tes rules missions.update
           const payload = {
             checklist: arrayToChecklistObject(newItems),
             agentComment: comment,
-            status: markDone ? "A_VALIDER" : (d.status || "EN_COURS"),
+            status: markDone ? "A_VALIDER" : (String(d.status || "EN_COURS").toUpperCase()),
             agentDone: markDone ? true : (!!d.agentDone),
             locked: markDone ? true : (!!d.locked),
-            updatedAt: serverTimestamp()
+            updatedAt: Timestamp.now()
           };
 
+          if(markDone){
+            payload.agentDoneAt = Timestamp.now();
+          }
+
           try{
-            await setDoc(doc(db, "events", prestationId, "missions", type), payload, { merge:true });
-
-            try{
-              await setDoc(doc(db, "events", prestationId), {
-                opStatus: markDone ? "A_VALIDER" : "EN_COURS",
-                updatedAt: serverTimestamp()
-              }, { merge:true });
-            }catch(e){}
-
+            await updateDoc(doc(db, "events", prestationId, "missions", type), payload);
             showAlert(markDone ? "✅ Mission terminée (À VALIDER) + verrouillée." : "✅ Enregistré.", true);
             await load();
           }catch(err){
