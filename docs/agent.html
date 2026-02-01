@@ -1,4 +1,4 @@
-<!-- docs/agent.html -->
+<!-- docs/agent.html (CHECKLIST ONLY — Enregistrer / Terminer) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -148,19 +148,6 @@
       border-left:5px solid rgba(122,92,255,0.55);
       background:linear-gradient(180deg,#ffffff 0%, rgba(122,92,255,0.06) 100%);
     }
-
-    details{
-      background:#fff;
-      border:1px solid rgba(122,92,255,0.18);
-      border-radius:14px;
-      padding:10px;
-      box-shadow:0 3px 10px rgba(0,0,0,.06);
-    }
-    details summary{ cursor:pointer; font-weight:900; color:#333; }
-    .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size:11px; }
-    .kv2{ display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; margin-top:6px; }
-    .kv2 .k{ font-weight:900; color:#555; }
-    .kv2 .v{ font-weight:800; color:#222; }
   </style>
 </head>
 
@@ -219,13 +206,8 @@
         <div class="missions" id="missionsWrap"></div>
       </section>
 
-      <details id="debugBox" style="display:none;">
-        <summary>Debug accès (si ça refuse)</summary>
-        <div class="mono" id="debugText" style="margin-top:8px;"></div>
-      </details>
-
       <div class="mini">
-        Mode test : photos désactivées. Valide checklist → enregistrer → terminer.
+        Photos désactivées. Checklist → Enregistrer → Terminer.
       </div>
     </div>
   </div>
@@ -235,7 +217,7 @@
     import { doc, getDoc, updateDoc, Timestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     // =========================
-    // MODE TEST : photos OFF
+    // PHOTOS OFF (on s'en occupe plus tard)
     // =========================
     const PHOTOS_ENABLED = false;
 
@@ -259,9 +241,6 @@
     const whoAmI = document.getElementById("whoAmI");
     const photosBtn = document.getElementById("photosBtn");
 
-    const debugBox = document.getElementById("debugBox");
-    const debugText = document.getElementById("debugText");
-
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
       alertBox.classList.toggle("ok", !!ok);
@@ -272,16 +251,9 @@
       alertBox.classList.remove("ok");
       alertBox.textContent = "";
     }
-    function showDebug(lines){
-      debugBox.style.display = "block";
-      debugText.textContent = (Array.isArray(lines) ? lines : [String(lines||"")]).join("\n");
-    }
-    function hideDebug(){
-      debugBox.style.display = "none";
-      debugText.textContent = "";
-    }
 
     function qs(name){ return new URLSearchParams(location.search).get(name) || ""; }
+
     function esc(str){
       return String(str ?? "")
         .replaceAll("&","&amp;")
@@ -330,7 +302,7 @@
       return false;
     }
 
-    // Checklist compacte (affichage). Le reset est fait côté intervention.html.
+    // Checklist template (affichage only ; aucune création de doc)
     function compactChecklistTemplate(type){
       const t = (type||"").toUpperCase();
 
@@ -466,8 +438,7 @@
 
       const addr = (e?.homeAddress || e?.address || "").trim();
       const zip  = (e?.homeZip || e?.zip || "").trim();
-      const city = (e?.homeCity || e?.city || "").trim();
-      addrLine.textContent = [addr, zip, city].filter(Boolean).join(" ").trim() || "—";
+      addrLine.textContent = [addr, zip].filter(Boolean).join(" ").trim() || "—";
 
       const note = (e?.meta || "").trim();
       if(note){
@@ -486,15 +457,8 @@
       return { id:type, data: snap.data() || {} };
     }
 
-    function normalizeTypes(arr){
-      return (Array.isArray(arr) ? arr : [])
-        .map(x => String(x||"").toUpperCase().trim())
-        .filter(Boolean);
-    }
-
     async function load(){
       hideAlert();
-      hideDebug();
       missionsWrap.innerHTML = "";
       subLine.textContent = "Chargement…";
 
@@ -507,7 +471,7 @@
       whoAmI.textContent = "Agent (token)";
       chipToken.textContent = "token: " + token;
 
-      // Photos OFF (mode test)
+      // Photos OFF
       if(PHOTOS_ENABLED){
         photosBtn.classList.remove("disabled");
         photosBtn.textContent = "📷 Photos";
@@ -518,7 +482,6 @@
         photosBtn.href = "#";
       }
 
-      // token
       const tSnap = await getDoc(doc(db, "dayTokens", token));
       if(!tSnap.exists()){
         showAlert("⛔ Token invalide.");
@@ -549,52 +512,35 @@
       }
       chipStatus.innerHTML = `<span class="chip ok">OK</span>`;
 
-      // header (snapshot safe depuis token)
+      // Header depuis dayTokens snapshot
       setPrestaHeaderFromToken(tokenDoc?.presta || {});
       agentLine.textContent = `Agent : ${(tokenDoc.agentName || "—")}${tokenDoc.agentEmail ? " • " + tokenDoc.agentEmail : ""}`;
 
-      const TYPES = normalizeTypes(tokenDoc.missionTypes);
-      const typesFinal = TYPES.length ? TYPES : ["MENAGE"];
+      // Missions : uniquement celles du token
+      const TYPES = (Array.isArray(tokenDoc.missionTypes) && tokenDoc.missionTypes.length)
+        ? tokenDoc.missionTypes.map(x => String(x||"").toUpperCase()).filter(Boolean)
+        : ["MENAGE"];
 
       subLine.textContent = "";
 
-      // charge missions (sans créer)
       const missions = [];
       const missing = [];
-      const dayTokenMismatches = [];
-
-      for(const t of typesFinal){
+      for(const t of TYPES){
         try{
           const m = await loadMissionDoc(t);
-          if(!m){
-            missing.push(t);
-            continue;
-          }
-          missions.push(m);
-
-          const missionDayToken = String(m.data?.dayToken || "");
-          if(missionDayToken !== String(token)){
-            dayTokenMismatches.push(`${t} (mission.dayToken=${missionDayToken || "∅"})`);
-          }
+          if(m) missions.push(m);
+          else missing.push(t);
         }catch(e){
           console.error("loadMissionDoc", t, e);
           missing.push(t);
         }
       }
 
-      if(missing.length || dayTokenMismatches.length){
-        const lines = [];
-        if(missing.length){
-          lines.push("Missions manquantes (docs absents) : " + missing.join(", "));
-        }
-        if(dayTokenMismatches.length){
-          lines.push("Mismatch dayToken (cause N°1 du permission-denied) :");
-          for(const x of dayTokenMismatches) lines.push(" - " + x);
-          lines.push("");
-          lines.push("Fix: intervention.html → Générer lien (Option A) => reset missions + dayToken = nouveau token.");
-        }
-        showAlert("⚠️ Problème de synchronisation token/missions.\nOuvre Debug pour détails.");
-        showDebug(lines);
+      if(missing.length){
+        showAlert(
+          "⚠️ Missions manquantes côté Firestore : " + missing.join(", ") + "\n" +
+          "=> Retourne dans intervention.html → Générer lien (ça doit créer events/{prestationId}/missions/{TYPE} avec dayToken)."
+        );
       }
 
       if(!missions.length){
@@ -609,12 +555,11 @@
       missionsWrap.innerHTML = "";
       for(const m of missions){
         const d = m.data || {};
-
         const locked = !!d.locked;
         const done = !!d.agentDone;
         const status = (d.status || "").toUpperCase() || "—";
 
-        // checklist: si vide on affiche template, mais l'état vient du doc
+        // checklist: template + merge états existants
         const tpl = compactChecklistTemplate(m.id);
         const savedItems = checklistToArray(extractChecklistRaw(d));
         const doneByKey = {};
@@ -647,9 +592,6 @@
             <div>
               <div class="mtitle">${missionTitle(d.missionId || d.type || m.id)} ${locked ? "• verrouillée" : ""}</div>
               <div class="msub">Status : ${esc(status)} ${done ? "\n✔ Terminée" : ""}</div>
-              <div class="mini mono" style="margin-top:6px;">
-                mission.dayToken: ${esc(String(d.dayToken || "∅"))}
-              </div>
             </div>
             <div>${chipFor(status)}</div>
           </div>
@@ -672,14 +614,6 @@
 
         async function saveMission(markDone=false){
           hideAlert();
-
-          // blocage UX si mismatch dayToken (sinon ça spam permission-denied)
-          const missionDayToken = String(d.dayToken || "");
-          if(missionDayToken !== String(token)){
-            showAlert("⛔ Impossible d’enregistrer : mission.dayToken ≠ token.\nRetour intervention → Générer lien (Option A).");
-            return;
-          }
-
           const type = m.id;
 
           const box = wrap.querySelector(`.checklist[data-m="${type}"]`);
@@ -694,17 +628,15 @@
           const commentEl = wrap.querySelector(`textarea[data-comment="${type}"]`);
           const comment = (commentEl?.value || "").trim();
 
-          // IMPORTANT: updateDoc uniquement sur champs autorisés par tes rules missions.update
-          // Et surtout: PAS DE dayToken dans l'update, sinon changedKeys contient dayToken => refus
+          // CHECKLIST ONLY : pas de photos, pas de trucs bizarres
           const payload = {
             checklist: arrayToChecklistObject(newItems),
             agentComment: comment,
-            status: markDone ? "A_VALIDER" : (String(d.status || "EN_COURS").toUpperCase()),
-            agentDone: markDone ? true : (!!d.agentDone),
-            locked: markDone ? true : (!!d.locked),
+            status: markDone ? "A_VALIDER" : "EN_COURS",
+            agentDone: markDone ? true : false,
+            locked: markDone ? true : false,
             updatedAt: Timestamp.now()
           };
-
           if(markDone){
             payload.agentDoneAt = Timestamp.now();
           }
