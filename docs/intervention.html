@@ -68,7 +68,6 @@
     .alert.ok{ border-left-color:var(--ok); }
     .mini{ font-size:11px; font-weight:900; color:var(--muted); }
 
-    /* bloc "prestation" compact */
     .prestaHead{
       display:flex; flex-direction:column; gap:6px;
       background:#fff;
@@ -94,7 +93,6 @@
     .kv .k{ font-weight:900; }
     .kv .v{ font-weight:800; color:#333; text-align:right; }
 
-    /* lignes / total (tu gardes le reste) */
     .linesBox{
       background:#fff;
       border-radius:16px;
@@ -160,7 +158,6 @@
       <section class="card">
         <div class="mini">Prestation</div>
 
-        <!-- ✅ En-tête demandé (logement + arrivée/départ + adresse+cp + propriétaire+tel) -->
         <div class="prestaHead">
           <div class="prestaTitle" id="homeLine">—</div>
 
@@ -187,7 +184,6 @@
           <div class="prestaMeta" id="noteLine" style="display:none;"></div>
         </div>
 
-        <!-- ✅ LIGNES + TOTAL (conservés) -->
         <div class="mini">Lignes</div>
         <div class="linesBox" id="linesBox"></div>
 
@@ -196,7 +192,6 @@
           <div id="totalValue">0,00 €</div>
         </div>
 
-        <!-- ✅ Missions : cachées (technique) -->
         <div id="missionsDebugWrap" style="display:none;">
           <div class="mini" style="margin-top:8px;">Missions (debug)</div>
           <div id="missionsList" style="display:flex;flex-direction:column;gap:6px;"></div>
@@ -222,7 +217,7 @@
         <textarea id="linkBox" rows="4" style="margin-top:8px;" readonly placeholder="Le lien apparaîtra ici…"></textarea>
 
         <div class="mini" style="margin-top:10px;">
-          Token 24h. 
+          Token 24h.
         </div>
       </aside>
     </div>
@@ -231,7 +226,9 @@
   <script type="module">
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-    import { doc, getDoc, setDoc, serverTimestamp, Timestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import {
+      doc, getDoc, setDoc, updateDoc, serverTimestamp, Timestamp
+    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const alertBox = document.getElementById("alertBox");
     const subLine = document.getElementById("subLine");
@@ -256,6 +253,48 @@
     const mailtoBtn = document.getElementById("mailtoBtn");
     const linkBox = document.getElementById("linkBox");
     const logoutBtn = document.getElementById("logoutBtn");
+
+    // ======================
+    // ✅ DEFAULT CHECKLISTS
+    // ======================
+    // Ajuste librement ici. Format attendu par agent.html :
+    // checklist: { key: {label:"...", done:false}, ... }
+    const DEFAULT_CHECKLISTS = {
+      MENAGE: {
+        sols:      { label:"Sols aspirés + lavés", done:false },
+        sdb:       { label:"Salle de bain nettoyée", done:false },
+        cuisine:   { label:"Cuisine nettoyée", done:false },
+        poussiere: { label:"Poussière faite", done:false },
+        poubelles: { label:"Poubelles sorties", done:false }
+      },
+      CHECKIN: {
+        clefs:     { label:"Clés remises / boîte à clés OK", done:false },
+        accueil:   { label:"Accueil / consignes transmises", done:false },
+        etat:      { label:"État des lieux d’entrée OK", done:false }
+      },
+      CHECKOUT: {
+        clefs:     { label:"Clés récupérées", done:false },
+        etat:      { label:"État des lieux de sortie OK", done:false },
+        signaler:  { label:"Dégradations signalées si besoin", done:false }
+      },
+      LINGE: {
+        collecte:  { label:"Linge collecté", done:false },
+        lavage:    { label:"Linge lavé / séché", done:false },
+        remise:    { label:"Linge remis en place", done:false }
+      },
+      MAINTENANCE: {
+        diag:      { label:"Diagnostic fait", done:false },
+        action:    { label:"Action effectuée", done:false },
+        test:      { label:"Test / contrôle OK", done:false }
+      },
+      KITS: {
+        check:     { label:"Stock vérifié", done:false },
+        pose:      { label:"Kit installé", done:false },
+        note:      { label:"Consommables notés si manque", done:false }
+      }
+    };
+
+    const MISSION_TYPES = ["MENAGE","CHECKIN","CHECKOUT","LINGE","MAINTENANCE","KITS"];
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -346,30 +385,24 @@
       const e = eSnap.data() || {};
       currentEvent = { id: eSnap.id, ...e };
 
-      // ✅ logement
       homeLine.textContent = e.homeName || "Logement";
 
-      // ✅ arrivée
       const aDate = e.arrivalDateKey || e.dateKey || e.date || "";
       const aTime = e.arrivalTime || e.time || "";
       arrLine.textContent = (aDate ? aDate : "—") + (aTime ? " • " + aTime : "");
 
-      // ✅ départ
       const dDate = e.departureDateKey || "";
       const dTime = e.departureTime || "";
       depLine.textContent = (dDate ? dDate : "—") + (dTime ? " • " + dTime : "");
 
-      // ✅ adresse + CP
       const addr = (e.homeAddress || e.address || "").trim();
       const zip  = (e.homeZip || e.zip || "").trim();
       addrLine.textContent = [addr, zip].filter(Boolean).join(" ").trim() || "—";
 
-      // ✅ propriétaire + tel
       const owner = (e.ownerName || "").trim();
       const phone = (e.ownerPhone || e.phone || "").trim();
       ownerLine.textContent = [owner, phone].filter(Boolean).join(" • ") || "—";
 
-      // note (si tu veux l’afficher quand présent)
       const note = (e.meta || "").trim();
       if(note){
         noteLine.style.display = "block";
@@ -379,39 +412,79 @@
         noteLine.textContent = "";
       }
 
-      // ✅ lignes + total
       const lines = Array.isArray(e.lines) ? e.lines : [];
       const total = (e.total != null) ? Number(e.total) : computeTotalFromLines(lines);
       renderLines(lines);
       totalValue.textContent = money(total);
 
-      // ✅ missions : on les charge mais on ne les montre pas
       missionsList.innerHTML = "";
-      const TYPES = ["MENAGE","CHECKIN","CHECKOUT","LINGE","MAINTENANCE","KITS"];
-      for(const t of TYPES){
+      for(const t of MISSION_TYPES){
         try{
           const mSnap = await getDoc(doc(db,"events",prestationId,"missions",t));
           if(mSnap.exists()){
             const d = mSnap.data() || {};
             const div = document.createElement("div");
             div.className = "mini";
-            div.textContent = `• ${t} — locked:${String(!!d.locked)} — status:${String(d.status||"—")}`;
+            div.textContent = `• ${t} — checklist:${d.checklist ? "oui" : "non"} — locked:${String(!!d.locked)} — status:${String(d.status||"—")}`;
             missionsList.appendChild(div);
           }
         }catch(_){}
       }
-      // laisse caché (tu peux passer en true pour debug)
       missionsDebugWrap.style.display = "none";
 
-      // ✅ agent fields
       agentName.value = e.assignedToName || "";
       agentEmail.value = e.assignedToEmail || "";
 
-      // boutons lien
       copyBtn.disabled = !linkBox.value;
       mailtoBtn.disabled = !linkBox.value;
 
       subLine.textContent = "";
+    }
+
+    // ==========================================
+    // ✅ ensureMission: crée + ajoute checklist
+    // sans écraser si déjà existante
+    // ==========================================
+    async function ensureMissionDoc(type, tokenId, email, name){
+      const mRef = doc(db, "events", prestationId, "missions", type);
+      const snap = await getDoc(mRef);
+
+      const basePayload = {
+        type,
+        conciergerieUid: currentUser.uid,
+        prestationId: String(prestationId),
+
+        locked: false,
+        agentDone: false,
+        photos: [],
+        status: "ASSIGNEE",
+
+        dayToken: tokenId,
+        assignedToEmail: email,
+        assignedToName: name,
+        updatedAt: serverTimestamp()
+      };
+
+      if(!snap.exists()){
+        // doc inexistant -> on le crée AVEC checklist
+        await setDoc(mRef, {
+          ...basePayload,
+          checklist: DEFAULT_CHECKLISTS[type] || {}
+        }, { merge: true });
+        return;
+      }
+
+      // doc existe -> on n’écrase PAS la checklist si elle existe
+      const cur = snap.data() || {};
+      if(!cur.checklist){
+        await updateDoc(mRef, {
+          checklist: DEFAULT_CHECKLISTS[type] || {},
+          updatedAt: serverTimestamp()
+        });
+      }
+
+      // on met quand même à jour les infos agent/token (sans toucher checklist)
+      await setDoc(mRef, basePayload, { merge: true });
     }
 
     async function generateLink(){
@@ -434,30 +507,16 @@
         prestationId: String(prestationId),
         agentEmail: email,
         agentName: name,
-        missionTypes: ["MENAGE","CHECKIN","CHECKOUT","LINGE","MAINTENANCE","KITS"],
+        missionTypes: [...MISSION_TYPES],
         active:true,
         expiresAt,
         expiresAtMs,
         createdAt: serverTimestamp()
       });
 
-      // backfill missions
-      for (const t of ["MENAGE","CHECKIN","CHECKOUT","LINGE","MAINTENANCE","KITS"]) {
-        await setDoc(doc(db, "events", prestationId, "missions", t), {
-          type: t,
-          conciergerieUid: currentUser.uid,
-          prestationId: String(prestationId),
-
-          locked: false,
-          agentDone: false,
-          photos: [],
-          status: "ASSIGNEE",
-
-          dayToken: tokenId,
-          assignedToEmail: email,
-          assignedToName: name,
-          updatedAt: serverTimestamp()
-        }, { merge: true });
+      // ✅ backfill missions + checklist si absente
+      for (const t of MISSION_TYPES) {
+        await ensureMissionDoc(t, tokenId, email, name);
       }
 
       await setDoc(doc(db,"events",prestationId),{
@@ -476,7 +535,7 @@
       copyBtn.disabled = false;
       mailtoBtn.disabled = false;
 
-      showAlert("Lien agent généré.", true);
+      showAlert("Lien agent généré (checklists injectées).", true);
       await load();
     }
 
@@ -538,4 +597,3 @@
   </script>
 </body>
 </html>
-
