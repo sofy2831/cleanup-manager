@@ -551,6 +551,10 @@
     alertBox.classList.remove("ok");
     alertBox.textContent = "";
   }
+  function toast(msg){
+    showAlert(msg, true);
+    setTimeout(()=>{ hideAlert(); }, 2200);
+  }
 
   function esc(s){
     return String(s ?? "")
@@ -682,13 +686,11 @@
       );
       const snap = await getDocs(qb);
       docs = snap.docs.map(d=>({ id:d.id, ...(d.data()||{}) }));
-        }catch(err){
+    }catch(err){
       console.error("Erreur lecture icalEvents:", err);
       showAlert("Erreur Firestore (icalEvents) : " + (err?.message || "inconnue"));
-      // IMPORTANT: on ne bloque pas le planning, on continue sans réservations
       docs = [];
     }
-
 
     const start = parseDateKey(startKey);
     const end = parseDateKey(endKey);
@@ -824,17 +826,27 @@
     focusIfNeeded();
   }
 
+  function goEventOpen(eventId){
+    location.href = `prestations.html?open=${encodeURIComponent(eventId)}`;
+  }
+  function goQuote(eventId){
+    location.href = `devis.html?eventId=${encodeURIComponent(eventId)}`;
+  }
+  function goInvoice(eventId){
+    location.href = `facture.html?eventId=${encodeURIComponent(eventId)}`;
+  }
+
   async function validateEvent(ev){
     if(!ev?.id) return;
     hideAlert();
     try{
       await updateDoc(doc(db,"events", ev.id), {
-      
         opStatus: "REALISEE",
         statusUpdatedAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       });
-      location.href = `prestations.html?open=${encodeURIComponent(ev.id)}`;
+      toast("✅ Réalisée");
+      await loadAllForMonth();
     }catch(err){
       console.error(err);
       showAlert("Erreur validation : " + (err?.message || "inconnue"));
@@ -1020,6 +1032,18 @@
             <span class="ico">✅</span><span class="txt">Valider</span>
           </button>
 
+          <button class="mini ghost" type="button" data-open="${esc(ev.id)}" title="Ouvrir">
+            <span class="ico">🛈</span><span class="txt">Ouvrir</span>
+          </button>
+
+          <button class="mini ghost" type="button" data-quote="${esc(ev.id)}" title="Devis">
+            <span class="ico">🧾</span><span class="txt">Devis</span>
+          </button>
+
+          <button class="mini ghost" type="button" data-invoice="${esc(ev.id)}" title="Facture">
+            <span class="ico">🧾</span><span class="txt">Facture</span>
+          </button>
+
           <button class="mini ghost" type="button" data-open-photos="${esc(ev.id)}" title="Photos">
             <span class="ico">📷</span><span class="txt">Photos</span>
           </button>
@@ -1034,6 +1058,21 @@
       div.querySelector(`[data-validate="${CSS.escape(ev.id)}"]`)?.addEventListener("click", (e)=>{
         e.stopPropagation();
         validateEvent(ev);
+      });
+
+      div.querySelector(`[data-open="${CSS.escape(ev.id)}"]`)?.addEventListener("click", (e)=>{
+        e.stopPropagation();
+        goEventOpen(ev.id);
+      });
+
+      div.querySelector(`[data-quote="${CSS.escape(ev.id)}"]`)?.addEventListener("click", (e)=>{
+        e.stopPropagation();
+        goQuote(ev.id);
+      });
+
+      div.querySelector(`[data-invoice="${CSS.escape(ev.id)}"]`)?.addEventListener("click", (e)=>{
+        e.stopPropagation();
+        goInvoice(ev.id);
       });
 
       div.querySelector(`[data-open-photos="${CSS.escape(ev.id)}"]`)?.addEventListener("click", (e)=>{
@@ -1088,7 +1127,6 @@
 
       const perHome = new Map(); // homeId -> cls
 
-      // ✅ MODIF #1 : ranking aligné sur les classes DOT réelles (validate/done/cancel/ical/manual/"")
       function setIfHigher(homeId, cls){
         if(!homeId) return;
         const rank = (x)=>{
@@ -1103,7 +1141,6 @@
         if(!prev || rank(cls) > rank(prev)) perHome.set(homeId, cls);
       }
 
-      // ✅ MODIF #2 : classes DOT corrigées (blue/ok/bad -> validate/done/cancel)
       for(const ev of presta){
         const st = normalizeOpStatus(ev.opStatus);
         if(st === "A_VALIDER") setIfHigher(ev.homeId, "validate");
@@ -1333,10 +1370,22 @@
             <span class="ico">📷</span><span class="txt">Photos</span>
           </button>
 
+          <button class="mini ghost" type="button" data-open="${esc(ev.id)}" title="Ouvrir">
+            <span class="ico">🛈</span><span class="txt">Ouvrir</span>
+          </button>
+
+          <button class="mini ghost" type="button" data-quote="${esc(ev.id)}" title="Devis">
+            <span class="ico">🧾</span><span class="txt">Devis</span>
+          </button>
+
+          <button class="mini ghost" type="button" data-invoice="${esc(ev.id)}" title="Facture">
+            <span class="ico">🧾</span><span class="txt">Facture</span>
+          </button>
+
           ${
             st === "A_VALIDER"
               ? `<button class="mini" type="button" data-validate="${esc(ev.id)}" title="Valider"><span class="ico">✅</span><span class="txt">Valider</span></button>`
-              : `<button class="mini ghost" type="button" data-open-presta="${esc(ev.id)}" title="Ouvrir prestation"><span class="ico">🛈</span><span class="txt">Ouvrir</span></button>`
+              : ``
           }
         </div>
       `;
@@ -1347,14 +1396,24 @@
         openProofsAdmin(ev.id);
       });
 
+      div.querySelector(`[data-open="${CSS.escape(ev.id)}"]`)?.addEventListener("click", (e)=>{
+        e.stopPropagation();
+        goEventOpen(ev.id);
+      });
+
+      div.querySelector(`[data-quote="${CSS.escape(ev.id)}"]`)?.addEventListener("click", (e)=>{
+        e.stopPropagation();
+        goQuote(ev.id);
+      });
+
+      div.querySelector(`[data-invoice="${CSS.escape(ev.id)}"]`)?.addEventListener("click", (e)=>{
+        e.stopPropagation();
+        goInvoice(ev.id);
+      });
+
       div.querySelector(`[data-validate="${CSS.escape(ev.id)}"]`)?.addEventListener("click", (e)=>{
         e.stopPropagation();
         validateEvent(ev);
-      });
-
-      div.querySelector(`[data-open-presta="${CSS.escape(ev.id)}"]`)?.addEventListener("click", (e)=>{
-        e.stopPropagation();
-        location.href = `prestations.html?open=${encodeURIComponent(ev.id)}`;
       });
     }
   }
