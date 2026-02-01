@@ -68,7 +68,12 @@
     .chip.ok{ background:rgba(27,143,77,0.16); color:var(--ok); }
     .chip.bad{ background:rgba(179,38,30,0.14); color:var(--bad); }
 
-    /* Photos (simple) */
+    .select{
+      padding:10px 12px; border-radius:12px; border:1px solid #D3C7FF; background:#fff;
+      font-size:13px; font-weight:900; outline:none; min-width:200px;
+    }
+
+    /* Photos */
     .ph-grid{
       display:grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -85,15 +90,25 @@
       box-shadow:0 3px 10px rgba(0,0,0,.06);
       background:#fafafa;
     }
-    .ph img{ width:100%; height:140px; object-fit:cover; display:block; }
+    .ph img{ width:100%; height:150px; object-fit:cover; display:block; }
     .ph .cap{
       position:absolute; left:8px; bottom:8px;
       background:rgba(255,255,255,0.92);
       padding:4px 8px; border-radius:999px;
       font-size:11px; font-weight:900; color:#444;
       box-shadow:0 2px 8px rgba(0,0,0,.10);
-      max-width:90%;
+      max-width:88%;
       overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+    }
+    .ph .del{
+      position:absolute; top:8px; right:8px;
+      border:none; border-radius:999px;
+      padding:6px 8px;
+      font-weight:900;
+      cursor:pointer;
+      background:rgba(255,255,255,0.95);
+      color:var(--bad);
+      box-shadow:0 2px 10px rgba(0,0,0,.12);
     }
 
     input[type="file"]{
@@ -151,9 +166,16 @@
         </div>
       </section>
 
-      <!-- Upload -->
       <section class="card">
-        <div class="mini">Ajouter des photos (max 20)</div>
+        <div class="row" style="align-items:flex-end;">
+          <div>
+            <div class="mini">Mission</div>
+            <select class="select" id="missionSel"></select>
+          </div>
+          <div class="mini" id="countLine">0</div>
+        </div>
+
+        <div class="mini">Ajouter des photos (max 20 par mission)</div>
 
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:space-between;margin-top:8px;">
           <input id="fileInput" type="file" accept="image/*" multiple />
@@ -168,30 +190,28 @@
         <div class="ph-grid" id="previewGrid" style="margin-top:8px; display:none;"></div>
       </section>
 
-      <!-- Gallery -->
       <section class="card">
         <div class="row">
           <div>
             <div style="font-weight:900;">Photos envoyées</div>
-            <div class="mini">Affichage simple (sans suppression côté agent)</div>
+            <div class="mini">Suppression autorisée côté agent (token)</div>
           </div>
-          <div class="mini" id="countLine">0/20</div>
         </div>
 
         <div class="ph-grid" id="photosGrid"></div>
       </section>
 
       <div class="mini">
-        Si ça bug encore : le problème n’est pas dans agent.html, mais dans tes rules Firestore / Storage.
-        Ici on isole les photos dans un seul doc: <b>events/{prestationId}</b> (champ <b>proofPhotos</b>).
+        Stockage = <b>events/{prestationId}/missions/{TYPE}.photos</b> (objets avec url+path).<br>
+        Si ça casse : on regarde rules Firestore/Storage.
       </div>
     </div>
   </div>
 
   <script type="module">
     import { storage, db } from "./firebase-init.js";
-    import { doc, getDoc, updateDoc, Timestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
-    import { ref as sRef, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js";
+    import { doc, getDoc, setDoc, updateDoc, Timestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import { ref as sRef, uploadBytes, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js";
 
     const MAX_PHOTOS = 20;
     const JPEG_QUALITY = 0.75;
@@ -209,6 +229,9 @@
     const refreshBtn = document.getElementById("refreshBtn");
     const backBtn = document.getElementById("backBtn");
 
+    const missionSel = document.getElementById("missionSel");
+    const countLine = document.getElementById("countLine");
+
     const fileInput = document.getElementById("fileInput");
     const clearBtn = document.getElementById("clearBtn");
     const uploadBtn = document.getElementById("uploadBtn");
@@ -216,7 +239,6 @@
 
     const previewGrid = document.getElementById("previewGrid");
     const photosGrid = document.getElementById("photosGrid");
-    const countLine = document.getElementById("countLine");
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -229,7 +251,6 @@
       alertBox.textContent = "";
     }
     function qs(name){ return new URLSearchParams(location.search).get(name) || ""; }
-
     function esc(str){
       return String(str ?? "")
         .replaceAll("&","&amp;")
@@ -247,30 +268,32 @@
       return `${pad2(d.getDate())}/${pad2(d.getMonth()+1)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
     }
 
-    // ===== JPEG compression (identique à agent.html) =====
+    function missionLabel(t){
+      const x = String(t||"").toUpperCase();
+      if(x==="CHECKIN") return "Check-in";
+      if(x==="MENAGE") return "Ménage";
+      if(x==="CHECKOUT") return "Check-out";
+      if(x==="LINGE") return "Linge";
+      if(x==="MAINTENANCE") return "Maintenance";
+      if(x==="KITS") return "Kits & conso";
+      return x || "Mission";
+    }
+
+    // ===== JPEG compression =====
     async function fileToImageBitmap(file){
       try{
-        if("createImageBitmap" in window){
-          return await createImageBitmap(file);
-        }
+        if("createImageBitmap" in window) return await createImageBitmap(file);
       }catch(e){}
-
       const url = URL.createObjectURL(file);
       try{
         const img = new Image();
         img.decoding = "async";
         img.src = url;
-        await new Promise((res, rej)=>{
-          img.onload = ()=>res();
-          img.onerror = (e)=>rej(e);
-        });
-
+        await new Promise((res, rej)=>{ img.onload=res; img.onerror=rej; });
         const c = document.createElement("canvas");
         c.width = img.naturalWidth || img.width;
         c.height = img.naturalHeight || img.height;
-        const ctx = c.getContext("2d");
-        ctx.drawImage(img, 0, 0);
-
+        c.getContext("2d").drawImage(img,0,0);
         const dataUrl = c.toDataURL("image/jpeg", 0.92);
         const blob = await (await fetch(dataUrl)).blob();
         return await createImageBitmap(blob);
@@ -278,110 +301,255 @@
         URL.revokeObjectURL(url);
       }
     }
-
     function computeResize(w,h,maxDim){
       const maxSide = Math.max(w,h);
       if(maxSide <= maxDim) return { w, h };
       const ratio = maxDim / maxSide;
       return { w: Math.round(w*ratio), h: Math.round(h*ratio) };
     }
-
     async function compressToJpegBlob(file){
       const bmp = await fileToImageBitmap(file);
       const { w, h } = computeResize(bmp.width, bmp.height, MAX_DIM);
-
       const canvas = document.createElement("canvas");
-      canvas.width = w;
-      canvas.height = h;
-
+      canvas.width = w; canvas.height = h;
       const ctx = canvas.getContext("2d", { alpha:false });
       ctx.drawImage(bmp, 0, 0, w, h);
-
-      const blob = await new Promise((resolve, reject)=>{
-        canvas.toBlob((b)=>{
-          if(!b) return reject(new Error("Compression canvas.toBlob() a échoué."));
-          resolve(b);
-        }, "image/jpeg", JPEG_QUALITY);
+      return await new Promise((resolve, reject)=>{
+        canvas.toBlob((b)=> b ? resolve(b) : reject(new Error("Compression canvas.toBlob() a échoué.")), "image/jpeg", JPEG_QUALITY);
       });
-
-      return blob;
     }
-
     function safeFileName(name){
       return (name || "photo.jpg").replace(/[^\w.\-]+/g, "_");
     }
-
-    function mergeUniqueMax(arr, add, max){
-      const out = Array.isArray(arr) ? arr.filter(Boolean) : [];
-      if(add && !out.includes(add)) out.push(add);
-      return out.slice(0, max);
+    function ensureJpg(name){
+      const n = String(name||"photo.jpg").replace(/\.(heic|heif)$/i, ".jpg");
+      return (/\.(jpg|jpeg)$/i.test(n)) ? n : (n + ".jpg");
     }
 
     const token = qs("token");
     const prestationId = qs("prestationId");
 
     let tokenDoc = null;
-    let eventDoc = null;
+    let selectedType = "MENAGE";
 
-    function tokenValid(tokenDoc){
-      if(!tokenDoc?.active) return false;
-
-      const expMs = Number(tokenDoc?.expiresAtMs);
+    function tokenValid(d){
+      if(!d?.active) return false;
+      const expMs = Number(d?.expiresAtMs);
       if(Number.isFinite(expMs)) return Date.now() < expMs;
-
-      const ts = tokenDoc?.expiresAt;
+      const ts = d?.expiresAt;
       const ms = ts?.toMillis ? ts.toMillis() : NaN;
       if(Number.isFinite(ms)) return Date.now() < ms;
-
       return false;
     }
 
-    function renderGrid(gridEl, urls){
-      gridEl.innerHTML = "";
-      if(!urls || !urls.length){
+    function normalizePhotoList(arr){
+      // support legacy: ["url"] OR new: [{url,path,...}]
+      const out = [];
+      (Array.isArray(arr) ? arr : []).forEach(x=>{
+        if(!x) return;
+        if(typeof x === "string") out.push({ url:x, path:"", createdAtMs:0 });
+        else if(typeof x === "object" && x.url) out.push({
+          url:String(x.url),
+          path:String(x.path||""),
+          createdAtMs:Number(x.createdAtMs||0),
+          token:String(x.token||""),
+          agentEmail:String(x.agentEmail||"")
+        });
+      });
+      return out;
+    }
+
+    function renderPhotos(list){
+      photosGrid.innerHTML = "";
+      const items = normalizePhotoList(list);
+      countLine.textContent = `${items.length}/${MAX_PHOTOS}`;
+
+      if(!items.length){
+        photosGrid.innerHTML = `<div class="mini">Aucune photo.</div>`;
         return;
       }
-      urls.forEach((url, idx)=>{
+
+      items.forEach((p, idx)=>{
         const div = document.createElement("div");
         div.className = "ph";
         div.innerHTML = `
-          <img src="${esc(url)}" alt="photo ${idx+1}">
-          <div class="cap">photo ${idx+1}</div>
+          <img src="${esc(p.url)}" alt="photo">
+          <div class="cap">${esc(missionLabel(selectedType))} • photo ${idx+1}</div>
+          <button class="del" type="button" title="Supprimer">🗑️</button>
         `;
-        gridEl.appendChild(div);
+        div.querySelector(".del")?.addEventListener("click", async (e)=>{
+          e.stopPropagation();
+          await deletePhoto(p);
+        });
+        photosGrid.appendChild(div);
       });
     }
 
-    function buildPreviews(files){
+    function renderPreviews(files){
       const urls = [];
-      for(const f of files){
-        try{ urls.push(URL.createObjectURL(f)); }catch{}
-      }
-      return urls;
+      for(const f of files){ try{ urls.push(URL.createObjectURL(f)); }catch{} }
+      previewGrid.style.display = urls.length ? "grid" : "none";
+      previewGrid.innerHTML = "";
+      urls.slice(0,8).forEach((u, idx)=>{
+        const div = document.createElement("div");
+        div.className = "ph";
+        div.innerHTML = `<img src="${esc(u)}"><div class="cap">sélection ${idx+1}</div>`;
+        previewGrid.appendChild(div);
+      });
     }
 
-    async function uploadOne(originalFile){
-      const safeName =
+    async function ensureMissionDoc(type){
+      // au cas où (sécurité)
+      await setDoc(doc(db,"events",prestationId,"missions",type),{
+        missionId:type,
+        type,
+        prestationId:String(prestationId),
+        dayToken:String(token),
+        updatedAt: Timestamp.now()
+      },{ merge:true });
+    }
+
+    async function loadMissionPhotos(type){
+      await ensureMissionDoc(type);
+      const mSnap = await getDoc(doc(db,"events",prestationId,"missions",type));
+      const d = mSnap.exists() ? (mSnap.data()||{}) : {};
+      return normalizePhotoList(d.photos);
+    }
+
+    async function uploadOne(originalFile, type){
+      const baseName =
         Date.now() + "_" +
         Math.random().toString(16).slice(2) + "_" +
-        safeFileName(originalFile.name || "photo.jpg").replace(/\.(heic|heif)$/i, ".jpg");
+        safeFileName(originalFile.name || "photo.jpg");
+      const finalName = ensureJpg(baseName);
 
-      const finalName = (/\.(jpg|jpeg)$/i.test(safeName)) ? safeName : (safeName + ".jpg");
-
-      // ✅ chemin Storage simple dédié preuves (pas missions)
-      const path = `proofPhotos/${prestationId}/${token}/${finalName}`;
+      const path = `proofPhotos/${prestationId}/${type}/${token}/${finalName}`;
       const ref = sRef(storage, path);
 
       const jpegBlob = await compressToJpegBlob(originalFile);
       await uploadBytes(ref, jpegBlob, { contentType: "image/jpeg" });
-      return await getDownloadURL(ref);
+      const url = await getDownloadURL(ref);
+
+      return { url, path };
+    }
+
+    async function doUpload(){
+      hideAlert();
+      hintLine.textContent = "";
+
+      const files = fileInput.files ? Array.from(fileInput.files) : [];
+      if(!files.length) return showAlert("Choisis au moins une photo.");
+
+      uploadBtn.disabled = true;
+      clearBtn.disabled = true;
+      missionSel.disabled = true;
+
+      try{
+        const type = selectedType;
+
+        // recharge mission photos pour éviter overwrite
+        const cur = await loadMissionPhotos(type);
+        if(cur.length >= MAX_PHOTOS) return showAlert(`Max ${MAX_PHOTOS} photos atteint pour ${missionLabel(type)}.`);
+
+        const remaining = Math.max(0, MAX_PHOTOS - cur.length);
+        const pick = files.slice(0, remaining);
+
+        hintLine.textContent = `Compression + upload (${pick.length})…`;
+
+        let next = cur.slice();
+        for(let i=0;i<pick.length;i++){
+          hintLine.textContent = `Upload ${i+1}/${pick.length}…`;
+          const up = await uploadOne(pick[i], type);
+          next.push({
+            url: up.url,
+            path: up.path,
+            createdAtMs: Date.now(),
+            token: String(token),
+            agentEmail: String(tokenDoc?.agentEmail || "")
+          });
+        }
+
+        hintLine.textContent = "Écriture Firestore…";
+        await updateDoc(doc(db,"events",prestationId,"missions",type),{
+          photos: next,
+          updatedAt: Timestamp.now()
+        });
+
+        fileInput.value = "";
+        previewGrid.style.display = "none";
+        previewGrid.innerHTML = "";
+        showAlert("✅ Photos ajoutées.", true);
+
+        const refreshed = await loadMissionPhotos(type);
+        renderPhotos(refreshed);
+      }catch(err){
+        console.error(err);
+        showAlert("Erreur upload photo : " + (err?.code || err?.message || "inconnue"));
+      }finally{
+        uploadBtn.disabled = false;
+        clearBtn.disabled = false;
+        missionSel.disabled = false;
+        hintLine.textContent = "";
+      }
+    }
+
+    async function deletePhoto(photo){
+      hideAlert();
+      const ok = confirm("Supprimer cette photo ? (irréversible)");
+      if(!ok) return;
+
+      uploadBtn.disabled = true;
+      clearBtn.disabled = true;
+      missionSel.disabled = true;
+
+      try{
+        const type = selectedType;
+
+        // supprime storage si on a path
+        if(photo?.path){
+          try{
+            await deleteObject(sRef(storage, photo.path));
+          }catch(e){
+            // si déjà supprimé, on continue quand même
+            console.warn("deleteObject failed:", e?.code || e?.message || e);
+          }
+        }
+
+        // refresh list, remove url/path
+        const cur = await loadMissionPhotos(type);
+        const next = cur.filter(p => p.url !== photo.url);
+
+        await updateDoc(doc(db,"events",prestationId,"missions",type),{
+          photos: next,
+          updatedAt: Timestamp.now()
+        });
+
+        showAlert("✅ Photo supprimée.", true);
+        renderPhotos(next);
+      }catch(err){
+        console.error(err);
+        showAlert("Erreur suppression : " + (err?.code || err?.message || "inconnue"));
+      }finally{
+        uploadBtn.disabled = false;
+        clearBtn.disabled = false;
+        missionSel.disabled = false;
+      }
+    }
+
+    function fillMissionSelect(types){
+      const list = (Array.isArray(types) && types.length) ? types : ["MENAGE"];
+      missionSel.innerHTML = list
+        .map(t=> `<option value="${esc(String(t).toUpperCase())}">${esc(missionLabel(String(t).toUpperCase()))}</option>`)
+        .join("");
+      selectedType = String(list[0]).toUpperCase();
+      missionSel.value = selectedType;
     }
 
     async function load(){
       hideAlert();
       subLine.textContent = "Chargement…";
       photosGrid.innerHTML = "";
-      countLine.textContent = "0/20";
+      countLine.textContent = `0/${MAX_PHOTOS}`;
 
       if(!token || !prestationId){
         subLine.textContent = "";
@@ -390,11 +558,9 @@
       }
 
       backBtn.href = `agent.html?token=${encodeURIComponent(token)}&prestationId=${encodeURIComponent(prestationId)}`;
-
       chipToken.textContent = "token: " + token;
 
-      // token doc
-      const tSnap = await getDoc(doc(db, "dayTokens", token));
+      const tSnap = await getDoc(doc(db,"dayTokens",token));
       if(!tSnap.exists()){
         subLine.textContent = "";
         chipStatus.innerHTML = `<span class="chip bad">INVALIDE</span>`;
@@ -403,7 +569,6 @@
       }
       tokenDoc = tSnap.data() || {};
 
-      // scope
       if(String(tokenDoc.prestationId) !== String(prestationId)){
         subLine.textContent = "";
         chipStatus.innerHTML = `<span class="chip bad">SCOPE</span>`;
@@ -412,9 +577,7 @@
       }
 
       chipExpiry.textContent = "expire: " + (
-        Number.isFinite(Number(tokenDoc.expiresAtMs))
-          ? prettyExpiryFromMs(tokenDoc.expiresAtMs)
-          : "—"
+        Number.isFinite(Number(tokenDoc.expiresAtMs)) ? prettyExpiryFromMs(tokenDoc.expiresAtMs) : "—"
       );
 
       if(!tokenValid(tokenDoc)){
@@ -425,83 +588,40 @@
       }
       chipStatus.innerHTML = `<span class="chip ok">OK</span>`;
 
-      // event doc (read: conciergerie only, mais si rules autorisent get pour token c'est bonus)
-      try{
-        const eSnap = await getDoc(doc(db, "events", prestationId));
-        if(eSnap.exists()) eventDoc = eSnap.data() || {};
-      }catch{
-        eventDoc = null;
-      }
+      // Header depuis tokenDoc.presta (stable même si rules events sont strictes)
+      const p = tokenDoc.presta || {};
+      const homeName = p.homeName || "Logement";
+      const city = p.homeCity ? " — " + p.homeCity : "";
+      homeLine.textContent = homeName + city;
 
-      const homeName = eventDoc?.homeName || "Logement";
-      const homeCity = eventDoc?.homeCity ? " — " + eventDoc.homeCity : "";
-      homeLine.textContent = homeName + homeCity;
+      const arrival = (p.arrivalDateKey || p.dateKey || p.date || "—") + (p.arrivalTime ? " • " + p.arrivalTime : (p.time ? " • " + p.time : ""));
+      const agent = `Agent : ${(tokenDoc.agentName || "—")}${tokenDoc.agentEmail ? " • " + tokenDoc.agentEmail : ""}`;
+      metaLine.textContent = `${arrival}\n${agent}`;
 
-      metaLine.textContent =
-        (eventDoc?.dateKey || eventDoc?.date || "—") +
-        (eventDoc?.time ? " • " + eventDoc.time : "") +
-        `\nAgent : ${(tokenDoc.agentName || "—")}${tokenDoc.agentEmail ? " • " + tokenDoc.agentEmail : ""}`;
+      // Missions du token
+      const types = (Array.isArray(tokenDoc.missionTypes) && tokenDoc.missionTypes.length)
+        ? tokenDoc.missionTypes.map(x=>String(x||"").toUpperCase()).filter(Boolean)
+        : ["MENAGE"];
 
-      const photos = Array.isArray(eventDoc?.proofPhotos) ? eventDoc.proofPhotos.filter(Boolean) : [];
-      renderGrid(photosGrid, photos);
-      countLine.textContent = `${photos.length}/${MAX_PHOTOS}`;
+      fillMissionSelect(types);
+
+      // Load photos for first mission
+      const list = await loadMissionPhotos(selectedType);
+      renderPhotos(list);
 
       subLine.textContent = "";
     }
 
-    async function doUpload(){
-      hideAlert();
-      hintLine.textContent = "";
-
-      const files = fileInput.files ? Array.from(fileInput.files) : [];
-      if(!files.length) return showAlert("Choisis au moins une photo.");
-
-      // reload event (évite écraser)
-      const eSnap = await getDoc(doc(db, "events", prestationId));
-      if(!eSnap.exists()) return showAlert("Prestation introuvable.");
-      const e = eSnap.data() || {};
-      const curPhotos = Array.isArray(e.proofPhotos) ? e.proofPhotos.filter(Boolean) : [];
-
-      if(curPhotos.length >= MAX_PHOTOS) return showAlert(`Max ${MAX_PHOTOS} photos déjà atteint.`);
-
-      uploadBtn.disabled = true;
-      clearBtn.disabled = true;
-
+    missionSel.addEventListener("change", async ()=>{
+      selectedType = String(missionSel.value||"MENAGE").toUpperCase();
       try{
-        let next = curPhotos.slice();
-        const remaining = Math.max(0, MAX_PHOTOS - next.length);
-        const pick = files.slice(0, remaining);
-
-        hintLine.textContent = `Compression + upload (${pick.length})…`;
-
-        for(let i=0;i<pick.length;i++){
-          hintLine.textContent = `Upload ${i+1}/${pick.length}…`;
-          const url = await uploadOne(pick[i]);
-          next = mergeUniqueMax(next, url, MAX_PHOTOS);
-        }
-
-        hintLine.textContent = "Écriture Firestore…";
-
-        // ✅ 1 seul endroit Firestore: events/{prestationId}.proofPhotos
-        await updateDoc(doc(db, "events", prestationId), {
-          proofPhotos: next,
-          updatedAt: Timestamp.now()
-        });
-
-        showAlert("✅ Photos ajoutées.", true);
-        fileInput.value = "";
-        previewGrid.style.display = "none";
-        previewGrid.innerHTML = "";
-        await load();
+        const list = await loadMissionPhotos(selectedType);
+        renderPhotos(list);
       }catch(err){
         console.error(err);
-        showAlert("Erreur upload photo : " + (err?.code || err?.message || "inconnue"));
-      }finally{
-        uploadBtn.disabled = false;
-        clearBtn.disabled = false;
-        hintLine.textContent = "";
+        showAlert("Erreur chargement mission : " + (err?.code || err?.message || "inconnue"));
       }
-    }
+    });
 
     refreshBtn.addEventListener("click", ()=> load().catch(err=>{
       console.error(err);
@@ -516,14 +636,7 @@
 
     fileInput.addEventListener("change", ()=>{
       const files = fileInput.files ? Array.from(fileInput.files) : [];
-      if(!files.length){
-        previewGrid.style.display = "none";
-        previewGrid.innerHTML = "";
-        return;
-      }
-      const urls = buildPreviews(files).slice(0, 8);
-      previewGrid.style.display = "grid";
-      renderGrid(previewGrid, urls);
+      renderPreviews(files);
     });
 
     uploadBtn.addEventListener("click", ()=> doUpload());
