@@ -234,7 +234,6 @@
       return false;
     }
 
-    // ✅ Checklist robuste : accepte plusieurs noms + formats
     function extractChecklistRaw(d){
       return (
         d?.checklist ??
@@ -247,17 +246,14 @@
       );
     }
 
-    // Convertit en tableau [{key,label,done}]
     function checklistToArray(any){
       const cl = any;
       if(!cl) return [];
 
-      // Array of strings
       if(Array.isArray(cl) && cl.every(x=> typeof x === "string")){
         return cl.map((label, i)=>({ key: String(i), label, done:false }));
       }
 
-      // Array of {label, done} ou {text, done}
       if(Array.isArray(cl)){
         return cl.map((x,i)=>{
           if(typeof x === "string") return { key:String(i), label:x, done:false };
@@ -268,7 +264,6 @@
         });
       }
 
-      // Object map : { key: boolean } ou { key: {label, done} }
       if(typeof cl === "object"){
         const out = [];
         for(const [k,v] of Object.entries(cl)){
@@ -292,9 +287,6 @@
       return obj;
     }
 
-    // =========================
-    // Token + load
-    // =========================
     const token = qs("token");
     const prestationId = qs("prestationId");
 
@@ -341,7 +333,7 @@
       }
       chipStatus.innerHTML = `<span class="chip ok">OK</span>`;
 
-      // event doc (chez toi il est lisible conciergerie-only → best effort)
+      // event doc : best effort
       try{
         const eSnap = await getDoc(doc(db, "events", prestationId));
         if(eSnap.exists()) eventDoc = eSnap.data() || {};
@@ -349,7 +341,6 @@
         eventDoc = null;
       }
 
-      // Affichage entête (si eventDoc non lisible, on reste minimal)
       const homeName = eventDoc?.homeName || "Logement";
       const homeCity = eventDoc?.homeCity ? " — " + eventDoc.homeCity : "";
       homeLine.textContent = homeName + homeCity;
@@ -361,7 +352,7 @@
       meta.push(`Agent : ${(tokenDoc.agentName || "—")}${tokenDoc.agentEmail ? " • " + tokenDoc.agentEmail : ""}`);
       metaLine.textContent = meta.join(" • ");
 
-      // ✅ uniquement les missions de ce token
+      // ✅ uniquement les missions de CE token (donc plus de parasites)
       const TYPES = Array.isArray(tokenDoc.missionTypes) && tokenDoc.missionTypes.length
         ? tokenDoc.missionTypes.map(x => String(x||"").toUpperCase()).filter(Boolean)
         : ["MENAGE"];
@@ -380,7 +371,7 @@
         missionsWrap.innerHTML = `
           <div class="mcard">
             <div class="mtitle">Aucune mission</div>
-            <div class="msub">Soit les documents n’existent pas, soit les rules bloquent la lecture.</div>
+            <div class="msub">Les documents n’existent pas (ou rules bloquent la lecture).</div>
           </div>`;
         return;
       }
@@ -392,8 +383,7 @@
         const done = !!d.agentDone;
         const status = (d.status || "").toUpperCase() || "—";
 
-        const rawChecklist = extractChecklistRaw(d);
-        const items = checklistToArray(rawChecklist);
+        const items = checklistToArray(extractChecklistRaw(d));
 
         const checklistHtml = items.length
           ? items.map((it, idx)=>{
@@ -408,14 +398,14 @@
                 </div>
               `;
             }).join("")
-          : `<div class="mini">Checklist vide (champ absent ou vide).</div>`;
+          : `<div class="mini">Checklist vide (mission sans template).</div>`;
 
         const wrap = document.createElement("div");
         wrap.className = "mcard" + (done ? " done" : "") + (locked ? " locked" : "");
         wrap.innerHTML = `
           <div class="mhead">
             <div>
-              <div class="mtitle">${missionTitle(d.missionId || d.type || m.id)} ${locked ? "• verrouillée" : ""}</div>
+              <div class="mtitle">${missionTitle(d.type || m.id)} ${locked ? "• verrouillée" : ""}</div>
               <div class="msub">Status : ${esc(status)} ${done ? "\n✔ Terminée" : ""}</div>
             </div>
             <div>${chipFor(status)}</div>
@@ -457,7 +447,7 @@
           const comment = (commentEl?.value || "").trim();
 
           const payload = {
-            checklist: arrayToChecklistObject(newItems),   // ✅ on écrit TOUJOURS en format propre
+            checklist: arrayToChecklistObject(newItems),
             agentComment: comment,
             status: markDone ? "A_VALIDER" : (d.status || "EN_COURS"),
             agentDone: markDone ? true : (!!d.agentDone),
@@ -468,13 +458,13 @@
           try{
             await updateDoc(doc(db, "events", prestationId, "missions", type), payload);
 
-            // 🔥 micro-patch utile : remonter le statut au parent (sans toucher photos)
+            // micro-patch : remonter statut au parent (sans photos)
             try{
               await updateDoc(doc(db, "events", prestationId), {
                 opStatus: markDone ? "A_VALIDER" : "EN_COURS",
                 updatedAt: Timestamp.now()
               });
-            }catch(e){ /* best effort */ }
+            }catch(e){}
 
             showAlert(markDone ? "✅ Mission terminée (À VALIDER) + verrouillée." : "✅ Enregistré.", true);
             await load();
