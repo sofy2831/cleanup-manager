@@ -59,7 +59,7 @@
     .chip.ok{ background:rgba(27,143,77,0.16); color:var(--ok); }
     .chip.bad{ background:rgba(179,38,30,0.14); color:var(--bad); }
 
-    /* ✅ En-tête "intervention-like" */
+    /* Entête "intervention-like" (sans proprio/tel) */
     .prestaHead{
       background:#fff;
       border:1px solid rgba(122,92,255,0.18);
@@ -162,7 +162,6 @@
         <div class="alert" id="alertBox"></div>
       </div>
 
-      <!-- ✅ Entête logement façon intervention -->
       <section class="card">
         <div class="row">
           <div class="prestaHead">
@@ -184,7 +183,6 @@
               <div class="v" id="addrLine">—</div>
             </div>
 
-            <!-- ✅ pas de propriétaire ici -->
             <div class="noteLine" id="noteLine"></div>
             <div class="agentMini" id="agentLine">—</div>
           </div>
@@ -210,7 +208,7 @@
 
   <script type="module">
     import { db } from "./firebase-init.js";
-    import { doc, getDoc, updateDoc, Timestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import { doc, getDoc, setDoc, Timestamp, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const alertBox = document.getElementById("alertBox");
     const subLine = document.getElementById("subLine");
@@ -293,6 +291,52 @@
       return false;
     }
 
+    // =========================
+    // ✅ Fallback déduction missions depuis les lignes (lavage/séchage => LINGE)
+    // =========================
+    function normTxt(s){
+      return String(s||"")
+        .toLowerCase()
+        .normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+    }
+    function inferMissionTypesFromEvent(eventDoc){
+      const out = new Set();
+
+      const ft = String(eventDoc?.type || "").toUpperCase().trim();
+      if(["MENAGE","CHECKIN","CHECKOUT","LINGE","MAINTENANCE","KITS"].includes(ft)) out.add(ft);
+
+      const lines = Array.isArray(eventDoc?.lines) ? eventDoc.lines : [];
+      for(const l of lines){
+        const label = normTxt(l?.label || l?.name || l?.title || "");
+        if(!label) continue;
+
+        if(label.includes("check-in") || label.includes("check in") || label.includes("arrivee")) out.add("CHECKIN");
+        if(label.includes("check-out") || label.includes("check out") || label.includes("depart")) out.add("CHECKOUT");
+
+        if(label.includes("menage") || label.includes("nettoyage")) out.add("MENAGE");
+
+        // ✅ LINGE : pas seulement "linge" (ton cas "collecte + lavage + séchage")
+        if(
+          label.includes("linge") ||
+          label.includes("drap") ||
+          label.includes("serviette") ||
+          label.includes("blanch") ||        // blanchisserie
+          label.includes("lavage") ||
+          label.includes("sechage") ||       // séchage sans accent
+          label.includes("collecte") ||
+          label.includes("lessive")
+        ) out.add("LINGE");
+
+        if(label.includes("maintenance") || label.includes("reparation") || label.includes("bricol")) out.add("MAINTENANCE");
+        if(label.includes("kit") || label.includes("consommable") || label.includes("capsule") || label.includes("shampo") || label.includes("savon")) out.add("KITS");
+      }
+
+      if(out.size === 0) out.add("MENAGE");
+
+      const order = ["MENAGE","CHECKIN","CHECKOUT","LINGE","MAINTENANCE","KITS"];
+      return order.filter(x => out.has(x));
+    }
+
     // ✅ Checklist COMPACTE (5 max) par mission
     function compactChecklistTemplate(type){
       const t = (type||"").toUpperCase();
@@ -306,7 +350,6 @@
           { key:"lit",       label:"Lits faits / mise en place" }
         ];
       }
-
       if(t==="CHECKIN"){
         return [
           { key:"cles",   label:"Remise des clés / code communiqué" },
@@ -316,7 +359,6 @@
           { key:"infos",  label:"Infos pratiques (wifi / règles / poubelles)" }
         ];
       }
-
       if(t==="CHECKOUT"){
         return [
           { key:"cles",      label:"Récupération clés / fermeture ok" },
@@ -326,7 +368,6 @@
           { key:"photos",    label:"Photos si anomalie" }
         ];
       }
-
       if(t==="KITS"){
         return [
           { key:"check",  label:"Vérifier stock kits (base)" },
@@ -336,7 +377,6 @@
           { key:"range",  label:"Ranger / placer kits" }
         ];
       }
-
       if(t==="LINGE"){
         return [
           { key:"collecte", label:"Collecte linge sale" },
@@ -346,7 +386,6 @@
           { key:"signal",   label:"Signaler manque / tâche / déchirure" }
         ];
       }
-
       if(t==="MAINTENANCE"){
         return [
           { key:"diag",   label:"Diagnostic rapide (source du problème)" },
@@ -356,7 +395,6 @@
           { key:"report", label:"Compte-rendu clair (suite / urgence)" }
         ];
       }
-
       return [
         { key:"ok",     label:"Mission réalisée" },
         { key:"signal", label:"Anomalies signalées si besoin" },
@@ -364,7 +402,7 @@
       ];
     }
 
-    // ✅ Checklist robuste : lecture depuis Firestore
+    // Checklist robuste : lecture depuis Firestore
     function extractChecklistRaw(d){
       return (
         d?.checklist ??
@@ -377,7 +415,6 @@
       );
     }
 
-    // Convertit en tableau [{key,label,done}]
     function checklistToArray(any){
       const cl = any;
       if(!cl) return [];
@@ -426,25 +463,20 @@
     let eventDoc = null;
 
     function setPrestaHeader(e){
-      // Nom logement
       homeLine.textContent = e?.homeName || "Logement";
 
-      // Arrivée
       const aDate = e?.arrivalDateKey || e?.dateKey || e?.date || "";
       const aTime = e?.arrivalTime || e?.time || "";
       arrLine.textContent = (aDate ? aDate : "—") + (aTime ? " • " + aTime : "");
 
-      // Départ
       const dDate = e?.departureDateKey || "";
       const dTime = e?.departureTime || "";
       depLine.textContent = (dDate ? dDate : "—") + (dTime ? " • " + dTime : "");
 
-      // Adresse + CP (pas de propriétaire)
       const addr = (e?.homeAddress || e?.address || "").trim();
       const zip  = (e?.homeZip || e?.zip || "").trim();
       addrLine.textContent = [addr, zip].filter(Boolean).join(" ").trim() || "—";
 
-      // Note / meta (ex: "LIT BEBE")
       const note = (e?.meta || "").trim();
       if(note){
         noteLine.style.display = "block";
@@ -453,6 +485,41 @@
         noteLine.style.display = "none";
         noteLine.textContent = "";
       }
+    }
+
+    // ✅ crée une mission si absente (cas token menage-only mais event a aussi linge)
+    async function ensureMissionDoc(type){
+      const ref = doc(db, "events", prestationId, "missions", type);
+      const snap = await getDoc(ref);
+      if(snap.exists()) return { id:type, data: snap.data() || {} };
+
+      const tpl = compactChecklistTemplate(type);
+      const checklistObj = arrayToChecklistObject(tpl.map(x => ({ key:x.key, label:x.label, done:false })));
+
+      const payload = {
+        type,
+        missionId: type,
+        conciergerieUid: tokenDoc?.conciergerieUid || null,
+        prestationId: String(prestationId),
+
+        locked: false,
+        agentDone: false,
+        status: "ASSIGNEE",
+
+        dayToken: token,
+        assignedToEmail: tokenDoc?.agentEmail || null,
+        assignedToName: tokenDoc?.agentName || null,
+
+        checklist: checklistObj,
+        photos: [],
+
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      };
+
+      await setDoc(ref, payload, { merge:true });
+      const snap2 = await getDoc(ref);
+      return { id:type, data: snap2.exists() ? (snap2.data()||{}) : payload };
     }
 
     async function load(){
@@ -512,18 +579,33 @@
       setPrestaHeader(eventDoc || {});
       agentLine.textContent = `Agent : ${(tokenDoc.agentName || "—")}${tokenDoc.agentEmail ? " • " + tokenDoc.agentEmail : ""}`;
 
-      // ✅ missions du token seulement
-      const TYPES = Array.isArray(tokenDoc.missionTypes) && tokenDoc.missionTypes.length
+      // ✅ missions du token + fallback depuis event.lines
+      const tokenTypes = Array.isArray(tokenDoc.missionTypes) && tokenDoc.missionTypes.length
         ? tokenDoc.missionTypes.map(x => String(x||"").toUpperCase()).filter(Boolean)
-        : ["MENAGE"];
+        : [];
 
-      const missions = [];
-      for(const t of TYPES){
-        const mSnap = await getDoc(doc(db, "events", prestationId, "missions", t));
-        if(mSnap.exists()) missions.push({ id:t, data: mSnap.data() || {} });
+      const inferredTypes = inferMissionTypesFromEvent(eventDoc || {});
+      const merged = [];
+      const seen = new Set();
+      for(const t of [...tokenTypes, ...inferredTypes]){
+        if(!t) continue;
+        if(seen.has(t)) continue;
+        seen.add(t);
+        merged.push(t);
       }
+      const TYPES = merged.length ? merged : ["MENAGE"];
 
       subLine.textContent = "";
+
+      // ✅ garantir l’existence des docs missions (sinon l’agent ne voit rien)
+      const missions = [];
+      for(const t of TYPES){
+        try{
+          missions.push(await ensureMissionDoc(t));
+        }catch(e){
+          console.error("ensureMissionDoc", t, e);
+        }
+      }
 
       if(!missions.length){
         missionsWrap.innerHTML = `
@@ -541,7 +623,7 @@
         const done = !!d.agentDone;
         const status = (d.status || "").toUpperCase() || "—";
 
-        // ✅ affichage compact (template) + état depuis Firestore
+        // ✅ affichage compact + état depuis Firestore
         const tpl = compactChecklistTemplate(m.id);
         const savedItems = checklistToArray(extractChecklistRaw(d));
         const doneByKey = {};
@@ -618,18 +700,19 @@
             status: markDone ? "A_VALIDER" : (d.status || "EN_COURS"),
             agentDone: markDone ? true : (!!d.agentDone),
             locked: markDone ? true : (!!d.locked),
-            updatedAt: Timestamp.now()
+            updatedAt: serverTimestamp()
           };
 
           try{
-            await updateDoc(doc(db, "events", prestationId, "missions", type), payload);
+            // ✅ setDoc merge => marche même si doc manquait
+            await setDoc(doc(db, "events", prestationId, "missions", type), payload, { merge:true });
 
             // best effort : remonter statut au parent
             try{
-              await updateDoc(doc(db, "events", prestationId), {
+              await setDoc(doc(db, "events", prestationId), {
                 opStatus: markDone ? "A_VALIDER" : "EN_COURS",
-                updatedAt: Timestamp.now()
-              });
+                updatedAt: serverTimestamp()
+              }, { merge:true });
             }catch(e){}
 
             showAlert(markDone ? "✅ Mission terminée (À VALIDER) + verrouillée." : "✅ Enregistré.", true);
