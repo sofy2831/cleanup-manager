@@ -310,12 +310,12 @@
     }
 
     // =========================
-    // ✅ Déduction missions depuis lignes (corrigée LINGE)
+    // Déduction missions depuis lignes (LINGE inclus)
     // =========================
     function normTxt(s){
       return String(s||"")
         .toLowerCase()
-        .normalize("NFD").replace(/[\u0300-\u036f]/g,""); // vire accents
+        .normalize("NFD").replace(/[\u0300-\u036f]/g,"");
     }
 
     function missionTypesFromLines(lines, fallbackType){
@@ -329,14 +329,11 @@
           const label = normTxt(l?.label || l?.name || l?.title || "");
           if(!label) continue;
 
-          // check-in/out
           if(label.includes("check-in") || label.includes("check in") || label.includes("arrivee")) out.add("CHECKIN");
           if(label.includes("check-out") || label.includes("check out") || label.includes("depart")) out.add("CHECKOUT");
 
-          // ménage
           if(label.includes("menage") || label.includes("nettoyage")) out.add("MENAGE");
 
-          // ✅ linge : cas "collecte + lavage + séchage"
           if(
             label.includes("linge") ||
             label.includes("drap") ||
@@ -345,10 +342,9 @@
             label.includes("lavage") ||
             label.includes("sechage") ||
             label.includes("lessive") ||
-            label.includes("blanch")      // blanchisserie
+            label.includes("blanch")
           ) out.add("LINGE");
 
-          // maintenance / kits
           if(label.includes("maintenance") || label.includes("reparation") || label.includes("bricol")) out.add("MAINTENANCE");
           if(label.includes("kit") || label.includes("consommable") || label.includes("capsule") || label.includes("shampo") || label.includes("savon")) out.add("KITS");
         }
@@ -483,7 +479,7 @@
       const expiresAtMs = Date.now() + 24*60*60*1000;
       const expiresAt = Timestamp.fromMillis(expiresAtMs);
 
-      // ✅ snapshot prestation pour l'agent (si rules bloquent events)
+      // ✅ snapshot SAFE (pour preuves.html / agent.html) => PAS de propriétaire
       const e = currentEvent || {};
       const aDate = e.arrivalDateKey || e.dateKey || e.date || "";
       const aTime = e.arrivalTime || e.time || "";
@@ -491,10 +487,12 @@
       const dTime = e.departureTime || "";
       const addr = (e.homeAddress || e.address || "").trim();
       const zip  = (e.homeZip || e.zip || "").trim();
+      const city = (e.homeCity || "").trim();
       const meta = (e.meta || "").trim();
 
       const prestaSnapshot = {
         homeName: e.homeName || "Logement",
+        homeCity: city,
         arrivalDateKey: aDate,
         arrivalTime: aTime,
         departureDateKey: dDate,
@@ -513,7 +511,7 @@
         conciergerieName: (conciergerieName?.value || "").trim() || null,
 
         missionTypes,
-        presta: prestaSnapshot,        // ✅ clé pour l'entête agent
+        presta: prestaSnapshot,   // ✅ lu par preuves.html (agent) sans lire events
 
         active:true,
         expiresAt,
@@ -521,7 +519,7 @@
         createdAt: serverTimestamp()
       });
 
-      // ✅ backfill missions (toutes celles du token)
+      // backfill missions (toutes celles du token)
       for (const t of missionTypes) {
         await setDoc(doc(db, "events", prestationId, "missions", t), {
           type: t,
@@ -541,7 +539,7 @@
         }, { merge: true });
       }
 
-      // parent event
+      // parent event (conciergerie only)
       await setDoc(doc(db,"events",prestationId),{
         assignedToEmail: email,
         assignedToName: name,
