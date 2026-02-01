@@ -1,4 +1,4 @@
-<!-- docs/intervention.html -->
+<!-- docs/intervention.html (Option A : nouveau token + reset missions) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -63,7 +63,7 @@
     }
     .btn:disabled{ opacity:.6; cursor:not-allowed; }
 
-    input, select{
+    input{
       width:100%;
       padding:10px;
       border-radius:12px;
@@ -72,7 +72,7 @@
       font-size:13px;
       outline:none;
     }
-    input:focus, select:focus{ border-color:var(--violet); box-shadow:0 0 0 2px rgba(122,92,255,.15); }
+    input:focus{ border-color:var(--violet); box-shadow:0 0 0 2px rgba(122,92,255,.15); }
 
     .grid{
       display:grid;
@@ -98,8 +98,10 @@
       border-radius:999px;
       font-weight:900;
       font-size:12px;
+      user-select:none;
     }
     .check input{ width:18px; height:18px; margin:0; }
+
     .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
     .linkbox{
       padding:10px;
@@ -108,6 +110,17 @@
       border:1px dashed rgba(122,92,255,0.35);
       word-break:break-all;
     }
+    .bigAddr{
+      margin-top:10px;
+      padding:10px;
+      border-radius:14px;
+      background:#fff;
+      border:1px solid rgba(122,92,255,0.18);
+      box-shadow:0 3px 10px rgba(0,0,0,.05);
+    }
+    .bigAddr .title{ font-weight:900; font-size:14px; color:#222; }
+    .bigAddr .line{ margin-top:6px; font-weight:800; color:#333; }
+    .bigAddr .subline{ margin-top:6px; font-weight:900; color:#555; font-size:12px; white-space:pre-wrap; }
   </style>
 </head>
 
@@ -127,18 +140,26 @@
 
       <section class="card">
         <div class="row">
+          <!-- gauche: logement -->
           <div style="flex:1;min-width:260px;">
-            <div class="mini">Prestation</div>
-            <div style="font-weight:900;font-size:14px;margin-top:4px;" id="homeLine">—</div>
-            <div style="margin-top:8px;" class="chips">
+            <div class="mini">Logement</div>
+            <div class="bigAddr">
+              <div class="title" id="homeLine">—</div>
+              <div class="line" id="addrLine">—</div>
+              <div class="subline" id="datesLine">—</div>
+              <div class="subline" id="metaLine" style="display:none;"></div>
+            </div>
+
+            <div style="margin-top:10px;" class="chips">
               <span class="chip" id="chipPresta">prestationId: —</span>
               <span class="chip" id="chipStatus">—</span>
             </div>
-            <div class="mini" style="margin-top:8px;" id="addrLine">—</div>
           </div>
 
+          <!-- droite: génération lien -->
           <div style="flex:1;min-width:260px;">
             <div class="mini">Générer un lien agent (token 24h)</div>
+
             <div class="grid" style="margin-top:8px;">
               <div>
                 <div class="mini">Agent (email)</div>
@@ -153,6 +174,8 @@
             <div class="mini" style="margin-top:10px;">Missions à inclure</div>
             <div class="checks" id="missionsChecks"></div>
 
+            <div class="mini" style="margin-top:8px;" id="recapLine">—</div>
+
             <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;margin-top:10px;">
               <button class="btn ghost" id="resetBtn" type="button">Reset missions</button>
               <button class="btn" id="genBtn" type="button">Générer lien</button>
@@ -161,14 +184,20 @@
             <div style="margin-top:10px; display:none;" id="linkWrap">
               <div class="mini">Lien agent</div>
               <div class="linkbox mono" id="agentLink">—</div>
+
               <div class="mini" style="margin-top:6px;" id="expLine">—</div>
+
+              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;justify-content:flex-end;">
+                <button class="btn ghost" id="copyLinkBtn" type="button">Copier le lien</button>
+                <a class="btn" id="mailLinkBtn" href="#" target="_blank" rel="noopener">Envoyer par mail</a>
+              </div>
             </div>
           </div>
         </div>
       </section>
 
       <div class="mini">
-        Option A appliquée : quand tu génères un lien, on <b>reset</b> chaque doc
+        Option A : quand tu génères un lien, on <b>reset</b> chaque doc
         <span class="mono">events/{prestationId}/missions/{TYPE}</span> et on met <b>dayToken = nouveau token</b>.
       </div>
     </div>
@@ -186,12 +215,16 @@
 
     const homeLine = document.getElementById("homeLine");
     const addrLine = document.getElementById("addrLine");
+    const datesLine = document.getElementById("datesLine");
+    const metaLine = document.getElementById("metaLine");
+
     const chipPresta = document.getElementById("chipPresta");
     const chipStatus = document.getElementById("chipStatus");
 
     const agentEmailEl = document.getElementById("agentEmail");
     const agentNameEl  = document.getElementById("agentName");
     const missionsChecks = document.getElementById("missionsChecks");
+    const recapLine = document.getElementById("recapLine");
 
     const genBtn = document.getElementById("genBtn");
     const resetBtn = document.getElementById("resetBtn");
@@ -199,6 +232,8 @@
     const linkWrap = document.getElementById("linkWrap");
     const agentLinkEl = document.getElementById("agentLink");
     const expLine = document.getElementById("expLine");
+    const copyLinkBtn = document.getElementById("copyLinkBtn");
+    const mailLinkBtn = document.getElementById("mailLinkBtn");
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -316,11 +351,12 @@
         `;
         missionsChecks.appendChild(wrap);
       }
-      // defaults
       const set = new Set((defaults||[]).map(x=>String(x||"").toUpperCase()));
       for(const cb of missionsChecks.querySelectorAll('input[type="checkbox"][data-type]')){
         cb.checked = set.size ? set.has(cb.getAttribute("data-type")) : (cb.getAttribute("data-type")==="MENAGE");
+        cb.addEventListener("change", updateRecap);
       }
+      updateRecap();
     }
 
     function selectedTypes(){
@@ -330,41 +366,40 @@
         .filter(Boolean);
     }
 
+    function updateRecap(){
+      const types = selectedTypes();
+      recapLine.textContent = types.length
+        ? ("Sélection : " + types.map(missionLabel).join(" • "))
+        : "Sélection : —";
+    }
+
     function baseUrl(){
-      // github pages
       const url = new URL(location.href);
       url.search = "";
       url.hash = "";
-      // garde le dossier /cleanup-manager/
       return url.href.replace(/intervention\.html$/,"");
     }
 
-    async function resetMissionsForToken(evtDoc, token, tokenDoc){
-      const types = tokenDoc.missionTypes || ["MENAGE"];
-
+    async function resetMissionsForToken(evtDoc, token, types){
       for(const type of types){
         const tpl = compactChecklistTemplate(type);
         const checklistObj = arrayToChecklistObject(tpl.map(x => ({ key:x.key, label:x.label, done:false })));
 
         const payload = {
-          // identifiants
           missionId: type,
           type,
           conciergerieUid: evtDoc.conciergerieUid || auth.currentUser?.uid || null,
           prestationId: String(prestationId),
           eventId: String(prestationId),
 
-          // snapshot utile (optionnel)
           homeId: evtDoc.homeId || null,
           homeName: evtDoc.homeName || "",
           homeCity: evtDoc.homeCity || "",
           homeAddress: evtDoc.homeAddress || "",
           dateKey: evtDoc.dateKey || evtDoc.arrivalDateKey || "",
 
-          // ✅ clé du bug
           dayToken: token,
 
-          // reset état
           locked: false,
           agentDone: false,
           agentDoneAt: null,
@@ -372,25 +407,23 @@
           agentComment: "",
           photos: [],
 
-          // reset checklist
           checklist: checklistObj,
 
-          // timestamps
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         };
 
-        // merge:false => on écrase le doc pour éviter les "cases bleues" persistantes
         await setDoc(doc(db, "events", prestationId, "missions", type), payload, { merge:false });
       }
 
-      // parent event : status cohérent
       await updateDoc(doc(db, "events", prestationId), {
         opStatus: "ASSIGNEE",
         missionsInitialized: true,
         updatedAt: serverTimestamp()
       });
     }
+
+    let lastEvt = null;
 
     async function load(){
       hideAlert();
@@ -404,7 +437,6 @@
       }
       chipPresta.textContent = "prestationId: " + prestationId;
 
-      // charge event
       const eSnap = await getDoc(doc(db, "events", prestationId));
       if(!eSnap.exists()){
         showAlert("⛔ events/" + prestationId + " introuvable.");
@@ -412,17 +444,33 @@
         return;
       }
       const evt = eSnap.data() || {};
+      lastEvt = evt;
+
       homeLine.textContent = evt.homeName || "Logement";
       addrLine.textContent = [evt.homeAddress, evt.homeZip, evt.homeCity].filter(Boolean).join(" ").trim() || "—";
+
+      const arr = [evt.arrivalDateKey || evt.dateKey || "", evt.arrivalTime || evt.time || ""].filter(Boolean).join(" • ");
+      const dep = [evt.departureDateKey || "", evt.departureTime || ""].filter(Boolean).join(" • ");
+      datesLine.textContent = `Arrivée : ${arr || "—"}\nDépart : ${dep || "—"}`;
+
+      const meta = (evt.meta || evt.stayNote || "").trim();
+      if(meta){
+        metaLine.style.display = "block";
+        metaLine.textContent = meta;
+      }else{
+        metaLine.style.display = "none";
+        metaLine.textContent = "";
+      }
+
       chipStatus.innerHTML = `<span class="chip">${(evt.opStatus || evt.status || "—")}</span>`;
 
-      // missions defaults (si tu as déjà stocké sur event)
       const defaults = Array.isArray(evt.missionTypes) && evt.missionTypes.length ? evt.missionTypes : ["MENAGE"];
       buildMissionChecks(defaults);
 
       subLine.textContent = "";
     }
 
+    // Générer lien = create token + reset missions(dayToken=token)
     genBtn.addEventListener("click", async ()=>{
       hideAlert();
       try{
@@ -447,7 +495,6 @@
           return;
         }
 
-        // recharge event (source de vérité)
         const eRef = doc(db, "events", prestationId);
         const eSnap = await getDoc(eRef);
         const evt = eSnap.exists() ? (eSnap.data() || {}) : {};
@@ -461,7 +508,6 @@
         const expMs = now + 24*60*60*1000;
         const expiresAt = Timestamp.fromMillis(expMs);
 
-        // snapshot presta "safe" pour agent (évite de lire events côté agent si bloqué)
         const presta = {
           prestationId: String(prestationId),
           homeName: evt.homeName || "",
@@ -472,7 +518,7 @@
           arrivalTime: evt.arrivalTime || evt.time || "",
           departureDateKey: evt.departureDateKey || "",
           departureTime: evt.departureTime || "",
-          meta: evt.meta || evt.stayNote || ""
+          meta: (evt.meta || evt.stayNote || "") || ""
         };
 
         const tokenPayload = {
@@ -486,7 +532,6 @@
           agentName: name,
 
           missionTypes: types,
-
           presta,
 
           createdAt: serverTimestamp(),
@@ -494,17 +539,42 @@
           expiresAtMs: expMs
         };
 
-        // 1) créer token
         await setDoc(doc(db, "dayTokens", token), tokenPayload, { merge:false });
 
-        // 2) ✅ RESET MISSIONS + dayToken = nouveau token
-        await resetMissionsForToken(evt, token, { ...tokenPayload, missionTypes: types });
+        await resetMissionsForToken(evt, token, types);
 
-        // 3) afficher lien
         const url = baseUrl() + "agent.html?token=" + encodeURIComponent(token) + "&prestationId=" + encodeURIComponent(prestationId);
+
         agentLinkEl.textContent = url;
-        expLine.textContent = "Expire: " + new Date(expMs).toLocaleString("fr-FR");
+        expLine.textContent = "Expire : " + new Date(expMs).toLocaleString("fr-FR");
         linkWrap.style.display = "block";
+
+        // Copier
+        copyLinkBtn.onclick = async ()=>{
+          try{
+            await navigator.clipboard.writeText(url);
+            showAlert("✅ Lien copié.", true);
+          }catch(e){
+            showAlert("⚠️ Copie impossible (navigateur). Sélectionne le lien et Ctrl+C.");
+          }
+        };
+
+        // Mailto
+        const subject = `CleanUp — Missions ${presta.homeName || ""} (${prestationId})`;
+        const body =
+          `Bonjour ${name},\n\n` +
+          `Voici ton lien pour accéder aux missions :\n${url}\n\n` +
+          `Logement : ${presta.homeName || ""}\n` +
+          `Adresse : ${[presta.homeAddress, presta.homeZip, presta.homeCity].filter(Boolean).join(" ")}\n` +
+          `Arrivée : ${[presta.arrivalDateKey, presta.arrivalTime].filter(Boolean).join(" ")}\n` +
+          `Départ : ${[presta.departureDateKey, presta.departureTime].filter(Boolean).join(" ")}\n\n` +
+          `Missions : ${types.map(missionLabel).join(", ")}\n` +
+          `Ce lien expire le : ${new Date(expMs).toLocaleString("fr-FR")}\n`;
+
+        mailLinkBtn.href =
+          `mailto:${encodeURIComponent(email)}` +
+          `?subject=${encodeURIComponent(subject)}` +
+          `&body=${encodeURIComponent(body)}`;
 
         showAlert("✅ Lien généré + missions reset (dayToken mis à jour).", true);
       }catch(err){
@@ -516,14 +586,12 @@
       }
     });
 
-    // bouton reset (sans créer de nouveau token) : utile en dépannage
+    // Reset missions (sans token) : dépannage uniquement
     resetBtn.addEventListener("click", async ()=>{
       hideAlert();
       try{
         resetBtn.disabled = true;
         genBtn.disabled = true;
-
-        showAlert("⏳ Reset missions…");
 
         const types = selectedTypes();
         if(!types.length){
@@ -539,13 +607,9 @@
         }
         const evt = eSnap.data() || {};
 
-        // reset “sec” : dayToken conservé si existant, sinon impossible côté agent.
-        // Ici on met dayToken="__RESET_ONLY__" pour que tu voies immédiatement le problème.
-        const token = "__RESET_ONLY__";
+        await resetMissionsForToken(evt, "__RESET_ONLY__", types);
 
-        await resetMissionsForToken(evt, token, { missionTypes: types });
-
-        showAlert("✅ Missions reset. (dayToken=__RESET_ONLY__ -> génère un lien ensuite)", true);
+        showAlert("✅ Missions reset. (dayToken=__RESET_ONLY__ → génère un lien ensuite)", true);
       }catch(err){
         console.error(err);
         showAlert("Erreur reset : " + (err?.code || err?.message || "inconnue"));
