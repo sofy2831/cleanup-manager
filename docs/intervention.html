@@ -68,6 +68,7 @@
     .alert.ok{ border-left-color:var(--ok); }
     .mini{ font-size:11px; font-weight:900; color:var(--muted); }
 
+    /* bloc "prestation" compact */
     .prestaHead{
       display:flex; flex-direction:column; gap:6px;
       background:#fff;
@@ -192,6 +193,12 @@
           <div id="totalValue">0,00 €</div>
         </div>
 
+        <!-- ✅ UN SEUL ENDROIT PHOTO (ADMIN) -->
+        <div class="btnrow" style="justify-content:flex-end;">
+          <a class="pill" id="photosAdminBtn" href="#" title="Voir les photos (preuves admin)">📷 Photos</a>
+        </div>
+
+        <!-- debug missions (laissé caché) -->
         <div id="missionsDebugWrap" style="display:none;">
           <div class="mini" style="margin-top:8px;">Missions (debug)</div>
           <div id="missionsList" style="display:flex;flex-direction:column;gap:6px;"></div>
@@ -226,9 +233,7 @@
   <script type="module">
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-    import {
-      doc, getDoc, setDoc, updateDoc, serverTimestamp, Timestamp
-    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import { doc, getDoc, setDoc, serverTimestamp, Timestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const alertBox = document.getElementById("alertBox");
     const subLine = document.getElementById("subLine");
@@ -254,47 +259,7 @@
     const linkBox = document.getElementById("linkBox");
     const logoutBtn = document.getElementById("logoutBtn");
 
-    // ======================
-    // ✅ DEFAULT CHECKLISTS
-    // ======================
-    // Ajuste librement ici. Format attendu par agent.html :
-    // checklist: { key: {label:"...", done:false}, ... }
-    const DEFAULT_CHECKLISTS = {
-      MENAGE: {
-        sols:      { label:"Sols aspirés + lavés", done:false },
-        sdb:       { label:"Salle de bain nettoyée", done:false },
-        cuisine:   { label:"Cuisine nettoyée", done:false },
-        poussiere: { label:"Poussière faite", done:false },
-        poubelles: { label:"Poubelles sorties", done:false }
-      },
-      CHECKIN: {
-        clefs:     { label:"Clés remises / boîte à clés OK", done:false },
-        accueil:   { label:"Accueil / consignes transmises", done:false },
-        etat:      { label:"État des lieux d’entrée OK", done:false }
-      },
-      CHECKOUT: {
-        clefs:     { label:"Clés récupérées", done:false },
-        etat:      { label:"État des lieux de sortie OK", done:false },
-        signaler:  { label:"Dégradations signalées si besoin", done:false }
-      },
-      LINGE: {
-        collecte:  { label:"Linge collecté", done:false },
-        lavage:    { label:"Linge lavé / séché", done:false },
-        remise:    { label:"Linge remis en place", done:false }
-      },
-      MAINTENANCE: {
-        diag:      { label:"Diagnostic fait", done:false },
-        action:    { label:"Action effectuée", done:false },
-        test:      { label:"Test / contrôle OK", done:false }
-      },
-      KITS: {
-        check:     { label:"Stock vérifié", done:false },
-        pose:      { label:"Kit installé", done:false },
-        note:      { label:"Consommables notés si manque", done:false }
-      }
-    };
-
-    const MISSION_TYPES = ["MENAGE","CHECKIN","CHECKOUT","LINGE","MAINTENANCE","KITS"];
+    const photosAdminBtn = document.getElementById("photosAdminBtn");
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -385,24 +350,30 @@
       const e = eSnap.data() || {};
       currentEvent = { id: eSnap.id, ...e };
 
+      // ✅ logement
       homeLine.textContent = e.homeName || "Logement";
 
+      // ✅ arrivée
       const aDate = e.arrivalDateKey || e.dateKey || e.date || "";
       const aTime = e.arrivalTime || e.time || "";
       arrLine.textContent = (aDate ? aDate : "—") + (aTime ? " • " + aTime : "");
 
+      // ✅ départ
       const dDate = e.departureDateKey || "";
       const dTime = e.departureTime || "";
       depLine.textContent = (dDate ? dDate : "—") + (dTime ? " • " + dTime : "");
 
+      // ✅ adresse + CP
       const addr = (e.homeAddress || e.address || "").trim();
       const zip  = (e.homeZip || e.zip || "").trim();
       addrLine.textContent = [addr, zip].filter(Boolean).join(" ").trim() || "—";
 
+      // ✅ propriétaire + tel
       const owner = (e.ownerName || "").trim();
       const phone = (e.ownerPhone || e.phone || "").trim();
       ownerLine.textContent = [owner, phone].filter(Boolean).join(" • ") || "—";
 
+      // note
       const note = (e.meta || "").trim();
       if(note){
         noteLine.style.display = "block";
@@ -412,26 +383,16 @@
         noteLine.textContent = "";
       }
 
+      // ✅ lignes + total
       const lines = Array.isArray(e.lines) ? e.lines : [];
       const total = (e.total != null) ? Number(e.total) : computeTotalFromLines(lines);
       renderLines(lines);
       totalValue.textContent = money(total);
 
-      missionsList.innerHTML = "";
-      for(const t of MISSION_TYPES){
-        try{
-          const mSnap = await getDoc(doc(db,"events",prestationId,"missions",t));
-          if(mSnap.exists()){
-            const d = mSnap.data() || {};
-            const div = document.createElement("div");
-            div.className = "mini";
-            div.textContent = `• ${t} — checklist:${d.checklist ? "oui" : "non"} — locked:${String(!!d.locked)} — status:${String(d.status||"—")}`;
-            missionsList.appendChild(div);
-          }
-        }catch(_){}
-      }
-      missionsDebugWrap.style.display = "none";
+      // ✅ bouton photos admin (UN SEUL)
+      photosAdminBtn.href = `preuves-admin.html?prestationId=${encodeURIComponent(prestationId)}`;
 
+      // ✅ agent fields
       agentName.value = e.assignedToName || "";
       agentEmail.value = e.assignedToEmail || "";
 
@@ -441,21 +402,16 @@
       subLine.textContent = "";
     }
 
-    // ==========================================
-    // ✅ ensureMission: crée + ajoute checklist
-    // sans écraser si déjà existante
-    // ==========================================
     async function ensureMissionDoc(type, tokenId, email, name){
-      const mRef = doc(db, "events", prestationId, "missions", type);
-      const snap = await getDoc(mRef);
-
-      const basePayload = {
+      await setDoc(doc(db, "events", prestationId, "missions", type), {
         type,
         conciergerieUid: currentUser.uid,
         prestationId: String(prestationId),
 
         locked: false,
         agentDone: false,
+        // photos restent ici si tu veux les garder au niveau mission
+        // (mais intervention ne les gère plus)
         photos: [],
         status: "ASSIGNEE",
 
@@ -463,28 +419,7 @@
         assignedToEmail: email,
         assignedToName: name,
         updatedAt: serverTimestamp()
-      };
-
-      if(!snap.exists()){
-        // doc inexistant -> on le crée AVEC checklist
-        await setDoc(mRef, {
-          ...basePayload,
-          checklist: DEFAULT_CHECKLISTS[type] || {}
-        }, { merge: true });
-        return;
-      }
-
-      // doc existe -> on n’écrase PAS la checklist si elle existe
-      const cur = snap.data() || {};
-      if(!cur.checklist){
-        await updateDoc(mRef, {
-          checklist: DEFAULT_CHECKLISTS[type] || {},
-          updatedAt: serverTimestamp()
-        });
-      }
-
-      // on met quand même à jour les infos agent/token (sans toucher checklist)
-      await setDoc(mRef, basePayload, { merge: true });
+      }, { merge: true });
     }
 
     async function generateLink(){
@@ -498,6 +433,15 @@
       if(!email || !name) return showAlert("Nom + email agent requis.");
       if(!/^\S+@\S+\.\S+$/.test(email)) return showAlert("Email agent invalide.");
 
+      // ✅ missionTypes : on prend ce que tu as déjà (event.missionTypes si présent, sinon ALL comme fallback)
+      // Tu m’as dit “on voit après missionTypes”, donc je ne casse pas ton flux :
+      // - si event.missionTypes existe : on l’utilise
+      // - sinon : on garde la liste complète (fallback)
+      const fallbackAll = ["MENAGE","CHECKIN","CHECKOUT","LINGE","MAINTENANCE","KITS"];
+      const missionTypes = Array.isArray(currentEvent?.missionTypes) && currentEvent.missionTypes.length
+        ? currentEvent.missionTypes.map(x=>String(x).toUpperCase().trim()).filter(Boolean)
+        : fallbackAll;
+
       const tokenId = randomToken(20);
       const expiresAtMs = Date.now() + 24*60*60*1000;
       const expiresAt = Timestamp.fromMillis(expiresAtMs);
@@ -507,15 +451,15 @@
         prestationId: String(prestationId),
         agentEmail: email,
         agentName: name,
-        missionTypes: [...MISSION_TYPES],
+        missionTypes,                 // ✅ la vérité pour agent.html
         active:true,
         expiresAt,
         expiresAtMs,
         createdAt: serverTimestamp()
       });
 
-      // ✅ backfill missions + checklist si absente
-      for (const t of MISSION_TYPES) {
+      // ✅ backfill UNIQUEMENT les missions du token
+      for (const t of missionTypes) {
         await ensureMissionDoc(t, tokenId, email, name);
       }
 
@@ -535,7 +479,7 @@
       copyBtn.disabled = false;
       mailtoBtn.disabled = false;
 
-      showAlert("Lien agent généré (checklists injectées).", true);
+      showAlert("Lien agent généré.", true);
       await load();
     }
 
