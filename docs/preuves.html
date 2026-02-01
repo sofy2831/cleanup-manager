@@ -69,7 +69,6 @@
       font-size:13px; font-weight:900; outline:none; min-width:200px;
     }
 
-    /* Photos */
     .ph-grid{
       display:grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -168,7 +167,7 @@
             <div class="mini">Mission</div>
             <select class="select" id="missionSel"></select>
           </div>
-          <div class="mini" id="countLine">0/20</div>
+          <div class="mini" id="countLine">0</div>
         </div>
 
         <div class="mini">Ajouter des photos (max 20 par mission)</div>
@@ -198,15 +197,15 @@
       </section>
 
       <div class="mini">
-        Écrit uniquement ici : <b>events/{prestationId}/missions/{TYPE}.photos</b> (objets {url,path,…}).<br>
-        Storage : <b>proofPhotos/{prestationId}/{TYPE}/{token}/{file}</b>.
+        Écrit uniquement ici : <b>events/{prestationId}/missions/{TYPE}.photos</b> (objets {url,path,...})<br>
+        Storage : <b>proofPhotos/{prestationId}/{TYPE}/{token}/{file}</b>
       </div>
     </div>
   </div>
 
   <script type="module">
     import { storage, db } from "./firebase-init.js";
-    import { doc, getDoc, setDoc, updateDoc, Timestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import { doc, getDoc, updateDoc, Timestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
     import { ref as sRef, uploadBytes, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js";
 
     const MAX_PHOTOS = 20;
@@ -277,7 +276,9 @@
 
     // ===== JPEG compression =====
     async function fileToImageBitmap(file){
-      try{ if("createImageBitmap" in window) return await createImageBitmap(file); }catch(e){}
+      try{
+        if("createImageBitmap" in window) return await createImageBitmap(file);
+      }catch(e){}
       const url = URL.createObjectURL(file);
       try{
         const img = new Image();
@@ -340,7 +341,7 @@
       const out = [];
       (Array.isArray(arr) ? arr : []).forEach(x=>{
         if(!x) return;
-        if(typeof x === "string") out.push({ url:x, path:"", createdAtMs:0 });
+        if(typeof x === "string") out.push({ url:x, path:"", createdAtMs:0, token:"", agentEmail:"" });
         else if(typeof x === "object" && x.url) out.push({
           url:String(x.url),
           path:String(x.path||""),
@@ -391,18 +392,22 @@
       });
     }
 
-    // IMPORTANT: ne JAMAIS créer de doc mission ici => sinon permission-denied.
-    // On lit/écrit uniquement si la mission existe déjà (créée par intervention.html).
-    async function loadMissionSnap(type){
+    async function loadMissionDocOrThrow(type){
       const ref = doc(db,"events",prestationId,"missions",type);
-      const snap = await getDoc(ref); // doit passer par la rule: allow get si dayToken actif (resource.data.dayToken)
-      if(!snap.exists()) throw new Error("Mission introuvable (pas créée côté conciergerie).");
-      return { ref, data: snap.data() || {} };
+      const snap = await getDoc(ref);
+      if(!snap.exists()){
+        throw new Error(`Mission "${type}" non initialisée. Regénère le lien depuis intervention.`);
+      }
+      const d = snap.data() || {};
+      if(String(d.dayToken || "") !== String(token)){
+        throw new Error(`Token non associé à la mission "${type}". Regénère le lien.`);
+      }
+      return d;
     }
 
-    async function getMissionPhotos(type){
-      const m = await loadMissionSnap(type);
-      return normalizePhotoList(m.data.photos);
+    async function loadMissionPhotos(type){
+      const d = await loadMissionDocOrThrow(type);
+      return normalizePhotoList(d.photos);
     }
 
     async function uploadOne(originalFile, type){
@@ -436,10 +441,8 @@
       try{
         const type = selectedType;
 
-        // recharge mission photos (évite overwrite)
-        const { ref, data } = await loadMissionSnap(type);
-        const cur = normalizePhotoList(data.photos);
-
+        // recharge mission photos (sans setDoc côté agent)
+        const cur = await loadMissionPhotos(type);
         if(cur.length >= MAX_PHOTOS) return showAlert(`Max ${MAX_PHOTOS} photos atteint pour ${missionLabel(type)}.`);
 
         const remaining = Math.max(0, MAX_PHOTOS - cur.length);
@@ -461,7 +464,7 @@
         }
 
         hintLine.textContent = "Écriture Firestore…";
-        await updateDoc(ref,{
+        await updateDoc(doc(db,"events",prestationId,"missions",type),{
           photos: next,
           updatedAt: Timestamp.now()
         });
@@ -495,17 +498,15 @@
       try{
         const type = selectedType;
 
-        // supprime storage si on a path
         if(photo?.path){
           try{ await deleteObject(sRef(storage, photo.path)); }
           catch(e){ console.warn("deleteObject failed:", e?.code || e?.message || e); }
         }
 
-        const { ref, data } = await loadMissionSnap(type);
-        const cur = normalizePhotoList(data.photos);
+        const cur = await loadMissionPhotos(type);
         const next = cur.filter(p => p.url !== photo.url);
 
-        await updateDoc(ref,{
+        await updateDoc(doc(db,"events",prestationId,"missions",type),{
           photos: next,
           updatedAt: Timestamp.now()
         });
@@ -525,10 +526,7 @@
     function fillMissionSelect(types){
       const list = (Array.isArray(types) && types.length) ? types : ["MENAGE"];
       missionSel.innerHTML = list
-        .map(t=> {
-          const v = String(t).toUpperCase();
-          return `<option value="${esc(v)}">${esc(missionLabel(v))}</option>`;
-        })
+        .map(t=> `<option value="${esc(String(t).toUpperCase())}">${esc(missionLabel(String(t).toUpperCase()))}</option>`)
         .join("");
       selectedType = String(list[0]).toUpperCase();
       missionSel.value = selectedType;
@@ -549,7 +547,6 @@
       backBtn.href = `agent.html?token=${encodeURIComponent(token)}&prestationId=${encodeURIComponent(prestationId)}`;
       chipToken.textContent = "token: " + token;
 
-      // token doc
       const tSnap = await getDoc(doc(db,"dayTokens",token));
       if(!tSnap.exists()){
         subLine.textContent = "";
@@ -578,33 +575,28 @@
       }
       chipStatus.innerHTML = `<span class="chip ok">OK</span>`;
 
-      // Header depuis tokenDoc.presta (SAFE)
       const p = tokenDoc.presta || {};
       const homeName = p.homeName || "Logement";
       const city = p.homeCity ? " — " + p.homeCity : "";
       homeLine.textContent = homeName + city;
 
-      const arrival =
-        (p.arrivalDateKey || p.dateKey || p.date || "—")
-        + (p.arrivalTime ? " • " + p.arrivalTime : (p.time ? " • " + p.time : ""));
+      const arrival = (p.arrivalDateKey || p.dateKey || p.date || "—") + (p.arrivalTime ? " • " + p.arrivalTime : (p.time ? " • " + p.time : ""));
       const agent = `Agent : ${(tokenDoc.agentName || "—")}${tokenDoc.agentEmail ? " • " + tokenDoc.agentEmail : ""}`;
       metaLine.textContent = `${arrival}\n${agent}`;
 
-      // Missions
       const types = (Array.isArray(tokenDoc.missionTypes) && tokenDoc.missionTypes.length)
         ? tokenDoc.missionTypes.map(x=>String(x||"").toUpperCase()).filter(Boolean)
         : ["MENAGE"];
 
       fillMissionSelect(types);
 
-      // Charger photos mission sélectionnée
       try{
-        const list = await getMissionPhotos(selectedType);
+        const list = await loadMissionPhotos(selectedType);
         renderPhotos(list);
       }catch(err){
-        // si mission pas créée => message clair
+        console.warn(err);
         renderPhotos([]);
-        showAlert("Mission introuvable côté Firestore. Re-génère le lien depuis intervention (ça recrée les missions).");
+        showAlert(String(err?.message || "Mission non initialisée. Regénère le lien."), false);
       }
 
       subLine.textContent = "";
@@ -613,10 +605,11 @@
     missionSel.addEventListener("change", async ()=>{
       selectedType = String(missionSel.value||"MENAGE").toUpperCase();
       try{
-        const list = await getMissionPhotos(selectedType);
+        const list = await loadMissionPhotos(selectedType);
         renderPhotos(list);
       }catch(err){
         console.error(err);
+        renderPhotos([]);
         showAlert("Erreur chargement mission : " + (err?.code || err?.message || "inconnue"));
       }
     });
