@@ -59,7 +59,6 @@
     .chip.ok{ background:rgba(27,143,77,0.16); color:var(--ok); }
     .chip.bad{ background:rgba(179,38,30,0.14); color:var(--bad); }
 
-    /* Entête "intervention-like" (sans proprio/tel) */
     .prestaHead{
       background:#fff;
       border:1px solid rgba(122,92,255,0.18);
@@ -292,7 +291,7 @@
     }
 
     // =========================
-    // ✅ Fallback déduction missions depuis les lignes (lavage/séchage => LINGE)
+    // ✅ inférence depuis lines (pour compléter token)
     // =========================
     function normTxt(s){
       return String(s||"")
@@ -315,14 +314,13 @@
 
         if(label.includes("menage") || label.includes("nettoyage")) out.add("MENAGE");
 
-        // ✅ LINGE : pas seulement "linge" (ton cas "collecte + lavage + séchage")
         if(
           label.includes("linge") ||
           label.includes("drap") ||
           label.includes("serviette") ||
-          label.includes("blanch") ||        // blanchisserie
+          label.includes("blanch") ||
           label.includes("lavage") ||
-          label.includes("sechage") ||       // séchage sans accent
+          label.includes("sechage") ||
           label.includes("collecte") ||
           label.includes("lessive")
         ) out.add("LINGE");
@@ -350,6 +348,7 @@
           { key:"lit",       label:"Lits faits / mise en place" }
         ];
       }
+
       if(t==="CHECKIN"){
         return [
           { key:"cles",   label:"Remise des clés / code communiqué" },
@@ -359,6 +358,7 @@
           { key:"infos",  label:"Infos pratiques (wifi / règles / poubelles)" }
         ];
       }
+
       if(t==="CHECKOUT"){
         return [
           { key:"cles",      label:"Récupération clés / fermeture ok" },
@@ -368,6 +368,7 @@
           { key:"photos",    label:"Photos si anomalie" }
         ];
       }
+
       if(t==="KITS"){
         return [
           { key:"check",  label:"Vérifier stock kits (base)" },
@@ -377,6 +378,7 @@
           { key:"range",  label:"Ranger / placer kits" }
         ];
       }
+
       if(t==="LINGE"){
         return [
           { key:"collecte", label:"Collecte linge sale" },
@@ -386,6 +388,7 @@
           { key:"signal",   label:"Signaler manque / tâche / déchirure" }
         ];
       }
+
       if(t==="MAINTENANCE"){
         return [
           { key:"diag",   label:"Diagnostic rapide (source du problème)" },
@@ -395,6 +398,7 @@
           { key:"report", label:"Compte-rendu clair (suite / urgence)" }
         ];
       }
+
       return [
         { key:"ok",     label:"Mission réalisée" },
         { key:"signal", label:"Anomalies signalées si besoin" },
@@ -402,7 +406,6 @@
       ];
     }
 
-    // Checklist robuste : lecture depuis Firestore
     function extractChecklistRaw(d){
       return (
         d?.checklist ??
@@ -487,7 +490,6 @@
       }
     }
 
-    // ✅ crée une mission si absente (cas token menage-only mais event a aussi linge)
     async function ensureMissionDoc(type){
       const ref = doc(db, "events", prestationId, "missions", type);
       const snap = await getDoc(ref);
@@ -576,15 +578,17 @@
         eventDoc = null;
       }
 
-      setPrestaHeader(eventDoc || {});
+      // ✅ IMPORTANT : fallback sur snapshot tokenDoc.presta si events bloqué
+      const headerSource = (eventDoc && Object.keys(eventDoc).length) ? eventDoc : (tokenDoc?.presta || {});
+      setPrestaHeader(headerSource);
+
       agentLine.textContent = `Agent : ${(tokenDoc.agentName || "—")}${tokenDoc.agentEmail ? " • " + tokenDoc.agentEmail : ""}`;
 
-      // ✅ missions du token + fallback depuis event.lines
       const tokenTypes = Array.isArray(tokenDoc.missionTypes) && tokenDoc.missionTypes.length
         ? tokenDoc.missionTypes.map(x => String(x||"").toUpperCase()).filter(Boolean)
         : [];
 
-      const inferredTypes = inferMissionTypesFromEvent(eventDoc || {});
+      const inferredTypes = inferMissionTypesFromEvent(eventDoc || tokenDoc?.presta || {});
       const merged = [];
       const seen = new Set();
       for(const t of [...tokenTypes, ...inferredTypes]){
@@ -597,7 +601,6 @@
 
       subLine.textContent = "";
 
-      // ✅ garantir l’existence des docs missions (sinon l’agent ne voit rien)
       const missions = [];
       for(const t of TYPES){
         try{
@@ -623,7 +626,6 @@
         const done = !!d.agentDone;
         const status = (d.status || "").toUpperCase() || "—";
 
-        // ✅ affichage compact + état depuis Firestore
         const tpl = compactChecklistTemplate(m.id);
         const savedItems = checklistToArray(extractChecklistRaw(d));
         const doneByKey = {};
@@ -704,10 +706,8 @@
           };
 
           try{
-            // ✅ setDoc merge => marche même si doc manquait
             await setDoc(doc(db, "events", prestationId, "missions", type), payload, { merge:true });
 
-            // best effort : remonter statut au parent
             try{
               await setDoc(doc(db, "events", prestationId), {
                 opStatus: markDone ? "A_VALIDER" : "EN_COURS",
