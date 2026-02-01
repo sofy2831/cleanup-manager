@@ -93,6 +93,8 @@
       border:none; border-radius:999px; padding:10px 12px; font-size:13px; font-weight:900; cursor:pointer;
       color:#fff; background:linear-gradient(90deg,var(--violet),var(--violet2));
       box-shadow:0 10px 22px rgba(0,0,0,0.10); white-space:nowrap;
+      text-decoration:none;
+      display:inline-flex; align-items:center; justify-content:center;
     }
     .btn.ghost{
       background:#fff; color:var(--violet); border:2px solid var(--violet);
@@ -107,75 +109,6 @@
     .locked{
       border-left:5px solid rgba(122,92,255,0.55);
       background:linear-gradient(180deg,#ffffff 0%, rgba(122,92,255,0.06) 100%);
-    }
-
-    /* Photos */
-    .photos{
-      border-top:1px dashed rgba(122,92,255,0.25);
-      padding-top:10px;
-      display:flex;
-      flex-direction:column;
-      gap:8px;
-    }
-    .ph-row{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; justify-content:space-between; }
-    .ph-grid{
-      display:grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap:8px;
-    }
-    @media(max-width:920px){ .ph-grid{ grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-    @media(max-width:720px){ .ph-grid{ grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-    .ph{
-      position:relative;
-      border-radius:14px;
-      overflow:hidden;
-      border:1px solid rgba(0,0,0,0.06);
-      box-shadow:0 3px 10px rgba(0,0,0,.06);
-      background:#fafafa;
-    }
-    .ph img{ width:100%; height:140px; object-fit:cover; display:block; }
-    .ph .del{
-      position:absolute; top:8px; right:8px;
-      border:none; cursor:pointer;
-      border-radius:999px; padding:6px 8px;
-      font-weight:900; font-size:12px;
-      background:rgba(255,255,255,0.92);
-      color:var(--bad);
-      box-shadow:0 2px 8px rgba(0,0,0,.10);
-    }
-    .ph .cap{
-      position:absolute; left:8px; bottom:8px;
-      background:rgba(255,255,255,0.92);
-      padding:4px 8px; border-radius:999px;
-      font-size:11px; font-weight:900; color:#444;
-      box-shadow:0 2px 8px rgba(0,0,0,.10);
-      max-width:90%;
-      overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
-    }
-
-    /* Preview */
-    .previews{
-      display:grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap:8px;
-      margin-top:6px;
-    }
-    @media(max-width:920px){ .previews{ grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-    @media(max-width:720px){ .previews{ grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-    .pv{
-      border:1px dashed rgba(122,92,255,0.35);
-      border-radius:14px;
-      overflow:hidden;
-      background:rgba(122,92,255,0.04);
-      position:relative;
-    }
-    .pv img{ width:100%; height:120px; object-fit:cover; display:block; }
-    .pv .cap{
-      position:absolute; left:8px; bottom:8px;
-      background:rgba(255,255,255,0.92);
-      padding:4px 8px; border-radius:999px;
-      font-size:11px; font-weight:900; color:#444;
-      box-shadow:0 2px 8px rgba(0,0,0,.10);
     }
   </style>
 </head>
@@ -224,13 +157,8 @@
   </div>
 
   <script type="module">
-    import { storage, db } from "./firebase-init.js";
+    import { db } from "./firebase-init.js";
     import { doc, getDoc, updateDoc, Timestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
-    import { ref as sRef, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js";
-
-    const MAX_PHOTOS = 20;
-    const JPEG_QUALITY = 0.75;
-    const MAX_DIM = 1600;
 
     const alertBox = document.getElementById("alertBox");
     const subLine = document.getElementById("subLine");
@@ -298,41 +226,61 @@
 
     function tokenValid(tokenDoc){
       if(!tokenDoc?.active) return false;
-
       const expMs = Number(tokenDoc?.expiresAtMs);
       if(Number.isFinite(expMs)) return Date.now() < expMs;
-
       const ts = tokenDoc?.expiresAt;
       const ms = ts?.toMillis ? ts.toMillis() : NaN;
       if(Number.isFinite(ms)) return Date.now() < ms;
-
-      const iso = tokenDoc?.expiresAtIso;
-      const p = Date.parse(iso || "");
-      if(Number.isFinite(p)) return Date.now() < p;
-
       return false;
     }
 
-    // Checklist helpers
-    function checklistToArray(cl){
+    // ✅ Checklist robuste : accepte plusieurs noms + formats
+    function extractChecklistRaw(d){
+      return (
+        d?.checklist ??
+        d?.checkList ??
+        d?.checklistItems ??
+        d?.items ??
+        d?.tasks ??
+        d?.taskList ??
+        null
+      );
+    }
+
+    // Convertit en tableau [{key,label,done}]
+    function checklistToArray(any){
+      const cl = any;
       if(!cl) return [];
+
+      // Array of strings
+      if(Array.isArray(cl) && cl.every(x=> typeof x === "string")){
+        return cl.map((label, i)=>({ key: String(i), label, done:false }));
+      }
+
+      // Array of {label, done} ou {text, done}
       if(Array.isArray(cl)){
         return cl.map((x,i)=>{
           if(typeof x === "string") return { key:String(i), label:x, done:false };
-          return { key: x.key || String(i), label: x.label || ("Item "+(i+1)), done: !!x.done };
+          const label = x?.label ?? x?.text ?? x?.name ?? ("Item " + (i+1));
+          const done = !!(x?.done ?? x?.checked ?? x?.ok);
+          const key = String(x?.key ?? x?.id ?? i);
+          return { key, label:String(label), done };
         });
       }
+
+      // Object map : { key: boolean } ou { key: {label, done} }
       if(typeof cl === "object"){
         const out = [];
         for(const [k,v] of Object.entries(cl)){
           if(typeof v === "boolean"){
             out.push({ key:k, label:k, done:v });
           }else{
-            out.push({ key:k, label:(v?.label || k), done: !!v?.done });
+            out.push({ key:k, label:String(v?.label ?? v?.text ?? k), done: !!(v?.done ?? v?.checked ?? v?.ok) });
           }
         }
         return out;
       }
+
       return [];
     }
 
@@ -344,112 +292,14 @@
       return obj;
     }
 
-    function safeFileName(name){
-      return (name || "photo.jpg").replace(/[^\w.\-]+/g, "_");
-    }
-
-    // ===== Compression JPEG =====
-    async function fileToImageBitmap(file){
-      try{
-        if("createImageBitmap" in window){
-          return await createImageBitmap(file);
-        }
-      }catch(e){}
-
-      const url = URL.createObjectURL(file);
-      try{
-        const img = new Image();
-        img.decoding = "async";
-        img.src = url;
-        await new Promise((res, rej)=>{
-          img.onload = ()=>res();
-          img.onerror = (e)=>rej(e);
-        });
-
-        const c = document.createElement("canvas");
-        c.width = img.naturalWidth || img.width;
-        c.height = img.naturalHeight || img.height;
-        const ctx = c.getContext("2d");
-        ctx.drawImage(img, 0, 0);
-
-        const dataUrl = c.toDataURL("image/jpeg", 0.92);
-        const blob = await (await fetch(dataUrl)).blob();
-        return await createImageBitmap(blob);
-      }finally{
-        URL.revokeObjectURL(url);
-      }
-    }
-
-    function computeResize(w,h,maxDim){
-      const maxSide = Math.max(w,h);
-      if(maxSide <= maxDim) return { w, h };
-      const ratio = maxDim / maxSide;
-      return { w: Math.round(w*ratio), h: Math.round(h*ratio) };
-    }
-
-    async function compressToJpegBlob(file){
-      const bmp = await fileToImageBitmap(file);
-      const { w, h } = computeResize(bmp.width, bmp.height, MAX_DIM);
-
-      const canvas = document.createElement("canvas");
-      canvas.width = w;
-      canvas.height = h;
-
-      const ctx = canvas.getContext("2d", { alpha:false });
-      ctx.drawImage(bmp, 0, 0, w, h);
-
-      const blob = await new Promise((resolve, reject)=>{
-        canvas.toBlob((b)=>{
-          if(!b) return reject(new Error("Compression canvas.toBlob() a échoué."));
-          resolve(b);
-        }, "image/jpeg", JPEG_QUALITY);
-      });
-
-      return blob;
-    }
-
-    function mergeUniqueMax(arr, add, max){
-      const out = Array.isArray(arr) ? arr.filter(Boolean) : [];
-      if(add && !out.includes(add)) out.push(add);
-      return out.slice(0, max);
-    }
-
-    function buildPreviews(files){
-      const urls = [];
-      for(const f of files){
-        try{ urls.push(URL.createObjectURL(f)); }catch{}
-      }
-      return urls;
-    }
-
     // =========================
-    // Token + preload
+    // Token + load
     // =========================
     const token = qs("token");
     const prestationId = qs("prestationId");
 
     let tokenDoc = null;
     let eventDoc = null;
-
-    async function uploadMissionPhoto(missionType, originalFile){
-      const safeName =
-        Date.now() + "_" +
-        Math.random().toString(16).slice(2) + "_" +
-        safeFileName(originalFile.name || "photo.jpg").replace(/\.(heic|heif)$/i, ".jpg");
-
-      const finalName = (/\.(jpg|jpeg)$/i.test(safeName)) ? safeName : (safeName + ".jpg");
-
-      // Storage path : ancien format
-      const path = `missionPhotos/${prestationId}/${missionType}/${token}/${finalName}`;
-      const ref = sRef(storage, path);
-
-      const jpegBlob = await compressToJpegBlob(originalFile);
-
-      console.log("[UPLOAD] path=", path);
-      await uploadBytes(ref, jpegBlob, { contentType: "image/jpeg" });
-      const url = await getDownloadURL(ref);
-      return url;
-    }
 
     async function load(){
       hideAlert();
@@ -460,11 +310,6 @@
         showAlert("⛔ Paramètres manquants (token / prestationId).");
         return;
       }
-
-      // debug bucket
-      try{
-        console.log("[INIT] project=", storage.app?.options?.projectId, "bucket=", storage.app?.options?.storageBucket);
-      }catch{}
 
       whoAmI.textContent = "Agent (token)";
       chipToken.textContent = "token: " + token;
@@ -486,7 +331,7 @@
       chipExpiry.textContent = "expire: " + (
         Number.isFinite(Number(tokenDoc.expiresAtMs))
           ? prettyExpiryFromMs(tokenDoc.expiresAtMs)
-          : (tokenDoc.expiresAt?.toDate ? prettyExpiryFromMs(tokenDoc.expiresAt.toDate().getTime()) : "—")
+          : (tokenDoc.expiresAt?.toMillis ? prettyExpiryFromMs(tokenDoc.expiresAt.toMillis()) : "—")
       );
 
       if(!tokenValid(tokenDoc)){
@@ -496,7 +341,7 @@
       }
       chipStatus.innerHTML = `<span class="chip ok">OK</span>`;
 
-      // event doc (souvent bloqué conciergerie-only, donc best effort)
+      // event doc (chez toi il est lisible conciergerie-only → best effort)
       try{
         const eSnap = await getDoc(doc(db, "events", prestationId));
         if(eSnap.exists()) eventDoc = eSnap.data() || {};
@@ -504,16 +349,19 @@
         eventDoc = null;
       }
 
+      // Affichage entête (si eventDoc non lisible, on reste minimal)
       const homeName = eventDoc?.homeName || "Logement";
       const homeCity = eventDoc?.homeCity ? " — " + eventDoc.homeCity : "";
       homeLine.textContent = homeName + homeCity;
 
-      metaLine.textContent =
-        (eventDoc?.dateKey || eventDoc?.date || "—") +
-        (eventDoc?.time ? " à " + eventDoc.time : "") +
-        (eventDoc?.homeAddress ? " • " + eventDoc.homeAddress : "") +
-        `\nAgent : ${(tokenDoc.agentName || "—")}${tokenDoc.agentEmail ? " • " + tokenDoc.agentEmail : ""}`;
+      const meta = [];
+      if(eventDoc?.dateKey) meta.push(eventDoc.dateKey);
+      if(eventDoc?.time) meta.push(eventDoc.time);
+      if(eventDoc?.homeAddress) meta.push(eventDoc.homeAddress);
+      meta.push(`Agent : ${(tokenDoc.agentName || "—")}${tokenDoc.agentEmail ? " • " + tokenDoc.agentEmail : ""}`);
+      metaLine.textContent = meta.join(" • ");
 
+      // ✅ uniquement les missions de ce token
       const TYPES = Array.isArray(tokenDoc.missionTypes) && tokenDoc.missionTypes.length
         ? tokenDoc.missionTypes.map(x => String(x||"").toUpperCase()).filter(Boolean)
         : ["MENAGE"];
@@ -524,13 +372,15 @@
         if(mSnap.exists()) missions.push({ id:t, data: mSnap.data() || {} });
       }
 
-      subLine.textContent = "";
+      subLine.textContent = missions.length
+        ? `Missions liées à ce lien : ${missions.map(x=>x.id).join(", ")}`
+        : `Aucune mission trouvée pour ce lien.`;
 
       if(!missions.length){
         missionsWrap.innerHTML = `
           <div class="mcard">
             <div class="mtitle">Aucune mission</div>
-            <div class="msub">Soit elles n’existent pas, soit les rules bloquent la lecture.</div>
+            <div class="msub">Soit les documents n’existent pas, soit les rules bloquent la lecture.</div>
           </div>`;
         return;
       }
@@ -542,8 +392,8 @@
         const done = !!d.agentDone;
         const status = (d.status || "").toUpperCase() || "—";
 
-        const items = checklistToArray(d.checklist);
-        const photos = Array.isArray(d.photos) ? d.photos.filter(Boolean) : [];
+        const rawChecklist = extractChecklistRaw(d);
+        const items = checklistToArray(rawChecklist);
 
         const checklistHtml = items.length
           ? items.map((it, idx)=>{
@@ -558,28 +408,14 @@
                 </div>
               `;
             }).join("")
-          : `<div class="mini">Checklist vide.</div>`;
-
-        const photosHtml = photos.length
-          ? `
-            <div class="ph-grid">
-              ${photos.map((url, idx)=>`
-                <div class="ph">
-                  <img src="${esc(url)}" alt="photo ${idx+1}">
-                  ${locked ? "" : `<button class="del" type="button" data-phdel="${m.id}" data-i="${idx}">✕</button>`}
-                  <div class="cap">photo ${idx+1}</div>
-                </div>
-              `).join("")}
-            </div>
-          `
-          : `<div class="mini">Aucune photo.</div>`;
+          : `<div class="mini">Checklist vide (champ absent ou vide).</div>`;
 
         const wrap = document.createElement("div");
         wrap.className = "mcard" + (done ? " done" : "") + (locked ? " locked" : "");
         wrap.innerHTML = `
           <div class="mhead">
             <div>
-              <div class="mtitle">${missionTitle(d.type || m.id)} ${locked ? "• verrouillée" : ""}</div>
+              <div class="mtitle">${missionTitle(d.missionId || d.type || m.id)} ${locked ? "• verrouillée" : ""}</div>
               <div class="msub">Status : ${esc(status)} ${done ? "\n✔ Terminée" : ""}</div>
             </div>
             <div>${chipFor(status)}</div>
@@ -594,54 +430,16 @@
             <textarea rows="2" placeholder="Ex. problème, remarque..." data-comment="${esc(m.id)}" ${locked ? "disabled" : ""}>${esc(d.agentComment || "")}</textarea>
           </div>
 
-          <div class="photos" data-ph="${esc(m.id)}">
-            <div class="ph-row">
-              <div class="mini">Photos (max ${MAX_PHOTOS}) — compression auto</div>
-              <div class="mini">${photos.length}/${MAX_PHOTOS}</div>
-            </div>
-
-            ${photosHtml}
-
-            <div class="ph-row">
-              <input type="file" accept="image/*" data-phinput="${esc(m.id)}" ${locked || photos.length>=MAX_PHOTOS ? "disabled" : ""} />
-              <button class="btn ghost" type="button" data-phupload="${esc(m.id)}" ${locked || photos.length>=MAX_PHOTOS ? "disabled" : ""}>Uploader</button>
-            </div>
-
-            <div class="mini" data-phhint="${esc(m.id)}"></div>
-            <div class="previews" data-pv="${esc(m.id)}" style="display:none;"></div>
-          </div>
-
           <div class="actions">
+            <a class="btn ghost" href="preuves.html?token=${encodeURIComponent(token)}&prestationId=${encodeURIComponent(prestationId)}&missionType=${encodeURIComponent(m.id)}" ${locked ? 'aria-disabled="true"' : ""}>
+              📷 Photos
+            </a>
             <button class="btn ghost" type="button" data-save="${esc(m.id)}" ${locked ? "disabled" : ""}>Enregistrer</button>
             <button class="btn" type="button" data-done="${esc(m.id)}" ${locked ? "disabled" : ""}>Terminer</button>
           </div>
         `;
         missionsWrap.appendChild(wrap);
 
-        function setHint(text){
-          const hint = wrap.querySelector(`[data-phhint="${m.id}"]`);
-          if(hint) hint.textContent = text || "";
-        }
-
-        function showPreviews(files){
-          const pv = wrap.querySelector(`[data-pv="${m.id}"]`);
-          if(!pv) return;
-          pv.innerHTML = "";
-          if(!files || !files.length){
-            pv.style.display = "none";
-            return;
-          }
-          const urls = buildPreviews(files);
-          pv.style.display = "grid";
-          urls.slice(0,4).forEach((u, idx)=>{
-            const div = document.createElement("div");
-            div.className = "pv";
-            div.innerHTML = `<img src="${u}"><div class="cap">preview ${idx+1}</div>`;
-            pv.appendChild(div);
-          });
-        }
-
-        // ✅ CHECKLIST / COMMENT / DONE / LOCK (pas de photos ici)
         async function saveMission(markDone=false){
           hideAlert();
           const type = m.id;
@@ -659,7 +457,7 @@
           const comment = (commentEl?.value || "").trim();
 
           const payload = {
-            checklist: arrayToChecklistObject(newItems),
+            checklist: arrayToChecklistObject(newItems),   // ✅ on écrit TOUJOURS en format propre
             agentComment: comment,
             status: markDone ? "A_VALIDER" : (d.status || "EN_COURS"),
             agentDone: markDone ? true : (!!d.agentDone),
@@ -670,10 +468,13 @@
           try{
             await updateDoc(doc(db, "events", prestationId, "missions", type), payload);
 
-            // ✅ MICRO-PATCH (3 lignes) : on pousse la presta parent en A_VALIDER quand l'agent termine
-            if(markDone){
-              await updateDoc(doc(db, "events", prestationId), { opStatus:"A_VALIDER", status:"A_VALIDER", updatedAt: Timestamp.now() });
-            }
+            // 🔥 micro-patch utile : remonter le statut au parent (sans toucher photos)
+            try{
+              await updateDoc(doc(db, "events", prestationId), {
+                opStatus: markDone ? "A_VALIDER" : "EN_COURS",
+                updatedAt: Timestamp.now()
+              });
+            }catch(e){ /* best effort */ }
 
             showAlert(markDone ? "✅ Mission terminée (À VALIDER) + verrouillée." : "✅ Enregistré.", true);
             await load();
@@ -683,83 +484,8 @@
           }
         }
 
-        // ✅ PHOTOS ONLY (FireStore update strict)
-        async function addPhoto(){
-          hideAlert();
-          const type = m.id;
-
-          const input = wrap.querySelector(`input[data-phinput="${type}"]`);
-          const file = input?.files?.[0];
-          if(!file) return showAlert("Choisis une image.");
-
-          try{
-            const fresh = await getDoc(doc(db, "events", prestationId, "missions", type));
-            const cur = fresh.exists() ? (fresh.data()||{}) : {};
-            const curPhotos = Array.isArray(cur.photos) ? cur.photos.filter(Boolean) : [];
-            if(curPhotos.length >= MAX_PHOTOS) return showAlert(`Max ${MAX_PHOTOS} photos.`);
-
-            setHint("Compression…");
-            const url = await uploadMissionPhoto(type, file);
-            setHint("Écriture Firestore…");
-
-            const nextPhotos = mergeUniqueMax(curPhotos, url, MAX_PHOTOS);
-
-            // 🔒 PHOTOS ONLY
-            await updateDoc(doc(db, "events", prestationId, "missions", type), {
-              photos: nextPhotos
-            });
-
-            showAlert("✅ Photo ajoutée.", true);
-            await load();
-          }catch(err){
-            console.error(err);
-            showAlert("Erreur upload photo : " + (err?.code || err?.message || "inconnue"));
-          }finally{
-            if(input) input.value = "";
-            showPreviews([]);
-            setHint("");
-          }
-        }
-
-        // 🔒 PHOTOS ONLY
-        async function deletePhoto(index){
-          hideAlert();
-          const type = m.id;
-
-          try{
-            const fresh = await getDoc(doc(db, "events", prestationId, "missions", type));
-            const cur = fresh.exists() ? (fresh.data()||{}) : {};
-            const curPhotos = Array.isArray(cur.photos) ? cur.photos.filter(Boolean) : [];
-            curPhotos.splice(index, 1);
-
-            await updateDoc(doc(db, "events", prestationId, "missions", type), {
-              photos: curPhotos.slice(0, MAX_PHOTOS)
-            });
-
-            showAlert("✅ Photo supprimée.", true);
-            await load();
-          }catch(err){
-            console.error(err);
-            showAlert("Erreur suppression photo : " + (err?.code || err?.message || "inconnue"));
-          }
-        }
-
         wrap.querySelector(`button[data-save="${m.id}"]`)?.addEventListener("click", ()=> saveMission(false));
         wrap.querySelector(`button[data-done="${m.id}"]`)?.addEventListener("click", ()=> saveMission(true));
-        wrap.querySelector(`button[data-phupload="${m.id}"]`)?.addEventListener("click", ()=> addPhoto());
-
-        const fileInput = wrap.querySelector(`input[data-phinput="${m.id}"]`);
-        fileInput?.addEventListener("change", ()=>{
-          const files = fileInput.files ? Array.from(fileInput.files) : [];
-          showPreviews(files.slice(0,1));
-        });
-
-        wrap.querySelectorAll(`button[data-phdel="${m.id}"]`).forEach(btn=>{
-          btn.addEventListener("click", ()=>{
-            const i = Number(btn.getAttribute("data-i"));
-            if(Number.isFinite(i)) deletePhoto(i);
-          });
-        });
       }
     }
 
