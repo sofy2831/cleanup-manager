@@ -581,6 +581,51 @@
   const unlinkOwnerBtn = document.getElementById("unlinkOwnerBtn");
   const ownerLookupInfo = document.getElementById("ownerLookupInfo");
 
+  // ===== Owner link state =====
+  let linkedOwnerUid = "";      // uid du compte proprio trouvé
+  let linkedOwnerEmail = "";    // email normalisé
+
+  function normEmail(s){
+    return String(s || "").trim().toLowerCase();
+  }
+
+  function showOwnerLookup(msg, ok=true){
+    ownerLookupInfo.style.display = "block";
+    ownerLookupInfo.style.borderLeft = ok ? "5px solid var(--ok)" : "5px solid var(--bad)";
+    ownerLookupInfo.innerHTML = msg;
+  }
+
+  function hideOwnerLookup(){
+    ownerLookupInfo.style.display = "none";
+    ownerLookupInfo.innerHTML = "";
+    ownerLookupInfo.style.borderLeft = "";
+  }
+
+  function setLinkedOwner({ uid, email, fullname }){
+    linkedOwnerUid = uid || "";
+    linkedOwnerEmail = normEmail(email || "");
+
+    if(linkedOwnerUid){
+      unlinkOwnerBtn.style.display = "inline-flex";
+      showOwnerLookup(
+        `✅ Compte trouvé<br><b>Email :</b> ${escapeHtml(linkedOwnerEmail)}<br><b>UID :</b> ${escapeHtml(linkedOwnerUid)}${fullname ? `<br><b>Nom :</b> ${escapeHtml(fullname)}` : ""}`,
+        true
+      );
+    }else{
+      unlinkOwnerBtn.style.display = "none";
+      hideOwnerLookup();
+    }
+  }
+
+  function clearLinkedOwner(){
+    linkedOwnerUid = "";
+    linkedOwnerEmail = "";
+    ownerAccountEmailEl.value = "";
+    unlinkOwnerBtn.style.display = "none";
+    hideOwnerLookup();
+  }
+
+    
   // booking modal
   const bookingBackdrop = document.getElementById("bookingBackdrop");
   const bookingModalTitle = document.getElementById("bookingModalTitle");
@@ -600,6 +645,8 @@
   const deleteBookingBtn = document.getElementById("deleteBookingBtn");
   const archiveBookingBtn = document.getElementById("archiveBookingBtn");
 
+
+    
   function showAlert(msg, ok=false){
     alertBox.style.display = "block";
     alertBox.classList.toggle("ok", !!ok);
@@ -733,6 +780,90 @@
     `;
   }
 
+  async function findOwnerAccountByEmail(rawEmail){
+    const emailLower = normEmail(rawEmail);
+    if(!emailLower) throw new Error("Email vide.");
+
+    // 1) users (recommandé)
+    // On tente d’abord emailLower (si tu le stockes), sinon email
+    let snap = null;
+
+    // Tentative A : users.emailLower == ...
+    try{
+      const q1 = query(
+        collection(db, "users"),
+        where("emailLower", "==", emailLower),
+        limit(1)
+      );
+      const s1 = await getDocs(q1);
+      if(!s1.empty) snap = { id: s1.docs[0].id, data: s1.docs[0].data() };
+    }catch(e){
+      // si le champ n’existe pas encore dans tes docs, la requête renvoie juste vide → pas grave
+    }
+
+    // Tentative B : users.email == ...
+    if(!snap){
+      const q2 = query(
+        collection(db, "users"),
+        where("email", "==", emailLower),
+        limit(1)
+      );
+      const s2 = await getDocs(q2);
+      if(!s2.empty) snap = { id: s2.docs[0].id, data: s2.docs[0].data() };
+    }
+
+    if(snap){
+      const u = snap.data || {};
+      // Optionnel : sécuriser sur role
+      const role = String(u.role || "").toLowerCase();
+      if(role && role !== "proprietaire"){
+        throw new Error("Ce compte existe, mais n’a pas le rôle propriétaire.");
+      }
+      return {
+        uid: snap.id,
+        email: u.email || emailLower,
+        fullname: u.fullname || u.displayName || ""
+      };
+    }
+
+    // 2) fallback owners (si tu l’utilises)
+    // owners doc id = uid (dans ton profil-proprio, tu crées owners/{uid})
+    // donc on recherche par emailLower / email aussi, sinon on abandonne.
+    let snapO = null;
+
+    try{
+      const q3 = query(
+        collection(db, "owners"),
+        where("emailLower", "==", emailLower),
+        limit(1)
+      );
+      const s3 = await getDocs(q3);
+      if(!s3.empty) snapO = { id: s3.docs[0].id, data: s3.docs[0].data() };
+    }catch(e){}
+
+    if(!snapO){
+      const q4 = query(
+        collection(db, "owners"),
+        where("email", "==", emailLower),
+        limit(1)
+      );
+      const s4 = await getDocs(q4);
+      if(!s4.empty) snapO = { id: s4.docs[0].id, data: s4.docs[0].data() };
+    }
+
+    if(snapO){
+      const o = snapO.data || {};
+      return {
+        uid: snapO.id,
+        email: o.email || emailLower,
+        fullname: o.fullname || o.displayName || ""
+      };
+    }
+
+    throw new Error("Aucun compte propriétaire trouvé avec cet email.");
+  }
+
+    
   async function lookupOwnerByEmail(){
     hideAlert();
 
@@ -788,6 +919,34 @@
       lookupOwnerBtn.style.opacity = "1";
     }
   }
+  lookupOwnerBtn.addEventListener("click", async ()=>{
+    hideAlert();
+    hideOwnerLookup();
+
+    const email = ownerAccountEmailEl.value.trim();
+    if(!email) return showOwnerLookup("⛔ Mets un email.", false);
+
+    lookupOwnerBtn.disabled = true;
+    lookupOwnerBtn.style.opacity = "0.75";
+
+    try{
+      const found = await findOwnerAccountByEmail(email);
+      setLinkedOwner(found);
+    }catch(err){
+      console.error(err);
+      setLinkedOwner({ uid:"", email:"", fullname:"" });
+      showOwnerLookup("⛔ " + (err?.message || "Recherche impossible."), false);
+    }finally{
+      lookupOwnerBtn.disabled = false;
+      lookupOwnerBtn.style.opacity = "1";
+    }
+  });
+
+  unlinkOwnerBtn.addEventListener("click", ()=>{
+    if(!confirm("Dissocier ce logement du compte propriétaire ?")) return;
+    clearLinkedOwner();
+    showOwnerLookup("✅ Dissociation prête. Clique “Enregistrer” pour appliquer.", true);
+  });
 
   function unlinkOwner(){
     linkedOwnerUid = ""; linkedOwnerEmail = ""; linkedOwnerName = "";
@@ -1500,3 +1659,4 @@
 
 </body>
 </html>
+
