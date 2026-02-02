@@ -1,4 +1,4 @@
-<!-- docs/logements.html (COMPLET) — Parcours CleanUp "qui ne casse pas" -->
+<!-- docs/logements.html (COMPLET) — Parcours CleanUp "qui ne casse pas" + lien OwnerUid -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -447,11 +447,28 @@
           </div>
         </div>
 
-        <label for="ownerName">Nom du propriétaire</label>
+        <label for="ownerName">Nom du propriétaire (libellé)</label>
         <input id="ownerName" type="text" placeholder="Ex. Dupont" required />
 
         <label for="ownerPhone">Téléphone propriétaire</label>
         <input id="ownerPhone" type="tel" inputmode="tel" placeholder="Ex. 06 12 34 56 78" required />
+
+        <!-- Lien au compte propriétaire (UID) -->
+        <div style="margin-top:10px; padding:10px; background:#fff; border-radius:14px; border:1px solid rgba(122,92,255,0.18); box-shadow:0 3px 10px rgba(0,0,0,.06);">
+          <div style="display:flex; justify-content:space-between; gap:10px; align-items:center; flex-wrap:wrap;">
+            <div style="font-weight:1000; font-size:12px; color:#333;">Associer à un compte propriétaire (optionnel)</div>
+            <div style="font-size:11px; font-weight:900; color:#666;">→ remplit <b>homes.ownerUid</b></div>
+          </div>
+
+          <label for="ownerAccountEmail" style="margin-top:10px;">Email du compte propriétaire</label>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+            <input id="ownerAccountEmail" type="email" placeholder="ex: proprio@email.com" style="flex:1; min-width:220px;">
+            <button class="btn" type="button" id="lookupOwnerBtn">Rechercher</button>
+            <button class="btn danger" type="button" id="unlinkOwnerBtn" style="display:none;">Dissocier</button>
+          </div>
+
+          <div id="ownerLookupInfo" class="kv" style="display:none;"></div>
+        </div>
 
         <label for="homeType">Type</label>
         <select id="homeType" required>
@@ -475,14 +492,14 @@
   <div class="modal-backdrop" id="bookingBackdrop" aria-hidden="true">
     <div class="modal" role="dialog" aria-modal="true" aria-label="Créer une réservation">
       <h2 id="bookingModalTitle">Créer une réservation</h2>
-     
+      <p id="bookingModalHint">Réservation manuelle → écrit dans <b>icalEvents</b>.</p>
+
       <div class="b-alert" id="bookingAlert"></div>
 
       <form id="bookingForm" autocomplete="off">
         <label for="bookingHomeSelect">Logement</label>
         <select id="bookingHomeSelect" required></select>
 
-        <!-- Affichage "en lecture" des infos demandées -->
         <div id="bookingHomeInfo" class="kv"></div>
 
         <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;">
@@ -513,7 +530,6 @@
         <div class="modal-actions">
           <button class="btn" type="button" id="cancelBookingBtn">Annuler</button>
 
-          <!-- visibles seulement en mode edit -->
           <button class="btn danger" type="button" id="deleteBookingBtn" style="display:none;">Supprimer</button>
           <button class="btn ok" type="button" id="archiveBookingBtn" style="display:none;">Archiver</button>
 
@@ -558,6 +574,12 @@
   const ownerPhoneEl = document.getElementById("ownerPhone");
   const homeType = document.getElementById("homeType");
   const saveBtn = document.getElementById("saveBtn");
+
+  // owner account link UI
+  const ownerAccountEmailEl = document.getElementById("ownerAccountEmail");
+  const lookupOwnerBtn = document.getElementById("lookupOwnerBtn");
+  const unlinkOwnerBtn = document.getElementById("unlinkOwnerBtn");
+  const ownerLookupInfo = document.getElementById("ownerLookupInfo");
 
   // booking modal
   const bookingBackdrop = document.getElementById("bookingBackdrop");
@@ -652,7 +674,6 @@
     return out;
   }
 
-  // ===== URL helpers (ouverture depuis planning) =====
   function getParam(name){
     return new URLSearchParams(location.search).get(name) || "";
   }
@@ -683,11 +704,99 @@
   let showArchived = false;
   let editingHomeId = null;
 
+  // owner account link state
+  let linkedOwnerUid = "";
+  let linkedOwnerEmail = "";
+  let linkedOwnerName = "";
+
   // booking state
   let editingBookingId = null; // null => create
   let editingBookingSource = "manual";
 
   function isArchived(h){ return h?.status === "archived"; }
+
+  function setOwnerLinkUI(){
+    const has = !!linkedOwnerUid;
+    unlinkOwnerBtn.style.display = has ? "inline-flex" : "none";
+
+    if(!has){
+      ownerLookupInfo.style.display = "none";
+      ownerLookupInfo.innerHTML = "";
+      return;
+    }
+
+    ownerLookupInfo.style.display = "block";
+    ownerLookupInfo.innerHTML = `
+      <div><b>UID :</b> ${escapeHtml(linkedOwnerUid)}</div>
+      <div><b>Nom :</b> ${escapeHtml(linkedOwnerName || "—")}</div>
+      <div><b>Email :</b> ${escapeHtml(linkedOwnerEmail || "—")}</div>
+    `;
+  }
+
+  async function lookupOwnerByEmail(){
+    hideAlert();
+
+    const emailRaw = (ownerAccountEmailEl.value || "").trim().toLowerCase();
+    if(!emailRaw){
+      showAlert("Renseigne un email propriétaire à rechercher.");
+      return;
+    }
+
+    lookupOwnerBtn.disabled = true;
+    lookupOwnerBtn.style.opacity = "0.75";
+
+    try{
+      // On cherche dans users/{uid} car c'est la source de vérité du compte auth
+      const qu = query(
+        collection(db, "users"),
+        where("email", "==", emailRaw),
+        limit(2)
+      );
+      const snap = await getDocs(qu);
+
+      if(snap.empty){
+        showAlert("Aucun compte trouvé avec cet email (users.email). Le propriétaire doit se connecter au moins une fois.", false);
+        linkedOwnerUid = ""; linkedOwnerEmail = ""; linkedOwnerName = "";
+        setOwnerLinkUI();
+        return;
+      }
+
+      const docs = snap.docs.map(d => ({ id:d.id, ...(d.data()||{}) }));
+      const u = docs[0];
+
+      // Garde-fou : il doit être role proprietaire
+      const role = String(u.role || "").toLowerCase();
+      if(role && role !== "proprietaire"){
+        showAlert("Compte trouvé, mais role != proprietaire. Vérifie users/{uid}.role.", false);
+        linkedOwnerUid = ""; linkedOwnerEmail = ""; linkedOwnerName = "";
+        setOwnerLinkUI();
+        return;
+      }
+
+      linkedOwnerUid = u.id;
+      linkedOwnerEmail = String(u.email || emailRaw);
+      linkedOwnerName = String(u.fullname || u.displayName || "").trim();
+
+      showAlert("✅ Compte propriétaire trouvé et prêt à associer.", true);
+      setOwnerLinkUI();
+
+    }catch(err){
+      console.error(err);
+      showAlert("Erreur recherche propriétaire : " + (err?.message || "inconnue"));
+    }finally{
+      lookupOwnerBtn.disabled = false;
+      lookupOwnerBtn.style.opacity = "1";
+    }
+  }
+
+  function unlinkOwner(){
+    linkedOwnerUid = ""; linkedOwnerEmail = ""; linkedOwnerName = "";
+    setOwnerLinkUI();
+    showAlert("Association propriétaire supprimée (sera appliquée à l'enregistrement).", true);
+  }
+
+  lookupOwnerBtn.addEventListener("click", lookupOwnerByEmail);
+  unlinkOwnerBtn.addEventListener("click", unlinkOwner);
 
   async function loadHomes(){
     hideAlert();
@@ -727,6 +836,12 @@
     modalTitle.textContent = "Ajouter un logement";
     modalBackdrop.style.display = "flex";
     modalBackdrop.setAttribute("aria-hidden","false");
+
+    // reset link state
+    linkedOwnerUid = ""; linkedOwnerEmail = ""; linkedOwnerName = "";
+    ownerAccountEmailEl.value = "";
+    setOwnerLinkUI();
+
     setTimeout(()=>homeName.focus(), 0);
   }
 
@@ -744,6 +859,13 @@
     ownerPhoneEl.value = home.ownerPhone || "";
     homeType.value = (home.homeType || home.type || "Studio");
 
+    // load owner link from home
+    linkedOwnerUid = String(home.ownerUid || "").trim();
+    linkedOwnerEmail = String(home.ownerAccountEmail || home.ownerEmail || "").trim();
+    linkedOwnerName = String(home.ownerAccountName || home.ownerFullname || "").trim();
+    ownerAccountEmailEl.value = linkedOwnerEmail || "";
+
+    setOwnerLinkUI();
     setTimeout(()=>homeName.focus(), 0);
   }
 
@@ -753,6 +875,10 @@
     homeForm.reset();
     homeType.value = "Studio";
     editingHomeId = null;
+
+    linkedOwnerUid = ""; linkedOwnerEmail = ""; linkedOwnerName = "";
+    ownerAccountEmailEl.value = "";
+    setOwnerLinkUI();
   }
 
   // ===== Booking modal =====
@@ -782,6 +908,8 @@
     const city = (h.homeCity || h.city || "—").toString().trim();
     const ownerName = (h.ownerName || h.homeOwner || "—").toString().trim();
     const ownerPhone = (h.ownerPhone || "—").toString().trim();
+    const ownerUid = (h.ownerUid || "").toString().trim();
+    const ownerEmail = (h.ownerAccountEmail || h.ownerEmail || "").toString().trim();
 
     bookingHomeInfo.style.display = "block";
     bookingHomeInfo.innerHTML = `
@@ -790,6 +918,7 @@
       <div><b>CP :</b> ${escapeHtml(zip)} • <b>Ville :</b> ${escapeHtml(city)}</div>
       <div><b>Nom du propriétaire :</b> ${escapeHtml(ownerName)}</div>
       <div><b>Téléphone propriétaire :</b> ${escapeHtml(ownerPhone)}</div>
+      <div><b>Compte lié :</b> ${ownerUid ? "✅ " + escapeHtml(ownerEmail || ownerUid) : "⛔ non"}</div>
     `;
   }
 
@@ -855,7 +984,6 @@
   cancelBookingBtn.addEventListener("click", closeBookingModal);
   bookingBackdrop.addEventListener("click", (e)=>{ if(e.target === bookingBackdrop) closeBookingModal(); });
 
-  // ===== load booking by id into modal (pour planning) =====
   async function loadBookingIntoModal(bookingId, mode="view"){
     hideBookingAlert();
 
@@ -911,7 +1039,9 @@
         h.homeAddress, h.address,
         h.ownerName, h.homeOwner,
         h.ownerPhone,
-        h.type, h.homeType
+        h.type, h.homeType,
+        h.ownerAccountEmail, h.ownerEmail,
+        h.ownerUid
       ].map(norm).join(" ");
       return hay.includes(q);
     });
@@ -940,6 +1070,13 @@
       const ownerLabel = (h.ownerName || h.homeOwner || "").trim() || "—";
       const ownerPhone = (h.ownerPhone || "").trim();
 
+      const ownerUid = (h.ownerUid || "").toString().trim();
+      const ownerEmail = (h.ownerAccountEmail || h.ownerEmail || "").toString().trim();
+
+      const accountChip = ownerUid
+        ? `<span class="chip">Compte lié ✅</span>`
+        : `<span class="chip">Compte non lié ⛔</span>`;
+
       const bookingBtn = isArchived(h)
         ? `<span class="mini-btn disabled">Réservation</span>`
         : `<button class="mini-btn primary" type="button" data-book="${h.id}">+ Réservation</button>`;
@@ -953,12 +1090,14 @@
               ${addr ? ` • <b>${escapeHtml(addr)}</b>` : ""}
               <br/>Propriétaire : <b>${escapeHtml(ownerLabel)}</b>
               ${ownerPhone ? `<br/>📞 ${escapeHtml(ownerPhone)}` : ""}
+              ${ownerUid ? `<br/>Compte : <b>${escapeHtml(ownerEmail || ownerUid)}</b>` : ``}
             </div>
             <div class="chips">
               <span class="chip">${escapeHtml(h.homeType || h.type || "Type")}</span>
               ${addr ? `<span class="chip">Adresse OK</span>` : `<span class="chip">Adresse manquante</span>`}
               ${zip ? `<span class="chip">CP OK</span>` : `<span class="chip">CP manquant</span>`}
               ${(ownerPhone ? `<span class="chip">Tel OK</span>` : `<span class="chip">Tel manquant</span>`)}
+              ${accountChip}
               ${statusChip}
             </div>
           </div>
@@ -982,7 +1121,6 @@
       });
     });
 
-    // Booking
     homesListEl.querySelectorAll("button[data-book]").forEach(btn=>{
       btn.addEventListener("click", ()=>{
         const homeId = btn.getAttribute("data-book");
@@ -993,7 +1131,6 @@
       });
     });
 
-    // Edit
     homesListEl.querySelectorAll("button[data-edit]").forEach(btn=>{
       btn.addEventListener("click", ()=>{
         const id = btn.getAttribute("data-edit");
@@ -1002,7 +1139,6 @@
       });
     });
 
-    // Archive
     homesListEl.querySelectorAll("button[data-archive]").forEach(btn=>{
       btn.addEventListener("click", async ()=>{
         hideAlert();
@@ -1024,7 +1160,6 @@
       });
     });
 
-    // Unarchive
     homesListEl.querySelectorAll("button[data-unarchive]").forEach(btn=>{
       btn.addEventListener("click", async ()=>{
         hideAlert();
@@ -1044,7 +1179,6 @@
       });
     });
 
-    // Delete (blocked if any events/icalEvents)
     homesListEl.querySelectorAll("button[data-delete]").forEach(btn=>{
       btn.addEventListener("click", async ()=>{
         hideAlert();
@@ -1095,6 +1229,11 @@
     });
   }
 
+  // ===== Home modal open/close =====
+  addBtn.addEventListener("click", openHomeModalCreate);
+  cancelBtn.addEventListener("click", closeHomeModal);
+  modalBackdrop.addEventListener("click", (e)=>{ if(e.target === modalBackdrop) closeHomeModal(); });
+
   // ===== Create / Update home =====
   homeForm.addEventListener("submit", async (e)=>{
     e.preventDefault();
@@ -1142,6 +1281,11 @@
         homeOwner: ownerName,
         type,
 
+        // lien compte propriétaire (optionnel)
+        ownerUid: linkedOwnerUid || "",
+        ownerAccountEmail: linkedOwnerEmail || "",
+        ownerAccountName: linkedOwnerName || "",
+
         updatedAt: serverTimestamp()
       };
 
@@ -1152,7 +1296,7 @@
         showAlert("✅ Logement modifié.", true);
       }else{
         await addDoc(collection(db,"homes"), {
-          conciergerieUid: user.uid,   // IMPORTANT
+          conciergerieUid: user.uid,
           status: "active",
           createdAt: serverTimestamp(),
           ...payload
@@ -1209,7 +1353,7 @@
     try {
       const payloadBase = {
         conciergerieUid: user.uid,
-        homeId: String(h.id),                 // IMPORTANT
+        homeId: String(h.id),
 
         homeName: String(h?.name || "Logement"),
         homeCity: String(h?.homeCity || h?.city || ""),
@@ -1218,12 +1362,16 @@
         ownerName: String(h?.ownerName || h?.homeOwner || ""),
         ownerPhone: String(h?.ownerPhone || ""),
 
+        ownerUid: String(h?.ownerUid || ""),
+        ownerAccountEmail: String(h?.ownerAccountEmail || ""),
+        ownerAccountName: String(h?.ownerAccountName || ""),
+
         arrivalDateKey: String(aDate),
         departureDateKey: String(dDate),
         arrivalTime: String(aTime),
         departureTime: String(dTime),
 
-        dateKey: String(aDate),               // compat planning existant
+        dateKey: String(aDate),
         dateKeys: dateKeys.map(String),
 
         meta: String(meta || ""),
@@ -1250,7 +1398,6 @@
         showBookingAlert("✅ Réservation enregistrée.", true);
       }
 
-      // ✅ redirection "clean" vers planning (date + bookingId)
       const params = new URLSearchParams();
       params.set("date", aDate);
       params.set("bookingId", bookingId);
@@ -1307,9 +1454,6 @@
   });
 
   // ===== Events =====
-  addBtn.addEventListener("click", openHomeModalCreate);
-  cancelBtn.addEventListener("click", closeHomeModal);
-  modalBackdrop.addEventListener("click", (e)=>{ if(e.target === modalBackdrop) closeHomeModal(); });
   searchInputEl.addEventListener("input", render);
 
   toggleArchivedBtn.addEventListener("click", ()=>{
@@ -1341,7 +1485,7 @@
     badgeLine.textContent = "Gestion des logements • " + (user.email || user.uid);
     await loadHomes();
 
-    // ✅ ouverture modale réservation depuis URL:
+    // ouverture modale réservation depuis URL:
     // logements.html?bookingId=XXX&mode=view|edit
     const bookingId = getParam("bookingId");
     const mode = (getParam("mode") || "view").toLowerCase();
@@ -1356,4 +1500,3 @@
 
 </body>
 </html>
-
