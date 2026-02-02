@@ -1,4 +1,4 @@
-<!-- docs/logements.html (COMPLET) — Parcours CleanUp "qui ne casse pas" + lien OwnerUid (CLEAN) -->
+<!-- docs/logements.html (COMPLET) — Parcours CleanUp "qui ne casse pas" + lien OwnerUid -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -237,10 +237,6 @@
       background:var(--violet-light);
       color:#5b45c8;
       white-space:nowrap;
-    }
-    .chip.bad{
-      background:#ffe3ec;
-      color:var(--bad);
     }
 
     .item-actions{ display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; }
@@ -662,8 +658,10 @@
     const d1 = parseDateKey(startKey);
     const d2 = parseDateKey(endKey);
     if(!d1 || !d2) return [];
+
     const a = (d1 <= d2) ? startKey : endKey;
     const b = (d1 <= d2) ? endKey : startKey;
+
     const out = [];
     let cur = a;
     out.push(cur);
@@ -705,12 +703,12 @@
   let showArchived = false;
   let editingHomeId = null;
 
-  // ===== Owner link state (UNIQUE) =====
+  // ===== Owner link state =====
   let linkedOwnerUid = "";
   let linkedOwnerEmail = "";
   let linkedOwnerName = "";
 
-  function normEmail(s){ return String(s||"").trim().toLowerCase(); }
+  function normEmail(s){ return String(s || "").trim().toLowerCase(); }
 
   function showOwnerLookup(msg, ok=true){
     ownerLookupInfo.style.display = "block";
@@ -723,8 +721,8 @@
     ownerLookupInfo.style.borderLeft = "";
   }
 
-  function setLinkedOwner({ uid, email, fullname }){
-    linkedOwnerUid = String(uid || "").trim();
+  function setLinkedOwner(uid, email, fullname){
+    linkedOwnerUid = uid || "";
     linkedOwnerEmail = normEmail(email || "");
     linkedOwnerName = String(fullname || "").trim();
 
@@ -749,99 +747,61 @@
     hideOwnerLookup();
   }
 
-  async function findOwnerAccountByEmail(rawEmail){
-    const emailLower = normEmail(rawEmail);
-    if(!emailLower) throw new Error("Email vide.");
-
-    // 1) users (source de vérité)
-    let snap = null;
-
-    // A) users.emailLower == ...
-    try{
-      const q1 = query(collection(db, "users"), where("emailLower", "==", emailLower), limit(1));
-      const s1 = await getDocs(q1);
-      if(!s1.empty) snap = { id: s1.docs[0].id, data: s1.docs[0].data() };
-    }catch(e){}
-
-    // B) users.email == ...
-    if(!snap){
-      const q2 = query(collection(db, "users"), where("email", "==", emailLower), limit(1));
-      const s2 = await getDocs(q2);
-      if(!s2.empty) snap = { id: s2.docs[0].id, data: s2.docs[0].data() };
-    }
-
-    if(snap){
-      const u = snap.data || {};
-      const role = String(u.role || "").toLowerCase();
-      if(role && role !== "proprietaire"){
-        throw new Error("Compte trouvé, mais role != proprietaire.");
-      }
-      return {
-        uid: snap.id,
-        email: u.email || emailLower,
-        fullname: u.fullname || u.displayName || ""
-      };
-    }
-
-    // 2) fallback owners (si tu l'utilises)
-    let snapO = null;
-
-    try{
-      const q3 = query(collection(db, "owners"), where("emailLower", "==", emailLower), limit(1));
-      const s3 = await getDocs(q3);
-      if(!s3.empty) snapO = { id: s3.docs[0].id, data: s3.docs[0].data() };
-    }catch(e){}
-
-    if(!snapO){
-      const q4 = query(collection(db, "owners"), where("email", "==", emailLower), limit(1));
-      const s4 = await getDocs(q4);
-      if(!s4.empty) snapO = { id: s4.docs[0].id, data: s4.docs[0].data() };
-    }
-
-    if(snapO){
-      const o = snapO.data || {};
-      return {
-        uid: snapO.id,
-        email: o.email || emailLower,
-        fullname: o.fullname || o.displayName || ""
-      };
-    }
-
-    throw new Error("Aucun compte propriétaire trouvé avec cet email.");
-  }
-
-  lookupOwnerBtn.addEventListener("click", async ()=>{
+  async function lookupOwnerAccount(){
     hideAlert();
     hideOwnerLookup();
 
-    const email = ownerAccountEmailEl.value.trim();
-    if(!email) return showOwnerLookup("⛔ Mets un email.", false);
+    const emailLower = normEmail(ownerAccountEmailEl.value);
+    if(!emailLower){
+      showOwnerLookup("⛔ Mets un email.", false);
+      return;
+    }
+    if(!currentUid){
+      showOwnerLookup("⛔ currentUid introuvable. Recharge la page.", false);
+      return;
+    }
 
     lookupOwnerBtn.disabled = true;
     lookupOwnerBtn.style.opacity = "0.75";
 
     try{
-      const found = await findOwnerAccountByEmail(email);
-      setLinkedOwner(found);
+      const q1 = query(
+        collection(db, "users"),
+        where("conciergerieUid", "==", currentUid),
+        where("role", "==", "proprietaire"),
+        where("email", "==", emailLower),
+        limit(1)
+      );
+      const s1 = await getDocs(q1);
+
+      if(s1.empty){
+        setLinkedOwner("", "", "");
+        showOwnerLookup("⛔ Aucun propriétaire trouvé avec cet email (users).", false);
+        return;
+      }
+
+      const d = s1.docs[0];
+      const u = d.data() || {};
+      setLinkedOwner(d.id, u.email || emailLower, u.fullname || u.displayName || "");
+      showAlert("✅ Compte propriétaire trouvé (prêt à associer).", true);
+
     }catch(err){
       console.error(err);
-      setLinkedOwner({ uid:"", email:"", fullname:"" });
-      showOwnerLookup("⛔ " + (err?.message || "Recherche impossible."), false);
+      setLinkedOwner("", "", "");
+      showOwnerLookup("⛔ " + (err?.message || "Erreur recherche."), false);
     }finally{
       lookupOwnerBtn.disabled = false;
       lookupOwnerBtn.style.opacity = "1";
     }
-  });
+  }
+
+  lookupOwnerBtn.addEventListener("click", lookupOwnerAccount);
 
   unlinkOwnerBtn.addEventListener("click", ()=>{
     if(!confirm("Dissocier ce logement du compte propriétaire ?")) return;
     clearLinkedOwner();
     showOwnerLookup("✅ Dissociation prête. Clique “Enregistrer” pour appliquer.", true);
   });
-
-  // ===== Booking state =====
-  let editingBookingId = null; // null => create
-  let editingBookingSource = "manual";
 
   function isArchived(h){ return h?.status === "archived"; }
 
@@ -856,7 +816,11 @@
     currentUid = user.uid;
 
     try{
-      const qh = query(collection(db, "homes"), where("conciergerieUid", "==", currentUid));
+      const qh = query(
+        collection(db, "homes"),
+        where("conciergerieUid", "==", currentUid)
+      );
+
       const snap = await getDocs(qh);
       allHomes = snap.docs.map(d => ({ id: d.id, ...d.data() }));
 
@@ -880,6 +844,7 @@
     modalBackdrop.style.display = "flex";
     modalBackdrop.setAttribute("aria-hidden","false");
 
+    // reset owner link
     clearLinkedOwner();
     setTimeout(()=>homeName.focus(), 0);
   }
@@ -898,17 +863,12 @@
     ownerPhoneEl.value = home.ownerPhone || "";
     homeType.value = (home.homeType || home.type || "Studio");
 
-    // restore owner link
-    const oUid = String(home.ownerUid || "").trim();
-    const oEmail = String(home.ownerAccountEmail || "").trim();
-    const oName = String(home.ownerAccountName || "").trim();
-    ownerAccountEmailEl.value = oEmail || "";
-
-    if(oUid || oEmail || oName){
-      setLinkedOwner({ uid:oUid, email:oEmail, fullname:oName });
-    }else{
-      clearLinkedOwner();
-    }
+    // load owner link from home (avec compat)
+    const ouid = String(home.ownerUid || "").trim();
+    const oemail = String(home.ownerAccountEmail || home.ownerEmail || "").trim();
+    const oname = String(home.ownerAccountName || home.ownerFullname || "").trim();
+    ownerAccountEmailEl.value = oemail || "";
+    setLinkedOwner(ouid, oemail, oname);
 
     setTimeout(()=>homeName.focus(), 0);
   }
@@ -919,7 +879,6 @@
     homeForm.reset();
     homeType.value = "Studio";
     editingHomeId = null;
-
     clearLinkedOwner();
   }
 
@@ -950,9 +909,8 @@
     const city = (h.homeCity || h.city || "—").toString().trim();
     const ownerName = (h.ownerName || h.homeOwner || "—").toString().trim();
     const ownerPhone = (h.ownerPhone || "—").toString().trim();
-
     const ownerUid = (h.ownerUid || "").toString().trim();
-    const ownerEmail = (h.ownerAccountEmail || "").toString().trim();
+    const ownerEmail = (h.ownerAccountEmail || h.ownerEmail || "").toString().trim();
 
     bookingHomeInfo.style.display = "block";
     bookingHomeInfo.innerHTML = `
@@ -964,6 +922,9 @@
       <div><b>Compte lié :</b> ${ownerUid ? "✅ " + escapeHtml(ownerEmail || ownerUid) : "⛔ non"}</div>
     `;
   }
+
+  let editingBookingId = null; // null => create
+  let editingBookingSource = "manual";
 
   function setBookingMode(mode){
     const readonly = (mode === "view");
@@ -1083,8 +1044,7 @@
         h.ownerName, h.homeOwner,
         h.ownerPhone,
         h.type, h.homeType,
-        h.ownerAccountEmail,
-        h.ownerAccountName,
+        h.ownerAccountEmail, h.ownerEmail,
         h.ownerUid
       ].map(norm).join(" ");
       return hay.includes(q);
@@ -1115,11 +1075,11 @@
       const ownerPhone = (h.ownerPhone || "").trim();
 
       const ownerUid = (h.ownerUid || "").toString().trim();
-      const ownerEmail = (h.ownerAccountEmail || "").toString().trim();
+      const ownerEmail = (h.ownerAccountEmail || h.ownerEmail || "").toString().trim();
 
       const accountChip = ownerUid
         ? `<span class="chip">Compte lié ✅</span>`
-        : `<span class="chip bad">Compte non lié ⛔</span>`;
+        : `<span class="chip">Compte non lié ⛔</span>`;
 
       const bookingBtn = isArchived(h)
         ? `<span class="mini-btn disabled">Réservation</span>`
@@ -1138,9 +1098,9 @@
             </div>
             <div class="chips">
               <span class="chip">${escapeHtml(h.homeType || h.type || "Type")}</span>
-              ${addr ? `<span class="chip">Adresse OK</span>` : `<span class="chip bad">Adresse manquante</span>`}
-              ${zip ? `<span class="chip">CP OK</span>` : `<span class="chip bad">CP manquant</span>`}
-              ${(ownerPhone ? `<span class="chip">Tel OK</span>` : `<span class="chip bad">Tel manquantAS</span>`)}
+              ${addr ? `<span class="chip">Adresse OK</span>` : `<span class="chip">Adresse manquante</span>`}
+              ${zip ? `<span class="chip">CP OK</span>` : `<span class="chip">CP manquant</span>`}
+              ${(ownerPhone ? `<span class="chip">Tel OK</span>` : `<span class="chip">Tel manquant</span>`)}
               ${accountChip}
               ${statusChip}
             </div>
@@ -1165,7 +1125,6 @@
       });
     });
 
-    // Booking
     homesListEl.querySelectorAll("button[data-book]").forEach(btn=>{
       btn.addEventListener("click", ()=>{
         const homeId = btn.getAttribute("data-book");
@@ -1176,7 +1135,6 @@
       });
     });
 
-    // Edit
     homesListEl.querySelectorAll("button[data-edit]").forEach(btn=>{
       btn.addEventListener("click", ()=>{
         const id = btn.getAttribute("data-edit");
@@ -1185,7 +1143,6 @@
       });
     });
 
-    // Archive
     homesListEl.querySelectorAll("button[data-archive]").forEach(btn=>{
       btn.addEventListener("click", async ()=>{
         hideAlert();
@@ -1207,7 +1164,6 @@
       });
     });
 
-    // Unarchive
     homesListEl.querySelectorAll("button[data-unarchive]").forEach(btn=>{
       btn.addEventListener("click", async ()=>{
         hideAlert();
@@ -1335,6 +1291,10 @@
         ownerAccountEmail: linkedOwnerEmail || "",
         ownerAccountName: linkedOwnerName || "",
 
+        // compat clients.html (évite EMAIL MANQUANT si ton écran lit ownerEmail)
+        ownerEmail: linkedOwnerEmail || "",
+        ownerFullname: linkedOwnerName || "",
+
         updatedAt: serverTimestamp()
       };
 
@@ -1414,6 +1374,9 @@
         ownerUid: String(h?.ownerUid || ""),
         ownerAccountEmail: String(h?.ownerAccountEmail || ""),
         ownerAccountName: String(h?.ownerAccountName || ""),
+
+        ownerEmail: String(h?.ownerEmail || h?.ownerAccountEmail || ""),
+        ownerFullname: String(h?.ownerFullname || h?.ownerAccountName || ""),
 
         arrivalDateKey: String(aDate),
         departureDateKey: String(dDate),
@@ -1535,6 +1498,7 @@
     await loadHomes();
 
     // ouverture modale réservation depuis URL:
+    // logements.html?bookingId=XXX&mode=view|edit
     const bookingId = getParam("bookingId");
     const mode = (getParam("mode") || "view").toLowerCase();
 
