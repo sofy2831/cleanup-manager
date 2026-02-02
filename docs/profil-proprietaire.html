@@ -175,7 +175,7 @@
     <div class="topbar">
       <a class="pill" id="backBtn" href="clients.html">← Clients</a>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-        <a class="pill" href="planning.html">Planning</a>
+        <a class="pill" id="planningBtn" href="planning.html">Planning</a>
         <button class="pill" id="logoutBtn" type="button">Déconnexion</button>
       </div>
     </div>
@@ -268,11 +268,11 @@
   </div>
 
   <nav class="bottom-nav" aria-label="Navigation">
-    <a href="planning.html">Planning</a>
-    <a class="active" href="clients.html">Clients</a>
-    <a href="logements.html">Logements</a>
-    <a href="equipe.html">Équipe</a>
-    <a href="catalogue.html">Catalogue</a>
+    <a href="planning.html" id="navPlanning">Planning</a>
+    <a class="active" href="clients.html" id="navClients">Clients</a>
+    <a href="logements.html" id="navLogements">Logements</a>
+    <a href="equipe.html" id="navEquipe">Équipe</a>
+    <a href="catalogue.html" id="navCatalogue">Catalogue</a>
   </nav>
 
 <script type="module">
@@ -283,11 +283,14 @@
     serverTimestamp
   } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
+  // UI
   const emailLine = document.getElementById("emailLine");
   const alertBox = document.getElementById("alertBox");
   const logoutBtn = document.getElementById("logoutBtn");
 
   const backBtn = document.getElementById("backBtn");
+  const planningBtn = document.getElementById("planningBtn");
+
   const cardTitle = document.getElementById("cardTitle");
   const ownerIdLine = document.getElementById("ownerIdLine");
 
@@ -296,6 +299,7 @@
   const copyBtn = document.getElementById("copyBtn");
   const saveBtn = document.getElementById("saveBtn");
 
+  // Inputs
   const displayName = document.getElementById("displayName");
   const email = document.getElementById("email");
   const phone = document.getElementById("phone");
@@ -308,6 +312,7 @@
   const vat = document.getElementById("vat");
   const notes = document.getElementById("notes");
 
+  // State
   let currentUser = null;
   let ownerId = "";
 
@@ -321,7 +326,16 @@
     alertBox.classList.remove("ok");
     alertBox.textContent = "";
   }
-  function qs(name){ return new URLSearchParams(location.search).get(name) || ""; }
+
+  function getParam(name){
+    return (new URLSearchParams(location.search).get(name) || "").trim();
+  }
+  function qs(name){ return getParam(name); }
+
+  function isSelfMode(){
+    // self=1 OU token=... => propriétaire qui complète son profil
+    return getParam("self") === "1" || !!getParam("token");
+  }
 
   function clearForm(){
     displayName.value = "";
@@ -339,7 +353,6 @@
 
   function serialize(){
     return {
-      conciergerieUid: currentUser.uid,
       displayName: (displayName.value || "").trim(),
       email: (email.value || "").trim(),
       phone: (phone.value || "").trim(),
@@ -356,7 +369,7 @@
   }
 
   function apply(data){
-    displayName.value = data.displayName || "";
+    displayName.value = data.displayName || data.fullname || "";
     email.value = data.email || "";
     phone.value = data.phone || "";
     address1.value = data.address1 || "";
@@ -372,10 +385,41 @@
   async function loadOwner(){
     hideAlert();
 
+    // ===== MODE SELF (proprio) =====
+    if(isSelfMode()){
+      cardTitle.textContent = "Mon profil";
+      ownerIdLine.textContent = "—";
+
+      // on cache la nav conciergerie + actions inutiles
+      backBtn.href = "owner-dashboard.html";
+      planningBtn.href = "owner-dashboard.html";
+
+      newBtn.style.display = "none";
+      deleteBtn.style.display = "none";
+      copyBtn.style.display = "none";
+
+      // masquer la bottom nav conciergerie
+      const nav = document.querySelector("nav.bottom-nav");
+      if(nav) nav.style.display = "none";
+
+      // Pré-remplir depuis users/{uid} si dispo
+      try{
+        const snapU = await getDoc(doc(db, "users", currentUser.uid));
+        if(snapU.exists()){
+          apply(snapU.data() || {});
+        }else{
+          clearForm();
+        }
+      }catch(err){
+        console.warn("Préfill users failed:", err);
+      }
+      return;
+    }
+
+    // ===== MODE CONCIERGERIE (gestion owners/{ownerId}) =====
     ownerId = qs("ownerId");
     const returnTo = qs("returnTo");
     if(returnTo){
-      // lien retour si tu veux l’utiliser depuis devis/fiche logement
       backBtn.href = `${returnTo}.html`;
     }
 
@@ -418,33 +462,90 @@
 
   async function saveOwner(){
     hideAlert();
-    const payload = serialize();
 
+    const payload = serialize();
     if(!payload.displayName){
       showAlert("Nom / Société obligatoire.");
       return;
     }
 
+    const token = getParam("token");
+
     try{
+      // ===== MODE SELF (proprio) =====
+      if(isSelfMode()){
+        const uid = currentUser.uid;
+
+        // users/{uid} = source de vérité (dashboard check fullname ici)
+        await setDoc(doc(db, "users", uid), {
+          uid,
+          role: "proprietaire",
+          email: currentUser.email || payload.email || "",
+          fullname: payload.displayName,
+          phone: payload.phone || "",
+          address1: payload.address1 || "",
+          address2: payload.address2 || "",
+          zip: payload.zip || "",
+          city: payload.city || "",
+          country: payload.country || "FR",
+          siret: payload.siret || "",
+          vat: payload.vat || "",
+          notes: payload.notes || "",
+          updatedAt: serverTimestamp()
+        }, { merge:true });
+
+        // owners/{uid} (optionnel mais pratique)
+        await setDoc(doc(db, "owners", uid), {
+          uid,
+          role: "proprietaire",
+          email: currentUser.email || payload.email || "",
+          fullname: payload.displayName,
+          phone: payload.phone || "",
+          address1: payload.address1 || "",
+          address2: payload.address2 || "",
+          zip: payload.zip || "",
+          city: payload.city || "",
+          country: payload.country || "FR",
+          siret: payload.siret || "",
+          vat: payload.vat || "",
+          notes: payload.notes || "",
+          updatedAt: serverTimestamp()
+        }, { merge:true });
+
+        showAlert("✅ Profil enregistré.", true);
+
+        const dashUrl = token
+          ? `owner-dashboard.html?token=${encodeURIComponent(token)}`
+          : `owner-dashboard.html`;
+        location.replace(dashUrl);
+        return;
+      }
+
+      // ===== MODE CONCIERGERIE (création/édition owners/{id}) =====
+      const conciergeriePayload = {
+        ...payload,
+        conciergerieUid: currentUser.uid
+      };
+
       if(!ownerId){
         const ref = doc(collection(db, "owners"));
         ownerId = ref.id;
+
         await setDoc(ref, {
-          ...payload,
+          ...conciergeriePayload,
           createdAt: serverTimestamp()
         });
+
         showAlert("✅ Propriétaire créé.", true);
-        location.href = "owner-dashboard.html";
-      return;
-    }
+        // on reste sur la fiche
+        location.href = `profil-proprietaire.html?ownerId=${encodeURIComponent(ownerId)}`;
+        return;
+      }
 
       const ref = doc(db, "owners", ownerId);
-      await updateDoc(ref, payload);
-      
+      await updateDoc(ref, conciergeriePayload);
       showAlert("✅ Enregistré.", true);
-    location.href = "owner-dashboard.html";
-    return;
-    
+
     }catch(err){
       console.error(err);
       showAlert("Erreur enregistrement : " + (err?.message || "inconnue"));
@@ -453,6 +554,10 @@
 
   async function deleteOwner(){
     hideAlert();
+    if(isSelfMode()){
+      showAlert("Suppression indisponible en mode propriétaire.", false);
+      return;
+    }
     if(!ownerId) return;
     if(!confirm("Supprimer ce propriétaire ?")) return;
 
@@ -491,14 +596,21 @@
 
   onAuthStateChanged(auth, async (user)=>{
     if(!user){
-      location.href = "login.html?role=conciergerie";
+      // Si proprio -> login proprio, sinon conciergerie
+      const role = isSelfMode() ? "proprietaire" : "conciergerie";
+      location.href = "login.html?role=" + role;
       return;
     }
     currentUser = user;
     emailLine.textContent = user.email || user.uid;
 
-    // défaut pays
     if(!country.value) country.value = "FR";
+
+    // En mode self : email readonly
+    if(isSelfMode()){
+      email.value = user.email || "";
+      email.readOnly = true;
+    }
 
     await loadOwner();
   });
@@ -506,4 +618,3 @@
 
 </body>
 </html>
-
