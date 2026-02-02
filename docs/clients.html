@@ -1,4 +1,4 @@
-<!-- docs/clients.html -->
+<!-- docs/clients.html (COMPLET) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -187,6 +187,54 @@
     .homeRow .meta{ font-size:12px; font-weight:800; color:#666; }
     .homeRow .actions{ display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
 
+    /* Modal shared */
+    .modal-backdrop{
+      position:fixed; inset:0;
+      background:rgba(0,0,0,.25);
+      display:none;
+      align-items:center;
+      justify-content:center;
+      padding:16px;
+      z-index:80;
+    }
+    .modal{
+      width:100%;
+      max-width:560px;
+      background:linear-gradient(180deg,#fff 0%,#EEE4FF 100%);
+      border-radius:18px;
+      box-shadow:0 10px 30px rgba(0,0,0,.20);
+      padding:16px 14px 18px;
+    }
+    .modal h2{ margin:0 0 6px; font-size:16px; font-weight:900; color:#111; }
+    .modal p{ margin:0 0 10px; font-size:12px; color:#666; line-height:1.25; }
+
+    label{ display:block; font-size:12px; font-weight:900; color:#333; margin:8px 0 4px; text-align:left; }
+    input, select{
+      width:100%; box-sizing:border-box; padding:9px 10px;
+      border-radius:10px; border:1px solid #D3C7FF; font-size:13px; outline:none; background:#fff;
+    }
+    .modal-actions{
+      display:flex;
+      gap:8px;
+      flex-wrap:wrap;
+      justify-content:flex-end;
+      margin-top:12px;
+    }
+    .m-alert{
+      display:none;
+      margin-top:10px;
+      padding:10px 12px;
+      background:#fff;
+      border-radius:14px;
+      border-left:5px solid var(--bad);
+      box-shadow:0 3px 10px rgba(0,0,0,.06);
+      font-size:12px;
+      color:#444;
+      white-space:pre-wrap;
+      font-weight:900;
+    }
+    .m-alert.ok{ border-left-color: var(--ok); }
+
     .bottom-nav{
       position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
       display: flex; gap: 6px; justify-content: space-around; align-items: center;
@@ -257,11 +305,56 @@
         </div>
 
         <div class="tiny" style="margin-top:8px;">
-          Source : <b>homes</b> (conciergerieUid = toi). Un “client” = un ownerEmail associé à au moins un logement.
+          Source : <b>homes</b>. Fiche stable : <b>clients</b>. (Un “client” = homes groupé par ownerUid ou ownerName)
         </div>
 
         <div class="list" id="clientsList"></div>
       </section>
+    </div>
+  </div>
+
+  <!-- MODALE EDIT CLIENT -->
+  <div class="modal-backdrop" id="clientModalBackdrop" aria-hidden="true">
+    <div class="modal" role="dialog" aria-modal="true">
+      <h2 id="clientModalTitle">Modifier client</h2>
+      <p id="clientModalHint">Met à jour la fiche <b>clients</b> + synchronise email/tel sur les logements liés.</p>
+
+      <div class="m-alert" id="clientModalAlert"></div>
+
+      <form id="clientForm" autocomplete="off">
+        <label for="cName">Nom (libellé)</label>
+        <input id="cName" type="text" placeholder="Ex. Jean Jeudi" required />
+
+        <label for="cEmail">Email</label>
+        <input id="cEmail" type="email" placeholder="ex: proprio@email.com" />
+
+        <label for="cPhone">Téléphone</label>
+        <input id="cPhone" type="tel" inputmode="tel" placeholder="Ex. 06 12 34 56 78" />
+
+        <label for="cAddr1">Adresse (facturation)</label>
+        <input id="cAddr1" type="text" placeholder="Ex. 1 rue des Flandres" />
+
+        <div style="display:flex; gap:10px; flex-wrap:wrap;">
+          <div style="flex:1; min-width:160px;">
+            <label for="cZip">Code postal</label>
+            <input id="cZip" type="text" inputmode="numeric" maxlength="5" placeholder="Ex. 31000" />
+          </div>
+          <div style="flex:1; min-width:160px;">
+            <label for="cCity">Ville</label>
+            <input id="cCity" type="text" placeholder="Ex. Toulouse" />
+          </div>
+        </div>
+
+        <div style="margin-top:10px; padding:10px; background:#fff; border-radius:14px; border:1px solid rgba(122,92,255,0.18); box-shadow:0 3px 10px rgba(0,0,0,.06);">
+          <div style="font-weight:1000; font-size:12px; color:#333;">Lien compte propriétaire (si email correspond)</div>
+          <div class="tiny" id="linkInfo" style="margin-top:6px;">—</div>
+        </div>
+
+        <div class="modal-actions">
+          <button class="pill" type="button" id="clientCancelBtn">Annuler</button>
+          <button class="pill primary" type="submit" id="clientSaveBtn">Enregistrer</button>
+        </div>
+      </form>
     </div>
   </div>
 
@@ -277,8 +370,9 @@
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
-      doc, getDoc,
-      collection, query, where, getDocs, limit
+      doc, getDoc, setDoc, serverTimestamp,
+      collection, query, where, getDocs, limit,
+      writeBatch
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     // UI
@@ -290,6 +384,23 @@
     const clientsList = document.getElementById("clientsList");
     const searchInput = document.getElementById("searchInput");
 
+    // Modal UI
+    const clientModalBackdrop = document.getElementById("clientModalBackdrop");
+    const clientModalTitle = document.getElementById("clientModalTitle");
+    const clientModalHint = document.getElementById("clientModalHint");
+    const clientModalAlert = document.getElementById("clientModalAlert");
+    const clientForm = document.getElementById("clientForm");
+    const clientCancelBtn = document.getElementById("clientCancelBtn");
+    const clientSaveBtn = document.getElementById("clientSaveBtn");
+    const linkInfo = document.getElementById("linkInfo");
+
+    const cName = document.getElementById("cName");
+    const cEmail = document.getElementById("cEmail");
+    const cPhone = document.getElementById("cPhone");
+    const cAddr1 = document.getElementById("cAddr1");
+    const cZip = document.getElementById("cZip");
+    const cCity = document.getElementById("cCity");
+
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
       alertBox.classList.toggle("ok", !!ok);
@@ -300,6 +411,17 @@
       alertBox.classList.remove("ok");
       alertBox.textContent = "";
     }
+    function showMAlert(msg, ok=false){
+      clientModalAlert.style.display = "block";
+      clientModalAlert.classList.toggle("ok", !!ok);
+      clientModalAlert.textContent = msg;
+    }
+    function hideMAlert(){
+      clientModalAlert.style.display = "none";
+      clientModalAlert.classList.remove("ok");
+      clientModalAlert.textContent = "";
+    }
+
     function esc(s){
       return String(s ?? "")
         .replaceAll("&","&amp;")
@@ -310,6 +432,32 @@
     }
     function norm(s){ return (s||"").toString().toLowerCase().trim(); }
     function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
+    function cleanPhone(s){ return (s||"").toString().trim().replace(/\s+/g," "); }
+    function cleanZip(s){
+      const z = (s||"").toString().trim().replace(/\D/g,"");
+      return z.slice(0,5);
+    }
+    function validateZip(zip){ return !zip || /^\d{5}$/.test(zip); }
+
+    function normKey(s){
+      return String(s||"")
+        .trim().toLowerCase()
+        .replace(/\s+/g," ")
+        .replace(/[’']/g,"'");
+    }
+
+    function buildClientKeyFromHome(h){
+      const ownerUid = String(h.ownerUid || "").trim();
+      if(ownerUid) return ownerUid;
+      const label = normKey(h.ownerName || h.homeOwner || "");
+      return "label:" + label;
+    }
+
+    function safeDocIdFromClientKey(clientKey){
+      // base64url pour éviter les chars moches
+      const b64 = btoa(unescape(encodeURIComponent(clientKey)));
+      return "c_" + b64.replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+    }
 
     // Logout
     logoutBtn.addEventListener("click", async ()=>{
@@ -318,7 +466,7 @@
       location.href = "index.html";
     });
 
-    // Guard conciergerie (copie simple)
+    // Guard conciergerie
     const FREE_EMAILS = new Set(["mathilde.debout31@gmail.com","s.dumas974@gmail.com"]);
     async function guardConciergerie(user){
       const email = (user.email || "").toLowerCase();
@@ -334,33 +482,72 @@
     // State
     let currentUser = null;
     let allHomes = [];
-    let owners = []; // [{ ownerEmail, ownerName, homes:[...], cities:Set }]
+    let owners = []; // rendu
+    let clientsByKey = new Map(); // clientKey -> clientDocData
+
+    // Modal state
+    let editingClientKey = "";
+    let editingClientLabelKey = "";
+    let editingClientDocId = "";
+    let editingHomes = [];
+    let resolvedOwnerUid = "";
+    let resolvedOwnerName = "";
+    let resolvedOwnerEmail = "";
+
+    async function loadClientsCollection(){
+      clientsByKey = new Map();
+      try{
+        const qc = query(collection(db,"clients"), where("conciergerieUid","==", currentUser.uid), limit(1500));
+        const snap = await getDocs(qc);
+        for(const d of snap.docs){
+          const data = d.data() || {};
+          const key = String(data.clientKey || "").trim();
+          if(key) clientsByKey.set(key, { id:d.id, ...data });
+        }
+      }catch(err){
+        // si rules pas prêtes, on n'empêche pas l'affichage homes
+        console.warn("clients collection unreadable:", err?.message || err);
+      }
+    }
 
     function buildOwnersFromHomes(homes){
       const map = new Map();
 
       for(const h of homes){
-        const ownerEmail = normalizeEmail(h.ownerEmail || "");
-        const ownerName  = (h.ownerName || "").trim();
-        if(!ownerEmail && !ownerName) continue;
+        const ownerName = (h.ownerName || h.homeOwner || "").trim();
+        const ownerEmail = normalizeEmail(h.ownerAccountEmail || h.ownerEmail || "");
+        if(!ownerName && !ownerEmail && !h.ownerUid) continue;
 
-        const key = ownerEmail || ("__NONAME__|" + ownerName.toLowerCase());
+        const clientKey = buildClientKeyFromHome(h);
+        const key = clientKey;
+
         if(!map.has(key)){
           map.set(key, {
-            ownerEmail,
+            clientKey,
             ownerName,
+            ownerEmail,
             homes: [],
-            cities: new Set()
+            cities: new Set(),
           });
         }
         const o = map.get(key);
-        if(!o.ownerName && ownerName) o.ownerName = ownerName;
         o.homes.push(h);
+
+        // fallback
+        if(!o.ownerName && ownerName) o.ownerName = ownerName;
+        if(!o.ownerEmail && ownerEmail) o.ownerEmail = ownerEmail;
+
         if(h.city) o.cities.add(h.city);
+
+        // si on a une fiche clients, on l'applique comme source stable
+        const c = clientsByKey.get(clientKey);
+        if(c){
+          if(c.displayName) o.ownerName = c.displayName;
+          if(c.email) o.ownerEmail = normalizeEmail(c.email);
+        }
       }
 
       const arr = Array.from(map.values());
-      // tri : nb logements desc puis email/nom
       arr.sort((a,b)=>{
         const da = b.homes.length - a.homes.length;
         if(da !== 0) return da;
@@ -374,8 +561,10 @@
 
       const visible = owners.filter(o=>{
         if(!q) return true;
+        const c = clientsByKey.get(o.clientKey) || {};
         const hay = [
           o.ownerName, o.ownerEmail,
+          c.phone, c.address1, c.zip, c.city,
           ...o.homes.map(h=>h.name),
           ...o.homes.map(h=>h.city),
           ...o.homes.map(h=>(h.homeAddress || h.address || "")),
@@ -392,7 +581,7 @@
           <div class="item">
             <div class="iMain">
               <div class="iTitle">${owners.length ? "Aucun résultat" : "Aucun client"}</div>
-              <div class="iSub">${owners.length ? "Change la recherche." : "Ajoute des logements avec ownerEmail/ownerName."}</div>
+              <div class="iSub">${owners.length ? "Change la recherche." : "Ajoute des logements."}</div>
             </div>
           </div>
         `;
@@ -405,7 +594,10 @@
         const ownerLabel = o.ownerName ? o.ownerName : "Propriétaire";
         const emailLabel = o.ownerEmail ? o.ownerEmail : "Email manquant";
 
-        const inviteUrl = `invite-proprietaire.html?email=${encodeURIComponent(o.ownerEmail || "")}&name=${encodeURIComponent(o.ownerName || "")}`;
+        const c = clientsByKey.get(o.clientKey) || {};
+        const hasEmail = !!normalizeEmail(c.email || o.ownerEmail);
+
+        const inviteUrl = `invite-proprietaire.html?email=${encodeURIComponent(normalizeEmail(c.email || o.ownerEmail || ""))}&name=${encodeURIComponent(c.displayName || o.ownerName || "")}`;
 
         const div = document.createElement("div");
         div.className = "item";
@@ -415,33 +607,42 @@
               <span class="badge ok">👤 CLIENT</span>
               <span class="badge">${o.homes.length} logement(s)</span>
               <span class="badge">🏙️ ${esc(citiesLabel)}</span>
-              ${o.ownerEmail ? "" : `<span class="badge bad">EMAIL MANQUANT</span>`}
+              ${hasEmail ? "" : `<span class="badge bad">EMAIL MANQUANT</span>`}
             </div>
-            <div class="iTitle">${esc(ownerLabel)}</div>
-            <div class="iSub">${esc(emailLabel)}</div>
+
+            <div class="iTitle">${esc(c.displayName || ownerLabel)}</div>
+            <div class="iSub">${esc(normalizeEmail(c.email || emailLabel))}</div>
+
+            <div class="iSub" style="margin-top:6px;">
+              ${c.phone ? `📞 ${esc(c.phone)}` : ""}
+              ${(c.address1 || c.zip || c.city) ? ` • 🧾 ${esc([c.address1, c.zip, c.city].filter(Boolean).join(" "))}` : ""}
+            </div>
 
             <details class="acc">
               <summary>
                 <span>🏠 Voir logements</span>
                 <span class="badge">${o.homes.length}</span>
               </summary>
-              <div class="accBody" id="homes_${esc(o.ownerEmail || ownerLabel)}"></div>
+              <div class="accBody"></div>
             </details>
           </div>
 
           <div class="iActions">
+            <button class="mini ghost" type="button" data-edit-client="1">✏️ Modifier</button>
             <a class="mini" href="${inviteUrl}">✉️ Inviter</a>
             <a class="mini ghost" href="logements.html">🏘️ Logements</a>
           </div>
         `;
+
         clientsList.appendChild(div);
 
+        // homes accordion
         const body = div.querySelector(".accBody");
         const homesSorted = o.homes.slice().sort((a,b)=> String(a.name||"").localeCompare(String(b.name||"")));
         body.innerHTML = homesSorted.map(h=>{
           const label = `${h.name || "Logement"}${h.city ? " — " + h.city : ""}`;
           const addr = (h.homeAddress || h.address || "").trim();
-          const type = (h.type || "").trim();
+          const type = (h.type || h.homeType || "").trim();
           const planUrl = `planning.html?homeId=${encodeURIComponent(h.id)}`;
           return `
             <div class="homeRow">
@@ -455,6 +656,11 @@
             </div>
           `;
         }).join("");
+
+        // edit button
+        div.querySelector('button[data-edit-client="1"]').addEventListener("click", ()=>{
+          openClientModal(o);
+        });
       }
     }
 
@@ -464,14 +670,11 @@
       owners = [];
 
       try{
-        const qH = query(
-          collection(db,"homes"),
-          where("conciergerieUid","==", currentUser.uid),
-          limit(1200)
-        );
+        const qH = query(collection(db,"homes"), where("conciergerieUid","==", currentUser.uid), limit(1200));
         const snap = await getDocs(qH);
         allHomes = snap.docs.map(d=>({ id:d.id, ...(d.data()||{}) }));
 
+        await loadClientsCollection();
         owners = buildOwnersFromHomes(allHomes);
         render();
 
@@ -481,6 +684,238 @@
         render();
       }
     }
+
+    // ===== Modal open/close =====
+    function openClientModal(ownerObj){
+      hideMAlert();
+
+      editingClientKey = ownerObj.clientKey;
+      editingClientLabelKey = editingClientKey.startsWith("label:") ? editingClientKey : ("label:" + normKey(ownerObj.ownerName || ""));
+      editingClientDocId = safeDocIdFromClientKey(editingClientKey);
+
+      const c = clientsByKey.get(editingClientKey) || {};
+
+      const defaultName = (c.displayName || ownerObj.ownerName || "").trim();
+      const defaultEmail = normalizeEmail(c.email || ownerObj.ownerEmail || "");
+      const defaultPhone = (c.phone || ownerObj.homes?.[0]?.ownerPhone || "").trim();
+
+      cName.value = defaultName || "";
+      cEmail.value = defaultEmail || "";
+      cPhone.value = defaultPhone || "";
+
+      cAddr1.value = (c.address1 || "").trim();
+      cZip.value = (c.zip || "").toString().trim();
+      cCity.value = (c.city || "").trim();
+
+      // homes attachés à ce clientKey (pour sync)
+      editingHomes = (ownerObj.homes || []).slice();
+
+      resolvedOwnerUid = "";
+      resolvedOwnerName = "";
+      resolvedOwnerEmail = "";
+      linkInfo.textContent = "—";
+
+      clientModalTitle.textContent = "Modifier client";
+      clientModalHint.innerHTML = `Fiche <b>clients</b> + sync <b>${editingHomes.length}</b> logement(s) (email/tel/lien compte).`;
+
+      clientModalBackdrop.style.display = "flex";
+      clientModalBackdrop.setAttribute("aria-hidden","false");
+
+      setTimeout(()=> cName.focus(), 0);
+    }
+
+    function closeClientModal(){
+      clientModalBackdrop.style.display = "none";
+      clientModalBackdrop.setAttribute("aria-hidden","true");
+      clientForm.reset();
+      hideMAlert();
+      editingClientKey = "";
+      editingClientLabelKey = "";
+      editingClientDocId = "";
+      editingHomes = [];
+      resolvedOwnerUid = "";
+      resolvedOwnerName = "";
+      resolvedOwnerEmail = "";
+      linkInfo.textContent = "—";
+    }
+
+    clientCancelBtn.addEventListener("click", closeClientModal);
+    clientModalBackdrop.addEventListener("click", (e)=>{ if(e.target === clientModalBackdrop) closeClientModal(); });
+
+    // ===== Lookup owner account by email (users) =====
+    async function lookupOwnerUserByEmail(emailLower){
+      const qU = query(collection(db,"users"), where("email", "==", emailLower), limit(5));
+      const snap = await getDocs(qU);
+      if(snap.empty) return null;
+
+      // filtre local (évite indexes composés)
+      const found = snap.docs
+        .map(d=>({ id:d.id, ...(d.data()||{}) }))
+        .find(u => String(u.role||"").toLowerCase() === "proprietaire" && String(u.conciergerieUid||"") === currentUser.uid);
+
+      if(!found) return null;
+
+      return {
+        uid: found.id,
+        email: normalizeEmail(found.email || emailLower),
+        fullname: (found.fullname || found.displayName || "").trim()
+      };
+    }
+
+    async function maybeResolveOwnerAccount(emailLower){
+      if(!emailLower) {
+        resolvedOwnerUid = ""; resolvedOwnerName = ""; resolvedOwnerEmail = "";
+        linkInfo.textContent = "—";
+        return;
+      }
+
+      linkInfo.textContent = "Recherche du compte propriétaire…";
+      try{
+        const found = await lookupOwnerUserByEmail(emailLower);
+        if(!found){
+          resolvedOwnerUid = ""; resolvedOwnerName = ""; resolvedOwnerEmail = emailLower;
+          linkInfo.textContent = "Aucun compte propriétaire trouvé (ou pas rattaché à ta conciergerie).";
+          return;
+        }
+        resolvedOwnerUid = found.uid;
+        resolvedOwnerName = found.fullname || "";
+        resolvedOwnerEmail = found.email || emailLower;
+        linkInfo.textContent = `✅ Compte lié : ${resolvedOwnerEmail} • UID: ${resolvedOwnerUid}${resolvedOwnerName ? " • " + resolvedOwnerName : ""}`;
+      }catch(err){
+        console.warn(err);
+        resolvedOwnerUid = ""; resolvedOwnerName = ""; resolvedOwnerEmail = emailLower;
+        linkInfo.textContent = "Erreur lookup (permissions/index).";
+      }
+    }
+
+    cEmail.addEventListener("blur", async ()=>{
+      const e = normalizeEmail(cEmail.value);
+      await maybeResolveOwnerAccount(e);
+    });
+
+    // ===== Bulk update homes =====
+    async function bulkUpdateHomesByKeys({ oldClientKeys, newClientKey, patchHomes }){
+      // oldClientKeys: array of keys to match (ex: label + old uid)
+      const keysSet = new Set((oldClientKeys||[]).filter(Boolean));
+
+      const targets = allHomes.filter(h=>{
+        const k = buildClientKeyFromHome(h);
+        return keysSet.has(k);
+      });
+
+      if(!targets.length) return { updated: 0 };
+
+      let updated = 0;
+      for(let i=0; i<targets.length; i+=450){
+        const chunk = targets.slice(i, i+450);
+        const batch = writeBatch(db);
+        for(const h of chunk){
+          batch.update(doc(db,"homes", h.id), {
+            ...patchHomes,
+            clientKey: newClientKey,
+            updatedAt: serverTimestamp()
+          });
+          updated++;
+        }
+        await batch.commit();
+      }
+      return { updated };
+    }
+
+    // ===== Save client =====
+    clientForm.addEventListener("submit", async (e)=>{
+      e.preventDefault();
+      hideMAlert();
+      hideAlert();
+
+      const displayName = (cName.value || "").trim();
+      const email = normalizeEmail(cEmail.value || "");
+      const phone = cleanPhone(cPhone.value || "");
+      const address1 = (cAddr1.value || "").trim();
+      const zip = cleanZip(cZip.value || "");
+      const city = (cCity.value || "").trim();
+
+      if(!displayName) return showMAlert("Nom obligatoire.");
+      if(zip && !validateZip(zip)) return showMAlert("Code postal invalide (5 chiffres).");
+
+      clientSaveBtn.disabled = true;
+      clientSaveBtn.style.opacity = "0.75";
+
+      try{
+        // 1) resolve account if possible
+        await maybeResolveOwnerAccount(email);
+
+        // 2) compute new clientKey
+        const oldKeys = [editingClientKey];
+        if(editingClientLabelKey && editingClientLabelKey !== editingClientKey) oldKeys.push(editingClientLabelKey);
+
+        let newClientKey = editingClientKey;
+        if(resolvedOwnerUid){
+          newClientKey = resolvedOwnerUid;
+          oldKeys.push(resolvedOwnerUid);
+        }else{
+          // si pas de uid, on stabilise via label
+          newClientKey = "label:" + normKey(displayName);
+          oldKeys.push(newClientKey);
+        }
+
+        const clientDocId = safeDocIdFromClientKey(newClientKey);
+
+        // 3) upsert clients/{id}
+        await setDoc(doc(db,"clients", clientDocId), {
+          conciergerieUid: currentUser.uid,
+          clientKey: newClientKey,
+
+          displayName,
+          email: email || "",
+          phone: phone || "",
+
+          address1: address1 || "",
+          zip: zip || "",
+          city: city || "",
+
+          ownerUid: resolvedOwnerUid || "",
+          ownerAccountName: resolvedOwnerName || "",
+
+          updatedAt: serverTimestamp(),
+          createdAt: clientsByKey.get(newClientKey)?.createdAt || serverTimestamp()
+        }, { merge:true });
+
+        // 4) bulk update homes (email/tel/lien)
+        const patchHomes = {
+          ownerName: displayName,
+          homeOwner: displayName,              // compat
+          ownerPhone: phone || "",
+
+          ownerAccountEmail: email || "",
+          ownerEmail: email || "",
+
+          ownerUid: resolvedOwnerUid || "",
+          ownerAccountName: resolvedOwnerName || "",
+          ownerFullname: resolvedOwnerName || ""
+        };
+
+        const res = await bulkUpdateHomesByKeys({
+          oldClientKeys: oldKeys,
+          newClientKey,
+          patchHomes
+        });
+
+        showMAlert(`✅ Client enregistré.\n• homes synchronisés: ${res.updated}`, true);
+
+        // refresh local state
+        await loadHomes();
+        closeClientModal();
+        showAlert("✅ Client mis à jour.", true);
+
+      }catch(err){
+        console.error(err);
+        showMAlert("Erreur enregistrement client : " + (err?.message || "inconnue"));
+      }finally{
+        clientSaveBtn.disabled = false;
+        clientSaveBtn.style.opacity = "1";
+      }
+    });
 
     // Events
     searchInput.addEventListener("input", render);
