@@ -375,55 +375,45 @@
     <a href="owner-dashboard.html#logements">Logements</a>
   </nav>
 
-  <script type="module">
-    import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-import { doc, getDoc } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+<script type="module">
+  import { auth, db } from "./firebase-init.js";
+  import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+  import {
+    doc, getDoc,
+    addDoc, collection, serverTimestamp,
+    query, where, orderBy, onSnapshot
+  } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
-function getParam(name){
-  const p = new URLSearchParams(location.search);
-  return (p.get(name) || "").trim();
-}
-
-async function guardOwnerProfile(user){
-  const snap = await getDoc(doc(db, "users", user.uid));
-  const d = snap.exists() ? (snap.data() || {}) : {};
-
-  const fullname = String(d.fullname || "").trim();
-  const role = String(d.role || "").toLowerCase();
-
-  // propriétaire uniquement
-  if(role && role !== "proprietaire") return;
-
-  // profil incomplet => go profil
-  if(!fullname){
-    const token = getParam("token");
-    const url = token
-      ? `profil-proprietaire.html?token=${encodeURIComponent(token)}`
-      : `profil-proprietaire.html`;
-    location.replace(url);
+  function getParam(name){
+    const p = new URLSearchParams(location.search);
+    return (p.get(name) || "").trim();
   }
-}
 
-onAuthStateChanged(auth, async (user)=>{
-  if(!user){
-    location.href = "login.html?role=proprietaire";
-    return;
+  async function guardOwnerProfile(user){
+    const snap = await getDoc(doc(db, "users", user.uid));
+    const d = snap.exists() ? (snap.data() || {}) : {};
+    const role = String(d.role || "").toLowerCase();
+    const fullname = String(d.fullname || "").trim();
+
+    // Si tu veux être strict :
+    if(role && role !== "proprietaire"){
+      // si c’est pas un proprio, dehors (optionnel)
+      // location.replace("login.html?role=proprietaire");
+      // return true;
+    }
+
+    if(!fullname){
+      const token = getParam("token");
+      const url = token
+        ? `profil-proprietaire.html?self=1&token=${encodeURIComponent(token)}`
+        : `profil-proprietaire.html?self=1`;
+      location.replace(url);
+      return false; // stop boot
+    }
+    return true;
   }
-  await guardOwnerProfile(user);
 
-  // ... ensuite seulement tu charges le dashboard
-  // initDashboard(user);
-});
-
-    
-    import { auth, db } from "./firebase-init.js";
-    import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-    import {
-      addDoc, collection, serverTimestamp,
-      query, where, orderBy, onSnapshot
-    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
-
-    // UI
+     // UI
     const badgeLine = document.getElementById("badgeLine");
     const logoutBtn = document.getElementById("logoutBtn");
 
@@ -668,23 +658,28 @@ onAuthStateChanged(auth, async (user)=>{
       }
     });
 
-    // Boot
-    onAuthStateChanged(auth, (user)=>{
-      if(!user){
-        location.href = "login.html?role=proprietaire";
-        return;
-      }
-      currentUser = user;
-      badgeLine.textContent = `Connecté : ${user.email || user.uid}`;
+      // Boot
+  onAuthStateChanged(auth, async (user)=>{
+    if(!user){
+      location.href = "login.html?role=proprietaire";
+      return;
+    }
 
-      // hash -> tab
-      const h = (location.hash || "").replace("#","").trim();
-      if(h && sections[h]) setTab(h);
+    const ok = await guardOwnerProfile(user);
+    if(!ok) return;
 
-      listenMyHomes();
-      listenMyRequests();
-    });
-  </script>
+    currentUser = user;
+    badgeLine.textContent = `Connecté : ${user.email || user.uid}`;
+
+    const h = (location.hash || "").replace("#","").trim();
+    if(h && sections[h]) setTab(h);
+
+    listenMyHomes();
+    listenMyRequests();
+  });
+</script>
+
 </body>
 </html>
+
 
