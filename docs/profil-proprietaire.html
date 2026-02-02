@@ -173,9 +173,8 @@
 <body>
   <div class="page">
     <div class="topbar">
-      <a class="pill" id="backBtn" href="clients.html">← Clients</a>
+      <a class="pill" id="backBtn" href="clients.html">← Retour</a>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-        <a class="pill" id="planningBtn" href="planning.html">Planning</a>
         <button class="pill" id="logoutBtn" type="button">Déconnexion</button>
       </div>
     </div>
@@ -185,7 +184,7 @@
         <div class="logo-icon">👤</div>
         <h1>Profil propriétaire</h1>
       </div>
-      <div class="subtitle">Coordonnées pour devis / facture</div>
+      <div class="subtitle">Coordonnées utilisées uniquement par la conciergerie pour établir vos factures.</div>
       <div class="emailLine" id="emailLine">—</div>
 
       <div class="alert" id="alertBox"></div>
@@ -267,12 +266,13 @@
     </div>
   </div>
 
-  <nav class="bottom-nav" aria-label="Navigation">
-    <a href="planning.html" id="navPlanning">Planning</a>
-    <a class="active" href="clients.html" id="navClients">Clients</a>
-    <a href="logements.html" id="navLogements">Logements</a>
-    <a href="equipe.html" id="navEquipe">Équipe</a>
-    <a href="catalogue.html" id="navCatalogue">Catalogue</a>
+  <!-- bottom-nav conciergerie : cachée automatiquement en mode propriétaire (self) -->
+  <nav class="bottom-nav" aria-label="Navigation" id="conciergerieNav">
+    <a href="planning.html">Planning</a>
+    <a class="active" href="clients.html">Clients</a>
+    <a href="logements.html">Logements</a>
+    <a href="equipe.html">Équipe</a>
+    <a href="catalogue.html">Catalogue</a>
   </nav>
 
 <script type="module">
@@ -289,7 +289,7 @@
   const logoutBtn = document.getElementById("logoutBtn");
 
   const backBtn = document.getElementById("backBtn");
-  const planningBtn = document.getElementById("planningBtn");
+  const conciergerieNav = document.getElementById("conciergerieNav");
 
   const cardTitle = document.getElementById("cardTitle");
   const ownerIdLine = document.getElementById("ownerIdLine");
@@ -330,7 +330,6 @@
   function getParam(name){
     return (new URLSearchParams(location.search).get(name) || "").trim();
   }
-  function qs(name){ return getParam(name); }
 
   function isSelfMode(){
     // self=1 OU token=... => propriétaire qui complète son profil
@@ -382,25 +381,30 @@
     notes.value = data.notes || "";
   }
 
+  async function setupSelfUi(){
+    // profil propriétaire (self) = pas de nav conciergerie, pas de "nouveau/supprimer/copie"
+    cardTitle.textContent = "Mon profil";
+    ownerIdLine.textContent = "—";
+
+    backBtn.href = "owner-dashboard.html";
+
+    newBtn.style.display = "none";
+    deleteBtn.style.display = "none";
+    copyBtn.style.display = "none";
+
+    if(conciergerieNav) conciergerieNav.style.display = "none";
+
+    // Email = readonly et prérempli avec Firebase Auth
+    email.readOnly = true;
+    email.value = currentUser?.email || "";
+  }
+
   async function loadOwner(){
     hideAlert();
 
     // ===== MODE SELF (proprio) =====
     if(isSelfMode()){
-      cardTitle.textContent = "Mon profil";
-      ownerIdLine.textContent = "—";
-
-      // on cache la nav conciergerie + actions inutiles
-      backBtn.href = "owner-dashboard.html";
-      planningBtn.href = "owner-dashboard.html";
-
-      newBtn.style.display = "none";
-      deleteBtn.style.display = "none";
-      copyBtn.style.display = "none";
-
-      // masquer la bottom nav conciergerie
-      const nav = document.querySelector("nav.bottom-nav");
-      if(nav) nav.style.display = "none";
+      await setupSelfUi();
 
       // Pré-remplir depuis users/{uid} si dispo
       try{
@@ -409,6 +413,9 @@
           apply(snapU.data() || {});
         }else{
           clearForm();
+          // garde quand même l'email auth
+          email.value = currentUser?.email || "";
+          email.readOnly = true;
         }
       }catch(err){
         console.warn("Préfill users failed:", err);
@@ -417,10 +424,12 @@
     }
 
     // ===== MODE CONCIERGERIE (gestion owners/{ownerId}) =====
-    ownerId = qs("ownerId");
-    const returnTo = qs("returnTo");
+    ownerId = getParam("ownerId");
+    const returnTo = getParam("returnTo");
     if(returnTo){
       backBtn.href = `${returnTo}.html`;
+    }else{
+      backBtn.href = "clients.html";
     }
 
     if(!ownerId){
@@ -476,7 +485,7 @@
       if(isSelfMode()){
         const uid = currentUser.uid;
 
-        // users/{uid} = source de vérité (dashboard check fullname ici)
+        // users/{uid} = source de vérité (guard du dashboard check fullname ici)
         await setDoc(doc(db, "users", uid), {
           uid,
           role: "proprietaire",
@@ -517,7 +526,9 @@
         const dashUrl = token
           ? `owner-dashboard.html?token=${encodeURIComponent(token)}`
           : `owner-dashboard.html`;
-        location.replace(dashUrl);
+
+        // petit délai pour que l'utilisateur voie le message
+        setTimeout(()=> location.replace(dashUrl), 350);
         return;
       }
 
@@ -537,7 +548,6 @@
         });
 
         showAlert("✅ Propriétaire créé.", true);
-        // on reste sur la fiche
         location.href = `profil-proprietaire.html?ownerId=${encodeURIComponent(ownerId)}`;
         return;
       }
@@ -554,6 +564,7 @@
 
   async function deleteOwner(){
     hideAlert();
+
     if(isSelfMode()){
       showAlert("Suppression indisponible en mode propriétaire.", false);
       return;
@@ -571,9 +582,7 @@
     }
   }
 
-  newBtn.addEventListener("click", ()=>{
-    location.href = "profil-proprietaire.html";
-  });
+  newBtn.addEventListener("click", ()=> location.href = "profil-proprietaire.html");
 
   copyBtn.addEventListener("click", async ()=>{
     if(!ownerId) return;
