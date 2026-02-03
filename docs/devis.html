@@ -1,4 +1,4 @@
-<!-- docs/devis.html (COMPLET + PATCH client/validité/logo + refresh avant preview) -->
+<!-- docs/devis.html (COMPLET + CORRIGÉ preview fiable sans enregistrer + client adresse complète + validité OK + logo cache-bust) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -435,7 +435,7 @@
     }
     function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
 
-    // ✅ anti-cache logo (sinon tu changes le fichier, l'URL peut rester identique -> navigateur garde l'ancien)
+    // anti-cache logo (si l'URL reste identique, navigateur garde l'ancien)
     function bustUrl(url){
       const u = (url || "").toString().trim();
       if(!u) return "";
@@ -643,7 +643,7 @@
       const ownerName  = (ownerUser?.fullname || d.ownerName || "—").trim();
       const ownerEmail = (ownerUser?.email || d.ownerEmail || "—").trim();
 
-      // ✅ adresse client depuis users/{ownerUid} prioritaire
+      // adresse client depuis users/{ownerUid} prioritaire
       const ownerAddr1 = (ownerUser?.address1 || ownerUser?.address || "").trim();
       const ownerZip   = (ownerUser?.zip || "").trim();
       const ownerCity  = (ownerUser?.city || "").trim();
@@ -716,15 +716,14 @@
       if(snap.exists()) homeData = snap.data() || {};
     }
 
-    // ✅ PATCH CLIENT : recherche email robuste (case / exact) via 2 requêtes
+    // lookup email robuste (case / exact) via 2 requêtes
     async function lookupOwnerUserByEmail(emailLower, emailRaw){
       const eLow = normalizeEmail(emailLower);
       const eRaw = (emailRaw || "").toString().trim();
       const candidates = [eLow, eRaw].filter(Boolean);
-
       if(!candidates.length) return null;
 
-      // 1) tentative exacte (email ==)
+      // 1) exact
       try{
         const q1 = query(collection(db,"users"), where("email", "==", candidates[0]), limit(10));
         const s1 = await getDocs(q1);
@@ -751,7 +750,7 @@
         console.warn("lookup exact email failed:", e?.message || e);
       }
 
-      // 2) fallback "in" (si tu stockes email avec casse différente)
+      // 2) fallback IN (si email stocké avec casse différente)
       if(candidates.length >= 2){
         try{
           const q2 = query(collection(db,"users"), where("email", "in", candidates.slice(0,10)), limit(10));
@@ -779,7 +778,6 @@
           console.warn("lookup email IN failed:", e?.message || e);
         }
       }
-
       return null;
     }
 
@@ -791,7 +789,7 @@
       const ownerEmailRaw = (d.ownerEmail || "").toString().trim();
       const ownerEmailLower = normalizeEmail(ownerEmailRaw);
 
-      // ✅ priorité absolue : ownerUid (fiable)
+      // priorité absolue : ownerUid
       if(ownerUid){
         try{
           const snap = await getDoc(doc(db,"users", ownerUid));
@@ -818,7 +816,7 @@
         }
       }
 
-      // ✅ fallback email (moins fiable, mais utile si pas de ownerUid)
+      // fallback email
       if(ownerEmailLower || ownerEmailRaw){
         try{
           ownerUser = await lookupOwnerUserByEmail(ownerEmailLower, ownerEmailRaw);
@@ -983,28 +981,26 @@
 
       const logoUrl = (bp?.logoUrl || "").toString().trim();
 
-      // client
-      // ===== client (priorité users/{ownerUid}, fallback eventData) =====
-const ownerName  = (ownerUser?.fullname || d.ownerName || "—").trim();
-const ownerEmail = (ownerUser?.email || d.ownerEmail || "").trim();
+      // client (priorité users/{ownerUid}, fallback eventData)
+      const ownerName  = (ownerUser?.fullname || d.ownerName || "—").trim();
+      const ownerEmail = (ownerUser?.email || d.ownerEmail || "").trim();
 
-const ownerAddr1 = (
-  ownerUser?.address1 ||
-  d.ownerAddress1 || d.clientAddress1 || d.ownerAddr1 || ""
-).trim();
+      const ownerAddr1 = (
+        ownerUser?.address1 ||
+        d.ownerAddress1 || d.clientAddress1 || d.ownerAddr1 || ""
+      ).toString().trim();
 
-const ownerZip = (
-  ownerUser?.zip ||
-  d.ownerZip || d.clientZip || ""
-).toString().trim();
+      const ownerZip = (
+        ownerUser?.zip ||
+        d.ownerZip || d.clientZip || ""
+      ).toString().trim();
 
-const ownerCity = (
-  ownerUser?.city ||
-  d.ownerCity || d.clientCity || ""
-).toString().trim();
+      const ownerCity = (
+        ownerUser?.city ||
+        d.ownerCity || d.clientCity || ""
+      ).toString().trim();
 
-const ownerAddr2 = [ownerZip, ownerCity].filter(Boolean).join(" ").trim();
-
+      const ownerAddr2 = [ownerZip, ownerCity].filter(Boolean).join(" ").trim();
 
       const lines = Array.isArray(d.lines) ? d.lines : [];
       const totals = computeTotals(lines, tvaEnabled, tvaRate);
@@ -1033,10 +1029,10 @@ const ownerAddr2 = [ownerZip, ownerCity].filter(Boolean).join(" ").trim();
         `;
       }).join("");
 
-      // ✅ PATCH validité : priorise ce qui est sauvegardé, sinon calcule maintenant
-      const validityDays = Number(d.quoteValidityDays || 30);
-      const quoteDate = (d.quoteDate || todayIso());
-      const validUntil = (d.quoteValidUntil || addDaysLabel(quoteDate, validityDays));
+      // ✅ PREVIEW FIABLE (sans enregistrer) => aujourd'hui + X jours
+      const quoteDate = todayIso();
+      const validityDays = Number.isFinite(Number(d.quoteValidityDays)) ? Number(d.quoteValidityDays) : 30;
+      const validUntil = addDaysLabel(quoteDate, validityDays);
 
       const period = getStayPeriod(d);
 
@@ -1065,7 +1061,6 @@ const ownerAddr2 = [ownerZip, ownerCity].filter(Boolean).join(" ").trim();
               <div class="docNum">${esc(d.quoteNumber || "—")}</div>
 
               <div class="block" style="margin-top:10px;">
-               
                 <div class="metaLine"><b>${esc(cName)}</b></div>
                 ${cStreet ? `<div class="metaLine">${esc(cStreet)}</div>` : ``}
                 ${cAddr2 ? `<div class="metaLine">${esc(cAddr2)}</div>` : ``}
@@ -1080,7 +1075,6 @@ const ownerAddr2 = [ownerZip, ownerCity].filter(Boolean).join(" ").trim();
             <div class="metaLine"><b>Validité</b> : jusqu’au ${esc(validUntil)}</div>
 
             <div class="block" style="margin-top:10px;">
-              
               <div class="metaLine"><b>${esc(ownerName || "—")}</b></div>
               ${ownerAddr1 ? `<div class="metaLine">${esc(ownerAddr1)}</div>` : ``}
               ${ownerAddr2 ? `<div class="metaLine">${esc(ownerAddr2)}</div>` : ``}
@@ -1191,8 +1185,6 @@ const ownerAddr2 = [ownerZip, ownerCity].filter(Boolean).join(" ").trim();
 
           .metaLine{font-size:13px;color:#222;font-weight:700;margin-top:4px}
           .block{border:1px solid rgba(0,0,0,.10);border-radius:12px;padding:10px 12px;background:#fff}
-          .btitle{font-weight:900;font-size:12px;color:#333;margin-bottom:6px}
-
           .box{border:1px solid rgba(0,0,0,.10);border-radius:12px;padding:10px 12px;background:#fff}
           .boxTitle{font-weight:900;font-size:12px;color:#333;margin-bottom:6px}
 
@@ -1264,26 +1256,25 @@ const ownerAddr2 = [ownerZip, ownerCity].filter(Boolean).join(" ").trim();
       w.document.close();
     }
 
-    // ✅ PATCH : avant preview, on recharge profile + owner (sinon tu vois du vieux)
+    // ✅ PREVIEW FIABLE : refresh event + profile + home + owner avant d'ouvrir
     previewBtn.addEventListener("click", async ()=>{
-  if(!eventRef) return;
+      if(!eventRef) return;
 
-  // ✅ charge/rafraîchit les infos nécessaires avant preview
-  try{
-    await loadProfile(currentUser.uid);
-  }catch(e){
-    console.warn("preview loadProfile failed:", e?.message || e);
-  }
-  try{
-    await loadOwnerFromUsers();
-  }catch(e){
-    console.warn("preview loadOwner failed:", e?.message || e);
-  }
+      try{
+        const snap = await getDoc(eventRef);
+        if(snap.exists()){
+          eventData = { id: snap.id, ...(snap.data()||{}) };
+        }
+        await loadProfile(currentUser.uid);
+        await loadHomeIfAny(eventData.homeId);
+        await loadOwnerFromUsers();
+      }catch(e){
+        console.warn("preview refresh failed:", e?.message || e);
+      }
 
-  const html = buildPreviewHtmlString(); // validité calculée (aujourd'hui + X jours)
-  openPrintWindow(html);
-});
-
+      const html = buildPreviewHtmlString();
+      openPrintWindow(html);
+    });
 
     function lockUI(locked){
       const d = eventData || {};
@@ -1311,13 +1302,12 @@ const ownerAddr2 = [ownerZip, ownerCity].filter(Boolean).join(" ").trim();
 
         const payMode = getSelectedPayMode() || "VIREMENT";
 
-        // ✅ date/validité sauvegardées : date du jour + délai
-        const quoteDate = todayIso(); // preview = aujourd'hui
-const validityDays = Number.isFinite(Number(d.quoteValidityDays))
-  ? Number(d.quoteValidityDays)
-  : 30;
-const validUntil = addDaysLabel(quoteDate, validityDays);
-
+        // ✅ ENREGISTREMENT : date du jour + validité X jours (PAS de variable d inexistante)
+        const quoteDate = todayIso();
+        const validityDays = Number.isFinite(Number(eventData?.quoteValidityDays))
+          ? Number(eventData.quoteValidityDays)
+          : 30;
+        const quoteValidUntil = addDaysLabel(quoteDate, validityDays);
 
         const patch = {
           quoteNumber,
@@ -1354,6 +1344,7 @@ const validUntil = addDaysLabel(quoteDate, validityDays);
 
         await updateDoc(eventRef, patch);
 
+        // refresh
         const snap = await getDoc(eventRef);
         eventData = { id: snap.id, ...(snap.data()||{}) };
 
@@ -1486,7 +1477,3 @@ const validUntil = addDaysLabel(quoteDate, validityDays);
   </script>
 </body>
 </html>
-
-
-
-
