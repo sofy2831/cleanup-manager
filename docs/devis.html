@@ -80,7 +80,7 @@
     @media(min-width:860px){
       .layout{
         display:grid;
-        grid-template-columns: 1fr 460px; /* bloc devis un peu plus large */
+        grid-template-columns: 1fr 460px; /* bloc devis plus large */
         align-items:start;
       }
     }
@@ -267,7 +267,7 @@
 
         <div class="card-title" style="font-size:14px; margin-bottom:6px;">
           <span>Paiement</span>
-         
+          <span class="small">1 seul mode</span>
         </div>
 
         <label for="paymentTerm">Délai de règlement</label>
@@ -400,7 +400,7 @@
     let homeData = null;    // homes/{homeId}
     let homeRef = null;
 
-    let ownerUser = null;   // users/{ownerUid}
+    let ownerUser = null;   // users/{ownerUid} role=proprietaire
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -430,28 +430,6 @@
       return (p.get(name) || "").trim();
     }
     function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
-
-    // ===== Dates séjour (corrigé : arrivalDateKey / departureDateKey) =====
-    function fmtDateFRFromKey(s){
-      const v = (s || "").toString().trim();
-      const m = v.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-      if(!m) return v || "—";
-      const [, y, mo, d] = m;
-      return `${d}/${mo}/${y}`;
-    }
-    function getStayPeriodObj(d){
-      const a = (d?.arrivalDateKey || "").toString().trim();
-      const b = (d?.departureDateKey || "").toString().trim();
-      if(a && b) return { from:a, to:b, label:`Du ${fmtDateFRFromKey(a)} au ${fmtDateFRFromKey(b)}` };
-      if(a && !b) return { from:a, to:"", label:`Arrivée : ${fmtDateFRFromKey(a)}` };
-      if(!a && b) return { from:"", to:b, label:`Départ : ${fmtDateFRFromKey(b)}` };
-      return { from:"", to:"", label:"—" };
-    }
-
-    // ===== Accès profil conciergerie (structure businessProfile) =====
-    function biz(){
-      return (profileData?.businessProfile || {});
-    }
 
     const eventId = getParam("eventId");
 
@@ -515,8 +493,9 @@
       return `D${year}-${padded}`;
     }
 
-    function applyLogoFromProfile(){
-      const url = (biz()?.logoUrl || "").trim();
+    function applyLogoFromProfile(profile){
+      const bp = (profile?.businessProfile || {});
+      const url = String(bp.logoUrl || "").trim();
       if(url){
         logoImg.src = url;
         logoImg.style.display = "block";
@@ -575,14 +554,31 @@
     penB2BEl.addEventListener("change", syncPenaltyText);
     penB2CEl.addEventListener("change", syncPenaltyText);
 
+    function pickDate(v){
+      const s = String(v||"").trim();
+      return s || "";
+    }
+
+    // ✅ FIX: tes dates sont stockées dans events.arrivalDateKey / departureDateKey
+    function getStayPeriod(d){
+      const a = pickDate(
+        d?.arrivalDateKey || d?.arrivalDate || d?.checkinDate || d?.arrival || d?.dateArrivee
+      );
+      const b = pickDate(
+        d?.departureDateKey || d?.departureDate || d?.checkoutDate || d?.departure || d?.dateDepart
+      );
+      if(a && b) return { from:a, to:b, label:`Du ${a} au ${b}` };
+      if(a && !b) return { from:a, to:"", label:`À partir du ${a}` };
+      if(!a && b) return { from:"", to:b, label:`Jusqu’au ${b}` };
+      return { from:"", to:"", label:"—" };
+    }
+
     function renderLinesAndTotals(){
       const d = eventData || {};
-      const p = biz();
+      const bp = (profileData?.businessProfile || {});
 
-      // TVA : profil-conciergerie.html -> businessProfile.vat.enabled
-      const tvaEnabled = !!p?.vat?.enabled;
-      // Si tu n'as pas encore de taux stocké : default 20% (modifiable plus tard)
-      const tvaRate = Number.isFinite(Number(p?.vat?.rate)) ? Number(p.vat.rate) : (tvaEnabled ? 0.20 : 0);
+      const tvaEnabled = !!bp.vat?.enabled;
+      const tvaRate = Number.isFinite(Number(bp.vat?.rate)) ? Number(bp.vat.rate) : 0;
 
       thTVA.style.display = tvaEnabled ? "" : "none";
       linesTbody.innerHTML = "";
@@ -620,7 +616,8 @@
         html.push(`<div class="r"><span>Total TTC</span><span>${esc(fmtMoney(totals.ttc))}</span></div>`);
       }else{
         html.push(`<div class="r"><span>Total</span><span>${esc(fmtMoney(totals.ttc))}</span></div>`);
-        html.push(`<div class="mutedLine">TVA non applicable, art. 293B du CGI.</div>`);
+        const ex = String(bp?.tvaExemptionText || "").trim();
+        if(ex) html.push(`<div class="mutedLine">${esc(ex)}</div>`);
       }
       totalsBox.innerHTML = html.join("");
     }
@@ -630,25 +627,23 @@
 
       const ownerName  = (ownerUser?.fullname || d.ownerName || "—").trim();
       const ownerEmail = (ownerUser?.email || d.ownerEmail || "—").trim();
-      const ownerPhone = (ownerUser?.phone || d.ownerPhone || "").trim();
 
       const ownerAddr1 = (ownerUser?.address1 || ownerUser?.address || "").trim();
       const ownerZip   = (ownerUser?.zip || "").trim();
       const ownerCity  = (ownerUser?.city || "").trim();
       const ownerAddrLine = [ownerAddr1, [ownerZip, ownerCity].filter(Boolean).join(" ")].filter(Boolean).join(" • ");
 
-      // logement : fallback event -> homeData
-      const hStreet = (d.homeAddress || homeData?.homeAddress || homeData?.address || "").toString().trim();
-      const hZip = (d.homeZip || homeData?.zip || homeData?.postalCode || "").toString().trim();
-      const hCity = (d.homeCity || homeData?.city || "").toString().trim();
-      const homeAddrFull = [hStreet, [hZip, hCity].filter(Boolean).join(" ")].filter(Boolean).join(" • ");
+      const homeAddr = (d.homeAddress || "").trim();
+      const homeZip = (d.homeZip || d.zip || d.postalCode || "").toString().trim();
+      const homeCity = (d.homeCity || "").trim();
+      const homeAddrFull = [homeAddr, [homeZip, homeCity].filter(Boolean).join(" ")].filter(Boolean).join(" • ");
 
-      const period = getStayPeriodObj(d);
+      const period = getStayPeriod(d);
 
       const rows = [];
-      rows.push(`<div class="line"><b>Logement</b> : ${esc((d.homeName|| homeData?.name || "—"))}</div>`);
+      rows.push(`<div class="line"><b>Logement</b> : ${esc((d.homeName||"—"))}</div>`);
       if(homeAddrFull) rows.push(`<div class="line"><b>Adresse logement</b> : ${esc(homeAddrFull)}</div>`);
-      rows.push(`<div class="line"><b>Client</b> : ${esc(ownerName)}${ownerEmail && ownerEmail!=="—" ? " • " + esc(ownerEmail) : ""}${ownerPhone ? " • " + esc(ownerPhone) : ""}</div>`);
+      rows.push(`<div class="line"><b>Client</b> : ${esc(ownerName)}${ownerEmail && ownerEmail!=="—" ? " • " + esc(ownerEmail) : ""}</div>`);
       if(ownerAddrLine) rows.push(`<div class="line"><b>Adresse client</b> : ${esc(ownerAddrLine)}</div>`);
       rows.push(`<div class="line"><b>Période</b> : ${esc(period.label)}</div>`);
 
@@ -684,7 +679,7 @@
         syncPenaltyText();
       }
 
-      applyLogoFromProfile();
+      applyLogoFromProfile(profileData);
       renderLinesAndTotals();
 
       saveBtn.disabled = !eventRef;
@@ -713,8 +708,6 @@
 
     async function lookupOwnerUserByEmail(emailLower){
       if(!emailLower) return null;
-
-      // IMPORTANT : ton clients.html a aussi un lookup emailLower, ici on garde simple.
       const qU = query(collection(db,"users"), where("email", "==", emailLower), limit(5));
       const snap = await getDocs(qU);
       if(snap.empty) return null;
@@ -732,13 +725,10 @@
         uid: found.id,
         email: normalizeEmail(found.email || emailLower),
         fullname: (found.fullname || found.displayName || found.ownerAccountName || "").trim(),
-        phone: (found.phone || "").toString().trim(),
         address1: (found.address1 || found.address || "").toString().trim(),
         address2: (found.address2 || "").toString().trim(),
         zip: (found.zip || "").toString().trim(),
         city: (found.city || "").toString().trim(),
-        role: found.role || "",
-        conciergerieUid: found.conciergerieUid || ""
       };
     }
 
@@ -759,13 +749,10 @@
                 uid: snap.id,
                 email: normalizeEmail(u.email || ownerEmail),
                 fullname: (u.fullname || u.displayName || "").trim(),
-                phone: (u.phone || "").toString().trim(),
                 address1: (u.address1 || u.address || "").toString().trim(),
                 address2: (u.address2 || "").toString().trim(),
                 zip: (u.zip || "").toString().trim(),
                 city: (u.city || "").toString().trim(),
-                role: u.role || "",
-                conciergerieUid: u.conciergerieUid || ""
               };
               return;
             }
@@ -838,7 +825,7 @@
         const u = x%10;
 
         if(t === 7 || t === 9){
-          const rest = x - (t*10);
+          const rest = x - (t*10); // 70-79 -> 0..9 à mapper sur teens
           const teen = teens[rest];
           if(t === 7){
             if(rest === 0) return "soixante-dix";
@@ -915,32 +902,35 @@
 
     function buildPreviewHtmlString(){
       const d = eventData || {};
-      const p = biz();
+      const bp = (profileData?.businessProfile || {});
 
-      // conciergerie (businessProfile)
-      const cName = (p.companyName || "Conciergerie").trim();
-      const cAddr1 = (p.address?.street || "").trim();
-      const cZip = (p.address?.zip || "").toString().trim();
-      const cCity = (p.address?.city || "").toString().trim();
+      // conciergerie (profil-conciergerie.html => users/{uid}.businessProfile.*)
+      const cName = String(bp.companyName || "Conciergerie").trim();
+      const cAddr1 = String(bp.address?.street || "").trim();
+      const cZip = String(bp.address?.zip || "").trim();
+      const cCity = String(bp.address?.city || "").trim();
       const cAddr2 = [cZip, cCity].filter(Boolean).join(" ").trim();
-      const cSiret = (p.registration?.siret || "").trim();
-      const cApe = (p.registration?.ape || "").trim();
-      const cVat = (p.vat?.number || "").trim();
-      const cIban = (p.bank?.iban || "").trim();
-      const cBic = (p.bank?.bic || "").trim();
-      const cSignName = (p.displayName || cName).trim();
-      const cLogoUrl = (p.logoUrl || "").trim();
 
-      // client
+      const cSiret = String(bp.registration?.siret || "").trim();
+      const cApe = String(bp.registration?.ape || "").trim();
+
+      const tvaEnabled = !!bp.vat?.enabled;
+      const tvaRate = Number.isFinite(Number(bp.vat?.rate)) ? Number(bp.vat.rate) : 0;
+      const cVat = String(bp.vat?.number || "").trim();
+
+      const cIban = String(bp.bank?.iban || "").trim();
+      const cBic = String(bp.bank?.bic || "").trim();
+
+      const cSignName = String(bp.displayName || cName).trim();
+      const logoUrl = String(bp.logoUrl || "").trim();
+
+      // client (users/{ownerUid})
       const ownerName = (ownerUser?.fullname || d.ownerName || "—").trim();
       const ownerEmail = (ownerUser?.email || d.ownerEmail || "").trim();
       const ownerAddr1 = (ownerUser?.address1 || "").trim();
       const ownerZip = (ownerUser?.zip || "").trim();
       const ownerCity = (ownerUser?.city || "").trim();
       const ownerAddr2 = [ownerZip, ownerCity].filter(Boolean).join(" ").trim();
-
-      const tvaEnabled = !!p?.vat?.enabled;
-      const tvaRate = Number.isFinite(Number(p?.vat?.rate)) ? Number(p.vat.rate) : (tvaEnabled ? 0.20 : 0);
 
       const lines = Array.isArray(d.lines) ? d.lines : [];
       const totals = computeTotals(lines, tvaEnabled, tvaRate);
@@ -969,11 +959,11 @@
         `;
       }).join("");
 
-      const quoteDate = (d.quoteDate || todayIso()).toString().trim() || todayIso();
+      const quoteDate = String(d.quoteDate || todayIso()).trim() || todayIso();
       const validityDays = Number(d.quoteValidityDays || 30);
-      const validUntil = (d.quoteValidUntil || addDaysLabel(quoteDate, validityDays)).toString().trim();
+      const validUntil = String(d.quoteValidUntil || addDaysLabel(quoteDate, validityDays)).trim();
 
-      const period = getStayPeriodObj(d);
+      const period = getStayPeriod(d);
 
       const payable = totals.ttc;
       const payableLetters = eurosToWords(payable);
@@ -993,7 +983,7 @@
         <div class="head">
           <div class="h-left">
             <div class="logoBox">
-              ${ cLogoUrl ? `<img src="${esc(cLogoUrl)}" alt="Logo">` : `<div class="logoFallback">✓</div>` }
+              ${ logoUrl ? `<img src="${esc(logoUrl)}" alt="Logo">` : `<div class="logoFallback">✓</div>` }
             </div>
             <div>
               <div class="docTitle">DEVIS</div>
@@ -1026,9 +1016,9 @@
 
         <div class="box" style="margin-top:12px;">
           <div class="boxTitle">Prestation</div>
-          <div><b>Logement</b> : ${esc(d.homeName || homeData?.name || "—")}${(d.homeCity || homeData?.city) ? " — " + esc(d.homeCity || homeData?.city) : ""}</div>
-          ${ (d.homeAddress || homeData?.homeAddress || homeData?.address) ? `<div><b>Adresse</b> : ${esc(d.homeAddress || homeData?.homeAddress || homeData?.address)}</div>` : ``}
-          <div><b>Période</b> : ${esc(period.label)}</div>
+          <div class="pLine"><b>Logement</b> : ${esc(d.homeName || "—")}${d.homeCity ? " — " + esc(d.homeCity) : ""}</div>
+          ${d.homeAddress ? `<div class="pLine"><b>Adresse</b> : ${esc(d.homeAddress)}</div>` : ``}
+          <div class="pLine"><b>Période</b> : ${esc(period.label)}</div>
         </div>
 
         <table class="tbl">
@@ -1057,7 +1047,7 @@
               `
               : `
                 <div class="r big"><span>Total</span><span>${esc(fmtMoney(totals.ttc))}</span></div>
-                <div class="smallNote">TVA non applicable, art. 293B du CGI.</div>
+                ${String(bp?.tvaExemptionText||"").trim() ? `<div class="smallNote">${esc(bp.tvaExemptionText)}</div>` : ``}
               `
           }
         </div>
@@ -1065,26 +1055,26 @@
         <div class="boxes" style="margin-top:12px;">
           <div class="box">
             <div class="boxTitle">Paiement</div>
-            <div><b>Délai</b> : ${esc(dueLabel(paymentTermEl.value))}</div>
-            <div><b>Mode</b> : ${esc(payModeLabel(payMode))}</div>
+            <div class="pLine"><b>Délai</b> : ${esc(dueLabel(paymentTermEl.value))}</div>
+            <div class="pLine"><b>Mode</b> : ${esc(payModeLabel(payMode))}</div>
 
             <div style="margin-top:8px;">
-              <div><b>À payer</b> : ${esc(fmtMoney(payable))}</div>
+              <div class="pLine"><b>À payer</b> : ${esc(fmtMoney(payable))}</div>
               <div class="smallNote" style="margin-top:4px;">(${esc(payableLetters)})</div>
             </div>
 
             ${(cIban || cBic) ? `
               <div style="margin-top:10px; border-top:1px solid rgba(0,0,0,.10); padding-top:8px;">
-                ${cIban ? `<div>IBAN : ${esc(cIban)}</div>` : ``}
-                ${cBic ? `<div>BIC : ${esc(cBic)}</div>` : ``}
+                ${cIban ? `<div class="pLine">IBAN : ${esc(cIban)}</div>` : ``}
+                ${cBic ? `<div class="pLine">BIC : ${esc(cBic)}</div>` : ``}
               </div>
             ` : ``}
           </div>
 
           <div class="box">
             <div class="boxTitle">Pénalités</div>
-            <div><b>Client</b> : ${esc(penMode === "B2B" ? "Professionnel" : (penMode === "B2C" ? "Particulier" : "—"))}</div>
-            <div style="margin-top:6px; white-space:pre-wrap;">${esc(penaltyTextEl.value || "—")}</div>
+            <div class="pLine"><b>Client</b> : ${esc(penMode === "B2B" ? "Professionnel" : (penMode === "B2C" ? "Particulier" : "—"))}</div>
+            <div class="pLine" style="margin-top:6px; white-space:pre-wrap;">${esc(penaltyTextEl.value || "—")}</div>
           </div>
         </div>
 
@@ -1112,6 +1102,7 @@
           *{box-sizing:border-box;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
           body{margin:0;background:#f3f3f3;padding:14px}
           .paper{max-width: 980px;margin: 0 auto;background:#fff;padding:18px;border-radius:14px;box-shadow:0 14px 36px rgba(0,0,0,.12);}
+
           .head{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;flex-wrap:wrap}
           .h-left{display:flex;gap:12px;align-items:flex-start;min-width:320px}
           .h-right{min-width:320px;max-width:420px}
@@ -1123,12 +1114,14 @@
           .docTitle{font-weight:900;font-size:14px;letter-spacing:.3px}
           .docNum{font-weight:900;font-size:20px;margin-top:2px}
 
-          .metaLine{font-size:13px;color:#222;font-weight:700;margin-top:4px}
+          .metaLine{font-size:13px;color:#222;font-weight:700;margin-top:4px;line-height:1.35}
           .block{border:1px solid rgba(0,0,0,.10);border-radius:12px;padding:10px 12px;background:#fff}
           .btitle{font-weight:900;font-size:12px;color:#333;margin-bottom:6px}
 
+          /* ✅ Uniformisation polices: prestation/logement/adresse/période */
           .box{border:1px solid rgba(0,0,0,.10);border-radius:12px;padding:10px 12px;background:#fff}
           .boxTitle{font-weight:900;font-size:12px;color:#333;margin-bottom:6px}
+          .pLine{font-size:13px;color:#222;font-weight:700;margin-top:4px;line-height:1.35}
 
           .tbl{width:100%;border-collapse:collapse;margin-top:12px;font-size:13px}
           .tbl th,.tbl td{padding:9px 9px;border-bottom:1px solid rgba(0,0,0,.10);text-align:left}
@@ -1138,17 +1131,19 @@
           .tot{margin-top:12px;border:1px solid rgba(0,0,0,.10);border-radius:12px;padding:10px 12px}
           .r{display:flex;justify-content:space-between;gap:10px;margin-top:6px;font-weight:800}
           .big{font-weight:900;font-size:15px}
-          .smallNote{margin-top:6px;font-size:12px;color:#555;font-weight:700}
+          .smallNote{margin-top:6px;font-size:12px;color:#555;font-weight:700;line-height:1.35}
 
           .boxes{display:grid;grid-template-columns:1fr;gap:10px;margin-top:12px}
           @media(min-width:760px){.boxes{grid-template-columns:1fr 1fr}}
 
-          .signRow{margin-top:12px;display:flex;justify-content:flex-end}
+          /* ✅ Signature à gauche */
+          .signRow{margin-top:12px;display:flex;justify-content:flex-start}
           .signBox{width:320px;border:1px solid rgba(0,0,0,.10);border-radius:12px;padding:10px 12px;background:#fff}
           .signLine{height:44px;border-bottom:1px dashed rgba(0,0,0,.35);margin-top:6px}
           .signName{margin-top:8px;font-size:12px;font-weight:800;color:#333}
 
-          .footer{margin-top:14px;border-top:1px solid rgba(0,0,0,.12);padding-top:10px;font-size:11px;color:#555;font-weight:700;line-height:1.35}
+          /* ✅ Footer centré */
+          .footer{margin-top:14px;border-top:1px solid rgba(0,0,0,.12);padding-top:10px;font-size:11px;color:#555;font-weight:700;line-height:1.35;text-align:center}
 
           .printbar{max-width:980px;margin:0 auto 10px;display:flex;justify-content:flex-end;gap:8px}
           .pbtn{border:none;border-radius:999px;padding:10px 12px;font-weight:900;cursor:pointer;background:#7A5CFF;color:#fff}
@@ -1158,9 +1153,10 @@
             body{padding:8px}
             .paper{padding:14px}
             .docNum{font-size:22px}
-            .metaLine{font-size:14px}
+            .metaLine{font-size:13px}
             .tbl{font-size:14px}
             .tbl th,.tbl td{padding:10px 8px}
+            .pLine{font-size:13px}
           }
 
           @media print{
@@ -1232,7 +1228,7 @@
 
         const quoteDate = eventData?.quoteDate || todayIso();
         const validityDays = Number(eventData?.quoteValidityDays || 30);
-        const quoteValidUntil = eventData?.quoteValidUntil || addDaysLabel(quoteDate, validityDays);
+        const validUntil = eventData?.quoteValidUntil || addDaysLabel(quoteDate, validityDays);
 
         const patch = {
           quoteNumber,
@@ -1241,7 +1237,7 @@
 
           quoteDate,
           quoteValidityDays: validityDays,
-          quoteValidUntil,
+          quoteValidUntil: validUntil,
 
           quotePaymentTerm: paymentTermEl.value,
           quotePaymentMode: payMode,
@@ -1400,4 +1396,3 @@
   </script>
 </body>
 </html>
-
