@@ -1,4 +1,4 @@
-<!-- docs/devis.html -->
+<!-- docs/devis.html (COMPLET) — FIX owner via users/{ownerUid} (pas owners) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -490,9 +490,9 @@
     let eventRef = null;
     let eventData = null;
 
-    let profileData = null; // users/{uid}
+    let profileData = null; // users/{conciergerieUid}
     let homeData = null;    // homes/{homeId}
-    let ownerData = null;   // owners/{ownerId}
+    let ownerData = null;   // users/{ownerUid}  ✅ FIX
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -690,27 +690,31 @@
 
     function renderRecap(){
       const d = eventData || {};
-      const owner = ownerData || {};
+      const owner = ownerData || {};   // ✅ users/{ownerUid}
       const p = profileData || {};
 
-      const ownerLabel = owner.displayName || d.ownerName || "—";
-      const ownerEmail = owner.email || d.ownerEmail || "—";
-      const ownerPhone = owner.phone || d.ownerPhone || "";
+      const ownerLabel = (owner.fullname || owner.displayName || "").trim() || d.ownerName || "—";
+      const ownerEmail = (owner.email || "").trim() || d.ownerEmail || "—";
+      const ownerPhone = (owner.phone || "").trim() || d.ownerPhone || "";
 
-      const addrParts = [
-        owner.address || "",
-        [owner.zip || "", owner.city || ""].filter(Boolean).join(" ")
-      ].filter(Boolean).join(" • ");
+      const ownerAddr1 = (owner.address1 || owner.address || "").trim();
+      const ownerAddr2 = [owner.zip || "", owner.city || ""].filter(Boolean).join(" ").trim();
+      const addrParts = [ownerAddr1, ownerAddr2].filter(Boolean).join(" • ");
 
       const rows = [];
       rows.push(`<div><b>Logement</b> : ${esc((d.homeName||"—") + (d.homeCity ? (" — " + d.homeCity) : ""))}</div>`);
       if(d.homeAddress) rows.push(`<div><b>Adresse logement</b> : ${esc(d.homeAddress)}</div>`);
       rows.push(`<div><b>Date mission</b> : ${esc(d.dateKey || d.date || "—")} • <b>Heure</b> : ${esc(d.time || "—")}</div>`);
-      rows.push(`<div><b>Propriétaire</b> : ${esc(ownerLabel)} • ${esc(ownerEmail)}${ownerPhone ? " • " + esc(ownerPhone) : ""}</div>`);
+
+      // ownerUid affichage (utile debug)
+      const ownerUid = (d.ownerUid || homeData?.ownerUid || "").toString().trim();
+      rows.push(`<div><b>Propriétaire</b> : ${esc(ownerLabel)} • ${esc(ownerEmail)}${ownerPhone ? " • " + esc(ownerPhone) : ""}${ownerUid ? " • UID: " + esc(ownerUid) : ""}</div>`);
       if(addrParts) rows.push(`<div><b>Adresse propriétaire</b> : ${esc(addrParts)}</div>`);
+
       if(d.assignedToName || d.assignedToEmail){
         rows.push(`<div><b>Agent</b> : ${esc(d.assignedToName||"—")} • ${esc(d.assignedToEmail||"—")}</div>`);
       }
+
       recapKv.innerHTML = rows.join("");
 
       const qs = quoteStatusLabel(d.quoteStatus);
@@ -764,10 +768,11 @@
       if(snap.exists()) homeData = snap.data() || {};
     }
 
-    async function loadOwner(ownerId){
+    // ✅ FIX : owner depuis users/{ownerUid}
+    async function loadOwnerUser(ownerUid){
       ownerData = null;
-      if(!ownerId) return;
-      const snap = await getDoc(doc(db,"owners", ownerId));
+      if(!ownerUid) return;
+      const snap = await getDoc(doc(db,"users", ownerUid));
       if(snap.exists()) ownerData = snap.data() || {};
     }
 
@@ -784,12 +789,12 @@
 
       await loadProfile(currentUser.uid);
 
-      // home (fallback ownerId)
+      // home
       await loadHomeIfAny(eventData.homeId);
 
-      // owner priority: event.ownerId > home.ownerId
-      const ownerId = (eventData.ownerId || homeData?.ownerId || "").toString().trim();
-      await loadOwner(ownerId);
+      // ✅ FIX ownerUid priority: event.ownerUid > home.ownerUid
+      const ownerUid = (eventData.ownerUid || homeData?.ownerUid || "").toString().trim();
+      await loadOwnerUser(ownerUid);
 
       renderRecap();
     }
@@ -799,11 +804,12 @@
       const p = profileData || {};
       const owner = ownerData || {};
 
-      const ownerLabel = owner.displayName || d.ownerName || "—";
-      const ownerEmail = owner.email || d.ownerEmail || "—";
-      const ownerPhone = owner.phone || d.ownerPhone || "";
-      const ownerAddr1 = owner.address || "";
-      const ownerAddr2 = [owner.zip || "", owner.city || ""].filter(Boolean).join(" ");
+      const ownerLabel = (owner.fullname || owner.displayName || "").trim() || d.ownerName || "—";
+      const ownerEmail = (owner.email || "").trim() || d.ownerEmail || "—";
+      const ownerPhone = (owner.phone || "").trim() || d.ownerPhone || "";
+
+      const ownerAddr1 = (owner.address1 || owner.address || "").trim();
+      const ownerAddr2 = [owner.zip || "", owner.city || ""].filter(Boolean).join(" ").trim();
 
       const cName = (p.companyName || p.displayName || "Conciergerie");
       const cAddr1 = (p.address || "");
@@ -881,7 +887,7 @@
             ${ownerEmail ? `<div>${esc(ownerEmail)}</div>` : ``}
             ${ownerPhone ? `<div>${esc(ownerPhone)}</div>` : ``}
             ${owner.siret ? `<div>SIRET: ${esc(owner.siret)}</div>` : ``}
-            ${owner.vatNumber ? `<div>TVA: ${esc(owner.vatNumber)}</div>` : ``}
+            ${owner.vat ? `<div>TVA: ${esc(owner.vat)}</div>` : ``}
           </div>
         </div>
 
