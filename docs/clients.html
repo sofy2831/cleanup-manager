@@ -1,4 +1,4 @@
-<!-- docs/clients.html (COMPLET) -->
+<!-- docs/clients.html (COMPLET + CORRIGÉ: sélection propriétaire => event.ownerUid = docId owners + snapshot adresse) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -157,7 +157,6 @@
     }
     .mini:disabled{ opacity:.55; cursor:not-allowed; }
 
-    /* ✅ Pick bar */
     .pickBar{
       margin-top:10px;
       background:#fff;
@@ -213,7 +212,6 @@
     .homeRow .meta{ font-size:12px; font-weight:800; color:#666; }
     .homeRow .actions{ display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
 
-    /* Modal shared */
     .modal-backdrop{
       position:fixed; inset:0;
       background:rgba(0,0,0,.25);
@@ -317,7 +315,6 @@
 
       <div class="alert" id="alertBox"></div>
 
-      <!-- ✅ mode sélection -->
       <div class="pickBar" id="pickBar">
         <div class="left">
           <span class="chip">✅ Mode sélection</span>
@@ -351,7 +348,6 @@
     </div>
   </div>
 
-  <!-- MODALE EDIT CLIENT -->
   <div class="modal-backdrop" id="clientModalBackdrop" aria-hidden="true">
     <div class="modal" role="dialog" aria-modal="true">
       <h2 id="clientModalTitle">Modifier client</h2>
@@ -451,7 +447,6 @@
       return (p.get(name) || "").trim();
     }
 
-    // ✅ mode sélection si pickOwnerForEventId présent
     const pickEventId = getParam("pickOwnerForEventId");
     const isPickMode = !!pickEventId;
 
@@ -512,14 +507,12 @@
       return "c_" + b64.replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
     }
 
-    // Logout
     logoutBtn.addEventListener("click", async ()=>{
       await signOut(auth);
       localStorage.removeItem("cm_auth");
       location.href = "index.html";
     });
 
-    // Guard conciergerie
     const FREE_EMAILS = new Set(["mathilde.debout31@gmail.com","s.dumas974@gmail.com"]);
     async function guardConciergerie(user){
       const email = (user.email || "").toLowerCase();
@@ -532,11 +525,10 @@
       }catch(e){ return false; }
     }
 
-    // State
     let currentUser = null;
     let allHomes = [];
-    let owners = []; // rendu
-    let clientsByKey = new Map(); // clientKey -> clientDocData
+    let owners = [];
+    let clientsByKey = new Map();
 
     // Modal state
     let editingClientKey = "";
@@ -608,40 +600,108 @@
     function setupPickModeUI(){
       if(!isPickMode) return;
 
-      // afficher la barre
       pickBar.style.display = "flex";
       pickHint.textContent = `• eventId: ${pickEventId}`;
 
-      // annuler -> retour devis
       pickCancelBtn.href = `devis.html?eventId=${encodeURIComponent(pickEventId)}`;
 
-      // rendre l'écran "sélection" plus propre
-      inviteBtn.style.display = "none";     // en sélection : pas besoin d'inviter
+      inviteBtn.style.display = "none";
       backPlanningBtn.href = `devis.html?eventId=${encodeURIComponent(pickEventId)}`;
     }
 
+    // ✅ Résolution OWNER fiable : docId owners prioritaire, puis uid, puis email
+    async function resolveOwnersDocId({ ownerUidCandidate, ownerEmailCandidate }){
+      const cand = String(ownerUidCandidate || "").trim();
+      const email = normalizeEmail(ownerEmailCandidate || "");
+
+      if(cand){
+        try{
+          const s = await getDoc(doc(db, "owners", cand));
+          if(s.exists()){
+            const d = s.data() || {};
+            if(String(d.conciergerieUid||"") === String(currentUser.uid)) return { ownerDocId: cand, owner: d };
+          }
+        }catch(e){
+          console.warn("resolveOwnersDocId getDoc failed:", e?.message || e);
+        }
+      }
+
+      if(cand){
+        try{
+          const q1 = query(
+            collection(db,"owners"),
+            where("uid","==", cand),
+            where("conciergerieUid","==", currentUser.uid),
+            limit(1)
+          );
+          const s1 = await getDocs(q1);
+          if(!s1.empty){
+            const doc1 = s1.docs[0];
+            return { ownerDocId: doc1.id, owner: (doc1.data()||{}) };
+          }
+        }catch(e){
+          console.warn("resolveOwnersDocId where uid failed:", e?.message || e);
+        }
+      }
+
+      if(email){
+        try{
+          const q2 = query(
+            collection(db,"owners"),
+            where("email","==", email),
+            where("conciergerieUid","==", currentUser.uid),
+            limit(1)
+          );
+          const s2 = await getDocs(q2);
+          if(!s2.empty){
+            const doc2 = s2.docs[0];
+            return { ownerDocId: doc2.id, owner: (doc2.data()||{}) };
+          }
+        }catch(e){
+          console.warn("resolveOwnersDocId where email failed:", e?.message || e);
+        }
+      }
+
+      return { ownerDocId: "", owner: null };
+    }
+
+    // ✅ En mode sélection : écrit ownerUid = docId owners + snapshot adresse
     async function pickThisOwner(ownerObj){
       if(!isPickMode) return;
       if(!pickEventId) return;
 
-      // source stable clients si existe
       const c = clientsByKey.get(ownerObj.clientKey) || {};
 
       const ownerName = (c.displayName || ownerObj.ownerName || "").trim();
       const ownerEmail = normalizeEmail(c.email || ownerObj.ownerEmail || "");
       const ownerPhone = (c.phone || ownerObj.homes?.[0]?.ownerPhone || "").trim();
 
-      // ownerUid si dispo (sinon vide)
-      const ownerUid = String(c.ownerUid || "").trim() || (ownerObj.clientKey && !ownerObj.clientKey.startsWith("label:") ? ownerObj.clientKey : "");
+      const ownerUidCandidate =
+        String(c.ownerUid || "").trim() ||
+        (ownerObj.clientKey && !ownerObj.clientKey.startsWith("label:") ? ownerObj.clientKey : "");
 
       if(!confirm(`Lier ce propriétaire au devis ?\n${ownerName || ownerEmail || "Propriétaire"}`)) return;
 
+      const { ownerDocId, owner } = await resolveOwnersDocId({
+        ownerUidCandidate,
+        ownerEmailCandidate: ownerEmail
+      });
+
+      const addr1 = (owner?.address1 || "").toString().trim();
+      const zip  = (owner?.zip || "").toString().trim();
+      const city = (owner?.city || "").toString().trim();
+
       try{
         await updateDoc(doc(db,"events", pickEventId), {
-          ownerUid: ownerUid || "",
-          ownerName: ownerName || "",
-          ownerEmail: ownerEmail || "",
-          ownerPhone: ownerPhone || "",
+          ownerUid: ownerDocId || "",
+          ownerName: ownerName || (owner?.fullname || ""),
+          ownerEmail: ownerEmail || (owner?.email || ""),
+          ownerPhone: ownerPhone || (owner?.phone || ""),
+
+          ownerAddress1: addr1 || "",
+          ownerZip: zip || "",
+          ownerCity: city || "",
+
           updatedAt: serverTimestamp()
         });
 
@@ -734,7 +794,6 @@
 
         clientsList.appendChild(div);
 
-        // homes accordion
         const body = div.querySelector(".accBody");
         const homesSorted = o.homes.slice().sort((a,b)=> String(a.name||"").localeCompare(String(b.name||"")));
         body.innerHTML = homesSorted.map(h=>{
@@ -755,13 +814,11 @@
           `;
         }).join("");
 
-        // pick button
         const pickBtn = div.querySelector('button[data-pick="1"]');
         if(pickBtn){
           pickBtn.addEventListener("click", ()=> pickThisOwner(o));
         }
 
-        // edit button
         div.querySelector('button[data-edit-client="1"]').addEventListener("click", ()=>{
           openClientModal(o);
         });
@@ -789,7 +846,6 @@
       }
     }
 
-    // ===== Modal open/close =====
     function openClientModal(ownerObj){
       hideMAlert();
 
@@ -946,7 +1002,6 @@
     cEmail.addEventListener("blur", async ()=>{ await maybeResolveOwnerAccount(cEmail.value); });
     cEmail.addEventListener("change", async ()=>{ await maybeResolveOwnerAccount(cEmail.value); });
 
-    // ===== Bulk update homes =====
     async function bulkUpdateHomesByKeys({ oldClientKeys, newClientKey, patchHomes }){
       const keysSet = new Set((oldClientKeys||[]).filter(Boolean));
 
@@ -974,7 +1029,6 @@
       return { updated };
     }
 
-    // ===== Save client =====
     clientForm.addEventListener("submit", async (e)=>{
       e.preventDefault();
       hideMAlert();
@@ -1063,11 +1117,9 @@
       }
     });
 
-    // Events
     searchInput.addEventListener("input", render);
     refreshBtn.addEventListener("click", ()=> loadHomes());
 
-    // Boot
     onAuthStateChanged(auth, async (user)=>{
       if(!user){
         location.href = "login.html?role=conciergerie";
