@@ -69,18 +69,28 @@
     }
 
     .layout{
-      width:100%; max-width:980px; margin-top:14px;
-      display:flex; flex-direction:column; gap:14px;
+      width:100%;
+      max-width:980px;
+      margin-top:14px;
+      display:flex;
+      flex-direction:column;
+      gap:14px;
     }
-    @media(min-width:860px){ .layout{ flex-direction:row; align-items:flex-start; } }
+
+    /* ✅ Desktop : gauche plus "raisonnable" + droite fixe */
+    @media(min-width:860px){
+      .layout{
+        display:grid;
+        grid-template-columns: 1fr 420px;
+        align-items:start;
+      }
+    }
 
     .card{
       width:100%; background: rgba(255,255,255,0.86);
       border: 1px solid var(--border); border-radius:18px;
       box-shadow: var(--shadow); padding:16px 14px 18px; backdrop-filter: blur(10px);
     }
-    .left{ flex:1.15; }
-    .right{ flex:0.95; }
 
     .card-title{
       font-size:16px; font-weight:1000; margin-bottom:8px;
@@ -157,14 +167,7 @@
     }
     .btn:disabled{ opacity:.65; cursor:not-allowed; }
 
-    .checkRow{ display:flex; gap:10px; flex-wrap:wrap; margin-top:10px; }
-    .check{
-      display:inline-flex; align-items:center; gap:8px; padding:8px 10px;
-      border-radius:999px; border:1px solid rgba(122,92,255,0.25);
-      background:#fff; font-weight:900; font-size:12px; color:#333; user-select:none;
-    }
-    .check input{ width:auto; }
-
+    /* ✅ Paiement : radio chips */
     .radioRow{ display:flex; gap:10px; flex-direction:column; margin-top:10px; }
     .radio{
       display:flex; gap:10px; align-items:flex-start;
@@ -202,7 +205,7 @@
 <body>
   <div class="page">
     <div class="topbar">
-      <a class="pill-link" id="backLink" href="planning.html">← Retour planning</a>
+      <a class="pill-link" href="planning.html">← Retour planning</a>
       <button class="pill-link" type="button" id="logoutBtn">Déconnexion</button>
     </div>
 
@@ -218,7 +221,7 @@
     <div class="badge" id="statusBadge">—</div>
 
     <div class="layout">
-      <div class="card left">
+      <div class="card">
         <div class="card-title">
           <span>Récapitulatif</span>
           <span class="small" id="eventIdLine">—</span>
@@ -253,7 +256,7 @@
         <div class="totals" id="totalsBox"></div>
       </div>
 
-      <div class="card right">
+      <div class="card">
         <div class="card-title">
           <span>Devis</span>
           <span class="small" id="quoteNumberLine">—</span>
@@ -266,7 +269,7 @@
 
         <div class="card-title" style="font-size:14px; margin-bottom:6px;">
           <span>Paiement</span>
-          <span class="small">au cas par cas</span>
+          <span class="small">1 seul mode</span>
         </div>
 
         <label for="paymentTerm">Délai de règlement</label>
@@ -278,11 +281,39 @@
           <option value="45J">45 jours</option>
         </select>
 
-        <div class="checkRow">
-          <label class="check"><input id="payVirement" type="checkbox">Virement</label>
-          <label class="check"><input id="payCB" type="checkbox">Carte bancaire</label>
-          <label class="check"><input id="payEspeces" type="checkbox">Espèces</label>
-          <label class="check"><input id="payCheque" type="checkbox">Chèque</label>
+        <!-- ✅ un seul mode : radio -->
+        <div class="radioRow" id="payModes">
+          <label class="radio" for="payModeVIR">
+            <input id="payModeVIR" name="payMode" type="radio" value="VIREMENT" />
+            <div>
+              <b>Virement</b>
+              <div class="sm">IBAN/BIC affichés si renseignés dans profil conciergerie.</div>
+            </div>
+          </label>
+
+          <label class="radio" for="payModeCB">
+            <input id="payModeCB" name="payMode" type="radio" value="CB" />
+            <div>
+              <b>Carte bancaire</b>
+              <div class="sm">À activer si tu encaisses vraiment par CB.</div>
+            </div>
+          </label>
+
+          <label class="radio" for="payModeESP">
+            <input id="payModeESP" name="payMode" type="radio" value="ESPECES" />
+            <div>
+              <b>Espèces</b>
+              <div class="sm">Option “terrain”.</div>
+            </div>
+          </label>
+
+          <label class="radio" for="payModeCHQ">
+            <input id="payModeCHQ" name="payMode" type="radio" value="CHEQUE" />
+            <div>
+              <b>Chèque</b>
+              <div class="sm">Si tu l’acceptes encore (je juge pas).</div>
+            </div>
+          </label>
         </div>
 
         <div class="divider"></div>
@@ -324,7 +355,8 @@
         </div>
 
         <div class="actions" style="margin-top:8px;">
-          <button class="btn" type="button" id="linkOwnerBtn" disabled title="Renseigne ownerUid sur l’event (si trouvé via users)">Lier le propriétaire à l’event</button>
+          <button class="btn" type="button" id="linkOwnerBtn" disabled>Lier le propriétaire à l’event</button>
+          <button class="btn" type="button" id="linkOwnerToHomeBtn" disabled>Lier le propriétaire au logement</button>
         </div>
 
         <div class="mutedLine" style="margin-top:8px;">
@@ -350,7 +382,6 @@
       collection, query, where, getDocs, limit
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
-    const backLink = document.getElementById("backLink");
     const logoutBtn = document.getElementById("logoutBtn");
     const alertBox = document.getElementById("alertBox");
     const recapKv = document.getElementById("recapKv");
@@ -369,10 +400,11 @@
     const quoteNumberLine = document.getElementById("quoteNumberLine");
 
     const paymentTermEl = document.getElementById("paymentTerm");
-    const payVirementEl = document.getElementById("payVirement");
-    const payCBEl = document.getElementById("payCB");
-    const payEspecesEl = document.getElementById("payEspeces");
-    const payChequeEl = document.getElementById("payCheque");
+
+    const payModeVIR = document.getElementById("payModeVIR");
+    const payModeCB  = document.getElementById("payModeCB");
+    const payModeESP = document.getElementById("payModeESP");
+    const payModeCHQ = document.getElementById("payModeCHQ");
 
     const penB2BEl = document.getElementById("penB2B");
     const penB2CEl = document.getElementById("penB2C");
@@ -383,6 +415,7 @@
     const markSentBtn = document.getElementById("markSentBtn");
     const markAcceptedBtn = document.getElementById("markAcceptedBtn");
     const linkOwnerBtn = document.getElementById("linkOwnerBtn");
+    const linkOwnerToHomeBtn = document.getElementById("linkOwnerToHomeBtn");
 
     let currentUser = null;
     let eventRef = null;
@@ -390,9 +423,9 @@
 
     let profileData = null; // users/{conciergerieUid}
     let homeData = null;    // homes/{homeId}
+    let homeRef = null;
 
-    // propriétaire résolu via users
-    let ownerUser = null;   // { uid, email, fullname, phone, address, zip, city, role, conciergerieUid }
+    let ownerUser = null;   // { uid, email, fullname, phone, address1, address2, zip, city, ... }
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -422,23 +455,9 @@
       return (p.get(name) || "").trim();
     }
     function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
-    function asRaw(s){ return String(s||"").toUpperCase().trim(); }
 
     const eventId = getParam("eventId");
-    const returnTo = getParam("returnTo");         // "planning"
-    const returnDate = getParam("returnDate");     // "YYYY-MM-DD"
-
     eventIdLine.textContent = eventId ? ("eventId: " + eventId) : "eventId manquant";
-
-    // ✅ retour dynamique vers planning + date
-    function syncBackLink(){
-      if(returnTo === "planning" && returnDate){
-        backLink.href = `planning.html?date=${encodeURIComponent(returnDate)}`;
-      }else{
-        backLink.href = "planning.html";
-      }
-    }
-    syncBackLink();
 
     logoutBtn.addEventListener("click", async ()=>{
       await signOut(auth);
@@ -476,28 +495,18 @@
       return qs === "SENT";
     }
 
-    // ✅ garde-fou : devis seulement si prestation REALISEE
-    function normalizeOpStatus(s){
-      const x = asRaw(s).replaceAll(" ", "_");
-      if(x === "REALISEE" || x === "RÉALISÉE" || x === "DONE") return "REALISEE";
-      if(x === "A_VALIDER" || x === "A_VALIDER" || x === "À_VALIDER") return "A_VALIDER";
-      if(x === "ANNULEE" || x === "ANNULÉE" || x === "CANCELLED") return "ANNULEE";
-      return "EN_COURS";
-    }
-    function isAllowedToQuote(d){
-      const st = normalizeOpStatus(d?.opStatus || d?.status || "");
-      return st === "REALISEE";
-    }
-
     async function ensureQuoteNumber(uid, year){
       const counterId = `${uid}_${year}`;
       const counterRef = doc(db, "counters", counterId);
 
       const next = await runTransaction(db, async (tx)=>{
         const snap = await tx.get(counterRef);
-        const cur = snap.exists() ? (snap.data() || {}) : { quoteSeq: 0, invoiceSeq: 0, creditSeq: 0 };
-        const n = (Number(cur.quoteSeq)||0) + 1;
-        tx.set(counterRef, { ...cur, quoteSeq: n }, { merge:true });
+        if(!snap.exists()){
+          tx.set(counterRef, { quoteSeq: 0, invoiceSeq: 0, creditSeq: 0 });
+        }
+        const c = snap.exists() ? (snap.data() || {}) : { quoteSeq: 0 };
+        const n = (Number(c.quoteSeq)||0) + 1;
+        tx.set(counterRef, { ...c, quoteSeq: n }, { merge:true });
         return n;
       });
 
@@ -517,13 +526,26 @@
       }
     }
 
-    function getQuotePaymentModes(){
-      return {
-        virement: !!payVirementEl.checked,
-        cb: !!payCBEl.checked,
-        especes: !!payEspecesEl.checked,
-        cheque: !!payChequeEl.checked
-      };
+    /* ======================
+       ✅ Paiement : 1 seul mode (radio)
+    ====================== */
+    function getSelectedPayMode(){
+      const el = document.querySelector('input[name="payMode"]:checked');
+      return el ? el.value : "";
+    }
+    function setPayMode(mode){
+      const m = String(mode||"").toUpperCase();
+      payModeVIR.checked = (m === "VIREMENT");
+      payModeCB.checked  = (m === "CB");
+      payModeESP.checked = (m === "ESPECES");
+      payModeCHQ.checked = (m === "CHEQUE");
+    }
+    function payModeLabel(m){
+      if(m === "VIREMENT") return "Virement";
+      if(m === "CB") return "Carte bancaire";
+      if(m === "ESPECES") return "Espèces";
+      if(m === "CHEQUE") return "Chèque";
+      return "—";
     }
 
     function dueLabel(term){
@@ -533,14 +555,6 @@
       if(term === "30J") return "30 jours";
       if(term === "45J") return "45 jours";
       return term || "—";
-    }
-    function paymentModesLabel(m){
-      const out = [];
-      if(m.virement) out.push("Virement");
-      if(m.cb) out.push("Carte bancaire");
-      if(m.especes) out.push("Espèces");
-      if(m.cheque) out.push("Chèque");
-      return out.length ? out.join(", ") : "—";
     }
 
     function getPenaltyTemplate(mode){
@@ -613,32 +627,11 @@
       totalsBox.innerHTML = html.join("");
     }
 
-    function setDefaultsIfEmpty(d){
-      // Paiement : par défaut virement, et délai "à réception"
-      if(!d.quotePaymentTerm) paymentTermEl.value = "RECEPTION";
-      else paymentTermEl.value = d.quotePaymentTerm;
-
-      const pm = d.quotePaymentModes || null;
-      if(pm){
-        payVirementEl.checked = !!pm.virement;
-        payCBEl.checked = !!pm.cb;
-        payEspecesEl.checked = !!pm.especes;
-        payChequeEl.checked = !!pm.cheque;
-      }else{
-        payVirementEl.checked = true;
-        payCBEl.checked = false;
-        payEspecesEl.checked = false;
-        payChequeEl.checked = false;
+    function ownerLabel(){
+      if(ownerUser){
+        return ownerUser.fullname || ownerUser.email || "—";
       }
-
-      // Pénalités : défaut B2C
-      const penMode = String(d.quotePenaltyMode || "").toUpperCase();
-      if(penMode === "B2B"){ penB2BEl.checked = true; penB2CEl.checked = false; }
-      else { penB2CEl.checked = true; penB2BEl.checked = false; }
-      if(d.quotePenaltyText) penaltyTextEl.value = d.quotePenaltyText;
-      else syncPenaltyText();
-
-      if(privateNoteEl.value === "" && d.quotePrivateNote) privateNoteEl.value = d.quotePrivateNote;
+      return (eventData?.ownerName || eventData?.ownerEmail || "—");
     }
 
     function renderRecap(){
@@ -649,7 +642,7 @@
       const ownerEmail = ownerUser?.email || d.ownerEmail || "—";
       const ownerPhone = ownerUser?.phone || d.ownerPhone || "";
 
-      const addrParts = [
+      const ownerAddrParts = [
         ownerUser?.address1 || ownerUser?.address || "",
         ownerUser?.address2 || "",
         [ownerUser?.zip || "", ownerUser?.city || ""].filter(Boolean).join(" ")
@@ -660,7 +653,7 @@
       if(d.homeAddress) rows.push(`<div><b>Adresse logement</b> : ${esc(d.homeAddress)}</div>`);
       rows.push(`<div><b>Date mission</b> : ${esc(d.dateKey || d.date || "—")} • <b>Heure</b> : ${esc(d.time || "—")}</div>`);
       rows.push(`<div><b>Propriétaire</b> : ${esc(ownerName)} • ${esc(ownerEmail)}${ownerPhone ? " • " + esc(ownerPhone) : ""}</div>`);
-      if(addrParts) rows.push(`<div><b>Adresse propriétaire</b> : ${esc(addrParts)}</div>`);
+      if(ownerAddrParts) rows.push(`<div><b>Adresse propriétaire</b> : ${esc(ownerAddrParts)}</div>`);
       if(d.assignedToName || d.assignedToEmail){
         rows.push(`<div><b>Agent</b> : ${esc(d.assignedToName||"—")} • ${esc(d.assignedToEmail||"—")}</div>`);
       }
@@ -671,36 +664,62 @@
       statusBadge.textContent = `Op: ${op} • Devis: ${qs}`;
 
       quoteNumberLine.textContent = d.quoteNumber ? `N° ${d.quoteNumber}` : "N° — (à l’enregistrement)";
+      if(privateNoteEl.value === "" && d.quotePrivateNote) privateNoteEl.value = d.quotePrivateNote;
+
+      if(d.quotePaymentTerm && paymentTermEl.value !== d.quotePaymentTerm) paymentTermEl.value = d.quotePaymentTerm;
+
+      /* ✅ Charge mode paiement :
+         - nouveau champ quotePaymentMode
+         - compat ancien objet quotePaymentModes (on convertit)
+      */
+      if(d.quotePaymentMode){
+        setPayMode(d.quotePaymentMode);
+      }else{
+        const pm = d.quotePaymentModes || {};
+        const legacy =
+          pm.virement ? "VIREMENT" :
+          pm.cb ? "CB" :
+          pm.especes ? "ESPECES" :
+          pm.cheque ? "CHEQUE" : "";
+        setPayMode(legacy || "VIREMENT");
+      }
+
+      const penMode = String(d.quotePenaltyMode || "").toUpperCase();
+      if(penMode === "B2B") penB2BEl.checked = true;
+      if(penMode === "B2C") penB2CEl.checked = true;
+      if(d.quotePenaltyText) penaltyTextEl.value = d.quotePenaltyText;
+      else {
+        if(!penB2BEl.checked && !penB2CEl.checked) penB2CEl.checked = true;
+        syncPenaltyText();
+      }
 
       applyLogoFromProfile(p);
       renderLinesAndTotals();
 
-      // defaults UI si manque
-      setDefaultsIfEmpty(d);
+      saveBtn.disabled = !eventRef;
+      previewBtn.disabled = !eventRef;
+      markSentBtn.disabled = !(eventRef && canMarkSent(d));
+      markAcceptedBtn.disabled = !(eventRef && canMarkAccepted(d));
 
-      const allowed = isAllowedToQuote(d);
-      if(!allowed){
-        showAlert("⛔ Devis bloqué : la prestation n’est pas RÉALISÉE.\nRetourne sur Planning → Valider la prestation, puis reviens ici.", false);
-      }
+      const canLinkEvent = !!(eventRef && ownerUser?.uid && String(d.ownerUid || "") !== String(ownerUser.uid));
+      linkOwnerBtn.disabled = !canLinkEvent;
 
-      const qsRaw = String(d.quoteStatus || "").toUpperCase() || "DRAFT";
-      const d2 = { ...d, quoteStatus: qsRaw };
-
-      saveBtn.disabled = !eventRef || !allowed;
-      previewBtn.disabled = !eventRef || !allowed;
-      markSentBtn.disabled = !(eventRef && allowed && canMarkSent(d2));
-      markAcceptedBtn.disabled = !(eventRef && allowed && canMarkAccepted(d2));
-
-      const canLink = !!(eventRef && ownerUser?.uid && String(d.ownerUid || "") !== String(ownerUser.uid));
-      linkOwnerBtn.disabled = !(canLink && allowed);
+      // ✅ liaison logement (homes/{homeId})
+      const canLinkHome = !!(homeRef && ownerUser?.uid && String(homeData?.ownerUid || "") !== String(ownerUser.uid));
+      linkOwnerToHomeBtn.disabled = !canLinkHome;
     }
 
     function lockUI(locked){
-      saveBtn.disabled = locked || saveBtn.disabled;
-      previewBtn.disabled = locked || previewBtn.disabled;
-      markSentBtn.disabled = locked || markSentBtn.disabled;
-      markAcceptedBtn.disabled = locked || markAcceptedBtn.disabled;
-      linkOwnerBtn.disabled = locked || linkOwnerBtn.disabled;
+      const d = eventData || {};
+      saveBtn.disabled = !!locked || !eventRef;
+      previewBtn.disabled = !!locked || !eventRef;
+      markSentBtn.disabled = !!locked || !eventRef || !canMarkSent(d);
+      markAcceptedBtn.disabled = !!locked || !eventRef || !canMarkAccepted(d);
+
+      // ✅ fix : on ne "bloque" pas définitivement en réutilisant linkOwnerBtn.disabled
+      linkOwnerBtn.disabled = !!locked || linkOwnerBtn.disabled;
+      linkOwnerToHomeBtn.disabled = !!locked || linkOwnerToHomeBtn.disabled;
+
       saveBtn.style.opacity = locked ? "0.75" : "1";
     }
 
@@ -712,8 +731,10 @@
 
     async function loadHomeIfAny(homeId){
       homeData = null;
+      homeRef = null;
       if(!homeId) return;
-      const snap = await getDoc(doc(db,"homes", homeId));
+      homeRef = doc(db,"homes", homeId);
+      const snap = await getDoc(homeRef);
       if(snap.exists()) homeData = snap.data() || {};
     }
 
@@ -800,13 +821,10 @@
         throw new Error("Accès refusé (event d’une autre conciergerie).");
       }
 
-      // normalise quoteStatus si vide
-      if(!eventData.quoteStatus) eventData.quoteStatus = "DRAFT";
-
       await loadProfile(currentUser.uid);
       await loadHomeIfAny(eventData.homeId);
-      await loadOwnerFromUsers();
 
+      await loadOwnerFromUsers();
       renderRecap();
     }
 
@@ -814,19 +832,21 @@
       const d = eventData || {};
       const p = profileData || {};
 
-      const ownerName = ownerUser?.fullname || d.ownerName || "—";
-      const ownerEmail = ownerUser?.email || d.ownerEmail || "—";
-      const ownerPhone = ownerUser?.phone || d.ownerPhone || "";
-      const ownerAddr1 = ownerUser?.address1 || "";
-      const ownerAddr2 = [ownerUser?.zip || "", ownerUser?.city || ""].filter(Boolean).join(" ");
+      // conciergerie
+      const cName = (p.companyName || p.displayName || "Conciergerie").trim();
+      const cAddr1 = (p.address || "").trim();
+      const cAddr2 = [p.zip || "", p.city || ""].filter(Boolean).join(" ").trim();
+      const cEmail = (p.email || currentUser?.email || "").trim();
+      const cPhone = (p.phone || "").trim();
+      const cSiret = (p.siret || "").trim();
+      const cVat = (p.vatNumber || "").trim();
 
-      const cName = (p.companyName || p.displayName || "Conciergerie");
-      const cAddr1 = (p.address || "");
-      const cAddr2 = [p.zip || "", p.city || ""].filter(Boolean).join(" ");
-      const cEmail = (p.email || currentUser?.email || "");
-      const cPhone = (p.phone || "");
-      const cSiret = (p.siret || "");
-      const cVat = (p.vatNumber || "");
+      // client
+      const ownerName = (ownerUser?.fullname || d.ownerName || "—").trim();
+      const ownerEmail = (ownerUser?.email || d.ownerEmail || "—").trim();
+      const ownerPhone = (ownerUser?.phone || d.ownerPhone || "").trim();
+      const ownerAddr1 = (ownerUser?.address1 || "").trim();
+      const ownerAddr2 = [ownerUser?.zip || "", ownerUser?.city || ""].filter(Boolean).join(" ").trim();
 
       const tvaEnabled = !!p.tvaEnabled;
       const tvaRate = Number.isFinite(Number(p.tvaRate)) ? Number(p.tvaRate) : 0;
@@ -834,7 +854,7 @@
       const lines = Array.isArray(d.lines) ? d.lines : [];
       const totals = computeTotals(lines, tvaEnabled, tvaRate);
 
-      const modes = getQuotePaymentModes();
+      const payMode = getSelectedPayMode() || (d.quotePaymentMode || "VIREMENT");
       const penMode = getSelectedPenaltyMode();
 
       const rowsLines = lines.map(l=>{
@@ -858,6 +878,20 @@
         `;
       }).join("");
 
+      // ✅ Header plus clair : conciergerie + client en haut à droite
+      const headerRight = `
+        <div class="metaLine"><b>Conciergerie</b> : ${esc(cName)}</div>
+        ${cAddr1 ? `<div class="metaLine">${esc(cAddr1)}</div>` : ``}
+        ${cAddr2 ? `<div class="metaLine">${esc(cAddr2)}</div>` : ``}
+        ${cEmail ? `<div class="metaLine">${esc(cEmail)}</div>` : ``}
+        ${cPhone ? `<div class="metaLine">${esc(cPhone)}</div>` : ``}
+        <div class="metaLine" style="margin-top:8px;"><b>Client</b> : ${esc(ownerName)}</div>
+        ${ownerAddr1 ? `<div class="metaLine">${esc(ownerAddr1)}</div>` : ``}
+        ${ownerAddr2 ? `<div class="metaLine">${esc(ownerAddr2)}</div>` : ``}
+        ${ownerEmail ? `<div class="metaLine">${esc(ownerEmail)}</div>` : ``}
+        ${ownerPhone ? `<div class="metaLine">${esc(ownerPhone)}</div>` : ``}
+      `;
+
       return `
         <div class="head">
           <div class="h-left">
@@ -868,33 +902,16 @@
               <div class="docTitle">DEVIS</div>
               <div class="docNum">${esc(d.quoteNumber || "—")}</div>
               <div class="docMeta">Réf interne: ${esc(d.id || eventId)}</div>
+              ${cSiret ? `<div class="docMeta">SIRET: ${esc(cSiret)}</div>` : ``}
+              ${cVat ? `<div class="docMeta">TVA: ${esc(cVat)}</div>` : ``}
             </div>
           </div>
           <div class="h-right">
             <div class="metaLine"><b>Date</b> : ${esc(d.quoteDate || d.dateKey || d.date || "—")}</div>
             <div class="metaLine"><b>Statut</b> : ${esc(quoteStatusLabel(d.quoteStatus))}</div>
-          </div>
-        </div>
-
-        <div class="boxes">
-          <div class="box">
-            <div class="boxTitle">Émetteur (Conciergerie)</div>
-            <div><b>${esc(cName)}</b></div>
-            ${cAddr1 ? `<div>${esc(cAddr1)}</div>` : ``}
-            ${cAddr2 ? `<div>${esc(cAddr2)}</div>` : ``}
-            ${cEmail ? `<div>${esc(cEmail)}</div>` : ``}
-            ${cPhone ? `<div>${esc(cPhone)}</div>` : ``}
-            ${cSiret ? `<div>SIRET: ${esc(cSiret)}</div>` : ``}
-            ${cVat ? `<div>TVA: ${esc(cVat)}</div>` : ``}
-          </div>
-
-          <div class="box">
-            <div class="boxTitle">Client (Propriétaire)</div>
-            <div><b>${esc(ownerName)}</b></div>
-            ${ownerAddr1 ? `<div>${esc(ownerAddr1)}</div>` : ``}
-            ${ownerAddr2 ? `<div>${esc(ownerAddr2)}</div>` : ``}
-            ${ownerEmail ? `<div>${esc(ownerEmail)}</div>` : ``}
-            ${ownerPhone ? `<div>${esc(ownerPhone)}</div>` : ``}
+            <div style="margin-top:10px; border-top:1px solid rgba(0,0,0,.12); padding-top:10px;">
+              ${headerRight}
+            </div>
           </div>
         </div>
 
@@ -940,9 +957,9 @@
           <div class="box">
             <div class="boxTitle">Paiement</div>
             <div><b>Délai</b> : ${esc(dueLabel(paymentTermEl.value))}</div>
-            <div><b>Modes</b> : ${esc(paymentModesLabel(modes))}</div>
-            ${p.iban ? `<div>IBAN: ${esc(p.iban)}</div>` : ``}
-            ${p.bic ? `<div>BIC: ${esc(p.bic)}</div>` : ``}
+            <div><b>Mode</b> : ${esc(payModeLabel(payMode))}</div>
+            ${payMode === "VIREMENT" && p.iban ? `<div>IBAN: ${esc(p.iban)}</div>` : ``}
+            ${payMode === "VIREMENT" && p.bic ? `<div>BIC: ${esc(p.bic)}</div>` : ``}
           </div>
           <div class="box">
             <div class="boxTitle">Pénalités</div>
@@ -965,7 +982,7 @@
         <style>
           *{box-sizing:border-box;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
           body{margin:0;background:#f3f3f3;padding:18px}
-          .paper{max-width: 860px;margin: 0 auto;background:#fff;padding:18px;border-radius:14px;box-shadow:0 14px 36px rgba(0,0,0,.12);}
+          .paper{max-width: 900px;margin: 0 auto;background:#fff;padding:18px;border-radius:14px;box-shadow:0 14px 36px rgba(0,0,0,.12);}
           .head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap}
           .h-left{display:flex;gap:12px;align-items:flex-start}
           .logoBox{width:56px;height:56px;border-radius:12px;border:1px solid rgba(0,0,0,.12);overflow:hidden;background:#fff;display:flex;align-items:center;justify-content:center}
@@ -974,7 +991,7 @@
           .docTitle{font-weight:900;font-size:14px;letter-spacing:.3px}
           .docNum{font-weight:900;font-size:18px;margin-top:2px}
           .docMeta{font-size:12px;color:#555;font-weight:700;margin-top:2px}
-          .h-right{min-width:240px}
+          .h-right{min-width:300px;max-width:360px}
           .metaLine{font-size:12px;color:#333;font-weight:700;margin-top:4px}
           .boxes{display:grid;grid-template-columns:1fr;gap:10px;margin-top:12px}
           @media(min-width:760px){.boxes{grid-template-columns:1fr 1fr}}
@@ -988,7 +1005,7 @@
           .r{display:flex;justify-content:space-between;gap:10px;margin-top:6px;font-weight:800}
           .big{font-weight:900;font-size:14px}
           .smallNote{margin-top:8px;font-size:12px;color:#555;font-weight:700}
-          .printbar{max-width:860px;margin:0 auto 10px;display:flex;justify-content:flex-end;gap:8px}
+          .printbar{max-width:900px;margin:0 auto 10px;display:flex;justify-content:flex-end;gap:8px}
           .pbtn{border:none;border-radius:999px;padding:10px 12px;font-weight:900;cursor:pointer;background:#7A5CFF;color:#fff}
           .pbtn2{border:2px solid #7A5CFF;border-radius:999px;padding:10px 12px;font-weight:900;cursor:pointer;background:#fff;color:#7A5CFF}
           @media print{
@@ -1028,51 +1045,40 @@
 
     previewBtn.addEventListener("click", ()=>{
       if(!eventRef) return;
-      if(!isAllowedToQuote(eventData)) return;
       const html = buildPreviewHtmlString();
       openPrintWindow(html);
     });
 
-    async function refreshEvent(){
-      const snap = await getDoc(eventRef);
-      eventData = { id: snap.id, ...(snap.data()||{}) };
-      if(!eventData.quoteStatus) eventData.quoteStatus = "DRAFT";
-      await loadOwnerFromUsers();
-      hideAlert();
-      renderRecap();
-    }
-
-    async function ensureQuoteNumberOnEvent(){
-      const year = new Date().getFullYear();
-      if(eventData?.quoteNumber) return eventData.quoteNumber;
-
-      const qn = await ensureQuoteNumber(currentUser.uid, year);
-      await updateDoc(eventRef, {
-        quoteNumber: qn,
-        quoteStatus: String(eventData?.quoteStatus || "").toUpperCase() || "DRAFT",
-        commercialStatus: String(eventData?.commercialStatus || "").trim() || "DEVIS",
-        quoteUpdatedAt: serverTimestamp(),
-        commercialUpdatedAt: serverTimestamp()
-      });
-      eventData.quoteNumber = qn;
-      return qn;
-    }
-
     saveBtn.addEventListener("click", async ()=>{
       hideAlert();
       if(!eventRef) return showAlert("Event non chargé.");
-      if(!isAllowedToQuote(eventData)) return;
 
       lockUI(true);
       try{
-        await ensureQuoteNumberOnEvent();
+        const year = new Date().getFullYear();
+        let quoteNumber = eventData?.quoteNumber || null;
+
+        if(!quoteNumber){
+          quoteNumber = await ensureQuoteNumber(currentUser.uid, year);
+        }
+
+        const payMode = getSelectedPayMode() || "VIREMENT";
 
         const patch = {
+          quoteNumber,
           quoteStatus: String(eventData?.quoteStatus || "").toUpperCase() || "DRAFT",
           commercialStatus: "DEVIS",
 
           quotePaymentTerm: paymentTermEl.value,
-          quotePaymentModes: getQuotePaymentModes(),
+          quotePaymentMode: payMode, // ✅ nouveau champ
+          // (optionnel) on garde l'ancien pour compat (mais on l'écrase clean)
+          quotePaymentModes: {
+            virement: payMode === "VIREMENT",
+            cb: payMode === "CB",
+            especes: payMode === "ESPECES",
+            cheque: payMode === "CHEQUE"
+          },
+
           quotePenaltyMode: getSelectedPenaltyMode(),
           quotePenaltyText: (penaltyTextEl.value || "").trim(),
 
@@ -1089,8 +1095,15 @@
         }
 
         await updateDoc(eventRef, patch);
-        await refreshEvent();
+
+        const snap = await getDoc(eventRef);
+        eventData = { id: snap.id, ...(snap.data()||{}) };
+
         showAlert("✅ Devis enregistré.", true);
+
+        await loadOwnerFromUsers();
+        await loadHomeIfAny(eventData.homeId);
+        renderRecap();
       }catch(err){
         console.error(err);
         showAlert("Erreur sauvegarde : " + (err?.message || "inconnue"));
@@ -1102,32 +1115,40 @@
     markSentBtn.addEventListener("click", async ()=>{
       hideAlert();
       if(!eventRef) return showAlert("Event non chargé.");
-      if(!isAllowedToQuote(eventData)) return;
-
       const qs = String(eventData?.quoteStatus || "").toUpperCase();
       if(qs !== "DRAFT") return showAlert("⛔ Action impossible : le devis n'est pas en brouillon.");
 
       lockUI(true);
       try{
-        await ensureQuoteNumberOnEvent();
+        // s'assure qu'on a un quoteNumber
+        if(!eventData?.quoteNumber){
+          const year = new Date().getFullYear();
+          const quoteNumber = await ensureQuoteNumber(currentUser.uid, year);
+          await updateDoc(eventRef, { quoteNumber });
+        }
 
-        // sauvegarde rapide des champs UI + statut SENT
+        const payMode = getSelectedPayMode() || "VIREMENT";
+
         await updateDoc(eventRef, {
           commercialStatus: "DEVIS_ENVOYE",
           quoteStatus: "SENT",
           quotePaymentTerm: paymentTermEl.value,
-          quotePaymentModes: getQuotePaymentModes(),
-          quotePenaltyMode: getSelectedPenaltyMode(),
-          quotePenaltyText: (penaltyTextEl.value || "").trim(),
-          quotePrivateNote: (privateNoteEl.value || "").trim(),
-
+          quotePaymentMode: payMode,
+          quotePaymentModes: {
+            virement: payMode === "VIREMENT",
+            cb: payMode === "CB",
+            especes: payMode === "ESPECES",
+            cheque: payMode === "CHEQUE"
+          },
           quoteSentAt: serverTimestamp(),
-          quoteUpdatedAt: serverTimestamp(),
           commercialUpdatedAt: serverTimestamp()
         });
 
-        await refreshEvent();
+        const snap = await getDoc(eventRef);
+        eventData = { id: snap.id, ...(snap.data()||{}) };
+
         showAlert("✅ Statut : devis envoyé.", true);
+        renderRecap();
       }catch(err){
         console.error(err);
         showAlert("Erreur statut : " + (err?.message || "inconnue"));
@@ -1139,8 +1160,6 @@
     markAcceptedBtn.addEventListener("click", async ()=>{
       hideAlert();
       if(!eventRef) return showAlert("Event non chargé.");
-      if(!isAllowedToQuote(eventData)) return;
-
       const qs = String(eventData?.quoteStatus || "").toUpperCase();
       if(qs !== "SENT") return showAlert("⛔ Action impossible : le devis doit être “envoyé”.");
       if(!confirm("Marquer ce devis comme ACCEPTÉ ?")) return;
@@ -1151,15 +1170,14 @@
           commercialStatus: "DEVIS_ACCEPTE",
           quoteStatus: "ACCEPTED",
           quoteAcceptedAt: serverTimestamp(),
-          quoteUpdatedAt: serverTimestamp(),
           commercialUpdatedAt: serverTimestamp()
         });
 
-        await refreshEvent();
-        showAlert("✅ Devis accepté.", true);
+        const snap = await getDoc(eventRef);
+        eventData = { id: snap.id, ...(snap.data()||{}) };
 
-        // (Optionnel plus tard) redirect facture
-        // location.href = `facture.html?eventId=${encodeURIComponent(eventId)}&returnTo=${encodeURIComponent(returnTo)}&returnDate=${encodeURIComponent(returnDate)}`;
+        showAlert("✅ Devis accepté.", true);
+        renderRecap();
       }catch(err){
         console.error(err);
         showAlert("Erreur statut : " + (err?.message || "inconnue"));
@@ -1171,7 +1189,6 @@
     linkOwnerBtn.addEventListener("click", async ()=>{
       hideAlert();
       if(!eventRef) return;
-      if(!isAllowedToQuote(eventData)) return;
       if(!ownerUser?.uid) return showAlert("Aucun propriétaire users trouvé.");
       if(!confirm(`Lier ce propriétaire à l’event ?\n${ownerUser.fullname || ownerUser.email}\nUID: ${ownerUser.uid}`)) return;
 
@@ -1184,11 +1201,44 @@
           updatedAt: serverTimestamp()
         });
 
-        await refreshEvent();
+        const snap = await getDoc(eventRef);
+        eventData = { id: snap.id, ...(snap.data()||{}) };
         showAlert("✅ Propriétaire lié à l’event.", true);
+
+        await loadOwnerFromUsers();
+        renderRecap();
       }catch(err){
         console.error(err);
         showAlert("Erreur liaison : " + (err?.message || "inconnue"));
+      }finally{
+        lockUI(false);
+      }
+    });
+
+    linkOwnerToHomeBtn.addEventListener("click", async ()=>{
+      hideAlert();
+      if(!homeRef) return showAlert("Aucun homeId sur l’event.");
+      if(!ownerUser?.uid) return showAlert("Aucun propriétaire users trouvé.");
+      const homeName = (eventData?.homeName || homeData?.name || "logement");
+      if(!confirm(`Lier ce propriétaire au logement ?\n${homeName}\n→ ${ownerUser.fullname || ownerUser.email}`)) return;
+
+      lockUI(true);
+      try{
+        await updateDoc(homeRef, {
+          ownerUid: ownerUser.uid,
+          ownerEmail: ownerUser.email || "",
+          ownerName: ownerUser.fullname || "",
+          updatedAt: serverTimestamp()
+        });
+
+        const snap = await getDoc(homeRef);
+        homeData = snap.exists() ? (snap.data()||{}) : homeData;
+
+        showAlert("✅ Propriétaire lié au logement.", true);
+        renderRecap();
+      }catch(err){
+        console.error(err);
+        showAlert("Erreur liaison logement : " + (err?.message || "inconnue"));
       }finally{
         lockUI(false);
       }
