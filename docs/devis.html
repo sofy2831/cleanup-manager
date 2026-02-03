@@ -1,4 +1,4 @@
-<!-- docs/devis.html (COMPLET) -->
+<!-- docs/devis.html (COMPLET + PATCH client/validité/logo + refresh avant preview) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -435,6 +435,14 @@
     }
     function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
 
+    // ✅ anti-cache logo (sinon tu changes le fichier, l'URL peut rester identique -> navigateur garde l'ancien)
+    function bustUrl(url){
+      const u = (url || "").toString().trim();
+      if(!u) return "";
+      const sep = u.includes("?") ? "&" : "?";
+      return `${u}${sep}v=${Date.now()}`;
+    }
+
     const eventId = getParam("eventId");
 
     logoutBtn.addEventListener("click", async ()=>{
@@ -505,10 +513,11 @@
       const bp = getBP();
       const url = (bp?.logoUrl || bp?.logo || "").toString().trim();
       if(url){
-        logoImg.src = url;
+        logoImg.src = bustUrl(url);
         logoImg.style.display = "block";
         logoFallback.style.display = "none";
       }else{
+        logoImg.removeAttribute("src");
         logoImg.style.display = "none";
         logoFallback.style.display = "block";
       }
@@ -567,7 +576,6 @@
       return s || "";
     }
 
-    // ✅ FIX: inclut arrivalDateKey / departureDateKey
     function getStayPeriod(d){
       const a = pickDate(
         d?.arrivalDateKey || d?.arrivalDate || d?.checkinDate || d?.arrival || d?.dateArrivee
@@ -635,6 +643,7 @@
       const ownerName  = (ownerUser?.fullname || d.ownerName || "—").trim();
       const ownerEmail = (ownerUser?.email || d.ownerEmail || "—").trim();
 
+      // ✅ adresse client depuis users/{ownerUid} prioritaire
       const ownerAddr1 = (ownerUser?.address1 || ownerUser?.address || "").trim();
       const ownerZip   = (ownerUser?.zip || "").trim();
       const ownerCity  = (ownerUser?.city || "").trim();
@@ -707,33 +716,71 @@
       if(snap.exists()) homeData = snap.data() || {};
     }
 
-    async function lookupOwnerUserByEmail(emailLower){
-      if(!emailLower) return null;
-      const qU = query(collection(db,"users"), where("email", "==", emailLower), limit(5));
-      const snap = await getDocs(qU);
-      if(snap.empty) return null;
+    // ✅ PATCH CLIENT : recherche email robuste (case / exact) via 2 requêtes
+    async function lookupOwnerUserByEmail(emailLower, emailRaw){
+      const eLow = normalizeEmail(emailLower);
+      const eRaw = (emailRaw || "").toString().trim();
+      const candidates = [eLow, eRaw].filter(Boolean);
 
-      const found = snap.docs
-        .map(d=>({ id:d.id, ...(d.data()||{}) }))
-        .find(u =>
+      if(!candidates.length) return null;
+
+      // 1) tentative exacte (email ==)
+      try{
+        const q1 = query(collection(db,"users"), where("email", "==", candidates[0]), limit(10));
+        const s1 = await getDocs(q1);
+        const list1 = s1.docs.map(d=>({ id:d.id, ...(d.data()||{}) }));
+        const found1 = list1.find(u =>
           String(u.role||"").toLowerCase() === "proprietaire" &&
           String(u.conciergerieUid||"") === String(currentUser.uid)
         );
+        if(found1){
+          return {
+            uid: found1.id,
+            email: normalizeEmail(found1.email || candidates[0]),
+            fullname: (found1.fullname || found1.displayName || found1.ownerAccountName || "").trim(),
+            phone: (found1.phone || "").toString().trim(),
+            address1: (found1.address1 || found1.address || "").toString().trim(),
+            address2: (found1.address2 || "").toString().trim(),
+            zip: (found1.zip || "").toString().trim(),
+            city: (found1.city || "").toString().trim(),
+            role: found1.role || "",
+            conciergerieUid: found1.conciergerieUid || ""
+          };
+        }
+      }catch(e){
+        console.warn("lookup exact email failed:", e?.message || e);
+      }
 
-      if(!found) return null;
+      // 2) fallback "in" (si tu stockes email avec casse différente)
+      if(candidates.length >= 2){
+        try{
+          const q2 = query(collection(db,"users"), where("email", "in", candidates.slice(0,10)), limit(10));
+          const s2 = await getDocs(q2);
+          const list2 = s2.docs.map(d=>({ id:d.id, ...(d.data()||{}) }));
+          const found2 = list2.find(u =>
+            String(u.role||"").toLowerCase() === "proprietaire" &&
+            String(u.conciergerieUid||"") === String(currentUser.uid)
+          );
+          if(found2){
+            return {
+              uid: found2.id,
+              email: normalizeEmail(found2.email || candidates[0]),
+              fullname: (found2.fullname || found2.displayName || found2.ownerAccountName || "").trim(),
+              phone: (found2.phone || "").toString().trim(),
+              address1: (found2.address1 || found2.address || "").toString().trim(),
+              address2: (found2.address2 || "").toString().trim(),
+              zip: (found2.zip || "").toString().trim(),
+              city: (found2.city || "").toString().trim(),
+              role: found2.role || "",
+              conciergerieUid: found2.conciergerieUid || ""
+            };
+          }
+        }catch(e){
+          console.warn("lookup email IN failed:", e?.message || e);
+        }
+      }
 
-      return {
-        uid: found.id,
-        email: normalizeEmail(found.email || emailLower),
-        fullname: (found.fullname || found.displayName || found.ownerAccountName || "").trim(),
-        phone: (found.phone || "").toString().trim(),
-        address1: (found.address1 || found.address || "").toString().trim(),
-        address2: (found.address2 || "").toString().trim(),
-        zip: (found.zip || "").toString().trim(),
-        city: (found.city || "").toString().trim(),
-        role: found.role || "",
-        conciergerieUid: found.conciergerieUid || ""
-      };
+      return null;
     }
 
     async function loadOwnerFromUsers(){
@@ -741,8 +788,10 @@
 
       const d = eventData || {};
       const ownerUid = (d.ownerUid || "").toString().trim();
-      const ownerEmail = normalizeEmail(d.ownerEmail || "");
+      const ownerEmailRaw = (d.ownerEmail || "").toString().trim();
+      const ownerEmailLower = normalizeEmail(ownerEmailRaw);
 
+      // ✅ priorité absolue : ownerUid (fiable)
       if(ownerUid){
         try{
           const snap = await getDoc(doc(db,"users", ownerUid));
@@ -751,7 +800,7 @@
             if(String(u.role||"").toLowerCase() === "proprietaire" && String(u.conciergerieUid||"") === String(currentUser.uid)){
               ownerUser = {
                 uid: snap.id,
-                email: normalizeEmail(u.email || ownerEmail),
+                email: normalizeEmail(u.email || ownerEmailLower),
                 fullname: (u.fullname || u.displayName || "").trim(),
                 phone: (u.phone || "").toString().trim(),
                 address1: (u.address1 || u.address || "").toString().trim(),
@@ -769,9 +818,10 @@
         }
       }
 
-      if(ownerEmail){
+      // ✅ fallback email (moins fiable, mais utile si pas de ownerUid)
+      if(ownerEmailLower || ownerEmailRaw){
         try{
-          ownerUser = await lookupOwnerUserByEmail(ownerEmail);
+          ownerUser = await lookupOwnerUserByEmail(ownerEmailLower, ownerEmailRaw);
         }catch(e){
           console.warn("lookup owner by email failed:", e?.message || e);
           ownerUser = null;
@@ -968,10 +1018,10 @@
         `;
       }).join("");
 
-      // ✅ date devis = aujourd'hui, validité = aujourd'hui + délai
-      const quoteDate = todayIso();
+      // ✅ PATCH validité : priorise ce qui est sauvegardé, sinon calcule maintenant
       const validityDays = Number(d.quoteValidityDays || 30);
-      const validUntil = addDaysLabel(quoteDate, validityDays);
+      const quoteDate = (d.quoteDate || todayIso());
+      const validUntil = (d.quoteValidUntil || addDaysLabel(quoteDate, validityDays));
 
       const period = getStayPeriod(d);
 
@@ -993,7 +1043,7 @@
         <div class="head">
           <div class="h-left">
             <div class="logoBox">
-              ${ logoUrl ? `<img src="${esc(logoUrl)}" alt="Logo">` : `<div class="logoFallback">✓</div>` }
+              ${ logoUrl ? `<img src="${esc(bustUrl(logoUrl))}" alt="Logo">` : `<div class="logoFallback">✓</div>` }
             </div>
             <div>
               <div class="docTitle">DEVIS</div>
@@ -1104,13 +1154,8 @@
     }
 
     function openPrintWindow(htmlInside){
-      // ✅ mobile = plein écran (remplace la page courante)
       const isMob = isMobile();
-
-      const w = isMob
-        ? window.open("", "_self")
-        : window.open("", "_blank");
-
+      const w = isMob ? window.open("", "_self") : window.open("", "_blank");
       if(!w) return alert("Ouverture impossible.");
 
       const styles = `
@@ -1149,20 +1194,17 @@
           .boxes{display:grid;grid-template-columns:1fr;gap:10px;margin-top:12px}
           @media(min-width:760px){.boxes{grid-template-columns:1fr 1fr}}
 
-          /* ✅ signature à gauche */
           .signRow{margin-top:12px;display:flex;justify-content:flex-start}
           .signBox{width:320px;border:1px solid rgba(0,0,0,.10);border-radius:12px;padding:10px 12px;background:#fff}
           .signLine{height:44px;border-bottom:1px dashed rgba(0,0,0,.35);margin-top:6px}
           .signName{margin-top:8px;font-size:12px;font-weight:800;color:#333}
 
-          /* ✅ footer centré */
           .footer{margin-top:14px;border-top:1px solid rgba(0,0,0,.12);padding-top:10px;font-size:11px;color:#555;font-weight:700;line-height:1.35;text-align:center}
 
           .printbar{max-width:980px;margin:0 auto 10px;display:flex;justify-content:flex-end;gap:8px}
           .pbtn{border:none;border-radius:999px;padding:10px 12px;font-weight:900;cursor:pointer;background:#7A5CFF;color:#fff}
           .pbtn2{border:2px solid #7A5CFF;border-radius:999px;padding:10px 12px;font-weight:900;cursor:pointer;background:#fff;color:#7A5CFF}
 
-          /* ✅ mobile = plein écran visuel */
           @media(max-width:520px){
             body{padding:0;background:#fff}
             .printbar{max-width:none;margin:0;position:sticky;top:0;background:#fff;padding:10px;border-bottom:1px solid rgba(0,0,0,.10);z-index:10}
@@ -1207,8 +1249,16 @@
       w.document.close();
     }
 
-    previewBtn.addEventListener("click", ()=>{
+    // ✅ PATCH : avant preview, on recharge profile + owner (sinon tu vois du vieux)
+    previewBtn.addEventListener("click", async ()=>{
       if(!eventRef) return;
+      try{
+        await loadProfile(currentUser.uid);     // refresh logo + businessProfile
+        await loadOwnerFromUsers();             // refresh client + adresse
+        renderRecap();                          // recap à jour dans l'écran
+      }catch(e){
+        console.warn("refresh before preview:", e?.message || e);
+      }
       const html = buildPreviewHtmlString();
       openPrintWindow(html);
     });
@@ -1239,6 +1289,7 @@
 
         const payMode = getSelectedPayMode() || "VIREMENT";
 
+        // ✅ date/validité sauvegardées : date du jour + délai
         const quoteDate = todayIso();
         const validityDays = Number(eventData?.quoteValidityDays || 30);
         const quoteValidUntil = addDaysLabel(quoteDate, validityDays);
@@ -1283,6 +1334,7 @@
 
         showAlert("✅ Devis enregistré.", true);
 
+        await loadProfile(currentUser.uid);
         await loadOwnerFromUsers();
         await loadHomeIfAny(eventData.homeId);
         renderRecap();
