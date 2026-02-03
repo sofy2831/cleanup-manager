@@ -1,4 +1,4 @@
-<!-- docs/devis.html (COMPLET + CORRIGÉ preview fiable sans enregistrer + client adresse complète + validité OK + logo cache-bust + fermer preview OK) -->
+<!-- docs/devis.html (COMPLET + CORRIGÉ preview fiable sans enregistrer + client depuis owners + adresse client OK + validité OK + logo cache-bust + fermer preview OK) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -400,7 +400,8 @@
     let homeData = null;    // homes/{homeId}
     let homeRef = null;
 
-    let ownerUser = null;   // users/{ownerUid}
+    // ✅ client depuis owners/{ownerUid}
+    let ownerUser = null;   // owners/{ownerUid}
 
     function isMobile(){
       return window.matchMedia("(max-width: 760px)").matches;
@@ -643,26 +644,20 @@
       const ownerName  = (ownerUser?.fullname || d.ownerName || "—").trim();
       const ownerEmail = (ownerUser?.email || d.ownerEmail || "—").trim();
 
-      // adresse client depuis users/{ownerUid} prioritaire (avec fallbacks)
+      // ✅ adresse client depuis owners/{ownerUid} prioritaire (avec fallback event)
       const ownerAddr1 = (
         ownerUser?.address1 ||
-        ownerUser?.address ||
-        ownerUser?.address?.street ||
-        ownerUser?.address?.address1 ||
-        ""
+        d.ownerAddress1 || d.clientAddress1 || d.ownerAddr1 || ""
       ).toString().trim();
 
       const ownerZip = (
         ownerUser?.zip ||
-        ownerUser?.address?.zip ||
-        ownerUser?.address?.postalCode ||
-        ""
+        d.ownerZip || d.clientZip || ""
       ).toString().trim();
 
       const ownerCity = (
         ownerUser?.city ||
-        ownerUser?.address?.city ||
-        ""
+        d.ownerCity || d.clientCity || ""
       ).toString().trim();
 
       const ownerAddrLine = [ownerAddr1, [ownerZip, ownerCity].filter(Boolean).join(" ")].filter(Boolean).join(" • ");
@@ -734,8 +729,8 @@
       if(snap.exists()) homeData = snap.data() || {};
     }
 
-    // lookup email robuste (case / exact) via 2 requêtes
-    async function lookupOwnerUserByEmail(emailLower, emailRaw){
+    // ✅ lookup email robuste dans owners (case / exact) via 2 requêtes
+    async function lookupOwnerInOwnersByEmail(emailLower, emailRaw){
       const eLow = normalizeEmail(emailLower);
       const eRaw = (emailRaw || "").toString().trim();
       const candidates = [eLow, eRaw].filter(Boolean);
@@ -743,93 +738,71 @@
 
       // 1) exact
       try{
-        const q1 = query(collection(db,"users"), where("email", "==", candidates[0]), limit(10));
+        const q1 = query(
+          collection(db,"owners"),
+          where("email", "==", candidates[0]),
+          where("conciergerieUid", "==", String(currentUser.uid)),
+          limit(10)
+        );
         const s1 = await getDocs(q1);
         const list1 = s1.docs.map(d=>({ id:d.id, ...(d.data()||{}) }));
-        const found1 = list1.find(u =>
-          String(u.role||"").toLowerCase() === "proprietaire" &&
-          String(u.conciergerieUid||"") === String(currentUser.uid)
-        );
+        const found1 = list1.find(o => String(o.role||"").toLowerCase() === "proprietaire");
         if(found1){
           return {
-            uid: found1.id,
+            uid: found1.uid || found1.id,
             email: normalizeEmail(found1.email || candidates[0]),
-            fullname: (found1.fullname || found1.displayName || found1.ownerAccountName || "").trim(),
+            fullname: (found1.fullname || found1.displayName || found1.ownerName || "").trim(),
             phone: (found1.phone || "").toString().trim(),
-            address1: (
-              found1.address1 ||
-              found1.address ||
-              found1?.address?.street ||
-              found1?.address?.address1 ||
-              ""
-            ).toString().trim(),
+            address1: (found1.address1 || found1.address || "").toString().trim(),
             address2: (found1.address2 || "").toString().trim(),
-            zip: (
-              found1.zip ||
-              found1?.address?.zip ||
-              found1?.address?.postalCode ||
-              ""
-            ).toString().trim(),
-            city: (
-              found1.city ||
-              found1?.address?.city ||
-              ""
-            ).toString().trim(),
+            zip: (found1.zip || "").toString().trim(),
+            city: (found1.city || "").toString().trim(),
+            country: (found1.country || "").toString().trim(),
             role: found1.role || "",
             conciergerieUid: found1.conciergerieUid || ""
           };
         }
       }catch(e){
-        console.warn("lookup exact email failed:", e?.message || e);
+        console.warn("owners lookup exact email failed:", e?.message || e);
       }
 
       // 2) fallback IN (si email stocké avec casse différente)
       if(candidates.length >= 2){
         try{
-          const q2 = query(collection(db,"users"), where("email", "in", candidates.slice(0,10)), limit(10));
+          const q2 = query(
+            collection(db,"owners"),
+            where("email", "in", candidates.slice(0,10)),
+            where("conciergerieUid", "==", String(currentUser.uid)),
+            limit(10)
+          );
           const s2 = await getDocs(q2);
           const list2 = s2.docs.map(d=>({ id:d.id, ...(d.data()||{}) }));
-          const found2 = list2.find(u =>
-            String(u.role||"").toLowerCase() === "proprietaire" &&
-            String(u.conciergerieUid||"") === String(currentUser.uid)
-          );
+          const found2 = list2.find(o => String(o.role||"").toLowerCase() === "proprietaire");
           if(found2){
             return {
-              uid: found2.id,
+              uid: found2.uid || found2.id,
               email: normalizeEmail(found2.email || candidates[0]),
-              fullname: (found2.fullname || found2.displayName || found2.ownerAccountName || "").trim(),
+              fullname: (found2.fullname || found2.displayName || found2.ownerName || "").trim(),
               phone: (found2.phone || "").toString().trim(),
-              address1: (
-                found2.address1 ||
-                found2.address ||
-                found2?.address?.street ||
-                found2?.address?.address1 ||
-                ""
-              ).toString().trim(),
+              address1: (found2.address1 || found2.address || "").toString().trim(),
               address2: (found2.address2 || "").toString().trim(),
-              zip: (
-                found2.zip ||
-                found2?.address?.zip ||
-                found2?.address?.postalCode ||
-                ""
-              ).toString().trim(),
-              city: (
-                found2.city ||
-                found2?.address?.city ||
-                ""
-              ).toString().trim(),
+              zip: (found2.zip || "").toString().trim(),
+              city: (found2.city || "").toString().trim(),
+              country: (found2.country || "").toString().trim(),
               role: found2.role || "",
               conciergerieUid: found2.conciergerieUid || ""
             };
           }
         }catch(e){
-          console.warn("lookup email IN failed:", e?.message || e);
+          console.warn("owners lookup email IN failed:", e?.message || e);
         }
       }
+
       return null;
     }
 
-    async function loadOwnerFromUsers(){
+    // ✅ charge le client depuis owners/{ownerUid} (docId == uid : cas 1)
+    async function loadOwnerFromOwners(){
       ownerUser = null;
 
       const d = eventData || {};
@@ -837,39 +810,39 @@
       const ownerEmailRaw = (d.ownerEmail || "").toString().trim();
       const ownerEmailLower = normalizeEmail(ownerEmailRaw);
 
-      // priorité absolue : ownerUid
       if(ownerUid){
         try{
-          const snap = await getDoc(doc(db,"users", ownerUid));
+          const snap = await getDoc(doc(db,"owners", ownerUid));
           if(snap.exists()){
-            const u = snap.data() || {};
-            if(String(u.role||"").toLowerCase() === "proprietaire" && String(u.conciergerieUid||"") === String(currentUser.uid)){
+            const o = snap.data() || {};
+            if(String(o.role||"").toLowerCase() === "proprietaire" && String(o.conciergerieUid||"") === String(currentUser.uid)){
               ownerUser = {
                 uid: snap.id,
-                email: normalizeEmail(u.email || ownerEmailLower),
-                fullname: (u.fullname || u.displayName || "").trim(),
-                phone: (u.phone || "").toString().trim(),
-                address1: (u.address1 || u.address || u?.address?.street || u?.address?.address1 || "").toString().trim(),
-                address2: (u.address2 || "").toString().trim(),
-                zip: (u.zip || u?.address?.zip || u?.address?.postalCode || "").toString().trim(),
-                city: (u.city || u?.address?.city || "").toString().trim(),
-                role: u.role || "",
-                conciergerieUid: u.conciergerieUid || ""
+                email: normalizeEmail(o.email || ownerEmailLower),
+                fullname: (o.fullname || o.displayName || "").trim(),
+                phone: (o.phone || "").toString().trim(),
+                address1: (o.address1 || o.address || "").toString().trim(),
+                address2: (o.address2 || "").toString().trim(),
+                zip: (o.zip || "").toString().trim(),
+                city: (o.city || "").toString().trim(),
+                country: (o.country || "").toString().trim(),
+                role: o.role || "",
+                conciergerieUid: o.conciergerieUid || ""
               };
               return;
             }
           }
         }catch(e){
-          console.warn("load ownerUid failed:", e?.message || e);
+          console.warn("load ownerUid (owners) failed:", e?.message || e);
         }
       }
 
       // fallback email
       if(ownerEmailLower || ownerEmailRaw){
         try{
-          ownerUser = await lookupOwnerUserByEmail(ownerEmailLower, ownerEmailRaw);
+          ownerUser = await lookupOwnerInOwnersByEmail(ownerEmailLower, ownerEmailRaw);
         }catch(e){
-          console.warn("lookup owner by email failed:", e?.message || e);
+          console.warn("lookup owner by email (owners) failed:", e?.message || e);
           ownerUser = null;
         }
       }
@@ -888,7 +861,7 @@
 
       await loadProfile(currentUser.uid);
       await loadHomeIfAny(eventData.homeId);
-      await loadOwnerFromUsers();
+      await loadOwnerFromOwners(); // ✅ owners
       renderRecap();
     }
 
@@ -1029,28 +1002,22 @@
 
       const logoUrl = (bp?.logoUrl || "").toString().trim();
 
-      // client (priorité users/{ownerUid}, fallback eventData) + fallbacks complets
+      // ✅ client (owners prioritaire, fallback eventData)
       const ownerName  = (ownerUser?.fullname || d.ownerName || "—").trim();
       const ownerEmail = (ownerUser?.email || d.ownerEmail || "").trim();
 
       const ownerAddr1 = (
         ownerUser?.address1 ||
-        ownerUser?.address ||
-        ownerUser?.address?.street ||
-        ownerUser?.address?.address1 ||
         d.ownerAddress1 || d.clientAddress1 || d.ownerAddr1 || ""
       ).toString().trim();
 
       const ownerZip = (
         ownerUser?.zip ||
-        ownerUser?.address?.zip ||
-        ownerUser?.address?.postalCode ||
         d.ownerZip || d.clientZip || ""
       ).toString().trim();
 
       const ownerCity = (
         ownerUser?.city ||
-        ownerUser?.address?.city ||
         d.ownerCity || d.clientCity || ""
       ).toString().trim();
 
@@ -1324,7 +1291,7 @@
         }
         await loadProfile(currentUser.uid);
         await loadHomeIfAny(eventData.homeId);
-        await loadOwnerFromUsers();
+        await loadOwnerFromOwners(); // ✅ owners
       }catch(e){
         console.warn("preview refresh failed:", e?.message || e);
       }
@@ -1359,7 +1326,7 @@
 
         const payMode = getSelectedPayMode() || "VIREMENT";
 
-        // ✅ ENREGISTREMENT : date du jour + validité X jours (PAS de variable d inexistante)
+        // ✅ ENREGISTREMENT : date du jour + validité X jours
         const quoteDate = todayIso();
         const validityDays = Number.isFinite(Number(eventData?.quoteValidityDays))
           ? Number(eventData.quoteValidityDays)
@@ -1408,7 +1375,7 @@
         showAlert("✅ Devis enregistré.", true);
 
         await loadProfile(currentUser.uid);
-        await loadOwnerFromUsers();
+        await loadOwnerFromOwners(); // ✅ owners
         await loadHomeIfAny(eventData.homeId);
         renderRecap();
       }catch(err){
@@ -1495,7 +1462,7 @@
     linkOwnerToHomeBtn.addEventListener("click", async ()=>{
       hideAlert();
       if(!homeRef) return showAlert("Aucun homeId sur l’event.");
-      if(!ownerUser?.uid) return showAlert("Aucun compte propriétaire lié (ownerUid manquant).");
+      if(!ownerUser?.uid) return showAlert("Aucun client lié (ownerUid manquant).");
       const homeName = (eventData?.homeName || homeData?.name || "logement");
       if(!confirm(`Lier ce client au logement ?\n${homeName}\n→ ${ownerUser.fullname || ownerUser.email}`)) return;
 
