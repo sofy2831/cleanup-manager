@@ -202,7 +202,7 @@
 <body>
   <div class="page">
     <div class="topbar">
-      <a class="pill-link" href="planning.html">← Retour planning</a>
+      <a class="pill-link" id="backLink" href="planning.html">← Retour planning</a>
       <button class="pill-link" type="button" id="logoutBtn">Déconnexion</button>
     </div>
 
@@ -350,6 +350,7 @@
       collection, query, where, getDocs, limit
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
+    const backLink = document.getElementById("backLink");
     const logoutBtn = document.getElementById("logoutBtn");
     const alertBox = document.getElementById("alertBox");
     const recapKv = document.getElementById("recapKv");
@@ -421,9 +422,23 @@
       return (p.get(name) || "").trim();
     }
     function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
+    function asRaw(s){ return String(s||"").toUpperCase().trim(); }
 
     const eventId = getParam("eventId");
+    const returnTo = getParam("returnTo");         // "planning"
+    const returnDate = getParam("returnDate");     // "YYYY-MM-DD"
+
     eventIdLine.textContent = eventId ? ("eventId: " + eventId) : "eventId manquant";
+
+    // ✅ retour dynamique vers planning + date
+    function syncBackLink(){
+      if(returnTo === "planning" && returnDate){
+        backLink.href = `planning.html?date=${encodeURIComponent(returnDate)}`;
+      }else{
+        backLink.href = "planning.html";
+      }
+    }
+    syncBackLink();
 
     logoutBtn.addEventListener("click", async ()=>{
       await signOut(auth);
@@ -461,18 +476,28 @@
       return qs === "SENT";
     }
 
+    // ✅ garde-fou : devis seulement si prestation REALISEE
+    function normalizeOpStatus(s){
+      const x = asRaw(s).replaceAll(" ", "_");
+      if(x === "REALISEE" || x === "RÉALISÉE" || x === "DONE") return "REALISEE";
+      if(x === "A_VALIDER" || x === "A_VALIDER" || x === "À_VALIDER") return "A_VALIDER";
+      if(x === "ANNULEE" || x === "ANNULÉE" || x === "CANCELLED") return "ANNULEE";
+      return "EN_COURS";
+    }
+    function isAllowedToQuote(d){
+      const st = normalizeOpStatus(d?.opStatus || d?.status || "");
+      return st === "REALISEE";
+    }
+
     async function ensureQuoteNumber(uid, year){
       const counterId = `${uid}_${year}`;
       const counterRef = doc(db, "counters", counterId);
 
       const next = await runTransaction(db, async (tx)=>{
         const snap = await tx.get(counterRef);
-        if(!snap.exists()){
-          tx.set(counterRef, { quoteSeq: 0, invoiceSeq: 0, creditSeq: 0 });
-        }
-        const c = snap.exists() ? (snap.data() || {}) : { quoteSeq: 0 };
-        const n = (Number(c.quoteSeq)||0) + 1;
-        tx.set(counterRef, { ...c, quoteSeq: n }, { merge:true });
+        const cur = snap.exists() ? (snap.data() || {}) : { quoteSeq: 0, invoiceSeq: 0, creditSeq: 0 };
+        const n = (Number(cur.quoteSeq)||0) + 1;
+        tx.set(counterRef, { ...cur, quoteSeq: n }, { merge:true });
         return n;
       });
 
@@ -588,11 +613,32 @@
       totalsBox.innerHTML = html.join("");
     }
 
-    function ownerLabel(){
-      if(ownerUser){
-        return ownerUser.fullname || ownerUser.email || "—";
+    function setDefaultsIfEmpty(d){
+      // Paiement : par défaut virement, et délai "à réception"
+      if(!d.quotePaymentTerm) paymentTermEl.value = "RECEPTION";
+      else paymentTermEl.value = d.quotePaymentTerm;
+
+      const pm = d.quotePaymentModes || null;
+      if(pm){
+        payVirementEl.checked = !!pm.virement;
+        payCBEl.checked = !!pm.cb;
+        payEspecesEl.checked = !!pm.especes;
+        payChequeEl.checked = !!pm.cheque;
+      }else{
+        payVirementEl.checked = true;
+        payCBEl.checked = false;
+        payEspecesEl.checked = false;
+        payChequeEl.checked = false;
       }
-      return (eventData?.ownerName || eventData?.ownerEmail || "—");
+
+      // Pénalités : défaut B2C
+      const penMode = String(d.quotePenaltyMode || "").toUpperCase();
+      if(penMode === "B2B"){ penB2BEl.checked = true; penB2CEl.checked = false; }
+      else { penB2CEl.checked = true; penB2BEl.checked = false; }
+      if(d.quotePenaltyText) penaltyTextEl.value = d.quotePenaltyText;
+      else syncPenaltyText();
+
+      if(privateNoteEl.value === "" && d.quotePrivateNote) privateNoteEl.value = d.quotePrivateNote;
     }
 
     function renderRecap(){
@@ -625,41 +671,36 @@
       statusBadge.textContent = `Op: ${op} • Devis: ${qs}`;
 
       quoteNumberLine.textContent = d.quoteNumber ? `N° ${d.quoteNumber}` : "N° — (à l’enregistrement)";
-      if(privateNoteEl.value === "" && d.quotePrivateNote) privateNoteEl.value = d.quotePrivateNote;
-
-      if(d.quotePaymentTerm && paymentTermEl.value !== d.quotePaymentTerm) paymentTermEl.value = d.quotePaymentTerm;
-      const pm = d.quotePaymentModes || {};
-      payVirementEl.checked = !!pm.virement;
-      payCBEl.checked = !!pm.cb;
-      payEspecesEl.checked = !!pm.especes;
-      payChequeEl.checked = !!pm.cheque;
-
-      const penMode = String(d.quotePenaltyMode || "").toUpperCase();
-      if(penMode === "B2B") penB2BEl.checked = true;
-      if(penMode === "B2C") penB2CEl.checked = true;
-      if(d.quotePenaltyText) penaltyTextEl.value = d.quotePenaltyText;
-      else syncPenaltyText();
 
       applyLogoFromProfile(p);
       renderLinesAndTotals();
 
-      saveBtn.disabled = !eventRef;
-      previewBtn.disabled = !eventRef;
-      markSentBtn.disabled = !(eventRef && canMarkSent(d));
-      markAcceptedBtn.disabled = !(eventRef && canMarkAccepted(d));
+      // defaults UI si manque
+      setDefaultsIfEmpty(d);
 
-      // bouton "lier" si ownerUser trouvé mais event.ownerUid vide/différent
+      const allowed = isAllowedToQuote(d);
+      if(!allowed){
+        showAlert("⛔ Devis bloqué : la prestation n’est pas RÉALISÉE.\nRetourne sur Planning → Valider la prestation, puis reviens ici.", false);
+      }
+
+      const qsRaw = String(d.quoteStatus || "").toUpperCase() || "DRAFT";
+      const d2 = { ...d, quoteStatus: qsRaw };
+
+      saveBtn.disabled = !eventRef || !allowed;
+      previewBtn.disabled = !eventRef || !allowed;
+      markSentBtn.disabled = !(eventRef && allowed && canMarkSent(d2));
+      markAcceptedBtn.disabled = !(eventRef && allowed && canMarkAccepted(d2));
+
       const canLink = !!(eventRef && ownerUser?.uid && String(d.ownerUid || "") !== String(ownerUser.uid));
-      linkOwnerBtn.disabled = !canLink;
+      linkOwnerBtn.disabled = !(canLink && allowed);
     }
 
     function lockUI(locked){
-      const d = eventData || {};
-      saveBtn.disabled = !!locked || !eventRef;
-      previewBtn.disabled = !!locked || !eventRef;
-      markSentBtn.disabled = !!locked || !eventRef || !canMarkSent(d);
-      markAcceptedBtn.disabled = !!locked || !eventRef || !canMarkAccepted(d);
-      linkOwnerBtn.disabled = !!locked || linkOwnerBtn.disabled;
+      saveBtn.disabled = locked || saveBtn.disabled;
+      previewBtn.disabled = locked || previewBtn.disabled;
+      markSentBtn.disabled = locked || markSentBtn.disabled;
+      markAcceptedBtn.disabled = locked || markAcceptedBtn.disabled;
+      linkOwnerBtn.disabled = locked || linkOwnerBtn.disabled;
       saveBtn.style.opacity = locked ? "0.75" : "1";
     }
 
@@ -676,7 +717,6 @@
       if(snap.exists()) homeData = snap.data() || {};
     }
 
-    // ===== users lookup (1 where + filtre JS) =====
     async function lookupOwnerUserByEmail(emailLower){
       if(!emailLower) return null;
       const qU = query(collection(db,"users"), where("email", "==", emailLower), limit(5));
@@ -713,13 +753,11 @@
       const ownerUid = (d.ownerUid || "").toString().trim();
       const ownerEmail = normalizeEmail(d.ownerEmail || "");
 
-      // 1) uid direct
       if(ownerUid){
         try{
           const snap = await getDoc(doc(db,"users", ownerUid));
           if(snap.exists()){
             const u = snap.data() || {};
-            // sécurité : vérifier attaché à la conciergerie
             if(String(u.role||"").toLowerCase() === "proprietaire" && String(u.conciergerieUid||"") === String(currentUser.uid)){
               ownerUser = {
                 uid: snap.id,
@@ -737,12 +775,10 @@
             }
           }
         }catch(e){
-          // on ignore, on tentera email
           console.warn("load ownerUid failed:", e?.message || e);
         }
       }
 
-      // 2) lookup email
       if(ownerEmail){
         try{
           ownerUser = await lookupOwnerUserByEmail(ownerEmail);
@@ -764,10 +800,13 @@
         throw new Error("Accès refusé (event d’une autre conciergerie).");
       }
 
+      // normalise quoteStatus si vide
+      if(!eventData.quoteStatus) eventData.quoteStatus = "DRAFT";
+
       await loadProfile(currentUser.uid);
       await loadHomeIfAny(eventData.homeId);
-
       await loadOwnerFromUsers();
+
       renderRecap();
     }
 
@@ -989,25 +1028,46 @@
 
     previewBtn.addEventListener("click", ()=>{
       if(!eventRef) return;
+      if(!isAllowedToQuote(eventData)) return;
       const html = buildPreviewHtmlString();
       openPrintWindow(html);
     });
 
+    async function refreshEvent(){
+      const snap = await getDoc(eventRef);
+      eventData = { id: snap.id, ...(snap.data()||{}) };
+      if(!eventData.quoteStatus) eventData.quoteStatus = "DRAFT";
+      await loadOwnerFromUsers();
+      hideAlert();
+      renderRecap();
+    }
+
+    async function ensureQuoteNumberOnEvent(){
+      const year = new Date().getFullYear();
+      if(eventData?.quoteNumber) return eventData.quoteNumber;
+
+      const qn = await ensureQuoteNumber(currentUser.uid, year);
+      await updateDoc(eventRef, {
+        quoteNumber: qn,
+        quoteStatus: String(eventData?.quoteStatus || "").toUpperCase() || "DRAFT",
+        commercialStatus: String(eventData?.commercialStatus || "").trim() || "DEVIS",
+        quoteUpdatedAt: serverTimestamp(),
+        commercialUpdatedAt: serverTimestamp()
+      });
+      eventData.quoteNumber = qn;
+      return qn;
+    }
+
     saveBtn.addEventListener("click", async ()=>{
       hideAlert();
       if(!eventRef) return showAlert("Event non chargé.");
+      if(!isAllowedToQuote(eventData)) return;
 
       lockUI(true);
       try{
-        const year = new Date().getFullYear();
-        let quoteNumber = eventData?.quoteNumber || null;
-
-        if(!quoteNumber){
-          quoteNumber = await ensureQuoteNumber(currentUser.uid, year);
-        }
+        await ensureQuoteNumberOnEvent();
 
         const patch = {
-          quoteNumber,
           quoteStatus: String(eventData?.quoteStatus || "").toUpperCase() || "DRAFT",
           commercialStatus: "DEVIS",
 
@@ -1029,15 +1089,8 @@
         }
 
         await updateDoc(eventRef, patch);
-
-        const snap = await getDoc(eventRef);
-        eventData = { id: snap.id, ...(snap.data()||{}) };
-
+        await refreshEvent();
         showAlert("✅ Devis enregistré.", true);
-
-        // refresh owner (au cas où)
-        await loadOwnerFromUsers();
-        renderRecap();
       }catch(err){
         console.error(err);
         showAlert("Erreur sauvegarde : " + (err?.message || "inconnue"));
@@ -1049,23 +1102,32 @@
     markSentBtn.addEventListener("click", async ()=>{
       hideAlert();
       if(!eventRef) return showAlert("Event non chargé.");
+      if(!isAllowedToQuote(eventData)) return;
+
       const qs = String(eventData?.quoteStatus || "").toUpperCase();
       if(qs !== "DRAFT") return showAlert("⛔ Action impossible : le devis n'est pas en brouillon.");
 
       lockUI(true);
       try{
+        await ensureQuoteNumberOnEvent();
+
+        // sauvegarde rapide des champs UI + statut SENT
         await updateDoc(eventRef, {
           commercialStatus: "DEVIS_ENVOYE",
           quoteStatus: "SENT",
+          quotePaymentTerm: paymentTermEl.value,
+          quotePaymentModes: getQuotePaymentModes(),
+          quotePenaltyMode: getSelectedPenaltyMode(),
+          quotePenaltyText: (penaltyTextEl.value || "").trim(),
+          quotePrivateNote: (privateNoteEl.value || "").trim(),
+
           quoteSentAt: serverTimestamp(),
+          quoteUpdatedAt: serverTimestamp(),
           commercialUpdatedAt: serverTimestamp()
         });
 
-        const snap = await getDoc(eventRef);
-        eventData = { id: snap.id, ...(snap.data()||{}) };
-
+        await refreshEvent();
         showAlert("✅ Statut : devis envoyé.", true);
-        renderRecap();
       }catch(err){
         console.error(err);
         showAlert("Erreur statut : " + (err?.message || "inconnue"));
@@ -1077,6 +1139,8 @@
     markAcceptedBtn.addEventListener("click", async ()=>{
       hideAlert();
       if(!eventRef) return showAlert("Event non chargé.");
+      if(!isAllowedToQuote(eventData)) return;
+
       const qs = String(eventData?.quoteStatus || "").toUpperCase();
       if(qs !== "SENT") return showAlert("⛔ Action impossible : le devis doit être “envoyé”.");
       if(!confirm("Marquer ce devis comme ACCEPTÉ ?")) return;
@@ -1087,14 +1151,15 @@
           commercialStatus: "DEVIS_ACCEPTE",
           quoteStatus: "ACCEPTED",
           quoteAcceptedAt: serverTimestamp(),
+          quoteUpdatedAt: serverTimestamp(),
           commercialUpdatedAt: serverTimestamp()
         });
 
-        const snap = await getDoc(eventRef);
-        eventData = { id: snap.id, ...(snap.data()||{}) };
-
+        await refreshEvent();
         showAlert("✅ Devis accepté.", true);
-        renderRecap();
+
+        // (Optionnel plus tard) redirect facture
+        // location.href = `facture.html?eventId=${encodeURIComponent(eventId)}&returnTo=${encodeURIComponent(returnTo)}&returnDate=${encodeURIComponent(returnDate)}`;
       }catch(err){
         console.error(err);
         showAlert("Erreur statut : " + (err?.message || "inconnue"));
@@ -1106,6 +1171,7 @@
     linkOwnerBtn.addEventListener("click", async ()=>{
       hideAlert();
       if(!eventRef) return;
+      if(!isAllowedToQuote(eventData)) return;
       if(!ownerUser?.uid) return showAlert("Aucun propriétaire users trouvé.");
       if(!confirm(`Lier ce propriétaire à l’event ?\n${ownerUser.fullname || ownerUser.email}\nUID: ${ownerUser.uid}`)) return;
 
@@ -1118,10 +1184,8 @@
           updatedAt: serverTimestamp()
         });
 
-        const snap = await getDoc(eventRef);
-        eventData = { id: snap.id, ...(snap.data()||{}) };
+        await refreshEvent();
         showAlert("✅ Propriétaire lié à l’event.", true);
-        renderRecap();
       }catch(err){
         console.error(err);
         showAlert("Erreur liaison : " + (err?.message || "inconnue"));
