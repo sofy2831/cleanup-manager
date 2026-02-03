@@ -743,55 +743,117 @@
     clientModalBackdrop.addEventListener("click", (e)=>{ if(e.target === clientModalBackdrop) closeClientModal(); });
 
     // ===== Lookup owner account by email (users) =====
-    async function lookupOwnerUserByEmail(emailLower){
-      const qU = query(collection(db,"users"), where("email", "==", emailLower), limit(5));
-      const snap = await getDocs(qU);
-      if(snap.empty) return null;
+async function lookupOwnerUserByEmail(emailLower){
+  const e = normalizeEmail(emailLower);
+  if(!e) return null;
 
-      // filtre local (évite indexes composés)
-      const found = snap.docs
-        .map(d=>({ id:d.id, ...(d.data()||{}) }))
-        .find(u => String(u.role||"").toLowerCase() === "proprietaire" && String(u.conciergerieUid||"") === currentUser.uid);
+  // 1) tentative recommandée : users.emailLower == e
+  try{
+    const q1 = query(
+      collection(db, "users"),
+      where("emailLower", "==", e),
+      limit(5)
+    );
+    const s1 = await getDocs(q1);
+    if(!s1.empty){
+      const found = s1.docs
+        .map(d => ({ id: d.id, ...(d.data()||{}) }))
+        .find(u =>
+          String(u.role || "").toLowerCase() === "proprietaire"
+          && String(u.conciergerieUid || "") === currentUser.uid
+        );
 
-      if(!found) return null;
+      if(found){
+        return {
+          uid: found.id,
+          email: normalizeEmail(found.email || e),
+          fullname: (found.fullname || found.displayName || "").trim()
+        };
+      }
+      // si on trouve un emailLower mais pas rattaché/role, on renvoie null (volontaire)
+      return null;
+    }
+  }catch(err){
+    // si le champ emailLower n’existe pas partout / pas indexé, on fallback
+    console.warn("lookup emailLower failed:", err);
+  }
 
-      return {
-        uid: found.id,
-        email: normalizeEmail(found.email || emailLower),
-        fullname: (found.fullname || found.displayName || "").trim()
-      };
+  // 2) fallback : users.email == e (moins fiable si tu ne normalises pas)
+  const q2 = query(
+    collection(db, "users"),
+    where("email", "==", e),
+    limit(5)
+  );
+  const s2 = await getDocs(q2);
+  if(s2.empty) return null;
+
+  const found2 = s2.docs
+    .map(d => ({ id: d.id, ...(d.data()||{}) }))
+    .find(u =>
+      String(u.role || "").toLowerCase() === "proprietaire"
+      && String(u.conciergerieUid || "") === currentUser.uid
+    );
+
+  if(!found2) return null;
+
+  return {
+    uid: found2.id,
+    email: normalizeEmail(found2.email || e),
+    fullname: (found2.fullname || found2.displayName || "").trim()
+  };
+}
+
+async function maybeResolveOwnerAccount(emailLower){
+  const e = normalizeEmail(emailLower);
+
+  if(!e){
+    resolvedOwnerUid = "";
+    resolvedOwnerName = "";
+    resolvedOwnerEmail = "";
+    linkInfo.textContent = "—";
+    return;
+  }
+
+  linkInfo.textContent = "Recherche du compte propriétaire…";
+
+  try{
+    const found = await lookupOwnerUserByEmail(e);
+
+    if(!found){
+      resolvedOwnerUid = "";
+      resolvedOwnerName = "";
+      resolvedOwnerEmail = e;
+      linkInfo.textContent = "Aucun compte propriétaire trouvé (ou pas rattaché à ta conciergerie).";
+      return;
     }
 
-    async function maybeResolveOwnerAccount(emailLower){
-      if(!emailLower) {
-        resolvedOwnerUid = ""; resolvedOwnerName = ""; resolvedOwnerEmail = "";
-        linkInfo.textContent = "—";
-        return;
-      }
+    resolvedOwnerUid = found.uid;
+    resolvedOwnerName = found.fullname || "";
+    resolvedOwnerEmail = found.email || e;
 
-      linkInfo.textContent = "Recherche du compte propriétaire…";
-      try{
-        const found = await lookupOwnerUserByEmail(emailLower);
-        if(!found){
-          resolvedOwnerUid = ""; resolvedOwnerName = ""; resolvedOwnerEmail = emailLower;
-          linkInfo.textContent = "Aucun compte propriétaire trouvé (ou pas rattaché à ta conciergerie).";
-          return;
-        }
-        resolvedOwnerUid = found.uid;
-        resolvedOwnerName = found.fullname || "";
-        resolvedOwnerEmail = found.email || emailLower;
-        linkInfo.textContent = `✅ Compte lié : ${resolvedOwnerEmail} • UID: ${resolvedOwnerUid}${resolvedOwnerName ? " • " + resolvedOwnerName : ""}`;
-      }catch(err){
-        console.warn(err);
-        resolvedOwnerUid = ""; resolvedOwnerName = ""; resolvedOwnerEmail = emailLower;
-        linkInfo.textContent = "Erreur lookup (permissions/index).";
-      }
-    }
+    linkInfo.textContent =
+      `✅ Compte lié : ${resolvedOwnerEmail} • UID: ${resolvedOwnerUid}` +
+      (resolvedOwnerName ? ` • ${resolvedOwnerName}` : "");
 
-    cEmail.addEventListener("blur", async ()=>{
-      const e = normalizeEmail(cEmail.value);
-      await maybeResolveOwnerAccount(e);
-    });
+  }catch(err){
+    console.warn(err);
+    resolvedOwnerUid = "";
+    resolvedOwnerName = "";
+    resolvedOwnerEmail = e;
+
+    // message plus vrai que "permissions/index"
+    linkInfo.textContent = "Erreur lookup (règles ou index). Vérifie console + lien d’index Firestore si proposé.";
+  }
+}
+
+// déclenchement : blur ok, mais je te conseille aussi "change" sur mobile
+cEmail.addEventListener("blur", async ()=>{
+  await maybeResolveOwnerAccount(cEmail.value);
+});
+cEmail.addEventListener("change", async ()=>{
+  await maybeResolveOwnerAccount(cEmail.value);
+});
+
 
     // ===== Bulk update homes =====
     async function bulkUpdateHomesByKeys({ oldClientKeys, newClientKey, patchHomes }){
@@ -940,3 +1002,4 @@
   </script>
 </body>
 </html>
+
