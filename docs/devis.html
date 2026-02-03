@@ -80,7 +80,7 @@
     @media(min-width:860px){
       .layout{
         display:grid;
-        grid-template-columns: 1fr 460px; /* ✅ bloc devis un peu plus large */
+        grid-template-columns: 1fr 460px; /* bloc devis un peu plus large */
         align-items:start;
       }
     }
@@ -218,11 +218,10 @@
     <div class="badge" id="statusBadge">—</div>
 
     <div class="layout">
-      <!-- ✅ GAUCHE -->
+      <!-- GAUCHE -->
       <div class="card">
         <div class="card-title">
           <span>Récapitulatif</span>
-          <!-- ✅ eventId masqué (volontaire) -->
         </div>
 
         <div class="alert" id="alertBox"></div>
@@ -254,7 +253,7 @@
         <div class="totals" id="totalsBox"></div>
       </div>
 
-      <!-- ✅ DROITE -->
+      <!-- DROITE -->
       <div class="card">
         <div class="card-title">
           <span>Devis</span>
@@ -335,13 +334,9 @@
         </div>
 
         <div class="actions" style="margin-top:8px;">
-          <!-- ✅ nouveau : sélection via clients.html -->
           <button class="btn" type="button" id="pickOwnerBtn">Lier un client</button>
-          <!-- (optionnel) garde la liaison logement si tu veux, mais tu ne l'as pas demandée ici -->
           <button class="btn" type="button" id="linkOwnerToHomeBtn" disabled>Lier le client au logement</button>
         </div>
-
-        <!-- ✅ plus de texte inutile "numéro devis" -->
       </div>
     </div>
   </div>
@@ -405,7 +400,7 @@
     let homeData = null;    // homes/{homeId}
     let homeRef = null;
 
-    let ownerUser = null;   // { uid, email, fullname, phone, address1, address2, zip, city, ... }
+    let ownerUser = null;   // users/{ownerUid}
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -435,6 +430,28 @@
       return (p.get(name) || "").trim();
     }
     function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
+
+    // ===== Dates séjour (corrigé : arrivalDateKey / departureDateKey) =====
+    function fmtDateFRFromKey(s){
+      const v = (s || "").toString().trim();
+      const m = v.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if(!m) return v || "—";
+      const [, y, mo, d] = m;
+      return `${d}/${mo}/${y}`;
+    }
+    function getStayPeriodObj(d){
+      const a = (d?.arrivalDateKey || "").toString().trim();
+      const b = (d?.departureDateKey || "").toString().trim();
+      if(a && b) return { from:a, to:b, label:`Du ${fmtDateFRFromKey(a)} au ${fmtDateFRFromKey(b)}` };
+      if(a && !b) return { from:a, to:"", label:`Arrivée : ${fmtDateFRFromKey(a)}` };
+      if(!a && b) return { from:"", to:b, label:`Départ : ${fmtDateFRFromKey(b)}` };
+      return { from:"", to:"", label:"—" };
+    }
+
+    // ===== Accès profil conciergerie (structure businessProfile) =====
+    function biz(){
+      return (profileData?.businessProfile || {});
+    }
 
     const eventId = getParam("eventId");
 
@@ -498,8 +515,8 @@
       return `D${year}-${padded}`;
     }
 
-    function applyLogoFromProfile(p){
-      const url = (p?.logoUrl || "").trim();
+    function applyLogoFromProfile(){
+      const url = (biz()?.logoUrl || "").trim();
       if(url){
         logoImg.src = url;
         logoImg.style.display = "block";
@@ -558,25 +575,14 @@
     penB2BEl.addEventListener("change", syncPenaltyText);
     penB2CEl.addEventListener("change", syncPenaltyText);
 
-    function pickDate(v){
-      const s = String(v||"").trim();
-      return s || "";
-    }
-    function getStayPeriod(d){
-      const a = pickDate(d?.arrivalDate || d?.checkinDate || d?.arrival || d?.dateArrivee);
-      const b = pickDate(d?.departureDate || d?.checkoutDate || d?.departure || d?.dateDepart);
-      if(a && b) return { from:a, to:b, label:`Du ${a} au ${b}` };
-      if(a && !b) return { from:a, to:"", label:`À partir du ${a}` };
-      if(!a && b) return { from:"", to:b, label:`Jusqu’au ${b}` };
-      return { from:"", to:"", label:"—" };
-    }
-
     function renderLinesAndTotals(){
       const d = eventData || {};
-      const p = profileData || {};
+      const p = biz();
 
-      const tvaEnabled = !!p.tvaEnabled;
-      const tvaRate = Number.isFinite(Number(p.tvaRate)) ? Number(p.tvaRate) : 0;
+      // TVA : profil-conciergerie.html -> businessProfile.vat.enabled
+      const tvaEnabled = !!p?.vat?.enabled;
+      // Si tu n'as pas encore de taux stocké : default 20% (modifiable plus tard)
+      const tvaRate = Number.isFinite(Number(p?.vat?.rate)) ? Number(p.vat.rate) : (tvaEnabled ? 0.20 : 0);
 
       thTVA.style.display = tvaEnabled ? "" : "none";
       linesTbody.innerHTML = "";
@@ -614,15 +620,13 @@
         html.push(`<div class="r"><span>Total TTC</span><span>${esc(fmtMoney(totals.ttc))}</span></div>`);
       }else{
         html.push(`<div class="r"><span>Total</span><span>${esc(fmtMoney(totals.ttc))}</span></div>`);
-        const ex = (p?.tvaExemptionText || "").trim();
-        if(ex) html.push(`<div class="mutedLine">${esc(ex)}</div>`);
+        html.push(`<div class="mutedLine">TVA non applicable, art. 293B du CGI.</div>`);
       }
       totalsBox.innerHTML = html.join("");
     }
 
     function renderRecap(){
       const d = eventData || {};
-      const p = profileData || {};
 
       const ownerName  = (ownerUser?.fullname || d.ownerName || "—").trim();
       const ownerEmail = (ownerUser?.email || d.ownerEmail || "—").trim();
@@ -633,15 +637,16 @@
       const ownerCity  = (ownerUser?.city || "").trim();
       const ownerAddrLine = [ownerAddr1, [ownerZip, ownerCity].filter(Boolean).join(" ")].filter(Boolean).join(" • ");
 
-      const homeAddr = (d.homeAddress || "").trim();
-      const homeZip = (d.homeZip || d.zip || d.postalCode || "").toString().trim();
-      const homeCity = (d.homeCity || "").trim();
-      const homeAddrFull = [homeAddr, [homeZip, homeCity].filter(Boolean).join(" ")].filter(Boolean).join(" • ");
+      // logement : fallback event -> homeData
+      const hStreet = (d.homeAddress || homeData?.homeAddress || homeData?.address || "").toString().trim();
+      const hZip = (d.homeZip || homeData?.zip || homeData?.postalCode || "").toString().trim();
+      const hCity = (d.homeCity || homeData?.city || "").toString().trim();
+      const homeAddrFull = [hStreet, [hZip, hCity].filter(Boolean).join(" ")].filter(Boolean).join(" • ");
 
-      const period = getStayPeriod(d);
+      const period = getStayPeriodObj(d);
 
       const rows = [];
-      rows.push(`<div class="line"><b>Logement</b> : ${esc((d.homeName||"—"))}</div>`);
+      rows.push(`<div class="line"><b>Logement</b> : ${esc((d.homeName|| homeData?.name || "—"))}</div>`);
       if(homeAddrFull) rows.push(`<div class="line"><b>Adresse logement</b> : ${esc(homeAddrFull)}</div>`);
       rows.push(`<div class="line"><b>Client</b> : ${esc(ownerName)}${ownerEmail && ownerEmail!=="—" ? " • " + esc(ownerEmail) : ""}${ownerPhone ? " • " + esc(ownerPhone) : ""}</div>`);
       if(ownerAddrLine) rows.push(`<div class="line"><b>Adresse client</b> : ${esc(ownerAddrLine)}</div>`);
@@ -679,7 +684,7 @@
         syncPenaltyText();
       }
 
-      applyLogoFromProfile(p);
+      applyLogoFromProfile();
       renderLinesAndTotals();
 
       saveBtn.disabled = !eventRef;
@@ -687,7 +692,6 @@
       markSentBtn.disabled = !(eventRef && canMarkSent(d));
       markAcceptedBtn.disabled = !(eventRef && canMarkAccepted(d));
 
-      // liaison logement
       const canLinkHome = !!(homeRef && ownerUser?.uid && String(homeData?.ownerUid || "") !== String(ownerUser.uid));
       linkOwnerToHomeBtn.disabled = !canLinkHome;
     }
@@ -709,6 +713,8 @@
 
     async function lookupOwnerUserByEmail(emailLower){
       if(!emailLower) return null;
+
+      // IMPORTANT : ton clients.html a aussi un lookup emailLower, ici on garde simple.
       const qU = query(collection(db,"users"), where("email", "==", emailLower), limit(5));
       const snap = await getDocs(qU);
       if(snap.empty) return null;
@@ -832,15 +838,12 @@
         const u = x%10;
 
         if(t === 7 || t === 9){
-          const base = tens[t];
-          const rest = x - (t*10); // 70-79 => rest 0..9 but we want 10..19 mapping
+          const rest = x - (t*10);
           const teen = teens[rest];
           if(t === 7){
-            // 70 = soixante-dix
             if(rest === 0) return "soixante-dix";
             return "soixante-" + teen;
           }else{
-            // 90 = quatre-vingt-dix
             if(rest === 0) return "quatre-vingt-dix";
             return "quatre-vingt-" + teen;
           }
@@ -864,7 +867,6 @@
         const r = x%100;
         const hWord = (h === 1) ? "cent" : (units[h] + " cent");
         if(r === 0){
-          // plural 'cents' only if exact multiple and h>1
           return h > 1 ? (hWord + "s") : hWord;
         }
         return hWord + " " + under100(r);
@@ -904,7 +906,6 @@
       return `${dd}/${mm}/${yyyy}`;
     }
     function addDaysLabel(ddmmyyyy, days){
-      // dd/mm/yyyy -> Date
       const [dd,mm,yy] = String(ddmmyyyy).split("/").map(x=>parseInt(x,10));
       const d = new Date(yy, (mm||1)-1, dd||1);
       d.setDate(d.getDate() + (Number(days)||0));
@@ -914,20 +915,21 @@
 
     function buildPreviewHtmlString(){
       const d = eventData || {};
-      const p = profileData || {};
+      const p = biz();
 
-      // conciergerie (profil-conciergerie)
-      const cName = (p.companyName || p.raisonSociale || p.displayName || "Conciergerie").trim();
-      const cAddr1 = (p.address || p.address1 || "").trim();
-      const cZip = (p.zip || "").toString().trim();
-      const cCity = (p.city || "").toString().trim();
+      // conciergerie (businessProfile)
+      const cName = (p.companyName || "Conciergerie").trim();
+      const cAddr1 = (p.address?.street || "").trim();
+      const cZip = (p.address?.zip || "").toString().trim();
+      const cCity = (p.address?.city || "").toString().trim();
       const cAddr2 = [cZip, cCity].filter(Boolean).join(" ").trim();
-      const cSiret = (p.siret || "").trim();
-      const cApe = (p.ape || p.naf || "").trim();
-      const cVat = (p.vatNumber || "").trim();
-      const cIban = (p.iban || "").trim();
-      const cBic = (p.bic || "").trim();
-      const cSignName = (p.legalRepName || p.contactName || cName).trim();
+      const cSiret = (p.registration?.siret || "").trim();
+      const cApe = (p.registration?.ape || "").trim();
+      const cVat = (p.vat?.number || "").trim();
+      const cIban = (p.bank?.iban || "").trim();
+      const cBic = (p.bank?.bic || "").trim();
+      const cSignName = (p.displayName || cName).trim();
+      const cLogoUrl = (p.logoUrl || "").trim();
 
       // client
       const ownerName = (ownerUser?.fullname || d.ownerName || "—").trim();
@@ -937,8 +939,8 @@
       const ownerCity = (ownerUser?.city || "").trim();
       const ownerAddr2 = [ownerZip, ownerCity].filter(Boolean).join(" ").trim();
 
-      const tvaEnabled = !!p.tvaEnabled;
-      const tvaRate = Number.isFinite(Number(p.tvaRate)) ? Number(p.tvaRate) : 0;
+      const tvaEnabled = !!p?.vat?.enabled;
+      const tvaRate = Number.isFinite(Number(p?.vat?.rate)) ? Number(p.vat.rate) : (tvaEnabled ? 0.20 : 0);
 
       const lines = Array.isArray(d.lines) ? d.lines : [];
       const totals = computeTotals(lines, tvaEnabled, tvaRate);
@@ -971,7 +973,7 @@
       const validityDays = Number(d.quoteValidityDays || 30);
       const validUntil = (d.quoteValidUntil || addDaysLabel(quoteDate, validityDays)).toString().trim();
 
-      const period = getStayPeriod(d);
+      const period = getStayPeriodObj(d);
 
       const payable = totals.ttc;
       const payableLetters = eurosToWords(payable);
@@ -991,7 +993,7 @@
         <div class="head">
           <div class="h-left">
             <div class="logoBox">
-              ${ (p.logoUrl||"").trim() ? `<img src="${esc(p.logoUrl)}" alt="Logo">` : `<div class="logoFallback">✓</div>` }
+              ${ cLogoUrl ? `<img src="${esc(cLogoUrl)}" alt="Logo">` : `<div class="logoFallback">✓</div>` }
             </div>
             <div>
               <div class="docTitle">DEVIS</div>
@@ -1024,8 +1026,8 @@
 
         <div class="box" style="margin-top:12px;">
           <div class="boxTitle">Prestation</div>
-          <div><b>Logement</b> : ${esc(d.homeName || "—")}${d.homeCity ? " — " + esc(d.homeCity) : ""}</div>
-          ${d.homeAddress ? `<div><b>Adresse</b> : ${esc(d.homeAddress)}</div>` : ``}
+          <div><b>Logement</b> : ${esc(d.homeName || homeData?.name || "—")}${(d.homeCity || homeData?.city) ? " — " + esc(d.homeCity || homeData?.city) : ""}</div>
+          ${ (d.homeAddress || homeData?.homeAddress || homeData?.address) ? `<div><b>Adresse</b> : ${esc(d.homeAddress || homeData?.homeAddress || homeData?.address)}</div>` : ``}
           <div><b>Période</b> : ${esc(period.label)}</div>
         </div>
 
@@ -1055,7 +1057,7 @@
               `
               : `
                 <div class="r big"><span>Total</span><span>${esc(fmtMoney(totals.ttc))}</span></div>
-                ${(p?.tvaExemptionText || "").trim() ? `<div class="smallNote">${esc(p.tvaExemptionText)}</div>` : ``}
+                <div class="smallNote">TVA non applicable, art. 293B du CGI.</div>
               `
           }
         </div>
@@ -1228,14 +1230,18 @@
 
         const payMode = getSelectedPayMode() || "VIREMENT";
 
+        const quoteDate = eventData?.quoteDate || todayIso();
+        const validityDays = Number(eventData?.quoteValidityDays || 30);
+        const quoteValidUntil = eventData?.quoteValidUntil || addDaysLabel(quoteDate, validityDays);
+
         const patch = {
           quoteNumber,
           quoteStatus: String(eventData?.quoteStatus || "").toUpperCase() || "DRAFT",
           commercialStatus: "DEVIS",
 
-          quoteDate: eventData?.quoteDate || todayIso(),
-          quoteValidityDays: Number(eventData?.quoteValidityDays || 30),
-          quoteValidUntil: eventData?.quoteValidUntil || addDaysLabel(eventData?.quoteDate || todayIso(), Number(eventData?.quoteValidityDays || 30)),
+          quoteDate,
+          quoteValidityDays: validityDays,
+          quoteValidUntil,
 
           quotePaymentTerm: paymentTermEl.value,
           quotePaymentMode: payMode,
