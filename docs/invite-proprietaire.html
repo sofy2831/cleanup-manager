@@ -1,4 +1,4 @@
-<!-- docs/invite-proprietaire.html (INVITE FIX — owners docId généré + auto-link homes) -->
+<!-- docs/invite-proprietaire.html (INVITE FIX — owners docId généré + auto-link homes par logement) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -269,7 +269,7 @@
     <div class="subtitle" id="pageSubtitle">Invitation propriétaire</div>
     <div class="badge" id="badgeLine">Chargement…</div>
 
-    <!-- MODE CONCIERGERIE : générer une invitation -->
+    <!-- MODE CONCIERGERIE -->
     <div class="card hidden" id="conciergerieCard">
       <div class="card-title">
         <span>Inviter un propriétaire</span>
@@ -312,7 +312,7 @@
       </div>
     </div>
 
-    <!-- MODE PROPRIETAIRE : créer un accès depuis token -->
+    <!-- MODE PROPRIÉTAIRE -->
     <div class="card hidden" id="ownerCard">
       <div class="card-title">
         <span>Créer mon accès</span>
@@ -382,8 +382,7 @@
 
     // ---------- utils ----------
     function getParam(name){
-      const p = new URLSearchParams(location.search);
-      return (p.get(name) || "").trim();
+      return (new URLSearchParams(location.search).get(name) || "").trim();
     }
     function normalizeEmail(s){ return (s||"").trim().toLowerCase(); }
     function isStrongPassword(pw){
@@ -397,27 +396,22 @@
       for(let i=0;i<len;i++) out += chars[arr[i] % chars.length];
       return out;
     }
+    function esc(s){
+      return String(s ?? "")
+        .replaceAll("&","&amp;")
+        .replaceAll("<","&lt;")
+        .replaceAll(">","&gt;")
+        .replaceAll('"',"&quot;")
+        .replaceAll("'","&#039;");
+    }
 
     function showAlert(el, msg, ok=false){
-      // tolérance : showAlert("message", bool)
-      if(typeof el === "string"){
-        ok = !!msg;
-        msg = el;
-        el = document.getElementById("alertOwner")
-          || document.getElementById("alertConciergerie")
-          || document.getElementById("alertBox");
-      }
-      if(!el){ console.warn("showAlert target missing:", msg); return; }
+      if(!el) return;
       el.style.display = "block";
       el.classList.toggle("ok", !!ok);
       el.innerHTML = msg;
     }
     function hideAlert(el){
-      if(!el){
-        el = document.getElementById("alertOwner")
-          || document.getElementById("alertConciergerie")
-          || document.getElementById("alertBox");
-      }
       if(!el) return;
       el.style.display = "none";
       el.classList.remove("ok");
@@ -461,10 +455,10 @@
 
     // ---------- params ----------
     const token = getParam("token");                 // mode owner
-    const prefillEmail = getParam("email");          // mode conciergerie (préfill)
-    const prefillName  = getParam("name");           // mode conciergerie (préfill)
+    const prefillEmail = getParam("email");          // mode conciergerie
+    const prefillName  = getParam("name");           // mode conciergerie
     const homeIdParam  = getParam("homeId");         // optionnel : associer l'invite à un home
-    const fromParam    = getParam("from");           // ex: logements.html (retour)
+    const fromParam    = getParam("from");           // retour
 
     // conserver token si "j'ai déjà un accès"
     alreadyLink.href = token
@@ -491,6 +485,7 @@
     // ---------- helpers data writes ----------
     async function attachInviteToHomeIfProvided(conciergerieUid, tokenValue, emailLower){
       if(!homeIdParam) return;
+
       try{
         const homeRef = doc(db, "homes", homeIdParam);
         const hs = await getDoc(homeRef);
@@ -499,7 +494,6 @@
         const h = hs.data() || {};
         if(String(h.conciergerieUid||"") !== String(conciergerieUid||"")) return;
 
-        // marque le home en attente (INVITED)
         await updateDoc(homeRef, {
           pendingOwnerEmail: emailLower,
           pendingInviteToken: tokenValue,
@@ -514,12 +508,13 @@
       }
     }
 
-    async function autoLinkHomesForOwner(conciergerieUid, emailLower, ownerDocId){
-      // auto-link : tous les homes de cette conciergerie qui attendent CET email
+    async function autoLinkHomesForOwner(conciergerieUid, emailLower, tokenValue, ownerDocId){
+      // ✅ auto-link strict : email + token (évite de lier un ancien lien)
       const qH = query(
         collection(db, "homes"),
         where("conciergerieUid", "==", String(conciergerieUid)),
-        where("pendingOwnerEmail", "==", String(emailLower))
+        where("pendingOwnerEmail", "==", String(emailLower)),
+        where("pendingInviteToken", "==", String(tokenValue))
       );
 
       const snap = await getDocs(qH);
@@ -527,14 +522,13 @@
 
       const batch = writeBatch(db);
       let count = 0;
+
       snap.docs.forEach(d=>{
-        const ref = d.ref;
-        batch.update(ref, {
-          ownerUid: ownerDocId,             // ✅ ownerUid = ownerDocId (owners doc id)
+        batch.update(d.ref, {
+          ownerUid: ownerDocId,     // ✅ ownerUid = owners/{autoId}
           ownerLinkStatus: "LINKED",
           pendingOwnerEmail: "",
           pendingInviteToken: "",
-          pendingOwnerDocId: "",
           updatedAt: serverTimestamp()
         });
         count++;
@@ -544,16 +538,14 @@
       return count;
     }
 
-    // ---------- MODE OWNER (token présent) ----------
+    // ---------- MODE OWNER ----------
     let invite = null;
 
     function disableOwnerForm(){
-      form.querySelectorAll("input,button").forEach(el => el.disabled = true);
+      form?.querySelectorAll("input,button").forEach(el => el.disabled = true);
     }
 
     async function loadInvite(){
-      if(!token) return;
-
       pageSubtitle.textContent = "Création d’accès propriétaire";
       backLink.href = "index.html";
       ownerCard.classList.remove("hidden");
@@ -596,7 +588,6 @@
 
         invitedByLabel.textContent = invite.by ? ("Invité par : " + invite.by) : "";
         badgeLine.textContent = "Invitation valide";
-
       }catch(err){
         console.error(err);
         badgeLine.textContent = "Erreur";
@@ -625,15 +616,24 @@
       if(password !== password2) return showAlert(alertOwner, "Les deux mots de passe ne correspondent pas.", false);
       if(!acceptEl.checked) return showAlert(alertOwner, "Tu dois cocher l’acceptation.", false);
 
+      // sécurité : l'email doit matcher l'invite
+      const invEmail = normalizeEmail(invite.email || "");
+      if(invEmail && email !== invEmail){
+        return showAlert(alertOwner, "⛔ Email différent de l’invitation. Recharge la page (email verrouillé).", false);
+      }
+
       createBtn.disabled = true;
       createBtn.style.opacity = "0.75";
 
       try{
-        // 1) Create auth user
+        // 1) Auth user
         const cred = await createUserWithEmailAndPassword(auth, email, password);
         const uid = cred.user.uid;
 
         const conciergerieUid = String(invite.conciergerieUid || "").trim();
+        if(!conciergerieUid){
+          throw new Error("Invitation invalide (conciergerieUid manquant).");
+        }
 
         // 2) users/{uid}
         await setDoc(doc(db, "users", uid), {
@@ -651,22 +651,23 @@
           updatedAt: serverTimestamp()
         }, { merge: true });
 
-        // 3) owners/{ownerDocId} (✅ docId généré)
+        // 3) owners/{autoId} (✅ docId généré)
         const ownerRef = doc(collection(db, "owners")); // auto-id
         const ownerDocId = ownerRef.id;
 
         await setDoc(ownerRef, {
-          ownerDocId,                  // pratique (facultatif mais utile)
-          uid,                         // ✅ UID Auth stocké ici
+          ownerDocId,
+          uid,                         // ✅ UID Auth
           role: "proprietaire",
-          status: "ACTIVE",            // ✅ status string (pas de guillemets dans Firestore UI)
+          status: "ACTIVE",
           email,
           fullname,
           phone: phone || "",
           conciergerieUid,
           inviteToken: token,
           invitedBy: invite.by || "",
-          // champs facturation (le owner les complètera dans profil-proprietaire.html)
+
+          // champs facturation
           address1: "",
           address2: "",
           zip: "",
@@ -675,12 +676,13 @@
           notes: "",
           siret: "",
           vat: "",
+
           acceptedAt: serverTimestamp(),
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp()
         }, { merge: true });
 
-        // 4) Mark invite used (stocke aussi ownerDocId)
+        // 4) invite used
         await updateDoc(doc(db, "invites", token), {
           status: "accepted",
           usedAt: serverTimestamp(),
@@ -688,16 +690,13 @@
           ownerDocId
         });
 
-        // 5) AUTO-LINK homes en attente de cet email
+        // 5) auto-link homes (strict: email + token)
         let linkedCount = 0;
-        if(conciergerieUid){
-          linkedCount = await autoLinkHomesForOwner(conciergerieUid, email, ownerDocId);
-        }
+        linkedCount = await autoLinkHomesForOwner(conciergerieUid, email, token, ownerDocId);
 
         showAlert(alertOwner, `✅ Accès créé. Logements liés : ${linkedCount}. Redirection…`, true);
 
         setTimeout(()=>{
-          // si tu as une page owner-dashboard.html, ok. Sinon adapte.
           location.href = "owner-dashboard.html";
         }, 650);
 
@@ -707,6 +706,7 @@
 
         if(code.includes("auth/email-already-in-use")){
           showAlert(
+            alertOwner,
             `⛔ Cet email a déjà un compte.<br><br>
              👉 Option 1 : te connecter (recommandé).<br>
              👉 Option 2 : réinitialiser ton mot de passe.<br><br>
@@ -721,28 +721,24 @@
             const loginBtn = document.getElementById("loginNowBtn");
             const resetBtn = document.getElementById("resetNowBtn");
 
-            if(loginBtn){
-              loginBtn.addEventListener("click", ()=>{
-                location.href = "login.html?role=proprietaire&token=" + encodeURIComponent(token);
-              });
-            }
+            loginBtn?.addEventListener("click", ()=>{
+              location.href = "login.html?role=proprietaire&token=" + encodeURIComponent(token);
+            });
 
-            if(resetBtn){
-              resetBtn.addEventListener("click", async ()=>{
-                resetBtn.disabled = true;
-                resetBtn.style.opacity = "0.75";
-                try{
-                  await sendPasswordResetEmail(auth, email);
-                  showAlert(alertOwner, "✅ Email de réinitialisation envoyé. Ensuite, connecte-toi via “J’ai déjà un accès”.", true);
-                }catch(resetErr){
-                  console.error(resetErr);
-                  showAlert(alertOwner, "Erreur reset : " + (resetErr?.message || "inconnue"), false);
-                }finally{
-                  resetBtn.disabled = false;
-                  resetBtn.style.opacity = "1";
-                }
-              });
-            }
+            resetBtn?.addEventListener("click", async ()=>{
+              resetBtn.disabled = true;
+              resetBtn.style.opacity = "0.75";
+              try{
+                await sendPasswordResetEmail(auth, email);
+                showAlert(alertOwner, "✅ Email de réinitialisation envoyé. Ensuite, connecte-toi via “J’ai déjà un accès”.", true);
+              }catch(resetErr){
+                console.error(resetErr);
+                showAlert(alertOwner, "Erreur reset : " + (resetErr?.message || "inconnue"), false);
+              }finally{
+                resetBtn.disabled = false;
+                resetBtn.style.opacity = "1";
+              }
+            });
           }, 0);
 
         } else if(code.includes("auth/invalid-email")){
@@ -750,7 +746,7 @@
         } else if(code.includes("auth/weak-password")){
           showAlert(alertOwner, "Mot de passe trop faible.", false);
         } else {
-          showAlert(alertOwner, "Erreur : " + (err?.message || "inconnue"), false);
+          showAlert(alertOwner, "Erreur : " + esc(err?.message || "inconnue"), false);
         }
 
         createBtn.disabled = false;
@@ -758,7 +754,7 @@
       }
     });
 
-    // ---------- MODE CONCIERGERIE (pas de token) ----------
+    // ---------- MODE CONCIERGERIE ----------
     async function bootConciergerieMode(){
       pageSubtitle.textContent = "Inviter un propriétaire";
       backLink.href = fromParam ? String(fromParam) : "clients.html";
@@ -767,6 +763,9 @@
       ownerCard.classList.add("hidden");
 
       badgeLine.textContent = "Connexion conciergerie requise";
+      hideAlert(alertConciergerie);
+
+      let wired = false;
 
       onAuthStateChanged(auth, async (user)=>{
         if(!user){
@@ -785,7 +784,7 @@
         badgeLine.textContent = "Prêt à générer une invitation";
         conciergerieWho.textContent = user.email || user.uid;
 
-        // si homeId passé, affiche hint (on essaie de le charger)
+        // si homeId passé, affiche hint (on tente de charger)
         if(homeIdParam){
           try{
             const hs = await getDoc(doc(db,"homes",homeIdParam));
@@ -796,6 +795,9 @@
             }
           }catch{}
         }
+
+        if(wired) return;
+        wired = true;
 
         genForm.addEventListener("submit", async (e)=>{
           e.preventDefault();
@@ -824,7 +826,7 @@
               createdAt: serverTimestamp()
             }, { merge: true });
 
-            // associe l'invite au home (optionnel)
+            // associe au logement si homeId présent
             await attachInviteToHomeIfProvided(user.uid, t, email);
 
             // lien
@@ -848,7 +850,7 @@
 
           }catch(err){
             console.error(err);
-            showAlert(alertConciergerie, "Erreur génération : " + (err?.message || "inconnue"), false);
+            showAlert(alertConciergerie, "Erreur génération : " + esc(err?.message || "inconnue"), false);
           }finally{
             genBtn.disabled = false;
             genBtn.style.opacity = "1";
@@ -860,7 +862,7 @@
             await navigator.clipboard.writeText(inviteLink.textContent || "");
             showAlert(alertConciergerie, "✅ Lien copié.", true);
           }catch{
-            showAlert(alertConciergerie, "Impossible de copier. Copie manuelle : " + (inviteLink.textContent||""), false);
+            showAlert(alertConciergerie, "Impossible de copier. Copie manuelle : " + esc(inviteLink.textContent||""), false);
           }
         });
       });
