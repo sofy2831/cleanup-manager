@@ -1,4 +1,4 @@
-<!-- docs/clients.html (COMPLET + CORRIGÉ: sélection propriétaire => event.ownerUid = docId owners + snapshot adresse) -->
+<!-- docs/clients.html (COMPLET + CORRIGÉ) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -476,7 +476,7 @@
         .replaceAll("&","&amp;")
         .replaceAll("<","&lt;")
         .replaceAll(">","&gt;")
-        .replaceAll('"',"&quot;")
+        .replaceAll('"',"quot;")
         .replaceAll("'","&#039;");
     }
     function norm(s){ return (s||"").toString().toLowerCase().trim(); }
@@ -609,11 +609,12 @@
       backPlanningBtn.href = `devis.html?eventId=${encodeURIComponent(pickEventId)}`;
     }
 
-    // ✅ Résolution OWNER fiable : docId owners prioritaire, puis uid, puis email
+    // ✅ Résolution OWNER : docId owners (si on l'a), sinon uid, sinon email
     async function resolveOwnersDocId({ ownerUidCandidate, ownerEmailCandidate }){
       const cand = String(ownerUidCandidate || "").trim();
       const email = normalizeEmail(ownerEmailCandidate || "");
 
+      // 1) cand = docId owners ?
       if(cand){
         try{
           const s = await getDoc(doc(db, "owners", cand));
@@ -626,6 +627,7 @@
         }
       }
 
+      // 2) cand = uid field dans owners ?
       if(cand){
         try{
           const q1 = query(
@@ -644,6 +646,7 @@
         }
       }
 
+      // 3) email match
       if(email){
         try{
           const q2 = query(
@@ -665,7 +668,7 @@
       return { ownerDocId: "", owner: null };
     }
 
-    // ✅ En mode sélection : écrit ownerUid = docId owners + snapshot adresse
+    // ✅ PICK MODE : écrit ownerUid = docId owners + snapshot complet adresse (pour affichage immédiat)
     async function pickThisOwner(ownerObj){
       if(!isPickMode) return;
       if(!pickEventId) return;
@@ -676,6 +679,7 @@
       const ownerEmail = normalizeEmail(c.email || ownerObj.ownerEmail || "");
       const ownerPhone = (c.phone || ownerObj.homes?.[0]?.ownerPhone || "").trim();
 
+      // candidate = uid (si on l'a) sinon rien (les docId owners ne sont PAS garantis ici)
       const ownerUidCandidate =
         String(c.ownerUid || "").trim() ||
         (ownerObj.clientKey && !ownerObj.clientKey.startsWith("label:") ? ownerObj.clientKey : "");
@@ -688,19 +692,30 @@
       });
 
       const addr1 = (owner?.address1 || "").toString().trim();
+      const addr2 = (owner?.address2 || "").toString().trim();
       const zip  = (owner?.zip || "").toString().trim();
       const city = (owner?.city || "").toString().trim();
+      const country = (owner?.country || "FR").toString().trim();
+      const fullName = (owner?.fullname || ownerName || "").toString().trim();
+      const emailResolved = normalizeEmail(owner?.email || ownerEmail || "");
+      const phoneResolved = (owner?.phone || ownerPhone || "").toString().trim();
 
       try{
         await updateDoc(doc(db,"events", pickEventId), {
+          // ✅ docId owners (source de vérité côté devis)
           ownerUid: ownerDocId || "",
-          ownerName: ownerName || (owner?.fullname || ""),
-          ownerEmail: ownerEmail || (owner?.email || ""),
-          ownerPhone: ownerPhone || (owner?.phone || ""),
 
+          // ✅ affichage
+          ownerName: fullName || ownerName || "",
+          ownerEmail: emailResolved || ownerEmail || "",
+          ownerPhone: phoneResolved || ownerPhone || "",
+
+          // ✅ snapshot facturation (affichage même si devis.html ne relit pas owners)
           ownerAddress1: addr1 || "",
+          ownerAddress2: addr2 || "",
           ownerZip: zip || "",
           ownerCity: city || "",
+          ownerCountry: country || "FR",
 
           updatedAt: serverTimestamp()
         });
@@ -906,6 +921,7 @@
       const e = normalizeEmail(emailLower);
       if(!e) return null;
 
+      // NOTE: si tu n'as pas emailLower dans users, ce bloc retournera vide -> fallback sur where("email","==",e)
       try{
         const q1 = query(
           collection(db, "users"),
