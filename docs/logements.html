@@ -1,4 +1,4 @@
-<!-- docs/logements.html (COMPLET) — Parcours CleanUp "qui ne casse pas" + lien OwnerUid -->
+<!-- docs/logements.html (COMPLET + FIX) — Parcours CleanUp "fiable" + ownerUid = owners.docId + réservation bloquée si non lié -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -452,14 +452,14 @@
         <label for="ownerPhone">Téléphone propriétaire</label>
         <input id="ownerPhone" type="tel" inputmode="tel" placeholder="Ex. 06 12 34 56 78" required />
 
-        <!-- Lien au compte propriétaire (UID) -->
+        <!-- Lien au compte propriétaire (owners.docId) -->
         <div style="margin-top:10px; padding:10px; background:#fff; border-radius:14px; border:1px solid rgba(122,92,255,0.18); box-shadow:0 3px 10px rgba(0,0,0,.06);">
           <div style="display:flex; justify-content:space-between; gap:10px; align-items:center; flex-wrap:wrap;">
-            <div style="font-weight:1000; font-size:12px; color:#333;">Associer à un compte propriétaire (optionnel)</div>
-            <div style="font-size:11px; font-weight:900; color:#666;">→ remplit <b>homes.ownerUid</b></div>
+            <div style="font-weight:1000; font-size:12px; color:#333;">Associer à un compte propriétaire (obligatoire pour réserver)</div>
+            <div style="font-size:11px; font-weight:900; color:#666;">→ remplit <b>homes.ownerUid</b> (= <b>owners.docId</b>)</div>
           </div>
 
-          <label for="ownerAccountEmail" style="margin-top:10px;">Email du compte propriétaire</label>
+          <label for="ownerAccountEmail" style="margin-top:10px;">Email du propriétaire (invite)</label>
           <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
             <input id="ownerAccountEmail" type="email" placeholder="ex: proprio@email.com" style="flex:1; min-width:220px;">
             <button class="btn" type="button" id="lookupOwnerBtn">Rechercher</button>
@@ -467,6 +467,16 @@
           </div>
 
           <div id="ownerLookupInfo" class="kv" style="display:none;"></div>
+
+          <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
+            <a class="btn" id="inviteOwnerBtn" href="invite-proprietaire.html" style="text-decoration:none; display:inline-flex; align-items:center; justify-content:center;">
+              Inviter propriétaire
+            </a>
+          </div>
+
+          <div class="kv" id="linkRuleInfo" style="display:block;">
+            <b>Règle :</b> sans <b>ownerUid</b> lié → <b>réservation bloquée</b> (anti-confusion + devis/facture fiables).
+          </div>
         </div>
 
         <label for="homeType">Type</label>
@@ -579,6 +589,7 @@
   const lookupOwnerBtn = document.getElementById("lookupOwnerBtn");
   const unlinkOwnerBtn = document.getElementById("unlinkOwnerBtn");
   const ownerLookupInfo = document.getElementById("ownerLookupInfo");
+  const inviteOwnerBtn = document.getElementById("inviteOwnerBtn");
 
   // booking modal
   const bookingBackdrop = document.getElementById("bookingBackdrop");
@@ -703,8 +714,8 @@
   let showArchived = false;
   let editingHomeId = null;
 
-  // ===== Owner link state =====
-  let linkedOwnerUid = "";
+  // ===== Owner link state (OWNER DOCID) =====
+  let linkedOwnerUid = "";     // = owners.docId
   let linkedOwnerEmail = "";
   let linkedOwnerName = "";
 
@@ -729,7 +740,7 @@
     if(linkedOwnerUid){
       unlinkOwnerBtn.style.display = "inline-flex";
       showOwnerLookup(
-        `✅ Compte trouvé<br><b>Email :</b> ${escapeHtml(linkedOwnerEmail)}<br><b>UID :</b> ${escapeHtml(linkedOwnerUid)}${linkedOwnerName ? `<br><b>Nom :</b> ${escapeHtml(linkedOwnerName)}` : ""}`,
+        `✅ Compte propriétaire trouvé<br><b>Email :</b> ${escapeHtml(linkedOwnerEmail)}<br><b>OwnerDocId :</b> ${escapeHtml(linkedOwnerUid)}${linkedOwnerName ? `<br><b>Nom :</b> ${escapeHtml(linkedOwnerName)}` : ""}`,
         true
       );
     }else{
@@ -747,6 +758,7 @@
     hideOwnerLookup();
   }
 
+  // ✅ FIX: lookup dans owners (pas users)
   async function lookupOwnerAccount(){
     hideAlert();
     hideOwnerLookup();
@@ -766,7 +778,7 @@
 
     try{
       const q1 = query(
-        collection(db, "users"),
+        collection(db, "owners"),
         where("conciergerieUid", "==", currentUid),
         where("role", "==", "proprietaire"),
         where("email", "==", emailLower),
@@ -776,14 +788,15 @@
 
       if(s1.empty){
         setLinkedOwner("", "", "");
-        showOwnerLookup("⛔ Aucun propriétaire trouvé avec cet email (users).", false);
+        showOwnerLookup("⛔ Aucun propriétaire trouvé avec cet email (owners).", false);
         return;
       }
 
       const d = s1.docs[0];
-      const u = d.data() || {};
-      setLinkedOwner(d.id, u.email || emailLower, u.fullname || u.displayName || "");
-      showAlert("✅ Compte propriétaire trouvé (prêt à associer).", true);
+      const o = d.data() || {};
+      // d.id = owners.docId -> c'est CE QU'ON STOCKE dans homes.ownerUid
+      setLinkedOwner(d.id, o.email || emailLower, o.fullname || "");
+      showAlert("✅ Propriétaire trouvé (owners). Clique “Enregistrer” pour lier.", true);
 
     }catch(err){
       console.error(err);
@@ -802,6 +815,18 @@
     clearLinkedOwner();
     showOwnerLookup("✅ Dissociation prête. Clique “Enregistrer” pour appliquer.", true);
   });
+
+  // Préremplir invite-proprietaire.html?email=&name=
+  function refreshInviteLinkFromForm(){
+    const email = normEmail(ownerAccountEmailEl.value);
+    const name = (ownerNameEl.value || "").trim();
+    const p = new URLSearchParams();
+    if(email) p.set("email", email);
+    if(name) p.set("name", name);
+    inviteOwnerBtn.href = "invite-proprietaire.html" + (p.toString() ? ("?" + p.toString()) : "");
+  }
+  ownerAccountEmailEl.addEventListener("input", refreshInviteLinkFromForm);
+  ownerNameEl.addEventListener("input", refreshInviteLinkFromForm);
 
   function isArchived(h){ return h?.status === "archived"; }
 
@@ -844,8 +869,11 @@
     modalBackdrop.style.display = "flex";
     modalBackdrop.setAttribute("aria-hidden","false");
 
-    // reset owner link
+    homeForm.reset();
+    homeType.value = "Studio";
     clearLinkedOwner();
+    refreshInviteLinkFromForm();
+
     setTimeout(()=>homeName.focus(), 0);
   }
 
@@ -863,12 +891,13 @@
     ownerPhoneEl.value = home.ownerPhone || "";
     homeType.value = (home.homeType || home.type || "Studio");
 
-    // load owner link from home (avec compat)
-    const ouid = String(home.ownerUid || "").trim();
+    // load owner link from home (compat)
+    const ouid = String(home.ownerUid || "").trim(); // owners.docId
     const oemail = String(home.ownerAccountEmail || home.ownerEmail || "").trim();
     const oname = String(home.ownerAccountName || home.ownerFullname || "").trim();
     ownerAccountEmailEl.value = oemail || "";
     setLinkedOwner(ouid, oemail, oname);
+    refreshInviteLinkFromForm();
 
     setTimeout(()=>homeName.focus(), 0);
   }
@@ -909,7 +938,7 @@
     const city = (h.homeCity || h.city || "—").toString().trim();
     const ownerName = (h.ownerName || h.homeOwner || "—").toString().trim();
     const ownerPhone = (h.ownerPhone || "—").toString().trim();
-    const ownerUid = (h.ownerUid || "").toString().trim();
+    const ownerUid = (h.ownerUid || "").toString().trim(); // owners.docId
     const ownerEmail = (h.ownerAccountEmail || h.ownerEmail || "").toString().trim();
 
     bookingHomeInfo.style.display = "block";
@@ -919,7 +948,7 @@
       <div><b>CP :</b> ${escapeHtml(zip)} • <b>Ville :</b> ${escapeHtml(city)}</div>
       <div><b>Nom du propriétaire :</b> ${escapeHtml(ownerName)}</div>
       <div><b>Téléphone propriétaire :</b> ${escapeHtml(ownerPhone)}</div>
-      <div><b>Compte lié :</b> ${ownerUid ? "✅ " + escapeHtml(ownerEmail || ownerUid) : "⛔ non"}</div>
+      <div><b>Compte lié :</b> ${ownerUid ? "✅ " + escapeHtml(ownerEmail || ownerUid) : "⛔ non (réservation bloquée)"}</div>
     `;
   }
 
@@ -968,6 +997,12 @@
       fillBookingHomeSelect(homeId);
     }
 
+    // 🔒 règle: réservation bloquée si home.ownerUid vide
+    const h = allHomes.find(x => x.id === (bookingHomeSelect.value || homeId || ""));
+    if(h && !String(h.ownerUid || "").trim()){
+      showBookingAlert("⛔ Propriétaire non lié : invite + acceptation obligatoires avant de créer une réservation.", false);
+    }
+
     setTimeout(()=> bookingHomeSelect.focus(), 0);
   }
 
@@ -984,7 +1019,17 @@
     setBookingMode("edit");
   }
 
-  bookingHomeSelect.addEventListener("change", ()=> renderBookingHomeInfo(bookingHomeSelect.value));
+  bookingHomeSelect.addEventListener("change", ()=>{
+    renderBookingHomeInfo(bookingHomeSelect.value);
+
+    const h = allHomes.find(x => x.id === (bookingHomeSelect.value || ""));
+    if(h && !String(h.ownerUid || "").trim()){
+      showBookingAlert("⛔ Propriétaire non lié : réservation bloquée.", false);
+    }else{
+      // ne pas effacer une alerte utile si autre raison, mais ici ok
+      hideBookingAlert();
+    }
+  });
   cancelBookingBtn.addEventListener("click", closeBookingModal);
   bookingBackdrop.addEventListener("click", (e)=>{ if(e.target === bookingBackdrop) closeBookingModal(); });
 
@@ -1074,16 +1119,21 @@
       const ownerLabel = (h.ownerName || h.homeOwner || "").trim() || "—";
       const ownerPhone = (h.ownerPhone || "").trim();
 
-      const ownerUid = (h.ownerUid || "").toString().trim();
+      const ownerUid = (h.ownerUid || "").toString().trim(); // owners.docId
       const ownerEmail = (h.ownerAccountEmail || h.ownerEmail || "").toString().trim();
 
       const accountChip = ownerUid
         ? `<span class="chip">Compte lié ✅</span>`
         : `<span class="chip">Compte non lié ⛔</span>`;
 
+      // 🔒 réservation bloquée si non lié
+      const canBook = !!ownerUid && !isArchived(h);
       const bookingBtn = isArchived(h)
         ? `<span class="mini-btn disabled">Réservation</span>`
-        : `<button class="mini-btn primary" type="button" data-book="${h.id}">+ Réservation</button>`;
+        : (canBook
+            ? `<button class="mini-btn primary" type="button" data-book="${h.id}">+ Réservation</button>`
+            : `<span class="mini-btn disabled" title="Propriétaire non lié">Réservation</span>`
+          );
 
       item.innerHTML = `
         <div class="item-top">
@@ -1094,7 +1144,7 @@
               ${addr ? ` • <b>${escapeHtml(addr)}</b>` : ""}
               <br/>Propriétaire : <b>${escapeHtml(ownerLabel)}</b>
               ${ownerPhone ? `<br/>📞 ${escapeHtml(ownerPhone)}` : ""}
-              ${ownerUid ? `<br/>Compte : <b>${escapeHtml(ownerEmail || ownerUid)}</b>` : ``}
+              ${ownerUid ? `<br/>Compte : <b>${escapeHtml(ownerEmail || ownerUid)}</b>` : `<br/>Compte : <b>⛔ non lié</b>`}
             </div>
             <div class="chips">
               <span class="chip">${escapeHtml(h.homeType || h.type || "Type")}</span>
@@ -1286,12 +1336,12 @@
         homeOwner: ownerName,
         type,
 
-        // lien compte propriétaire (optionnel)
+        // lien compte propriétaire (owners.docId)
         ownerUid: linkedOwnerUid || "",
         ownerAccountEmail: linkedOwnerEmail || "",
         ownerAccountName: linkedOwnerName || "",
 
-        // compat clients.html (évite EMAIL MANQUANT si ton écran lit ownerEmail)
+        // compat historique
         ownerEmail: linkedOwnerEmail || "",
         ownerFullname: linkedOwnerName || "",
 
@@ -1353,6 +1403,13 @@
     const h = allHomes.find(x => x.id === homeId);
     if (!h) return showBookingAlert("Logement introuvable. Recharge la page.");
 
+    // 🔒 BLOQUANT: ownerUid obligatoire
+    const ownerUid = String(h?.ownerUid || "").trim();
+    if(!ownerUid){
+      showBookingAlert("⛔ Propriétaire non lié : impossible de créer une réservation. Invite + acceptation d'abord.", false);
+      return;
+    }
+
     const dateKeys = buildDateKeys(aDate, dDate);
     if (!dateKeys.length) return showBookingAlert("Erreur dates (YYYY-MM-DD).");
 
@@ -1371,7 +1428,8 @@
         ownerName: String(h?.ownerName || h?.homeOwner || ""),
         ownerPhone: String(h?.ownerPhone || ""),
 
-        ownerUid: String(h?.ownerUid || ""),
+        // ownerUid = owners.docId
+        ownerUid: ownerUid,
         ownerAccountEmail: String(h?.ownerAccountEmail || ""),
         ownerAccountName: String(h?.ownerAccountName || ""),
 
