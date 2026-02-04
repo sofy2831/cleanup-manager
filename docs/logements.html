@@ -1,4 +1,4 @@
-<!-- docs/logements.html (COMPLET + FIX) — Parcours CleanUp "fiable" + ownerUid = owners.docId + réservation bloquée si non lié -->
+<!-- docs/logements.html (COMPLET + FIX) — + bouton INVITER dans la liste + lien invite contextualisé homeId -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -816,14 +816,22 @@
     showOwnerLookup("✅ Dissociation prête. Clique “Enregistrer” pour appliquer.", true);
   });
 
-  // Préremplir invite-proprietaire.html?email=&name=
+  // ---- INVITE link helpers ----
+  function buildInviteUrl({ homeId="", email="", name="", from="logements.html" } = {}){
+    const p = new URLSearchParams();
+    if(homeId) p.set("homeId", homeId);
+    if(from) p.set("from", from);
+    if(email) p.set("email", email);
+    if(name) p.set("name", name);
+    return "invite-proprietaire.html" + (p.toString() ? ("?" + p.toString()) : "");
+  }
+
+  // Préremplir invite-proprietaire.html?email=&name= (+ homeId si edit)
   function refreshInviteLinkFromForm(){
     const email = normEmail(ownerAccountEmailEl.value);
     const name = (ownerNameEl.value || "").trim();
-    const p = new URLSearchParams();
-    if(email) p.set("email", email);
-    if(name) p.set("name", name);
-    inviteOwnerBtn.href = "invite-proprietaire.html" + (p.toString() ? ("?" + p.toString()) : "");
+    const homeId = editingHomeId || ""; // ✅ important : quand on édite, on passe homeId
+    inviteOwnerBtn.href = buildInviteUrl({ homeId, email, name, from:"logements.html" });
   }
   ownerAccountEmailEl.addEventListener("input", refreshInviteLinkFromForm);
   ownerNameEl.addEventListener("input", refreshInviteLinkFromForm);
@@ -897,8 +905,8 @@
     const oname = String(home.ownerAccountName || home.ownerFullname || "").trim();
     ownerAccountEmailEl.value = oemail || "";
     setLinkedOwner(ouid, oemail, oname);
-    refreshInviteLinkFromForm();
 
+    refreshInviteLinkFromForm(); // ✅ inclut homeId
     setTimeout(()=>homeName.focus(), 0);
   }
 
@@ -1026,7 +1034,6 @@
     if(h && !String(h.ownerUid || "").trim()){
       showBookingAlert("⛔ Propriétaire non lié : réservation bloquée.", false);
     }else{
-      // ne pas effacer une alerte utile si autre raison, mais ici ok
       hideBookingAlert();
     }
   });
@@ -1135,6 +1142,17 @@
             : `<span class="mini-btn disabled" title="Propriétaire non lié">Réservation</span>`
           );
 
+      // ✅ bouton inviter dans la liste (toujours dispo si pas archivé)
+      const inviteHref = buildInviteUrl({
+        homeId: h.id,
+        email: ownerEmail,
+        name: ownerLabel,
+        from: "logements.html"
+      });
+      const inviteBtn = isArchived(h)
+        ? `<span class="mini-btn disabled" title="Logement archivé">Inviter</span>`
+        : `<a class="mini-btn" href="${inviteHref}" data-invite="${h.id}">Inviter</a>`;
+
       item.innerHTML = `
         <div class="item-top">
           <div style="min-width:0;">
@@ -1158,6 +1176,7 @@
 
           <div class="item-actions">
             ${bookingBtn}
+            ${inviteBtn}
             <button class="mini-btn" type="button" data-edit="${h.id}">✏️ Modifier</button>
             <button class="mini-btn red" type="button" data-delete="${h.id}">Supprimer</button>
             ${
