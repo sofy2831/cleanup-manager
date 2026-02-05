@@ -1,4 +1,4 @@
-<!-- docs/profil-proprietaire.html (COMPLET + FIX) -->
+<!-- docs/profil-proprietaire.html (COMPLET + CORRIGÉ ownerDocId/uid + self/conciergerie) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -266,6 +266,7 @@
     </div>
   </div>
 
+  <!-- nav conciergerie : cachée en mode self -->
   <nav class="bottom-nav" aria-label="Navigation" id="conciergerieNav">
     <a href="planning.html">Planning</a>
     <a class="active" href="clients.html">Clients</a>
@@ -282,6 +283,7 @@
     serverTimestamp
   } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
+  // UI
   const emailLine = document.getElementById("emailLine");
   const alertBox = document.getElementById("alertBox");
   const logoutBtn = document.getElementById("logoutBtn");
@@ -297,6 +299,7 @@
   const copyBtn = document.getElementById("copyBtn");
   const saveBtn = document.getElementById("saveBtn");
 
+  // Inputs
   const displayName = document.getElementById("displayName");
   const email = document.getElementById("email");
   const phone = document.getElementById("phone");
@@ -309,11 +312,15 @@
   const vat = document.getElementById("vat");
   const notes = document.getElementById("notes");
 
+  // State
   let currentUser = null;
-  let ownerId = "";
 
-  let selfOwnerDocId = "";
-  let selfConciergerieUid = "";
+  // conciergerie mode
+  let ownerId = ""; // owners/{ownerId}
+
+  // self mode (proprio)
+  let selfOwnerDocId = "";       // users/{uid}.ownerDocId (doc owners)
+  let selfConciergerieUid = "";  // users/{uid}.conciergerieUid
 
   function showAlert(msg, ok=false){
     alertBox.style.display = "block";
@@ -329,6 +336,7 @@
   function getParam(name){
     return (new URLSearchParams(location.search).get(name) || "").trim();
   }
+
   function isSelfMode(){
     return getParam("self") === "1" || !!getParam("token");
   }
@@ -402,9 +410,11 @@
   async function loadOwner(){
     hideAlert();
 
+    // ===== MODE SELF (proprio) =====
     if(isSelfMode()){
       await setupSelfUi();
 
+      // 1) Charger users/{uid} (source de vérité)
       let u = null;
       try{
         const snapU = await getDoc(doc(db, "users", currentUser.uid));
@@ -421,17 +431,25 @@
         email.readOnly = true;
       }
 
+      // 2) Préfill owners/{ownerDocId} si dispo (optionnel)
       if(selfOwnerDocId){
         try{
           const osnap = await getDoc(doc(db,"owners", selfOwnerDocId));
-          if(osnap.exists()) apply(osnap.data() || {});
-        }catch(_){}
+          if(osnap.exists()){
+            apply(osnap.data() || {});
+          }else{
+            showAlert("⚠️ OwnerDocId présent mais owners/" + selfOwnerDocId + " introuvable. Demande à la conciergerie de régénérer/valider l’invitation.", false);
+          }
+        }catch(err){
+          console.warn(err);
+        }
       }else{
-        showAlert("⚠️ ownerDocId manquant. Si ça arrive après une invitation, régénère le lien.", false);
+        showAlert("⚠️ ownerDocId manquant. Ton profil peut être enregistré, mais tu ne verras pas tes logements tant que l’invitation n’a pas finalisé le lien.", false);
       }
       return;
     }
 
+    // ===== MODE CONCIERGERIE (gestion owners/{ownerId}) =====
     ownerId = getParam("ownerId");
     const returnTo = getParam("returnTo");
     backBtn.href = returnTo ? `${returnTo}.html` : "clients.html";
@@ -485,10 +503,12 @@
     const token = getParam("token");
 
     try{
+      // ===== MODE SELF (proprio) =====
       if(isSelfMode()){
         const uid = currentUser.uid;
 
-        const usersPayload = {
+        // users/{uid} = source de vérité
+        await setDoc(doc(db, "users", uid), {
           uid,
           role: "proprietaire",
           email: currentUser.email || payload.email || "",
@@ -504,22 +524,25 @@
           vat: payload.vat || "",
           notes: payload.notes || "",
 
-          ...(selfConciergerieUid ? { conciergerieUid: selfConciergerieUid } : {}),
-          ...(selfOwnerDocId ? { ownerDocId: selfOwnerDocId } : {}),
+          // ne pas écraser si déjà présent
+          conciergerieUid: selfConciergerieUid || undefined,
+          ownerDocId: selfOwnerDocId || undefined,
 
           updatedAt: serverTimestamp()
-        };
+        }, { merge:true });
 
-        await setDoc(doc(db, "users", uid), usersPayload, { merge:true });
-
+        // owners/{ownerDocId} seulement si on a le docId
         if(selfOwnerDocId){
-          const ownersPayload = {
+          await setDoc(doc(db, "owners", selfOwnerDocId), {
             ownerDocId: selfOwnerDocId,
-            uid,
-            role: "proprietaire",
-            email: currentUser.email || payload.email || "",
-            fullname: payload.displayName,
+            conciergerieUid: selfConciergerieUid || undefined,
 
+            // uid firebase (doit être déjà claim via invitation/login)
+            uid,
+
+            // champs profil whitelist (rules)
+            fullname: payload.displayName,
+            email: currentUser.email || payload.email || "",
             phone: payload.phone || "",
             address1: payload.address1 || "",
             address2: payload.address2 || "",
@@ -529,12 +552,8 @@
             siret: payload.siret || "",
             vat: payload.vat || "",
             notes: payload.notes || "",
-
-            ...(selfConciergerieUid ? { conciergerieUid: selfConciergerieUid } : {}),
             updatedAt: serverTimestamp()
-          };
-
-          await setDoc(doc(db, "owners", selfOwnerDocId), ownersPayload, { merge:true });
+          }, { merge:true });
         }
 
         showAlert("✅ Profil enregistré.", true);
@@ -547,6 +566,7 @@
         return;
       }
 
+      // ===== MODE CONCIERGERIE (création/édition owners/{id}) =====
       const conciergeriePayload = {
         ...payload,
         conciergerieUid: currentUser.uid
@@ -556,10 +576,10 @@
         const ref = doc(collection(db, "owners"));
         ownerId = ref.id;
 
+        // IMPORTANT: ownerId = docId attendu par homes.ownerUid
         await setDoc(ref, {
           ownerDocId: ownerId,
-          uid: "",
-          role: "proprietaire",
+          uid: "", // inconnu tant que le proprio n'a pas accepté
           ...conciergeriePayload,
           createdAt: serverTimestamp()
         });
@@ -569,7 +589,8 @@
         return;
       }
 
-      await updateDoc(doc(db, "owners", ownerId), conciergeriePayload);
+      const ref = doc(db, "owners", ownerId);
+      await updateDoc(ref, conciergeriePayload);
       showAlert("✅ Enregistré.", true);
 
     }catch(err){
