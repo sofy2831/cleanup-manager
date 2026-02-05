@@ -1,4 +1,4 @@
-<!-- docs/invite-proprietaire.html (INVITE FIX — owners docId généré + auto-link homes par logement) -->
+<!-- docs/invite-proprietaire.html (COMPLET + CORRIGÉ — ownerDocId créé côté conciergerie, réutilisé côté propriétaire, homes.ownerUid = auth.uid + homes.ownerDocId = owners docId) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -483,7 +483,7 @@
     }
 
     // ---------- helpers data writes ----------
-    async function attachInviteToHomeIfProvided(conciergerieUid, tokenValue, emailLower){
+    async function attachInviteToHomeIfProvided(conciergerieUid, tokenValue, emailLower, ownerDocId){
       if(!homeIdParam) return;
 
       try{
@@ -497,6 +497,7 @@
         await updateDoc(homeRef, {
           pendingOwnerEmail: emailLower,
           pendingInviteToken: tokenValue,
+          pendingOwnerDocId: ownerDocId,   // ✅ pour debug / traçage (optionnel)
           ownerLinkStatus: "INVITED",
           updatedAt: serverTimestamp()
         });
@@ -508,7 +509,7 @@
       }
     }
 
-    async function autoLinkHomesForOwner(conciergerieUid, emailLower, tokenValue, ownerDocId){
+    async function autoLinkHomesForOwner(conciergerieUid, emailLower, tokenValue, uid, ownerDocId){
       // ✅ auto-link strict : email + token (évite de lier un ancien lien)
       const qH = query(
         collection(db, "homes"),
@@ -525,10 +526,12 @@
 
       snap.docs.forEach(d=>{
         batch.update(d.ref, {
-          ownerUid: ownerDocId,     // ✅ ownerUid = owners/{autoId}
+          ownerUid: uid,              // ✅ Auth UID (pour rules HOMES)
+          ownerDocId: ownerDocId,     // ✅ doc owners (pour facturation)
           ownerLinkStatus: "LINKED",
           pendingOwnerEmail: "",
           pendingInviteToken: "",
+          pendingOwnerDocId: "",
           updatedAt: serverTimestamp()
         });
         count++;
@@ -577,6 +580,15 @@
         if(!invEmail){
           badgeLine.textContent = "Invitation invalide";
           showAlert(alertOwner, "⛔ Invitation invalide (email manquant). Demande un nouveau lien.", false);
+          disableOwnerForm();
+          return;
+        }
+
+        // ✅ ownerDocId doit exister (créé côté conciergerie)
+        const ownerDocId = String(invite.ownerDocId || "").trim();
+        if(!ownerDocId){
+          badgeLine.textContent = "Invitation invalide";
+          showAlert(alertOwner, "⛔ Invitation invalide (ownerDocId manquant). Demande à la conciergerie de régénérer le lien.", false);
           disableOwnerForm();
           return;
         }
@@ -631,11 +643,12 @@
         const uid = cred.user.uid;
 
         const conciergerieUid = String(invite.conciergerieUid || "").trim();
-        if(!conciergerieUid){
-          throw new Error("Invitation invalide (conciergerieUid manquant).");
-        }
+        if(!conciergerieUid) throw new Error("Invitation invalide (conciergerieUid manquant).");
 
-        // 2) users/{uid}
+        const ownerDocId = String(invite.ownerDocId || "").trim();
+        if(!ownerDocId) throw new Error("Invitation invalide (ownerDocId manquant).");
+
+        // 2) users/{uid} (✅ inclure ownerDocId)
         await setDoc(doc(db, "users", uid), {
           uid,
           role: "proprietaire",
@@ -643,6 +656,7 @@
           fullname,
           phone: phone || "",
           conciergerieUid,
+          ownerDocId,                 // ✅ essentiel pour profil-proprietaire.html
           inviteToken: token,
           invitedBy: invite.by || "",
           subscriptionStatus: "active",
@@ -651,34 +665,17 @@
           updatedAt: serverTimestamp()
         }, { merge: true });
 
-        // 3) owners/{autoId} (✅ docId généré)
-        const ownerRef = doc(collection(db, "owners")); // auto-id
-        const ownerDocId = ownerRef.id;
-
-        await setDoc(ownerRef, {
+        // 3) owners/{ownerDocId} : finaliser (pas de nouveau doc)
+        await setDoc(doc(db, "owners", ownerDocId), {
           ownerDocId,
-          uid,                         // ✅ UID Auth
-          role: "proprietaire",
-          status: "ACTIVE",
-          email,
+          conciergerieUid,
+          email,                      // ok (merge) : créé par conciergerie
           fullname,
           phone: phone || "",
-          conciergerieUid,
-          inviteToken: token,
-          invitedBy: invite.by || "",
 
-          // champs facturation
-          address1: "",
-          address2: "",
-          zip: "",
-          city: "",
-          country: "FR",
-          notes: "",
-          siret: "",
-          vat: "",
-
+          uid,                         // ✅ Auth UID
+          status: "ACTIVE",
           acceptedAt: serverTimestamp(),
-          createdAt: serverTimestamp(),
           updatedAt: serverTimestamp()
         }, { merge: true });
 
@@ -690,9 +687,8 @@
           ownerDocId
         });
 
-        // 5) auto-link homes (strict: email + token)
-        let linkedCount = 0;
-        linkedCount = await autoLinkHomesForOwner(conciergerieUid, email, token, ownerDocId);
+        // 5) auto-link homes : ownerUid = uid + ownerDocId = owners docId
+        const linkedCount = await autoLinkHomesForOwner(conciergerieUid, email, token, uid, ownerDocId);
 
         showAlert(alertOwner, `✅ Accès créé. Logements liés : ${linkedCount}. Redirection…`, true);
 
@@ -815,21 +811,43 @@
           try{
             const t = randToken(24);
 
+            // ✅ 1) créer owners/{ownerDocId} INVITED maintenant (docId stable)
+            const ownerRef = doc(collection(db, "owners"));
+            const ownerDocId = ownerRef.id;
+
+            await setDoc(ownerRef, {
+              ownerDocId,
+              conciergerieUid: user.uid,
+              email,
+              fullname: name || "",
+              phone: "",
+              status: "INVITED",
+              uid: "",
+
+              inviteToken: t,
+              invitedBy: user.email || user.uid,
+
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp()
+            }, { merge: true });
+
+            // ✅ 2) créer invite avec ownerDocId
             await setDoc(doc(db, "invites", t), {
               token: t,
               email,
               name,
               note,
               conciergerieUid: user.uid,
+              ownerDocId,                 // ✅ requis par login.html
               by: user.email || user.uid,
               status: "pending",
               createdAt: serverTimestamp()
             }, { merge: true });
 
-            // associe au logement si homeId présent
-            await attachInviteToHomeIfProvided(user.uid, t, email);
+            // ✅ 3) associer au logement si homeId présent
+            await attachInviteToHomeIfProvided(user.uid, t, email, ownerDocId);
 
-            // lien
+            // lien => invite-proprietaire.html?token=...
             const base = `${location.origin}${location.pathname}`;
             const url = `${base}?token=${encodeURIComponent(t)}`;
             inviteLink.textContent = url;
