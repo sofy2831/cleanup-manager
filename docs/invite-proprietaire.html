@@ -1,4 +1,4 @@
-<!-- docs/invite-proprietaire.html (COMPLET + CORRIGÉ — sans pendingOwnerDocId, link homes ownerUid=auth.uid + ownerDocId=owners docId, redirection profil d'abord + finalize si compte existe déjà) -->
+<!-- docs/invite-proprietaire.html (COMPLET — FIX homes update: conciergerieUid included) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -460,12 +460,10 @@
     const homeIdParam  = getParam("homeId");         // optionnel : associer l'invite à un home
     const fromParam    = getParam("from");           // retour
 
-    // conserver token si "j'ai déjà un accès"
     alreadyLink.href = token
       ? ("login.html?role=proprietaire&token=" + encodeURIComponent(token))
       : "login.html?role=proprietaire";
 
-    // préfill conciergerie
     if(prefillEmail) genEmail.value = normalizeEmail(prefillEmail);
     if(prefillName)  genName.value = prefillName;
 
@@ -508,6 +506,7 @@
       }
     }
 
+    // ✅ FIX: on met conciergerieUid dans le batch.update (sinon rules lock conciergerieUid => PERMISSION_DENIED)
     async function autoLinkHomesForOwner(conciergerieUid, emailLower, tokenValue, uid, ownerDocId){
       const qH = query(
         collection(db, "homes"),
@@ -524,8 +523,9 @@
 
       snap.docs.forEach(d=>{
         batch.update(d.ref, {
-          ownerUid: uid,              // ✅ Auth UID
-          ownerDocId: ownerDocId,     // ✅ docId owners
+          conciergerieUid: String(conciergerieUid), // ✅ AJOUT
+          ownerUid: uid,
+          ownerDocId: ownerDocId,
           ownerLinkStatus: "LINKED",
           pendingOwnerEmail: "",
           pendingInviteToken: "",
@@ -548,7 +548,6 @@
     }
 
     function profileRedirectUrl(){
-      // profil d'abord, puis dashboard depuis profil
       const p = new URLSearchParams();
       p.set("self","1");
       if(token) p.set("token", token);
@@ -607,7 +606,6 @@
         invitedByLabel.textContent = invite.by ? ("Invité par : " + invite.by) : "";
         badgeLine.textContent = "Invitation valide";
 
-        // si déjà connecté → on finalise automatiquement
         if(ownerAuthedUser){
           await finalizeIfAuthed(ownerAuthedUser);
         }
@@ -646,7 +644,6 @@
 
         badgeLine.textContent = "Finalisation du rattachement…";
 
-        // 1) users/{uid}
         await setDoc(doc(db, "users", user.uid), {
           uid: user.uid,
           role: "proprietaire",
@@ -660,7 +657,6 @@
           updatedAt: serverTimestamp()
         }, { merge:true });
 
-        // 2) owners/{ownerDocId}
         await setDoc(doc(db, "owners", ownerDocId), {
           ownerDocId,
           conciergerieUid,
@@ -671,7 +667,6 @@
           updatedAt: serverTimestamp()
         }, { merge:true });
 
-        // 3) invite accepted
         await updateDoc(doc(db, "invites", token), {
           status: "accepted",
           usedAt: serverTimestamp(),
@@ -679,11 +674,9 @@
           ownerDocId
         });
 
-        // 4) homes auto-link (INVITED -> LINKED)
         const linkedCount = await autoLinkHomesForOwner(conciergerieUid, userEmail, token, user.uid, ownerDocId);
 
         showAlert(alertOwner, `✅ Compte lié. Logements liés : ${linkedCount}. Redirection profil…`, true);
-
         setTimeout(()=> location.href = profileRedirectUrl(), 650);
 
       }catch(err){
@@ -724,7 +717,6 @@
       createBtn.style.opacity = "0.75";
 
       try{
-        // 1) Auth user
         const cred = await createUserWithEmailAndPassword(auth, email, password);
         const uid = cred.user.uid;
 
@@ -734,7 +726,6 @@
         const ownerDocId = String(invite.ownerDocId || "").trim();
         if(!ownerDocId) throw new Error("Invitation invalide (ownerDocId manquant).");
 
-        // 2) users/{uid}
         await setDoc(doc(db, "users", uid), {
           uid,
           role: "proprietaire",
@@ -751,7 +742,6 @@
           updatedAt: serverTimestamp()
         }, { merge: true });
 
-        // 3) owners/{ownerDocId} : finaliser (profil + accept)
         await setDoc(doc(db, "owners", ownerDocId), {
           ownerDocId,
           conciergerieUid,
@@ -764,7 +754,6 @@
           updatedAt: serverTimestamp()
         }, { merge: true });
 
-        // 4) invite used
         await updateDoc(doc(db, "invites", token), {
           status: "accepted",
           usedAt: serverTimestamp(),
@@ -772,11 +761,9 @@
           ownerDocId
         });
 
-        // 5) auto-link homes
         const linkedCount = await autoLinkHomesForOwner(conciergerieUid, email, token, uid, ownerDocId);
 
         showAlert(alertOwner, `✅ Accès créé. Logements liés : ${linkedCount}. Redirection profil…`, true);
-
         setTimeout(()=> location.href = profileRedirectUrl(), 650);
 
       }catch(err){
@@ -864,7 +851,6 @@
         badgeLine.textContent = "Prêt à générer une invitation";
         conciergerieWho.textContent = user.email || user.uid;
 
-        // hint logement si homeId
         if(homeIdParam){
           try{
             const hs = await getDoc(doc(db,"homes",homeIdParam));
@@ -895,7 +881,6 @@
           try{
             const t = randToken(24);
 
-            // 1) créer owners/{ownerDocId} INVITED (docId stable)
             const ownerRef = doc(collection(db, "owners"));
             const ownerDocId = ownerRef.id;
 
@@ -913,7 +898,6 @@
               updatedAt: serverTimestamp()
             }, { merge: true });
 
-            // 2) créer invite avec ownerDocId
             await setDoc(doc(db, "invites", t), {
               token: t,
               email,
@@ -926,16 +910,13 @@
               createdAt: serverTimestamp()
             }, { merge: true });
 
-            // 3) associer au logement si homeId
             await attachInviteToHomeIfProvided(user.uid, t, email);
 
-            // lien
             const base = `${location.origin}${location.pathname}`;
             const url = `${base}?token=${encodeURIComponent(t)}`;
             inviteLink.textContent = url;
             linkBox.classList.remove("hidden");
 
-            // mailto
             const subj = encodeURIComponent("Invitation – Accès propriétaire CleanUp Manager");
             const body = encodeURIComponent(
               `Bonjour${name ? " " + name : ""},\n\n` +
@@ -970,15 +951,12 @@
 
     // ---------- BOOT ----------
     if(token){
-      // capter une session existante pour finaliser automatiquement
       onAuthStateChanged(auth, async (u)=>{
         ownerAuthedUser = u || null;
-        // si l'invite est déjà chargée, on finalise
         if(u && invite){
           await finalizeIfAuthed(u);
         }
       });
-
       await loadInvite();
     }else{
       await bootConciergerieMode();
