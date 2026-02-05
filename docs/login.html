@@ -1,4 +1,4 @@
-<!-- docs/login.html (COMPLET — owner token géré par invite-proprietaire) -->
+<!-- docs/login.html (COMPLET — PROPRE : login ne finalise pas, il redirige vers invite-proprietaire si token) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -116,7 +116,7 @@
         </div>
       </div>
 
-      <div class="tokenInfo" id="tokenInfo">Invitation détectée : après connexion, on finalise.</div>
+      <div class="tokenInfo" id="tokenInfo">Invitation détectée : après connexion, on retourne sur l’invitation.</div>
       <div class="msg" id="msgBox"></div>
 
       <form id="loginForm" autocomplete="on">
@@ -193,15 +193,15 @@
     }
 
     const roleMode = getRoleFromUrl();
-    const token = getParam("token"); // optionnel
+    const token = getParam("token"); // optionnel (si owner vient d'une invite)
+    if(roleMode === "proprietaire" && token) tokenInfo.style.display = "block";
 
     if(roleMode === "proprietaire"){
       titleH1.textContent = "Connexion propriétaire";
       subtitleP.textContent = token
-        ? "Connecte-toi : après connexion, on finalise ton rattachement via l’invitation."
+        ? "Connecte-toi, puis on retourne sur l’invitation pour finaliser."
         : "Connecte-toi pour accéder à ton espace propriétaire.";
       signupLine.innerHTML = 'Pas d’accès ? <a class="link" href="index.html">Demande une invitation</a>';
-      if(token) tokenInfo.style.display = "block";
     }else{
       titleH1.textContent = "Connexion conciergerie";
       subtitleP.textContent = "Connecte-toi pour accéder à ton espace conciergerie.";
@@ -240,28 +240,10 @@
       return !!String(u?.fullname || "").trim();
     }
 
-    function buildRedirectUrl(roleMode, opts={}){
-      const plan = getParam("plan") || "starter";
-      const next = getParam("next");
-
-      if(next === "abonnement"){
-        return "abonnement.html?plan=" + encodeURIComponent(plan);
-      }
-
-      // ✅ Proprio : si token => on renvoie vers invite-proprietaire (c’est lui qui finalise)
-      if(roleMode === "proprietaire"){
-        if(token){
-          return "invite-proprietaire.html?token=" + encodeURIComponent(token);
-        }
-        if(opts.forceProfile){
-          const p = new URLSearchParams();
-          p.set("self","1");
-          return "profil-proprietaire.html?" + p.toString();
-        }
-        return "owner-dashboard.html";
-      }
-
-      return "conciergerie.html";
+    function buildOwnerProfileUrl(){
+      const p = new URLSearchParams();
+      p.set("self","1");
+      return "profil-proprietaire.html?" + p.toString();
     }
 
     let isSubmitting = false;
@@ -284,23 +266,26 @@
         const cred = await signInWithEmailAndPassword(auth, email, password);
         const user = cred.user;
 
+        // ✅ owner: si token => on retourne sur l’invite (c’est elle qui finalise)
         if(roleMode === "proprietaire"){
-          // ✅ Ici: pas de write Firestore. L’invite gère le token et fait la finalisation.
-          // Si pas de token, on check juste si profil complet
-          if(!token){
-            let u = null;
-            try{
-              const usnap = await getDoc(doc(db,"users", user.uid));
-              u = usnap.exists() ? (usnap.data() || {}) : null;
-            }catch(_){}
-            const complete = ownerProfileIsComplete(u);
-            location.replace(buildRedirectUrl("proprietaire", { forceProfile: !complete }));
+          if(token){
+            location.replace("invite-proprietaire.html?token=" + encodeURIComponent(token));
             return;
           }
-          location.replace(buildRedirectUrl("proprietaire"));
+
+          // sinon redirige profil si incomplet
+          let u = null;
+          try{
+            const usnap = await getDoc(doc(db,"users", user.uid));
+            u = usnap.exists() ? (usnap.data() || {}) : null;
+          }catch(_){}
+
+          const complete = ownerProfileIsComplete(u);
+          location.replace(complete ? "owner-dashboard.html" : buildOwnerProfileUrl());
           return;
         }
 
+        // conciergerie
         const isFree = FREE_EMAILS.has(email);
         let role = "conciergerie";
         let planActive = false;
@@ -330,11 +315,6 @@
             console.warn("Firestore read failed:", err);
             planActive = false;
           }
-        }
-
-        if(getParam("next") === "abonnement"){
-          location.replace(buildRedirectUrl("conciergerie"));
-          return;
         }
 
         if(role === "conciergerie" && planActive){
