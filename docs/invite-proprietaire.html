@@ -1,4 +1,4 @@
-<!-- docs/invite-proprietaire.html (COMPLET + CORRIGÉ — sans pendingOwnerDocId, link homes ownerUid=auth.uid + ownerDocId=owners docId, redirection profil d'abord) -->
+<!-- docs/invite-proprietaire.html (COMPLET + CORRIGÉ — sans pendingOwnerDocId, link homes ownerUid=auth.uid + ownerDocId=owners docId, redirection profil d'abord + finalize si compte existe déjà) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -361,7 +361,7 @@
         <button class="cta" type="submit" id="createBtn">Créer mon accès</button>
 
         <div class="fineprint">
-          Si tu as déjà un compte, clique “J’ai déjà un accès”.
+          Si tu as déjà un compte, clique “J’ai déjà un accès”, connecte-toi, puis <b>réouvre ce lien</b> (il finalisera le rattachement).
         </div>
       </form>
     </div>
@@ -540,6 +540,8 @@
 
     // ---------- MODE OWNER ----------
     let invite = null;
+    let ownerAuthedUser = null;
+    let finalizeRunning = false;
 
     function disableOwnerForm(){
       form?.querySelectorAll("input,button").forEach(el => el.disabled = true);
@@ -554,7 +556,7 @@
     }
 
     async function loadInvite(){
-      pageSubtitle.textContent = "Création d’accès propriétaire";
+      pageSubtitle.textContent = "Accès propriétaire";
       backLink.href = "index.html";
       ownerCard.classList.remove("hidden");
       conciergerieCard.classList.add("hidden");
@@ -604,11 +606,92 @@
 
         invitedByLabel.textContent = invite.by ? ("Invité par : " + invite.by) : "";
         badgeLine.textContent = "Invitation valide";
+
+        // si déjà connecté → on finalise automatiquement
+        if(ownerAuthedUser){
+          await finalizeIfAuthed(ownerAuthedUser);
+        }
+
       }catch(err){
         console.error(err);
         badgeLine.textContent = "Erreur";
         showAlert(alertOwner, "Erreur chargement invitation : " + (err?.message || "inconnue"), false);
         disableOwnerForm();
+      }
+    }
+
+    async function finalizeIfAuthed(user){
+      if(finalizeRunning) return;
+      if(!invite) return;
+
+      finalizeRunning = true;
+      hideAlert(alertOwner);
+
+      try{
+        const invEmail = normalizeEmail(invite.email || "");
+        const userEmail = normalizeEmail(user.email || "");
+        if(invEmail && userEmail !== invEmail){
+          showAlert(alertOwner, "⛔ Tu es connecté avec un email différent de l’invitation. Déconnecte-toi et reconnecte-toi avec le bon email.", false);
+          finalizeRunning = false;
+          return;
+        }
+
+        const conciergerieUid = String(invite.conciergerieUid || "").trim();
+        const ownerDocId = String(invite.ownerDocId || "").trim();
+        if(!conciergerieUid || !ownerDocId){
+          showAlert(alertOwner, "⛔ Invitation invalide (conciergerieUid/ownerDocId manquant).", false);
+          finalizeRunning = false;
+          return;
+        }
+
+        badgeLine.textContent = "Finalisation du rattachement…";
+
+        // 1) users/{uid}
+        await setDoc(doc(db, "users", user.uid), {
+          uid: user.uid,
+          role: "proprietaire",
+          email: userEmail,
+          conciergerieUid,
+          ownerDocId,
+          inviteToken: token,
+          invitedBy: invite.by || "",
+          subscriptionStatus: "active",
+          plan: "owner-free",
+          updatedAt: serverTimestamp()
+        }, { merge:true });
+
+        // 2) owners/{ownerDocId}
+        await setDoc(doc(db, "owners", ownerDocId), {
+          ownerDocId,
+          conciergerieUid,
+          email: userEmail,
+          uid: user.uid,
+          status: "ACTIVE",
+          acceptedAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        }, { merge:true });
+
+        // 3) invite accepted
+        await updateDoc(doc(db, "invites", token), {
+          status: "accepted",
+          usedAt: serverTimestamp(),
+          usedOwnerUid: user.uid,
+          ownerDocId
+        });
+
+        // 4) homes auto-link (INVITED -> LINKED)
+        const linkedCount = await autoLinkHomesForOwner(conciergerieUid, userEmail, token, user.uid, ownerDocId);
+
+        showAlert(alertOwner, `✅ Compte lié. Logements liés : ${linkedCount}. Redirection profil…`, true);
+
+        setTimeout(()=> location.href = profileRedirectUrl(), 650);
+
+      }catch(err){
+        console.error(err);
+        showAlert(alertOwner, "Erreur finalisation : " + esc(err?.message || "inconnue"), false);
+        badgeLine.textContent = "Invitation valide";
+      }finally{
+        finalizeRunning = false;
       }
     }
 
@@ -668,7 +751,7 @@
           updatedAt: serverTimestamp()
         }, { merge: true });
 
-        // 3) owners/{ownerDocId} : finaliser
+        // 3) owners/{ownerDocId} : finaliser (profil + accept)
         await setDoc(doc(db, "owners", ownerDocId), {
           ownerDocId,
           conciergerieUid,
@@ -694,9 +777,7 @@
 
         showAlert(alertOwner, `✅ Accès créé. Logements liés : ${linkedCount}. Redirection profil…`, true);
 
-        setTimeout(()=>{
-          location.href = profileRedirectUrl();
-        }, 650);
+        setTimeout(()=> location.href = profileRedirectUrl(), 650);
 
       }catch(err){
         console.error(err);
@@ -706,7 +787,8 @@
           showAlert(
             alertOwner,
             `⛔ Cet email a déjà un compte.<br><br>
-             👉 Connecte-toi avec “J’ai déjà un accès” (le lien contient le token).<br><br>
+             1) Clique “J’ai déjà un accès” et connecte-toi.<br>
+             2) Puis <b>réouvre ce lien d’invitation</b> (il finalisera le rattachement automatiquement).<br><br>
              <div class="alt-actions">
                <button id="loginNowBtn" class="btn primary" type="button">Se connecter</button>
                <button id="resetNowBtn" class="btn" type="button">Réinitialiser le mot de passe</button>
@@ -727,7 +809,7 @@
               resetBtn.style.opacity = "0.75";
               try{
                 await sendPasswordResetEmail(auth, email);
-                showAlert(alertOwner, "✅ Email de réinitialisation envoyé. Ensuite connecte-toi via “J’ai déjà un accès”.", true);
+                showAlert(alertOwner, "✅ Email de réinitialisation envoyé. Ensuite connecte-toi via “J’ai déjà un accès”, puis réouvre ce lien.", true);
               }catch(resetErr){
                 console.error(resetErr);
                 showAlert(alertOwner, "Erreur reset : " + (resetErr?.message || "inconnue"), false);
@@ -746,6 +828,7 @@
           showAlert(alertOwner, "Erreur : " + esc(err?.message || "inconnue"), false);
         }
 
+      }finally{
         createBtn.disabled = false;
         createBtn.style.opacity = "1";
       }
@@ -810,7 +893,7 @@
           genBtn.style.opacity = "0.75";
 
           try{
-            const t = new URLSearchParams(location.search).get("forceToken") || randToken(24);
+            const t = randToken(24);
 
             // 1) créer owners/{ownerDocId} INVITED (docId stable)
             const ownerRef = doc(collection(db, "owners"));
@@ -887,6 +970,15 @@
 
     // ---------- BOOT ----------
     if(token){
+      // capter une session existante pour finaliser automatiquement
+      onAuthStateChanged(auth, async (u)=>{
+        ownerAuthedUser = u || null;
+        // si l'invite est déjà chargée, on finalise
+        if(u && invite){
+          await finalizeIfAuthed(u);
+        }
+      });
+
       await loadInvite();
     }else{
       await bootConciergerieMode();
