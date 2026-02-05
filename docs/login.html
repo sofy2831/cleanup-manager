@@ -152,7 +152,6 @@
       doc, getDoc, setDoc, updateDoc, serverTimestamp
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
-    // Comptes gratuits (DEV/admin)
     const FREE_EMAILS = new Set([
       "mathilde.debout31@gmail.com",
       "s.dumas974@gmail.com"
@@ -196,7 +195,6 @@
     const roleMode = getRoleFromUrl();
     const token = getParam("token"); // optionnel
 
-    // UI selon rôle
     if(roleMode === "proprietaire"){
       titleH1.textContent = "Connexion propriétaire";
       subtitleP.textContent = token
@@ -210,7 +208,6 @@
       signupLine.innerHTML = 'Pas de compte ? <a class="link" href="signup.html">Créer un compte</a>';
     }
 
-    // Reset password
     resetLink.addEventListener("click", async (e)=>{
       e.preventDefault();
       clearMsg();
@@ -240,13 +237,10 @@
     }
 
     function ownerProfileIsComplete(u){
-      // minimal: fullname (tu peux durcir ensuite)
       return !!String(u?.fullname || "").trim();
     }
 
     async function attachOwnerFromToken(user){
-      // IMPORTANT: on ne crée PAS owners/{uid}.
-      // On se base sur invites/{token} qui DOIT contenir ownerDocId (créé par invite-proprietaire.html).
       if(!token) return { ok:true };
 
       const tokenRef = doc(db, "invites", token);
@@ -263,7 +257,6 @@
         return { ok:false, msg:"Cet email ne correspond pas à l’invitation. Connecte-toi avec le bon email." };
       }
 
-      // Si déjà utilisée par un autre uid -> stop
       if(inv.usedOwnerUid && inv.usedOwnerUid !== user.uid){
         return { ok:false, msg:"Cette invitation a déjà été utilisée. Demande un nouveau lien." };
       }
@@ -271,15 +264,9 @@
       const conciergerieUid = String(inv.conciergerieUid || "").trim();
       const ownerDocId = String(inv.ownerDocId || "").trim();
 
-      if(!conciergerieUid){
-        return { ok:false, msg:"Invitation invalide (conciergerie manquante)." };
-      }
-      if(!ownerDocId){
-        // ton flow normal met ownerDocId lors de la création via invite-proprietaire.html
-        return { ok:false, msg:"Invitation invalide (ownerDocId manquant). Régénère le lien d’invitation." };
-      }
+      if(!conciergerieUid) return { ok:false, msg:"Invitation invalide (conciergerie manquante)." };
+      if(!ownerDocId) return { ok:false, msg:"Invitation invalide (ownerDocId manquant). Régénère le lien." };
 
-      // 1) users/{uid} : stocker conciergerieUid + ownerDocId (source de vérité)
       await setDoc(doc(db, "users", user.uid), {
         uid: user.uid,
         role: "proprietaire",
@@ -290,8 +277,6 @@
         updatedAt: serverTimestamp()
       }, { merge:true });
 
-      // 2) owners/{ownerDocId} : s’assurer que uid est bien renseigné (utile)
-      // (si rules owners permettent pas write owner, supprime ce bloc. Mais normalement conciergerie a déjà créé.)
       try{
         await setDoc(doc(db, "owners", ownerDocId), {
           ownerDocId,
@@ -302,7 +287,6 @@
         }, { merge:true });
       }catch(_){}
 
-      // 3) Marquer invite accepted (idempotent)
       await updateDoc(tokenRef, {
         status: "accepted",
         usedAt: serverTimestamp(),
@@ -321,14 +305,12 @@
       }
 
       if(roleMode === "proprietaire"){
-        // profil obligatoire d’abord si incomplet
         if(opts.forceProfile){
           const p = new URLSearchParams();
           p.set("self","1");
           if(token) p.set("token", token);
           return "profil-proprietaire.html?" + p.toString();
         }
-        // dashboard
         return "owner-dashboard.html" + (token ? ("?token=" + encodeURIComponent(token)) : "");
       }
 
@@ -355,9 +337,7 @@
         const cred = await signInWithEmailAndPassword(auth, email, password);
         const user = cred.user;
 
-        // ===== PROPRIÉTAIRE =====
         if(roleMode === "proprietaire"){
-          // Si token présent → rattachement
           if(token){
             const res = await attachOwnerFromToken(user);
             if(!res.ok){
@@ -368,7 +348,6 @@
             }
           }
 
-          // Lire users/{uid} pour décider profil vs dashboard
           let u = null;
           try{
             const usnap = await getDoc(doc(db,"users", user.uid));
@@ -376,16 +355,11 @@
           }catch(_){}
 
           const complete = ownerProfileIsComplete(u);
-
-          // ✅ profil obligatoire avant dashboard
-          const url = buildRedirectUrl("proprietaire", { forceProfile: !complete });
-          location.replace(url);
+          location.replace(buildRedirectUrl("proprietaire", { forceProfile: !complete }));
           return;
         }
 
-        // ===== CONCIERGERIE =====
         const isFree = FREE_EMAILS.has(email);
-
         let role = "conciergerie";
         let planActive = false;
 
@@ -416,7 +390,7 @@
           }
         }
 
-        // next=abonnement (même si inactif)
+        // ✅ FIX: si next=abonnement => abonnement, pas conciergerie.html
         if(getParam("next") === "abonnement"){
           location.replace(buildRedirectUrl("conciergerie"));
           return;
