@@ -1,4 +1,4 @@
-<!-- docs/owner-dashboard.html -->
+<!-- docs/owner-dashboard.html (COMPLET + CORRIGÉ: ownerDocId + guard + homes query alignée data model) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -247,8 +247,7 @@
     <div class="topbar">
       <a class="pill" href="index.html">← Accueil</a>
       <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-        <!-- Si tu as une page profil séparée, décommente et mets le bon nom -->
-        <!-- <a class="pill" href="profil-proprietaire.html">Mon profil</a> -->
+        <a class="pill" id="profileBtn" href="profil-proprietaire.html?self=1">Mon profil</a>
         <button class="pill" id="logoutBtn" type="button">Déconnexion</button>
       </div>
     </div>
@@ -325,8 +324,9 @@
           <span>Mes logements</span>
           <span class="tiny" id="myHomesCount">—</span>
         </div>
-        <div class="tiny" style="margin-top:6px;">Lecture Firestore : homes (ownerUid = moi)</div>
+        <div class="tiny" style="margin-top:6px;">Lecture Firestore : homes (ownerUid = ownerDocId)</div>
 
+        <div class="alert" id="alertHomes"></div>
         <div id="myHomesList" class="list"></div>
 
         <div style="height:1px; background:rgba(122,92,255,0.18); margin:12px 0;"></div>
@@ -370,7 +370,6 @@
 
   <nav class="bottom-nav" aria-label="Navigation propriétaire">
     <a class="active" href="owner-dashboard.html">Dashboard</a>
-    <!-- Placeholders si tu fais des pages dédiées plus tard -->
     <a href="owner-dashboard.html#messages">Messages</a>
     <a href="owner-dashboard.html#logements">Logements</a>
   </nav>
@@ -389,287 +388,330 @@
     return (p.get(name) || "").trim();
   }
 
-  async function guardOwnerProfile(user){
-    const snap = await getDoc(doc(db, "users", user.uid));
-    const d = snap.exists() ? (snap.data() || {}) : {};
-    const role = String(d.role || "").toLowerCase();
-    const fullname = String(d.fullname || "").trim();
+  // UI
+  const badgeLine = document.getElementById("badgeLine");
+  const logoutBtn = document.getElementById("logoutBtn");
+  const profileBtn = document.getElementById("profileBtn");
 
-    // Si tu veux être strict :
-    if(role && role !== "proprietaire"){
-      // si c’est pas un proprio, dehors (optionnel)
-      // location.replace("login.html?role=proprietaire");
-      // return true;
-    }
+  const alertHome  = document.getElementById("alertHome");
+  const alertMsg   = document.getElementById("alertMsg");
+  const alertHomes = document.getElementById("alertHomes");
 
-    if(!fullname){
-      const token = getParam("token");
-      const url = token
-        ? `profil-proprietaire.html?self=1&token=${encodeURIComponent(token)}`
-        : `profil-proprietaire.html?self=1`;
-      location.replace(url);
-      return false; // stop boot
+  const myHomesList  = document.getElementById("myHomesList");
+  const myHomesCount = document.getElementById("myHomesCount");
+
+  const myReqList  = document.getElementById("myReqList");
+  const myReqCount = document.getElementById("myReqCount");
+
+  // Tabs
+  const tabBtns = Array.from(document.querySelectorAll(".tabBtn"));
+  const sections = {
+    planning: document.getElementById("tab_planning"),
+    ical: document.getElementById("tab_ical"),
+    messages: document.getElementById("tab_messages"),
+    logements: document.getElementById("tab_logements"),
+  };
+
+  function setTab(name){
+    for(const k of Object.keys(sections)){
+      sections[k].classList.toggle("hidden", k !== name);
     }
-    return true;
+    tabBtns.forEach(b=> b.classList.toggle("active", b.dataset.tab === name));
+    history.replaceState(null, "", `#${name}`);
+  }
+  tabBtns.forEach(b=> b.addEventListener("click", ()=> setTab(b.dataset.tab)));
+
+  // Helpers
+  function showAlert(el, msg, ok=false){
+    if(!el) return;
+    el.style.display = "block";
+    el.classList.toggle("ok", !!ok);
+    el.textContent = msg;
+  }
+  function hideAlert(el){
+    if(!el) return;
+    el.style.display = "none";
+    el.classList.remove("ok");
+    el.textContent = "";
   }
 
-     // UI
-    const badgeLine = document.getElementById("badgeLine");
-    const logoutBtn = document.getElementById("logoutBtn");
+  function esc(s){
+    return String(s ?? "")
+      .replaceAll("&","&amp;")
+      .replaceAll("<","&lt;")
+      .replaceAll(">","&gt;")
+      .replaceAll('"',"&quot;")
+      .replaceAll("'","&#039;");
+  }
+  function fmt(ts){
+    try{
+      const d = ts?.toDate ? ts.toDate() : new Date(ts || Date.now());
+      const dd = String(d.getDate()).padStart(2,"0");
+      const mm = String(d.getMonth()+1).padStart(2,"0");
+      const hh = String(d.getHours()).padStart(2,"0");
+      const mi = String(d.getMinutes()).padStart(2,"0");
+      return `${dd}/${mm} ${hh}:${mi}`;
+    }catch(e){ return ""; }
+  }
 
-    const alertHome = document.getElementById("alertHome");
-    const alertMsg  = document.getElementById("alertMsg");
+  function buildProfileUrl(){
+    const token = getParam("token");
+    return token
+      ? `profil-proprietaire.html?self=1&token=${encodeURIComponent(token)}`
+      : `profil-proprietaire.html?self=1`;
+  }
 
-    const myHomesList  = document.getElementById("myHomesList");
-    const myHomesCount = document.getElementById("myHomesCount");
+  // State
+  let currentUser = null;
+  let ownerDocId = "";       // ✅ docId owners attendu dans homes.ownerUid
+  let conciergerieUid = "";  // utile pour debug / futures règles
+  let unsubHomes = null;
+  let unsubReqs  = null;
 
-    const myReqList  = document.getElementById("myReqList");
-    const myReqCount = document.getElementById("myReqCount");
+  async function guardOwnerProfile(user){
+    // 1) lire users/{uid}
+    const snap = await getDoc(doc(db, "users", user.uid));
+    const d = snap.exists() ? (snap.data() || {}) : {};
 
-    // Tabs
-    const tabBtns = Array.from(document.querySelectorAll(".tabBtn"));
-    const sections = {
-      planning: document.getElementById("tab_planning"),
-      ical: document.getElementById("tab_ical"),
-      messages: document.getElementById("tab_messages"),
-      logements: document.getElementById("tab_logements"),
-    };
+    const role = String(d.role || "").toLowerCase();
+    const fullname = String(d.fullname || "").trim();
+    const od = String(d.ownerDocId || "").trim();
+    const cu = String(d.conciergerieUid || "").trim();
 
-    function setTab(name){
-      for(const k of Object.keys(sections)){
-        sections[k].classList.toggle("hidden", k !== name);
-      }
-      tabBtns.forEach(b=> b.classList.toggle("active", b.dataset.tab === name));
-      // hash simple
-      history.replaceState(null, "", `#${name}`);
+    // (optionnel) si tu veux être strict sur role
+    // if(role && role !== "proprietaire") { ... }
+
+    // 2) profil minimal : fullname + ownerDocId
+    // fullname = “profil rempli”
+    // ownerDocId = “rattachement homes”
+    if(!fullname || !od){
+      location.replace(buildProfileUrl());
+      return { ok:false };
     }
 
-    tabBtns.forEach(b=>{
-      b.addEventListener("click", ()=> setTab(b.dataset.tab));
+    return { ok:true, ownerDocId: od, conciergerieUid: cu, role, fullname };
+  }
+
+  // Logout
+  logoutBtn.addEventListener("click", async ()=>{
+    await signOut(auth);
+    localStorage.removeItem("cm_auth");
+    location.href = "index.html";
+  });
+
+  // Requests
+  async function sendRequest({ type, title, message, payload={} }){
+    if(!currentUser) throw new Error("not-auth");
+    await addDoc(collection(db, "requests"), {
+      ownerUid: currentUser.uid,          // ✅ conforme à tes rules requests
+      ownerDocId: ownerDocId || "",       // utile côté conciergerie (optionnel)
+      ownerEmail: currentUser.email || "",
+      conciergerieUid: conciergerieUid || "", // optionnel
+      type,
+      title,
+      message,
+      payload,
+      status: "pending",
+      createdAt: serverTimestamp()
     });
+  }
 
-    // Helpers
-    function showAlert(el, msg, ok=false){
-      if(!el) return;
-      el.style.display = "block";
-      el.classList.toggle("ok", !!ok);
-      el.textContent = msg;
-    }
-    function hideAlert(el){
-      if(!el) return;
-      el.style.display = "none";
-      el.classList.remove("ok");
-      el.textContent = "";
-    }
+  // Homes
+  function listenMyHomes(){
+    hideAlert(alertHomes);
+    if(unsubHomes) unsubHomes();
 
-    function esc(s){
-      return String(s ?? "")
-        .replaceAll("&","&amp;")
-        .replaceAll("<","&lt;")
-        .replaceAll(">","&gt;")
-        .replaceAll('"',"&quot;")
-        .replaceAll("'","&#039;");
-    }
-    function fmt(ts){
-      try{
-        const d = ts?.toDate ? ts.toDate() : new Date(ts || Date.now());
-        const dd = String(d.getDate()).padStart(2,"0");
-        const mm = String(d.getMonth()+1).padStart(2,"0");
-        const hh = String(d.getHours()).padStart(2,"0");
-        const mi = String(d.getMinutes()).padStart(2,"0");
-        return `${dd}/${mm} ${hh}:${mi}`;
-      }catch(e){ return ""; }
-    }
-
-    // State
-    let currentUser = null;
-    let unsubHomes = null;
-    let unsubReqs  = null;
-
-    // Logout
-    logoutBtn.addEventListener("click", async ()=>{
-      await signOut(auth);
-      localStorage.removeItem("cm_auth");
-      location.href = "index.html";
-    });
-
-    async function sendRequest({ type, title, message, payload={} }){
-      if(!currentUser) throw new Error("not-auth");
-
-      await addDoc(collection(db, "requests"), {
-        ownerUid: currentUser.uid,
-        ownerEmail: currentUser.email || "",
-        type,
-        title,
-        message,
-        payload,
-        status: "pending",
-        createdAt: serverTimestamp()
-      });
-    }
-
-    function listenMyHomes(){
-      if(unsubHomes) unsubHomes();
-      const qh = query(
-        collection(db, "homes"),
-        where("ownerUid", "==", currentUser.uid)
-      );
-
-      unsubHomes = onSnapshot(qh, (snap)=>{
-        const homes = snap.docs.map(d => ({ id:d.id, ...(d.data()||{}) }));
-        homes.sort((a,b)=>{
-          const ta = a.createdAt?.seconds ? a.createdAt.seconds : 0;
-          const tb = b.createdAt?.seconds ? b.createdAt.seconds : 0;
-          return tb - ta;
-        });
-
-        myHomesCount.textContent = String(homes.length);
-        myHomesList.innerHTML = "";
-
-        if(!homes.length){
-          myHomesList.innerHTML = `
-            <div class="item">
-              <div class="meta"><span>Aucun logement</span><span>—</span></div>
-              <p class="msg">Soit la conciergerie ne t’a pas encore associé de logement, soit ownerUid n’est pas renseigné.</p>
-            </div>
-          `;
-          return;
-        }
-
-        homes.forEach(h=>{
-          const name = `${h.name || "Logement"}${h.city ? " • " + h.city : ""}`;
-          const el = document.createElement("div");
-          el.className = "item";
-          el.innerHTML = `
-            <div class="meta">
-              <span>${esc(name)}</span>
-              <span>${esc(h.type || "")}</span>
-            </div>
-            <p class="msg">${esc((h.homeAddress || h.address || "").trim() || "Adresse manquante")}</p>
-            <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
-              <a class="pill primary" style="text-decoration:none;" href="planning-proprietaire.html?homeId=${encodeURIComponent(h.id)}">Voir planning</a>
-            </div>
-          `;
-          myHomesList.appendChild(el);
-        });
-      }, (err)=> console.error(err));
-    }
-
-    function listenMyRequests(){
-      if(unsubReqs) unsubReqs();
-      const qr = query(
-        collection(db, "requests"),
-        where("ownerUid", "==", currentUser.uid),
-        orderBy("createdAt", "desc")
-      );
-
-      unsubReqs = onSnapshot(qr, (snap)=>{
-        const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-        myReqCount.textContent = String(items.length);
-
-        myReqList.innerHTML = "";
-        if(!items.length){
-          myReqList.innerHTML = `
-            <div class="item">
-              <div class="meta"><span>Aucune demande</span><span>—</span></div>
-              <p class="msg">Tu peux envoyer un message ou une demande d’ajout de logement.</p>
-            </div>
-          `;
-          return;
-        }
-
-        items.forEach(r=>{
-          const el = document.createElement("div");
-          el.className = "item";
-          el.innerHTML = `
-            <div class="meta">
-              <span>${esc(r.type || "request")} • ${esc(r.status || "pending")}</span>
-              <span>${esc(fmt(r.createdAt))}</span>
-            </div>
-            <p class="msg">${esc(r.title || "")}\n${esc(r.message || "")}</p>
-          `;
-          myReqList.appendChild(el);
-        });
-      }, (err)=> console.error(err));
-    }
-
-    // Forms
-    document.getElementById("addHomeReqForm").addEventListener("submit", async (e)=>{
-      e.preventDefault();
-      hideAlert(alertHome);
-
-      const homeName = document.getElementById("homeName").value.trim();
-      const city = document.getElementById("homeCity").value.trim();
-      const homeType = document.getElementById("homeType").value.trim();
-      const extra = document.getElementById("homeMsg").value.trim();
-
-      if(!homeName || !city) return showAlert(alertHome, "Champs manquants : nom + ville.");
-
-      const btn = document.getElementById("sendHomeBtn");
-      btn.disabled = true; btn.style.opacity = "0.75";
-
-      try{
-        const title = `Ajout logement – ${homeName} (${city})`;
-        const msg = extra ? extra : `Merci d’ajouter ce logement : ${homeName} (${city}).`;
-
-        await sendRequest({
-          type: "add_home",
-          title,
-          message: msg,
-          payload: { homeName, city, homeType }
-        });
-
-        showAlert(alertHome, "✅ Demande envoyée.", true);
-        e.target.reset();
-        document.getElementById("homeType").value = "Studio";
-      }catch(err){
-        console.error(err);
-        showAlert(alertHome, "Erreur envoi : " + (err?.message || "inconnue"));
-      }finally{
-        btn.disabled = false; btn.style.opacity = "1";
-      }
-    });
-
-    document.getElementById("msgReqForm").addEventListener("submit", async (e)=>{
-      e.preventDefault();
-      hideAlert(alertMsg);
-
-      const msg = document.getElementById("needMsg").value.trim();
-      if(!msg) return showAlert(alertMsg, "Message vide.");
-
-      const btn = document.getElementById("sendMsgBtn");
-      btn.disabled = true; btn.style.opacity = "0.75";
-
-      try{
-        await sendRequest({
-          type: "message",
-          title: "Message propriétaire",
-          message: msg,
-          payload: {}
-        });
-
-        showAlert(alertMsg, "✅ Message envoyé.", true);
-        e.target.reset();
-      }catch(err){
-        console.error(err);
-        showAlert(alertMsg, "Erreur envoi : " + (err?.message || "inconnue"));
-      }finally{
-        btn.disabled = false; btn.style.opacity = "1";
-      }
-    });
-
-      // Boot
-  onAuthStateChanged(auth, async (user)=>{
-    if(!user){
-      location.href = "login.html?role=proprietaire";
+    if(!ownerDocId){
+      showAlert(alertHomes, "ownerDocId manquant : impossible de lister tes logements. Retour profil.", false);
       return;
     }
 
-    const ok = await guardOwnerProfile(user);
-    if(!ok) return;
+    // ✅ IMPORTANT : homes.ownerUid = ownerDocId (PAS auth.uid)
+    const qh = query(
+      collection(db, "homes"),
+      where("ownerUid", "==", ownerDocId)
+    );
+
+    unsubHomes = onSnapshot(qh, (snap)=>{
+      const homes = snap.docs.map(d => ({ id:d.id, ...(d.data()||{}) }));
+      homes.sort((a,b)=>{
+        const ta = a.createdAt?.seconds ? a.createdAt.seconds : 0;
+        const tb = b.createdAt?.seconds ? b.createdAt.seconds : 0;
+        return tb - ta;
+      });
+
+      myHomesCount.textContent = String(homes.length);
+      myHomesList.innerHTML = "";
+
+      if(!homes.length){
+        myHomesList.innerHTML = `
+          <div class="item">
+            <div class="meta"><span>Aucun logement</span><span>—</span></div>
+            <p class="msg">Soit la conciergerie ne t’a pas encore associé de logement, soit ownerUid n’est pas renseigné sur les homes.</p>
+          </div>
+        `;
+        return;
+      }
+
+      homes.forEach(h=>{
+        const name = `${h.name || "Logement"}${h.city ? " • " + h.city : ""}`;
+        const el = document.createElement("div");
+        el.className = "item";
+        el.innerHTML = `
+          <div class="meta">
+            <span>${esc(name)}</span>
+            <span>${esc(h.type || "")}</span>
+          </div>
+          <p class="msg">${esc((h.homeAddress || h.address || "").trim() || "Adresse manquante")}</p>
+          <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
+            <a class="pill primary" style="text-decoration:none;" href="planning-proprietaire.html?homeId=${encodeURIComponent(h.id)}">Voir planning</a>
+          </div>
+        `;
+        myHomesList.appendChild(el);
+      });
+    }, (err)=>{
+      console.error(err);
+
+      // ⚠️ si tu gardes la rule HOMES “conciergerie only”, le proprio prendra PERMISSION_DENIED ici.
+      const msg = String(err?.message || "");
+      if(msg.toLowerCase().includes("permission")){
+        showAlert(
+          alertHomes,
+          "⛔ Permission refusée sur homes.\n" +
+          "Ton dashboard est OK, mais tes rules HOMES bloquent probablement la lecture côté propriétaire.\n" +
+          "À corriger dans rules si tu veux que le proprio voie ses logements.",
+          false
+        );
+      }else{
+        showAlert(alertHomes, "Erreur lecture homes : " + msg, false);
+      }
+    });
+  }
+
+  // Requests list
+  function listenMyRequests(){
+    if(unsubReqs) unsubReqs();
+
+    const qr = query(
+      collection(db, "requests"),
+      where("ownerUid", "==", currentUser.uid),
+      orderBy("createdAt", "desc")
+    );
+
+    unsubReqs = onSnapshot(qr, (snap)=>{
+      const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      myReqCount.textContent = String(items.length);
+
+      myReqList.innerHTML = "";
+      if(!items.length){
+        myReqList.innerHTML = `
+          <div class="item">
+            <div class="meta"><span>Aucune demande</span><span>—</span></div>
+            <p class="msg">Tu peux envoyer un message ou une demande d’ajout de logement.</p>
+          </div>
+        `;
+        return;
+      }
+
+      items.forEach(r=>{
+        const el = document.createElement("div");
+        el.className = "item";
+        el.innerHTML = `
+          <div class="meta">
+            <span>${esc(r.type || "request")} • ${esc(r.status || "pending")}</span>
+            <span>${esc(fmt(r.createdAt))}</span>
+          </div>
+          <p class="msg">${esc(r.title || "")}\n${esc(r.message || "")}</p>
+        `;
+        myReqList.appendChild(el);
+      });
+    }, (err)=> console.error(err));
+  }
+
+  // Forms
+  document.getElementById("addHomeReqForm").addEventListener("submit", async (e)=>{
+    e.preventDefault();
+    hideAlert(alertHome);
+
+    const homeName = document.getElementById("homeName").value.trim();
+    const city = document.getElementById("homeCity").value.trim();
+    const homeType = document.getElementById("homeType").value.trim();
+    const extra = document.getElementById("homeMsg").value.trim();
+
+    if(!homeName || !city) return showAlert(alertHome, "Champs manquants : nom + ville.");
+
+    const btn = document.getElementById("sendHomeBtn");
+    btn.disabled = true; btn.style.opacity = "0.75";
+
+    try{
+      const title = `Ajout logement – ${homeName} (${city})`;
+      const msg = extra ? extra : `Merci d’ajouter ce logement : ${homeName} (${city}).`;
+
+      await sendRequest({
+        type: "add_home",
+        title,
+        message: msg,
+        payload: { homeName, city, homeType }
+      });
+
+      showAlert(alertHome, "✅ Demande envoyée.", true);
+      e.target.reset();
+      document.getElementById("homeType").value = "Studio";
+    }catch(err){
+      console.error(err);
+      showAlert(alertHome, "Erreur envoi : " + (err?.message || "inconnue"));
+    }finally{
+      btn.disabled = false; btn.style.opacity = "1";
+    }
+  });
+
+  document.getElementById("msgReqForm").addEventListener("submit", async (e)=>{
+    e.preventDefault();
+    hideAlert(alertMsg);
+
+    const msg = document.getElementById("needMsg").value.trim();
+    if(!msg) return showAlert(alertMsg, "Message vide.");
+
+    const btn = document.getElementById("sendMsgBtn");
+    btn.disabled = true; btn.style.opacity = "0.75";
+
+    try{
+      await sendRequest({
+        type: "message",
+        title: "Message propriétaire",
+        message: msg,
+        payload: {}
+      });
+
+      showAlert(alertMsg, "✅ Message envoyé.", true);
+      e.target.reset();
+    }catch(err){
+      console.error(err);
+      showAlert(alertMsg, "Erreur envoi : " + (err?.message || "inconnue"));
+    }finally{
+      btn.disabled = false; btn.style.opacity = "1";
+    }
+  });
+
+  // Boot
+  onAuthStateChanged(auth, async (user)=>{
+    if(!user){
+      location.href = "login.html?role=proprietaire" + (getParam("token") ? ("&token=" + encodeURIComponent(getParam("token"))) : "");
+      return;
+    }
+
+    const g = await guardOwnerProfile(user);
+    if(!g.ok) return;
 
     currentUser = user;
-    badgeLine.textContent = `Connecté : ${user.email || user.uid}`;
+    ownerDocId = g.ownerDocId || "";
+    conciergerieUid = g.conciergerieUid || "";
+
+    // bouton profil garde le token s'il existe
+    profileBtn.href = buildProfileUrl();
+
+    badgeLine.textContent =
+      `Connecté : ${user.email || user.uid}\nownerDocId: ${ownerDocId || "—"}`;
 
     const h = (location.hash || "").replace("#","").trim();
     if(h && sections[h]) setTab(h);
@@ -681,5 +723,3 @@
 
 </body>
 </html>
-
-
