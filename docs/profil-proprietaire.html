@@ -1,4 +1,4 @@
-<!-- docs/profil-proprietaire.html -->
+<!-- docs/profil-proprietaire.html (COMPLET + FIX) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -266,7 +266,7 @@
     </div>
   </div>
 
-  <!-- bottom-nav conciergerie : cachée automatiquement en mode propriétaire (self) -->
+  <!-- nav conciergerie : cachée en mode self -->
   <nav class="bottom-nav" aria-label="Navigation" id="conciergerieNav">
     <a href="planning.html">Planning</a>
     <a class="active" href="clients.html">Clients</a>
@@ -314,7 +314,9 @@
 
   // State
   let currentUser = null;
-  let ownerId = "";
+  let ownerId = "";              // mode conciergerie (owners/{ownerId})
+  let selfOwnerDocId = "";       // mode self: users/{uid}.ownerDocId
+  let selfConciergerieUid = "";  // mode self: users/{uid}.conciergerieUid
 
   function showAlert(msg, ok=false){
     alertBox.style.display = "block";
@@ -332,7 +334,6 @@
   }
 
   function isSelfMode(){
-    // self=1 OU token=... => propriétaire qui complète son profil
     return getParam("self") === "1" || !!getParam("token");
   }
 
@@ -381,12 +382,16 @@
     notes.value = data.notes || "";
   }
 
+  function buildOwnerDashUrl(){
+    const t = getParam("token");
+    return t ? `owner-dashboard.html?token=${encodeURIComponent(t)}` : "owner-dashboard.html";
+  }
+
   async function setupSelfUi(){
-    // profil propriétaire (self) = pas de nav conciergerie, pas de "nouveau/supprimer/copie"
     cardTitle.textContent = "Mon profil";
     ownerIdLine.textContent = "—";
 
-    backBtn.href = "owner-dashboard.html";
+    backBtn.href = buildOwnerDashUrl();
 
     newBtn.style.display = "none";
     deleteBtn.style.display = "none";
@@ -394,7 +399,6 @@
 
     if(conciergerieNav) conciergerieNav.style.display = "none";
 
-    // Email = readonly et prérempli avec Firebase Auth
     email.readOnly = true;
     email.value = currentUser?.email || "";
   }
@@ -406,31 +410,44 @@
     if(isSelfMode()){
       await setupSelfUi();
 
-      // Pré-remplir depuis users/{uid} si dispo
+      // 1) Charger users/{uid} (source de vérité)
+      let u = null;
       try{
         const snapU = await getDoc(doc(db, "users", currentUser.uid));
-        if(snapU.exists()){
-          apply(snapU.data() || {});
-        }else{
-          clearForm();
-          // garde quand même l'email auth
-          email.value = currentUser?.email || "";
-          email.readOnly = true;
-        }
-      }catch(err){
-        console.warn("Préfill users failed:", err);
+        u = snapU.exists() ? (snapU.data() || {}) : null;
+      }catch(_){}
+
+      if(u){
+        // infos linkage
+        selfOwnerDocId = String(u.ownerDocId || "").trim();
+        selfConciergerieUid = String(u.conciergerieUid || "").trim();
+        apply(u);
+      }else{
+        clearForm();
+        email.value = currentUser?.email || "";
+        email.readOnly = true;
       }
+
+      // 2) si on a ownerDocId, tenter préfill owners/{ownerDocId} (optionnel)
+      if(selfOwnerDocId){
+        try{
+          const osnap = await getDoc(doc(db,"owners", selfOwnerDocId));
+          if(osnap.exists()){
+            apply(osnap.data() || {});
+          }
+        }catch(_){}
+      }else{
+        // important : expliquer pourquoi ça peut bloquer le “compte lié”
+        showAlert("⚠️ ownerDocId manquant. Ton profil peut être enregistré, mais le lien avec les logements ne pourra pas être finalisé. Si ça arrive après une invitation, régénère le lien.", false);
+      }
+
       return;
     }
 
     // ===== MODE CONCIERGERIE (gestion owners/{ownerId}) =====
     ownerId = getParam("ownerId");
     const returnTo = getParam("returnTo");
-    if(returnTo){
-      backBtn.href = `${returnTo}.html`;
-    }else{
-      backBtn.href = "clients.html";
-    }
+    backBtn.href = returnTo ? `${returnTo}.html` : "clients.html";
 
     if(!ownerId){
       cardTitle.textContent = "Nouveau propriétaire";
@@ -485,12 +502,13 @@
       if(isSelfMode()){
         const uid = currentUser.uid;
 
-        // users/{uid} = source de vérité (guard du dashboard check fullname ici)
+        // users/{uid} = source de vérité
         await setDoc(doc(db, "users", uid), {
           uid,
           role: "proprietaire",
           email: currentUser.email || payload.email || "",
           fullname: payload.displayName,
+
           phone: payload.phone || "",
           address1: payload.address1 || "",
           address2: payload.address2 || "",
@@ -500,26 +518,37 @@
           siret: payload.siret || "",
           vat: payload.vat || "",
           notes: payload.notes || "",
+
+          // ne pas écraser si déjà présent
+          conciergerieUid: selfConciergerieUid || undefined,
+          ownerDocId: selfOwnerDocId || undefined,
+
           updatedAt: serverTimestamp()
         }, { merge:true });
 
-        // owners/{uid} (optionnel mais pratique)
-        await setDoc(doc(db, "owners", uid), {
-          uid,
-          role: "proprietaire",
-          email: currentUser.email || payload.email || "",
-          fullname: payload.displayName,
-          phone: payload.phone || "",
-          address1: payload.address1 || "",
-          address2: payload.address2 || "",
-          zip: payload.zip || "",
-          city: payload.city || "",
-          country: payload.country || "FR",
-          siret: payload.siret || "",
-          vat: payload.vat || "",
-          notes: payload.notes || "",
-          updatedAt: serverTimestamp()
-        }, { merge:true });
+        // owners/{ownerDocId} uniquement si on connaît le docId
+        if(selfOwnerDocId){
+          await setDoc(doc(db, "owners", selfOwnerDocId), {
+            ownerDocId: selfOwnerDocId,
+            uid, // uid firebase
+            role: "proprietaire",
+            email: currentUser.email || payload.email || "",
+            fullname: payload.displayName,
+
+            phone: payload.phone || "",
+            address1: payload.address1 || "",
+            address2: payload.address2 || "",
+            zip: payload.zip || "",
+            city: payload.city || "",
+            country: payload.country || "FR",
+            siret: payload.siret || "",
+            vat: payload.vat || "",
+            notes: payload.notes || "",
+
+            conciergerieUid: selfConciergerieUid || undefined,
+            updatedAt: serverTimestamp()
+          }, { merge:true });
+        }
 
         showAlert("✅ Profil enregistré.", true);
 
@@ -527,7 +556,6 @@
           ? `owner-dashboard.html?token=${encodeURIComponent(token)}`
           : `owner-dashboard.html`;
 
-        // petit délai pour que l'utilisateur voie le message
         setTimeout(()=> location.replace(dashUrl), 350);
         return;
       }
@@ -542,9 +570,11 @@
         const ref = doc(collection(db, "owners"));
         ownerId = ref.id;
 
+        // IMPORTANT: ownerId est le docId attendu par homes.ownerUid
         await setDoc(ref, {
-          uid: ownerId,                 // ✅ AJOUTE ÇA
-  role: "proprietaire",         // ✅ (si tu veux bétonner)
+          ownerDocId: ownerId,
+          uid: "",                  // uid Firebase inconnu tant que le proprio n’a pas accepté
+          role: "proprietaire",
           ...conciergeriePayload,
           createdAt: serverTimestamp()
         });
@@ -607,7 +637,6 @@
 
   onAuthStateChanged(auth, async (user)=>{
     if(!user){
-      // Si proprio -> login proprio, sinon conciergerie
       const role = isSelfMode() ? "proprietaire" : "conciergerie";
       location.href = "login.html?role=" + role;
       return;
@@ -617,7 +646,6 @@
 
     if(!country.value) country.value = "FR";
 
-    // En mode self : email readonly
     if(isSelfMode()){
       email.value = user.email || "";
       email.readOnly = true;
@@ -629,4 +657,3 @@
 
 </body>
 </html>
-
