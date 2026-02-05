@@ -1,4 +1,4 @@
-<!-- docs/profil-proprietaire.html (COMPLET + CORRIGÉ ownerDocId/uid + self/conciergerie) -->
+<!-- docs/profil-proprietaire.html (COMPLET + FIX permissions/undefined + owners whitelist) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -319,7 +319,7 @@
   let ownerId = ""; // owners/{ownerId}
 
   // self mode (proprio)
-  let selfOwnerDocId = "";       // users/{uid}.ownerDocId (doc owners)
+  let selfOwnerDocId = "";       // users/{uid}.ownerDocId
   let selfConciergerieUid = "";  // users/{uid}.conciergerieUid
 
   function showAlert(msg, ok=false){
@@ -358,6 +358,7 @@
   function serialize(){
     return {
       displayName: (displayName.value || "").trim(),
+      // email: owner en self -> on le garde readOnly, mais on ne l’écrit PAS dans owners
       email: (email.value || "").trim(),
       phone: (phone.value || "").trim(),
       address1: (address1.value || "").trim(),
@@ -374,7 +375,7 @@
 
   function apply(data){
     displayName.value = data.displayName || data.fullname || "";
-    email.value = data.email || "";
+    email.value = data.email || email.value || "";
     phone.value = data.phone || "";
     address1.value = data.address1 || "";
     address2.value = data.address2 || "";
@@ -403,6 +404,7 @@
 
     if(conciergerieNav) conciergerieNav.style.display = "none";
 
+    // email toujours celui du compte
     email.readOnly = true;
     email.value = currentUser?.email || "";
   }
@@ -414,7 +416,7 @@
     if(isSelfMode()){
       await setupSelfUi();
 
-      // 1) Charger users/{uid} (source de vérité)
+      // 1) Charger users/{uid} (source de vérité compte)
       let u = null;
       try{
         const snapU = await getDoc(doc(db, "users", currentUser.uid));
@@ -431,20 +433,22 @@
         email.readOnly = true;
       }
 
-      // 2) Préfill owners/{ownerDocId} si dispo (optionnel)
+      // 2) Charger owners/{ownerDocId} si dispo (peut échouer si invitation pas finalisée)
       if(selfOwnerDocId){
         try{
           const osnap = await getDoc(doc(db,"owners", selfOwnerDocId));
           if(osnap.exists()){
             apply(osnap.data() || {});
           }else{
-            showAlert("⚠️ OwnerDocId présent mais owners/" + selfOwnerDocId + " introuvable. Demande à la conciergerie de régénérer/valider l’invitation.", false);
+            showAlert("⚠️ owners/" + selfOwnerDocId + " introuvable. Demande à la conciergerie de régénérer/valider l’invitation.", false);
           }
         }catch(err){
+          // permissions = invitation pas finalisée (owners.uid != auth.uid)
+          showAlert("⚠️ Accès owners refusé. L’invitation n’est pas finalisée (owners.uid ≠ ton uid). Reconnecte-toi via le lien d’invitation.", false);
           console.warn(err);
         }
       }else{
-        showAlert("⚠️ ownerDocId manquant. Ton profil peut être enregistré, mais tu ne verras pas tes logements tant que l’invitation n’a pas finalisé le lien.", false);
+        showAlert("⚠️ ownerDocId manquant. Reconnecte-toi via le lien d’invitation.", false);
       }
       return;
     }
@@ -507,8 +511,8 @@
       if(isSelfMode()){
         const uid = currentUser.uid;
 
-        // users/{uid} = source de vérité
-        await setDoc(doc(db, "users", uid), {
+        // ✅ users/{uid} (compte) — pas de undefined
+        const baseUser = {
           uid,
           role: "proprietaire",
           email: currentUser.email || payload.email || "",
@@ -524,25 +528,17 @@
           vat: payload.vat || "",
           notes: payload.notes || "",
 
-          // ne pas écraser si déjà présent
-          conciergerieUid: selfConciergerieUid || undefined,
-          ownerDocId: selfOwnerDocId || undefined,
-
           updatedAt: serverTimestamp()
-        }, { merge:true });
+        };
+        if(selfConciergerieUid) baseUser.conciergerieUid = selfConciergerieUid;
+        if(selfOwnerDocId) baseUser.ownerDocId = selfOwnerDocId;
 
-        // owners/{ownerDocId} seulement si on a le docId
+        await setDoc(doc(db, "users", uid), baseUser, { merge:true });
+
+        // ✅ owners/{ownerDocId} : WHITELIST champs autorisés (ne pas réécrire email/uid/status/conciergerieUid)
         if(selfOwnerDocId){
           await setDoc(doc(db, "owners", selfOwnerDocId), {
-            ownerDocId: selfOwnerDocId,
-            conciergerieUid: selfConciergerieUid || undefined,
-
-            // uid firebase (doit être déjà claim via invitation/login)
-            uid,
-
-            // champs profil whitelist (rules)
             fullname: payload.displayName,
-            email: currentUser.email || payload.email || "",
             phone: payload.phone || "",
             address1: payload.address1 || "",
             address2: payload.address2 || "",
@@ -568,7 +564,19 @@
 
       // ===== MODE CONCIERGERIE (création/édition owners/{id}) =====
       const conciergeriePayload = {
-        ...payload,
+        // mapping : ta collection owners utilise fullname, pas displayName
+        fullname: payload.displayName,
+        email: payload.email,
+        phone: payload.phone,
+        address1: payload.address1,
+        address2: payload.address2,
+        zip: payload.zip,
+        city: payload.city,
+        country: payload.country || "FR",
+        siret: payload.siret,
+        vat: payload.vat,
+        notes: payload.notes,
+        updatedAt: serverTimestamp(),
         conciergerieUid: currentUser.uid
       };
 
@@ -576,10 +584,10 @@
         const ref = doc(collection(db, "owners"));
         ownerId = ref.id;
 
-        // IMPORTANT: ownerId = docId attendu par homes.ownerUid
         await setDoc(ref, {
           ownerDocId: ownerId,
-          uid: "", // inconnu tant que le proprio n'a pas accepté
+          uid: "",             // Auth UID inconnu tant que le proprio n'a pas accepté
+          status: "INVITED",   // ✅ état initial
           ...conciergeriePayload,
           createdAt: serverTimestamp()
         });
