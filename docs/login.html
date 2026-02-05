@@ -1,4 +1,4 @@
-<!-- docs/login.html (COMPLET + FIX) -->
+<!-- docs/login.html (COMPLET — owner token géré par invite-proprietaire) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -116,7 +116,7 @@
         </div>
       </div>
 
-      <div class="tokenInfo" id="tokenInfo">Invitation détectée : on finalise le rattachement.</div>
+      <div class="tokenInfo" id="tokenInfo">Invitation détectée : après connexion, on finalise.</div>
       <div class="msg" id="msgBox"></div>
 
       <form id="loginForm" autocomplete="on">
@@ -149,7 +149,7 @@
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
 
     import {
-      doc, getDoc, setDoc, updateDoc, serverTimestamp
+      doc, getDoc, setDoc, serverTimestamp
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const FREE_EMAILS = new Set([
@@ -198,7 +198,7 @@
     if(roleMode === "proprietaire"){
       titleH1.textContent = "Connexion propriétaire";
       subtitleP.textContent = token
-        ? "Connecte-toi : on finalise ton rattachement à la conciergerie."
+        ? "Connecte-toi : après connexion, on finalise ton rattachement via l’invitation."
         : "Connecte-toi pour accéder à ton espace propriétaire.";
       signupLine.innerHTML = 'Pas d’accès ? <a class="link" href="index.html">Demande une invitation</a>';
       if(token) tokenInfo.style.display = "block";
@@ -240,65 +240,6 @@
       return !!String(u?.fullname || "").trim();
     }
 
-    async function attachOwnerFromToken(user){
-      if(!token) return { ok:true };
-
-      const tokenRef = doc(db, "invites", token);
-      const snap = await getDoc(tokenRef);
-      if(!snap.exists()){
-        return { ok:false, msg:"Invitation introuvable. Demande un nouveau lien." };
-      }
-
-      const inv = snap.data() || {};
-      const invEmail = normalizeEmail(inv.email);
-      const userEmail = normalizeEmail(user.email);
-
-      if(invEmail && userEmail !== invEmail){
-        return { ok:false, msg:"Cet email ne correspond pas à l’invitation. Connecte-toi avec le bon email." };
-      }
-
-      if(inv.usedOwnerUid && inv.usedOwnerUid !== user.uid){
-        return { ok:false, msg:"Cette invitation a déjà été utilisée. Demande un nouveau lien." };
-      }
-
-      const conciergerieUid = String(inv.conciergerieUid || "").trim();
-      const ownerDocId = String(inv.ownerDocId || "").trim();
-
-      if(!conciergerieUid) return { ok:false, msg:"Invitation invalide (conciergerie manquante)." };
-      if(!ownerDocId) return { ok:false, msg:"Invitation invalide (ownerDocId manquant). Régénère le lien." };
-
-      await setDoc(doc(db, "users", user.uid), {
-        uid: user.uid,
-        role: "proprietaire",
-        email: userEmail,
-        conciergerieUid,
-        ownerDocId,
-        inviteToken: token,
-        updatedAt: serverTimestamp()
-      }, { merge:true });
-
-      await setDoc(doc(db, "owners", ownerDocId), {
-  ownerDocId,
-  conciergerieUid,
-  email: userEmail,
-
-  // ✅ acceptation
-  uid: user.uid,
-  status: "ACTIVE",
-  acceptedAt: serverTimestamp(),
-  updatedAt: serverTimestamp()
-}, { merge:true });
-
-
-      await updateDoc(tokenRef, {
-        status: "accepted",
-        usedAt: serverTimestamp(),
-        usedOwnerUid: user.uid
-      });
-
-      return { ok:true };
-    }
-
     function buildRedirectUrl(roleMode, opts={}){
       const plan = getParam("plan") || "starter";
       const next = getParam("next");
@@ -307,14 +248,17 @@
         return "abonnement.html?plan=" + encodeURIComponent(plan);
       }
 
+      // ✅ Proprio : si token => on renvoie vers invite-proprietaire (c’est lui qui finalise)
       if(roleMode === "proprietaire"){
+        if(token){
+          return "invite-proprietaire.html?token=" + encodeURIComponent(token);
+        }
         if(opts.forceProfile){
           const p = new URLSearchParams();
           p.set("self","1");
-          if(token) p.set("token", token);
           return "profil-proprietaire.html?" + p.toString();
         }
-        return "owner-dashboard.html" + (token ? ("?token=" + encodeURIComponent(token)) : "");
+        return "owner-dashboard.html";
       }
 
       return "conciergerie.html";
@@ -341,24 +285,19 @@
         const user = cred.user;
 
         if(roleMode === "proprietaire"){
-          if(token){
-            const res = await attachOwnerFromToken(user);
-            if(!res.ok){
-              showMsg(res.msg || "Invitation invalide.");
-              lockUI(false);
-              isSubmitting = false;
-              return;
-            }
+          // ✅ Ici: pas de write Firestore. L’invite gère le token et fait la finalisation.
+          // Si pas de token, on check juste si profil complet
+          if(!token){
+            let u = null;
+            try{
+              const usnap = await getDoc(doc(db,"users", user.uid));
+              u = usnap.exists() ? (usnap.data() || {}) : null;
+            }catch(_){}
+            const complete = ownerProfileIsComplete(u);
+            location.replace(buildRedirectUrl("proprietaire", { forceProfile: !complete }));
+            return;
           }
-
-          let u = null;
-          try{
-            const usnap = await getDoc(doc(db,"users", user.uid));
-            u = usnap.exists() ? (usnap.data() || {}) : null;
-          }catch(_){}
-
-          const complete = ownerProfileIsComplete(u);
-          location.replace(buildRedirectUrl("proprietaire", { forceProfile: !complete }));
+          location.replace(buildRedirectUrl("proprietaire"));
           return;
         }
 
@@ -393,7 +332,6 @@
           }
         }
 
-        // ✅ FIX: si next=abonnement => abonnement, pas conciergerie.html
         if(getParam("next") === "abonnement"){
           location.replace(buildRedirectUrl("conciergerie"));
           return;
