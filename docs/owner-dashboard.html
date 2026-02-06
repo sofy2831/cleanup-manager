@@ -1,4 +1,4 @@
-<!-- docs/owner-dashboard.html (FINAL CLEAN – no QR, human greeting, no tech data) -->
+<!-- docs/owner-dashboard.html (PATCH: logout->login proprietaire, header centré, nav 4 onglets) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -45,32 +45,40 @@
       font-size:13px;
       text-decoration:none;
       cursor:pointer;
+      white-space:nowrap;
     }
 
-    .logo-title{
-      display:flex; justify-content:center; align-items:center; gap:8px;
+    /* Header centré */
+    .hero{
+      width:100%;
+      max-width:980px;
       margin-top:10px;
+      text-align:center;
+      display:flex;
+      flex-direction:column;
+      align-items:center;
+      gap:6px;
     }
     .logo-icon{
-      width:38px;height:38px;border-radius:50%;
+      width:42px;height:42px;border-radius:50%;
       border:2px solid var(--violet-main);
       display:flex;align-items:center;justify-content:center;
-      color:var(--violet-main); font-weight:900;
+      color:var(--violet-main); font-weight:1000;
+      background:#fff;
+      box-shadow:0 3px 10px rgba(0,0,0,.06);
     }
-
     h1{ margin:0; font-size:24px; font-weight:900; }
-    .subtitle{ font-size:15px; font-weight:800; color:#444; text-align:center; }
-
-    .hello{
-      margin-top:6px;
+    .subtitle{ font-size:15px; font-weight:800; color:#444; margin:0; }
+    .ownerName{
+      margin-top:4px;
       font-size:15px;
-      font-weight:900;
+      font-weight:1000;
       text-align:center;
     }
 
     .badge{
-      margin-top:10px;
-      padding:8px 12px;
+      margin-top:12px;
+      padding:10px 12px;
       border-radius:14px;
       background:#fff;
       font-size:12px;
@@ -78,6 +86,8 @@
       box-shadow:0 3px 10px rgba(0,0,0,.06);
       width:100%;
       max-width:980px;
+      white-space:pre-wrap;
+      color:#333;
     }
 
     .wrap{ width:100%; max-width:980px; margin-top:14px; display:flex; flex-direction:column; gap:12px; }
@@ -135,6 +145,7 @@
       justify-content:center;
     }
 
+    /* Bottom nav (4 onglets) */
     .bottom-nav{
       position:fixed; left:50%; transform:translateX(-50%); bottom:0;
       width:calc(100% - 20px); max-width:980px;
@@ -142,16 +153,21 @@
       background:rgba(255,255,255,0.96);
       border:1px solid var(--border); border-bottom:none;
       border-radius:22px 22px 0 0;
+      box-shadow:0 -6px 20px rgba(0,0,0,0.08);
+      backdrop-filter:blur(10px);
+      z-index:50;
     }
     .bottom-nav a{
       flex:1; text-align:center;
       font-size:11px; font-weight:1000;
       text-decoration:none; color:#666;
       padding:10px; border-radius:999px;
+      white-space:nowrap;
     }
     .bottom-nav a.active{
       background:linear-gradient(90deg,var(--violet-main),var(--violet-dark));
       color:#fff;
+      box-shadow:0 10px 22px rgba(0,0,0,0.10);
     }
   </style>
 </head>
@@ -161,20 +177,19 @@
 
   <div class="topbar">
     <a class="pill" id="profileBtn" href="profil-proprietaire.html?self=1">Mon profil</a>
-    <button class="pill" id="logoutBtn">Déconnexion</button>
+    <button class="pill" id="logoutBtn" type="button">Déconnexion</button>
   </div>
 
-  <div class="logo-title">
+  <div class="hero">
     <div class="logo-icon">✓</div>
     <h1>CleanUp Manager</h1>
+    <p class="subtitle">Dashboard propriétaire</p>
+    <div class="ownerName" id="ownerNameLine">—</div>
   </div>
-  <div class="subtitle">Dashboard propriétaire</div>
-  <div class="hello" id="helloLine">Bonjour</div>
 
   <div class="badge" id="alertsLine">—</div>
 
   <div class="wrap">
-
     <section class="card">
       <div class="cardTitle">
         <span>Accès</span>
@@ -187,19 +202,19 @@
         <a class="btn" href="owner-messages.html">
           💬 Messages <span class="count" id="countMsg">0</span>
         </a>
-        <a class="btn" href="owner-facturation.html">
-          🧾 Facturation <span class="count" id="countBill">0</span>
+        <a class="btn" href="owner-import-ical.html">
+          🔁 iCal <span class="count" id="countIcal">0</span>
         </a>
       </div>
     </section>
-
   </div>
 </div>
 
 <nav class="bottom-nav">
   <a class="active" href="owner-dashboard.html">Dashboard</a>
+  <a href="owner-planning.html">Planning</a>
+  <a href="owner-homes.html">Logements</a>
   <a href="owner-messages.html">Messages</a>
-  <a href="owner-facturation.html">Facturation</a>
 </nav>
 
 <script type="module">
@@ -207,10 +222,10 @@
   import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
   import { doc, getDoc } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
-  const helloLine = document.getElementById("helloLine");
+  const ownerNameLine = document.getElementById("ownerNameLine");
   const alertsLine = document.getElementById("alertsLine");
   const countMsg = document.getElementById("countMsg");
-  const countBill = document.getElementById("countBill");
+  const countIcal = document.getElementById("countIcal");
 
   function setCount(el, n){
     if(n>0){ el.style.display="inline-flex"; el.textContent=n; }
@@ -219,16 +234,18 @@
 
   function refreshBadges(){
     const um = Number(localStorage.getItem("cm_owner_unread_messages")||0);
-    const ub = Number(localStorage.getItem("cm_owner_unread_billing")||0);
+    const ui = Number(localStorage.getItem("cm_owner_pending_ical")||0);
     setCount(countMsg, um);
-    setCount(countBill, ub);
+    setCount(countIcal, ui);
     alertsLine.textContent =
-      `💬 Messages non lus : ${um}\n🧾 Nouveaux devis/factures : ${ub}`;
+      `💬 Messages non lus : ${um}\n🔁 iCal en attente : ${ui}`;
   }
 
   document.getElementById("logoutBtn").onclick = async ()=>{
+    // 1) stop session firebase
     await signOut(auth);
-    location.href="index.html";
+    // 2) redirige vers login propriétaire (pas index)
+    location.href="login.html?role=proprietaire";
   };
 
   onAuthStateChanged(auth, async (user)=>{
@@ -236,15 +253,35 @@
       location.href="login.html?role=proprietaire";
       return;
     }
-    const us = await getDoc(doc(db,"users",user.uid));
-    const ud = us.exists()?us.data():{};
-    const od = ud.ownerDocId;
-    if(!od){ location.href="profil-proprietaire.html?self=1"; return; }
-    const os = await getDoc(doc(db,"owners",od));
-    if(!os.exists()){ location.href="profil-proprietaire.html?self=1"; return; }
-    const o = os.data();
-    helloLine.textContent = "Bonjour " + (o.company || o.legalName || o.fullname || user.email);
-    refreshBadges();
+
+    try{
+      const us = await getDoc(doc(db,"users",user.uid));
+      const ud = us.exists()?us.data():{};
+      const od = String(ud.ownerDocId || "").trim();
+
+      if(!od){
+        ownerNameLine.textContent = user.email || "Propriétaire";
+        refreshBadges();
+        return;
+      }
+
+      const os = await getDoc(doc(db,"owners",od));
+      if(!os.exists()){
+        ownerNameLine.textContent = user.email || "Propriétaire";
+        refreshBadges();
+        return;
+      }
+
+      const o = os.data() || {};
+      const name = (o.company || o.legalName || o.fullname || "").trim();
+      ownerNameLine.textContent = name ? name : (user.email || "Propriétaire");
+
+      refreshBadges();
+    }catch(e){
+      console.error(e);
+      ownerNameLine.textContent = user.email || "Propriétaire";
+      refreshBadges();
+    }
   });
 </script>
 </body>
