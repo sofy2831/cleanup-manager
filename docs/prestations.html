@@ -1,4 +1,4 @@
-<!-- docs/prestations.html -->
+<!-- docs/prestations.html (COMPLET + PATCH: sticky search + topbar sans iCal/ni déconnexion + affiche raison sociale) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -46,7 +46,7 @@
       max-width:980px;
       position:sticky;
       top:0;
-      z-index:10;
+      z-index:30;
       display:flex;
       justify-content:space-between;
       align-items:center;
@@ -117,7 +117,7 @@
     }
     .subtitle{
       font-size:13px;
-      font-weight:900;
+      font-weight:800;
       color:#444;
       text-align:center;
     }
@@ -164,6 +164,7 @@
       display:flex;
       flex-direction:column;
       gap:10px;
+      min-width:0;
     }
     .card-title{
       display:flex;
@@ -179,6 +180,49 @@
       color:var(--muted);
       line-height:1.35;
     }
+
+    /* ✅ Sticky search */
+    .searchWrap{
+      position: sticky;
+      top: 64px; /* sous la topbar */
+      z-index: 25;
+    }
+    @media(min-width: 860px){
+      .searchWrap{ top: 66px; }
+    }
+    .searchbar{
+      display:flex;
+      align-items:center;
+      gap:8px;
+      padding:10px 12px;
+      border-radius:14px;
+      background:#fff;
+      border:1px solid rgba(122,92,255,0.18);
+      box-shadow:0 3px 10px rgba(0,0,0,.06);
+    }
+    .s-ico{ font-size:14px; opacity:.75; }
+    .s-in{
+      flex:1;
+      border:none;
+      outline:none;
+      font-size:13px;
+      font-weight:800;
+      color:#111;
+      background:transparent;
+      min-width:0;
+    }
+    .s-x{
+      border:none;
+      cursor:pointer;
+      width:34px;
+      height:34px;
+      border-radius:999px;
+      background:rgba(122,92,255,0.10);
+      color:#5b45c8;
+      font-weight:900;
+      display:none;
+    }
+    .s-x.show{ display:inline-flex; align-items:center; justify-content:center; }
 
     /* List */
     .list{
@@ -201,6 +245,9 @@
       font-size:13px;
       font-weight:900;
       color:#222;
+      white-space:nowrap;
+      overflow:hidden;
+      text-overflow:ellipsis;
     }
 
     .actions{
@@ -254,7 +301,7 @@
       font-size:12px;
     }
 
-    /* Bottom nav (identique conciergerie.html) */
+    /* Bottom nav (même que conciergerie.html) */
     .bottom-nav{
       position: fixed;
       left: 0;
@@ -286,8 +333,6 @@
       color:#fff;
       box-shadow: 0 10px 22px rgba(0,0,0,0.10);
     }
-
-    /* ✅ PC: nav pleine largeur du container (même largeur que la page) */
     @media(min-width: 860px){
       .bottom-nav{
         position: static;
@@ -481,9 +526,9 @@
   <div class="page">
     <div class="topbar">
       <a class="pill" href="conciergerie.html">← Tableau de bord</a>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;">
-        <a class="pill" href="import-ical.html">iCal</a>
+      <div style="display:flex;gap:8px;">
         <a class="pill primary" href="planning.html">Planning</a>
+        <!-- ✅ Déconnexion supprimée -->
       </div>
     </div>
 
@@ -502,18 +547,29 @@
           <span>Prestations</span>
           <span class="tiny" id="countLabel">—</span>
         </div>
+
+        <!-- ✅ Bandeau recherche sticky -->
+        <div class="searchWrap">
+          <div class="searchbar">
+            <span class="s-ico">🔎</span>
+            <input id="searchInput" class="s-in" type="search" placeholder="Rechercher (logement, ville, propriétaire…)" autocomplete="off">
+            <button id="clearSearchBtn" class="s-x" type="button" title="Effacer" aria-label="Effacer">✕</button>
+          </div>
+        </div>
+
         <div class="list" id="list"></div>
       </section>
     </div>
-
-    <nav class="bottom-nav" aria-label="Navigation">
-      <a href="planning.html">Planning</a>
-      <a class="active" href="prestations.html">Opérations</a>
-      <a href="logements.html">Logements</a>
-      <a href="import-ical.html">iCal</a>
-      <a href="messagerie.html">Messages</a>
-    </nav>
   </div>
+
+  <!-- ✅ Bottom nav = conciergerie.html -->
+  <nav class="bottom-nav" aria-label="Navigation">
+    <a href="planning.html">Planning</a>
+    <a class="active" href="prestations.html">Opérations</a>
+    <a href="logements.html">Logements</a>
+    <a href="import-ical.html">iCal</a>
+    <a href="messagerie.html">Messages</a>
+  </nav>
 
   <!-- MODALE DÉTAIL -->
   <div class="modal-backdrop" id="detailBackdrop" aria-hidden="true">
@@ -657,6 +713,11 @@
     const listEl = document.getElementById("list");
     const countLabel = document.getElementById("countLabel");
 
+    // search
+    const searchInput = document.getElementById("searchInput");
+    const clearSearchBtn = document.getElementById("clearSearchBtn");
+    let searchQuery = "";
+
     // detail modal
     const detailBackdrop = document.getElementById("detailBackdrop");
     const detailCloseBtn = document.getElementById("detailCloseBtn");
@@ -726,6 +787,7 @@
     }
     function asRaw(s){ return String(s||"").toUpperCase().trim(); }
     function qs(name){ return new URLSearchParams(location.search).get(name) || ""; }
+    function safeStr(v){ return (v ?? "").toString().trim(); }
 
     function normalizeOpStatus(s){
       const x = asRaw(s);
@@ -756,34 +818,6 @@
         Array.isArray(d.lines) ? d.lines.map(l=>l?.label).join(" ") : ""
       ];
       return parts.filter(Boolean).join(" ").toLowerCase();
-    }
-
-    // ========= raison sociale (comme conciergerie/planning) =========
-    function safeStr(v){ return (v ?? "").toString().trim(); }
-
-    async function loadConciergerieProfile(user){
-      const uid = user.uid;
-      let societe = "";
-
-      try{
-        const cSnap = await getDoc(doc(db, "conciergeries", uid));
-        if(cSnap.exists()){
-          const d = cSnap.data() || {};
-          societe = safeStr(d.raisonSociale || d.societe || d.company || d.companyName || d.name);
-        }
-      }catch(e){}
-
-      if(!societe){
-        try{
-          const uSnap = await getDoc(doc(db, "users", uid));
-          if(uSnap.exists()){
-            const d = uSnap.data() || {};
-            societe = safeStr(d.raisonSociale || d.societe || d.company || d.companyName || d.name);
-          }
-        }catch(e){}
-      }
-
-      emailLine.textContent = societe || "Conciergerie";
     }
 
     // ========= Datalist produits =========
@@ -828,6 +862,32 @@
     // ===== Guard placeholder =====
     async function guardConciergerie(user){ return true; }
 
+    // ===== Profil conciergerie: raison sociale =====
+    async function loadConciergerieProfile(user){
+      const uid = user.uid;
+      let societe = "";
+
+      try{
+        const cSnap = await getDoc(doc(db, "conciergeries", uid));
+        if(cSnap.exists()){
+          const d = cSnap.data() || {};
+          societe = safeStr(d.raisonSociale || d.societe || d.company || d.companyName || d.name);
+        }
+      }catch(e){}
+
+      if(!societe){
+        try{
+          const uSnap = await getDoc(doc(db, "users", uid));
+          if(uSnap.exists()){
+            const d = uSnap.data() || {};
+            societe = safeStr(d.raisonSociale || d.societe || d.company || d.companyName || d.name);
+          }
+        }catch(e){}
+      }
+
+      emailLine.textContent = societe || "Conciergerie";
+    }
+
     // ===== State =====
     let currentUser = null;
     const PAGE_SIZE = 60;
@@ -836,6 +896,24 @@
 
     // Edit draft
     let editLinesDraft = [];
+
+    // ===== Search =====
+    function applySearchUI(){
+      const q = (searchQuery || "").trim();
+      clearSearchBtn?.classList.toggle("show", !!q);
+    }
+    searchInput?.addEventListener("input", ()=>{
+      searchQuery = searchInput.value || "";
+      applySearchUI();
+      renderList();
+    });
+    clearSearchBtn?.addEventListener("click", ()=>{
+      searchQuery = "";
+      if(searchInput) searchInput.value = "";
+      applySearchUI();
+      renderList();
+      searchInput?.focus();
+    });
 
     // ===== Modales =====
     function openDetailModal(){
@@ -886,7 +964,7 @@
     editBackdrop?.addEventListener("click",(e)=>{ if(e.target===editBackdrop) closeEditModal(); });
     editCancelBtn?.addEventListener("click", closeEditModal);
 
-    // ===== helper photos =====
+    // ===== NEW : helper redirection photos =====
     function goPhotos(prestationId){
       location.href = `preuves-admin.html?prestationId=${encodeURIComponent(prestationId)}`;
     }
@@ -894,17 +972,21 @@
     // ===== List render =====
     function renderList(){
       listEl.innerHTML = "";
-      if(countLabel) countLabel.textContent = `${items.length} prestation(s)`;
 
-      if(!items.length){
+      const q = (searchQuery || "").trim().toLowerCase();
+      const shown = q ? items.filter(x => (x._search || "").includes(q)) : items;
+
+      if(countLabel) countLabel.textContent = `${shown.length} prestation(s)`;
+
+      if(!shown.length){
         const div = document.createElement("div");
         div.className = "empty";
-        div.textContent = "Aucune prestation.";
+        div.textContent = q ? "Aucun résultat pour cette recherche." : "Aucune prestation.";
         listEl.appendChild(div);
         return;
       }
 
-      for(const it of items){
+      for(const it of shown){
         const op = normalizeOpStatus(it.opStatus);
         const title = `${it.homeName || "Logement"}${it.homeCity ? " — " + it.homeCity : ""}${it.homeType ? " (" + it.homeType + ")" : ""}`;
 
@@ -917,7 +999,10 @@
             <div class="actions">
               <button class="mini" type="button" data-open="${esc(it.id)}">Détails</button>
               <button class="mini" type="button" data-edit="${esc(it.id)}">Modifier</button>
+
+              <!-- ✅ Photos -->
               <button class="mini" type="button" data-photos="${esc(it.id)}" title="Photos">📷</button>
+
               ${ (op==="EN_COURS") ? `<button class="mini danger" type="button" data-del="${esc(it.id)}">Supprimer</button>` : `` }
               <button class="mini" type="button" data-program="${esc(it.id)}">Intervention</button>
 
@@ -1286,7 +1371,9 @@
         summary: x.summary || "",
         lines,
         total,
-        createdAt: x.createdAt || null
+        createdAt: x.createdAt || null,
+
+        _search: ""
       };
       obj._search = normalizeForSearch(obj);
       return obj;
@@ -1297,7 +1384,7 @@
         collection(db,"events"),
         where("conciergerieUid","==", currentUser.uid),
         orderBy("createdAt","desc"),
-        limit(60)
+        limit(PAGE_SIZE)
       );
 
       const snap = await getDocs(q);
@@ -1330,13 +1417,14 @@
 
       currentUser = user;
 
+      // ✅ raison sociale
+      try{ await loadConciergerieProfile(user); }
+      catch(e){ emailLine.textContent = "Conciergerie"; }
+
       fillPrestaDatalist();
 
-      try{
-        await loadConciergerieProfile(user);
-      }catch(e){
-        emailLine.textContent = "Conciergerie";
-      }
+      // init search UI
+      applySearchUI();
 
       try{
         hideAlert();
