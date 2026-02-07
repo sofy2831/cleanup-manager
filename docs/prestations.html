@@ -1,3 +1,4 @@
+<!-- docs/prestations.html -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -116,7 +117,7 @@
     }
     .subtitle{
       font-size:13px;
-      font-weight:800;
+      font-weight:900;
       color:#444;
       text-align:center;
     }
@@ -253,36 +254,58 @@
       font-size:12px;
     }
 
-    /* Bottom nav */
+    /* Bottom nav (identique conciergerie.html) */
     .bottom-nav{
-      position:fixed;
-      left:0;
-      right:0;
-      bottom:0;
-      z-index:50;
-      display:flex;
-      gap:6px;
-      justify-content:space-around;
-      padding:10px 10px calc(10px + env(safe-area-inset-bottom));
-      background:rgba(255,255,255,.92);
-      border-top:1px solid var(--border);
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 50;
+      display: flex;
+      gap: 6px;
+      justify-content: space-around;
+      align-items: center;
+      padding: 10px 10px calc(10px + env(safe-area-inset-bottom));
+      background: rgba(255,255,255,0.92);
+      border-top: 1px solid rgba(122,92,255,0.18);
       backdrop-filter: blur(10px);
     }
     .bottom-nav a{
-      flex:1;
-      text-align:center;
-      text-decoration:none;
-      font-size:11px;
-      font-weight:800;
-      padding:8px 10px;
-      border-radius:999px;
-      color:#666;
-      white-space:nowrap;
+      flex: 1;
+      text-align: center;
+      text-decoration: none;
+      font-size: 11px;
+      font-weight: 900;
+      color: #666;
+      padding: 10px 8px;
+      border-radius: 999px;
+      white-space: nowrap;
     }
     .bottom-nav a.active{
-      background:linear-gradient(90deg,var(--violet-main),var(--violet-dark));
+      background: linear-gradient(90deg,var(--violet-main),var(--violet-dark));
       color:#fff;
       box-shadow: 0 10px 22px rgba(0,0,0,0.10);
+    }
+
+    /* ✅ PC: nav pleine largeur du container (même largeur que la page) */
+    @media(min-width: 860px){
+      .bottom-nav{
+        position: static;
+        width: 100%;
+        max-width: 980px;
+        margin: 14px 0 0;
+        border-top: none;
+        border: 1px solid rgba(122,92,255,0.18);
+        border-radius: 999px;
+        box-shadow: 0 4px 12px rgba(0,0,0,.08);
+        padding: 12px 12px;
+        gap: 10px;
+      }
+      .bottom-nav a{
+        font-size: 13px;
+        padding: 12px 12px;
+      }
+      .page{ padding-bottom: 32px; }
     }
 
     /* Modals (style harmonisé nouvelle-prestation) */
@@ -458,9 +481,9 @@
   <div class="page">
     <div class="topbar">
       <a class="pill" href="conciergerie.html">← Tableau de bord</a>
-      <div style="display:flex;gap:8px;">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <a class="pill" href="import-ical.html">iCal</a>
         <a class="pill primary" href="planning.html">Planning</a>
-        <button class="pill" id="logoutBtn" type="button">Déconnexion</button>
       </div>
     </div>
 
@@ -468,7 +491,7 @@
       <div class="logo-icon">✓</div>
       <h1>CleanUp Manager</h1>
     </div>
-    <div class="subtitle">Prestations</div>
+    <div class="subtitle">Gestion de vos prestations</div>
     <div class="emailLine" id="emailLine">—</div>
 
     <div class="alert" id="alertBox"></div>
@@ -482,13 +505,15 @@
         <div class="list" id="list"></div>
       </section>
     </div>
-  </div>
 
-  <nav class="bottom-nav">
-    <a href="planning.html">Planning</a>
-    <a href="logements.html">Logements</a>
-    <a href="catalogue.html">Catalogue</a>
-  </nav>
+    <nav class="bottom-nav" aria-label="Navigation">
+      <a href="planning.html">Planning</a>
+      <a class="active" href="prestations.html">Opérations</a>
+      <a href="logements.html">Logements</a>
+      <a href="import-ical.html">iCal</a>
+      <a href="messagerie.html">Messages</a>
+    </nav>
+  </div>
 
   <!-- MODALE DÉTAIL -->
   <div class="modal-backdrop" id="detailBackdrop" aria-hidden="true">
@@ -530,7 +555,6 @@
           <h3>Modifier la prestation</h3>
           <button class="mini" id="editCancelBtn" type="button">Fermer</button>
         </div>
-      
       </div>
 
       <div class="modal-alert" id="editModalAlert"></div>
@@ -621,7 +645,7 @@
 
   <script type="module">
     import { auth, db } from "./firebase-init.js";
-    import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+    import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
       collection, query, where, orderBy, limit, getDocs,
       doc, updateDoc, deleteDoc, serverTimestamp, getDoc
@@ -629,7 +653,6 @@
 
     // ========= UI =========
     const emailLine = document.getElementById("emailLine");
-    const logoutBtn = document.getElementById("logoutBtn");
     const alertBox = document.getElementById("alertBox");
     const listEl = document.getElementById("list");
     const countLabel = document.getElementById("countLabel");
@@ -735,6 +758,34 @@
       return parts.filter(Boolean).join(" ").toLowerCase();
     }
 
+    // ========= raison sociale (comme conciergerie/planning) =========
+    function safeStr(v){ return (v ?? "").toString().trim(); }
+
+    async function loadConciergerieProfile(user){
+      const uid = user.uid;
+      let societe = "";
+
+      try{
+        const cSnap = await getDoc(doc(db, "conciergeries", uid));
+        if(cSnap.exists()){
+          const d = cSnap.data() || {};
+          societe = safeStr(d.raisonSociale || d.societe || d.company || d.companyName || d.name);
+        }
+      }catch(e){}
+
+      if(!societe){
+        try{
+          const uSnap = await getDoc(doc(db, "users", uid));
+          if(uSnap.exists()){
+            const d = uSnap.data() || {};
+            societe = safeStr(d.raisonSociale || d.societe || d.company || d.companyName || d.name);
+          }
+        }catch(e){}
+      }
+
+      emailLine.textContent = societe || "Conciergerie";
+    }
+
     // ========= Datalist produits =========
     const PRODUCT_TEMPLATES = [
       { label:"Ménage standard (inter-séjour)", unit:"unité" },
@@ -776,12 +827,6 @@
 
     // ===== Guard placeholder =====
     async function guardConciergerie(user){ return true; }
-
-    logoutBtn?.addEventListener("click", async ()=>{
-      await signOut(auth);
-      localStorage.removeItem("cm_auth");
-      location.href = "index.html";
-    });
 
     // ===== State =====
     let currentUser = null;
@@ -841,7 +886,7 @@
     editBackdrop?.addEventListener("click",(e)=>{ if(e.target===editBackdrop) closeEditModal(); });
     editCancelBtn?.addEventListener("click", closeEditModal);
 
-    // ===== NEW : helper redirection photos =====
+    // ===== helper photos =====
     function goPhotos(prestationId){
       location.href = `preuves-admin.html?prestationId=${encodeURIComponent(prestationId)}`;
     }
@@ -872,10 +917,7 @@
             <div class="actions">
               <button class="mini" type="button" data-open="${esc(it.id)}">Détails</button>
               <button class="mini" type="button" data-edit="${esc(it.id)}">Modifier</button>
-
-              <!-- ✅ NOUVEAU : Photos -->
               <button class="mini" type="button" data-photos="${esc(it.id)}" title="Photos">📷</button>
-
               ${ (op==="EN_COURS") ? `<button class="mini danger" type="button" data-del="${esc(it.id)}">Supprimer</button>` : `` }
               <button class="mini" type="button" data-program="${esc(it.id)}">Intervention</button>
 
@@ -1157,7 +1199,6 @@
       const note = (editNote.value || "").trim();
       const total = computeTotalFromLines(editLinesDraft);
 
-      // ✅ On aligne dateKey/time sur l'arrivée (compat historique)
       await patchSelected({
         arrivalDateKey: aD,
         arrivalTime: aT,
@@ -1218,7 +1259,7 @@
     }
 
     function mapEventToItem(id, x, lines, total, rawStatus){
-      return {
+      const obj = {
         id,
         _rawStatus: rawStatus,
         opStatus: x.opStatus || rawStatus,
@@ -1245,10 +1286,10 @@
         summary: x.summary || "",
         lines,
         total,
-        createdAt: x.createdAt || null,
-
-        _search: ""
+        createdAt: x.createdAt || null
       };
+      obj._search = normalizeForSearch(obj);
+      return obj;
     }
 
     async function loadInitial(){
@@ -1256,7 +1297,7 @@
         collection(db,"events"),
         where("conciergerieUid","==", currentUser.uid),
         orderBy("createdAt","desc"),
-        limit(PAGE_SIZE)
+        limit(60)
       );
 
       const snap = await getDocs(q);
@@ -1266,9 +1307,7 @@
         const lines = Array.isArray(x.lines) ? x.lines : [];
         const total = (x.total != null) ? Number(x.total) : computeTotalFromLines(lines);
         const rawStatus = x.status || "EN_COURS";
-        const obj = mapEventToItem(d.id, x, lines, total, rawStatus);
-        obj._search = normalizeForSearch(obj);
-        return obj;
+        return mapEventToItem(d.id, x, lines, total, rawStatus);
       });
 
       renderList();
@@ -1290,9 +1329,14 @@
       }
 
       currentUser = user;
-      if(emailLine) emailLine.textContent = user.email || user.uid;
 
       fillPrestaDatalist();
+
+      try{
+        await loadConciergerieProfile(user);
+      }catch(e){
+        emailLine.textContent = "Conciergerie";
+      }
 
       try{
         hideAlert();
