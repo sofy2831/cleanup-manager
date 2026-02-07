@@ -1,4 +1,4 @@
-<!-- docs/planning.html (PATCH UI: cohérence conciergerie + raison sociale + pas de logout + nav identique dashboard + textes fluides + retire +réservation) -->
+<!-- docs/planning.html (FIX: calendrier OK + raison sociale OK + nav identique conciergerie + pas de logout ici) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -483,7 +483,6 @@
             </div>
           </div>
 
-          <!-- Légende : utile si tu gardes les points -->
           <div class="tiny" style="margin-top:10px; line-height:1.35;">
             <b>Légende :</b>
             <span style="margin-left:6px;"><span class="dot ical"></span> iCal</span>
@@ -506,7 +505,6 @@
     </div>
   </div>
 
-  <!-- NAV identique conciergerie.html -->
   <nav class="bottom-nav" aria-label="Navigation">
     <a class="active" href="planning.html">Planning</a>
     <a href="prestations.html">Opérations</a>
@@ -595,6 +593,7 @@
       .replaceAll('"',"&quot;")
       .replaceAll("'","&#039;");
   }
+  function safeStr(v){ return (v ?? "").toString().trim(); }
   function asRaw(s){ return String(s || "").toUpperCase().trim(); }
   function pad2(n){ return String(n).padStart(2,"0"); }
   function toDateKey(d){ return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`; }
@@ -656,7 +655,6 @@
     return "ical";
   }
 
-  function openModal(){ modalBack.style.display = "flex"; }
   function closeModal(){
     modalBack.style.display = "none";
     modalTitle.textContent = "Détails de la réservation";
@@ -666,7 +664,6 @@
   closeModalBtn.addEventListener("click", closeModal);
   modalBack.addEventListener("click", (e)=>{ if(e.target === modalBack) closeModal(); });
 
-  function openEventModal(){ eventModalBack.style.display = "flex"; }
   function closeEventModal(){
     eventModalBack.style.display = "none";
     eventModalTitle.textContent = "Détails prestation";
@@ -712,16 +709,34 @@
     history.replaceState(null, "", `planning.html?${p.toString()}`);
   }
 
-  async function loadCompanyName(){
-    let name = "";
+  async function loadConciergerieName(){
+    const uid = currentUser.uid;
+    let societe = "";
+
+    // 1) conciergeries/{uid}
     try{
-      const snap = await getDoc(doc(db, "users", currentUser.uid));
-      if(snap.exists()){
-        const d = snap.data() || {};
-        name = (d?.businessProfile?.companyName || "").toString().trim();
+      const cSnap = await getDoc(doc(db, "conciergeries", uid));
+      if(cSnap.exists()){
+        const d = cSnap.data() || {};
+        societe = safeStr(d.raisonSociale || d.societe || d.company || d.companyName || d.name);
       }
     }catch(e){}
-    companyLine.textContent = name || "Conciergerie";
+
+    // 2) users/{uid}
+    if(!societe){
+      try{
+        const uSnap = await getDoc(doc(db, "users", uid));
+        if(uSnap.exists()){
+          const d = uSnap.data() || {};
+          societe = safeStr(
+            d?.businessProfile?.companyName ||
+            d.raisonSociale || d.societe || d.company || d.companyName || d.name
+          );
+        }
+      }catch(e){}
+    }
+
+    companyLine.textContent = societe || "Conciergerie";
   }
 
   async function loadBookingsForMonth(){
@@ -844,7 +859,6 @@
         homeCity: (ev.homeCity || ev.city || "").toString(),
         homeZip: (ev.homeZip || ev.zip || "").toString(),
         homeAddress: (ev.homeAddress || ev.address || "").toString(),
-        homeType: (ev.homeType || ev.typeLogement || "").toString(),
 
         ownerUid: (ev.ownerUid || "").toString(),
         ownerName: (ev.ownerName || "").toString(),
@@ -877,7 +891,7 @@
 
   async function loadAllForMonth(){
     hideAlert();
-    await loadCompanyName();
+    await loadConciergerieName();
     await loadEventsForMonth();
     await loadBookingsForMonth();
     renderAll();
@@ -983,7 +997,7 @@
     document.getElementById("evFactureBtn")?.addEventListener("click", ()=>{ if(allowBilling) openFacture(ev.id); });
     document.getElementById("evPhotosBtn")?.addEventListener("click", ()=>{ openProofsAdmin(ev.id); });
 
-    openEventModal();
+    eventModalBack.style.display = "flex";
   }
 
   async function deleteBooking(b){
@@ -1020,7 +1034,7 @@
       await updateDoc(doc(db,"icalEvents", b.id), {
         archived: true,
         archivedAt: serverTimestamp(),
-        updatedAt: serverTimestamp
+        updatedAt: serverTimestamp()  // ✅ FIX : parenthèses !
       });
       showAlert("✅ Réservation archivée.", true);
       await loadAllForMonth();
@@ -1040,7 +1054,6 @@
     location.href = `logements.html?${p.toString()}`;
   }
 
-  function openModal(){ modalBack.style.display = "flex"; }
   function openBookingDetail(b){
     const src = (b.source || "import").toLowerCase();
     const allowEdit = (src === "manual");
@@ -1086,24 +1099,12 @@
     `;
 
     document.getElementById("modalCloseBtn")?.addEventListener("click", closeModal);
-    document.getElementById("modalEditBtn")?.addEventListener("click", ()=>{
-      if(!allowEdit) return;
-      closeModal();
-      openBookingEdit(b);
-    });
-    document.getElementById("modalDelBtn")?.addEventListener("click", async ()=>{
-      if(!allowEdit) return;
-      closeModal();
-      await deleteBooking(b);
-    });
-    document.getElementById("modalArchBtn")?.addEventListener("click", async ()=>{
-      if(!allowEdit) return;
-      closeModal();
-      await archiveBooking(b);
-    });
+    document.getElementById("modalEditBtn")?.addEventListener("click", ()=>{ if(allowEdit){ closeModal(); openBookingEdit(b); } });
+    document.getElementById("modalDelBtn")?.addEventListener("click", async ()=>{ if(allowEdit){ closeModal(); await deleteBooking(b); } });
+    document.getElementById("modalArchBtn")?.addEventListener("click", async ()=>{ if(allowEdit){ closeModal(); await archiveBooking(b); } });
 
     setFocusParams(selectedDateKey, b.id);
-    openModal();
+    modalBack.style.display = "flex";
   }
 
   function renderAll(){
@@ -1167,18 +1168,9 @@
       `;
       toValidateList.appendChild(div);
 
-      div.querySelector(`[data-validate="${CSS.escape(ev.id)}"]`)?.addEventListener("click", (e)=>{
-        e.stopPropagation();
-        validateEvent(ev);
-      });
-      div.querySelector(`[data-open-presta="${CSS.escape(ev.id)}"]`)?.addEventListener("click", (e)=>{
-        e.stopPropagation();
-        openEventDetail(ev);
-      });
-      div.querySelector(`[data-open-photos="${CSS.escape(ev.id)}"]`)?.addEventListener("click", (e)=>{
-        e.stopPropagation();
-        openProofsAdmin(ev.id);
-      });
+      div.querySelector(`[data-validate="${CSS.escape(ev.id)}"]`)?.addEventListener("click", (e)=>{ e.stopPropagation(); validateEvent(ev); });
+      div.querySelector(`[data-open-presta="${CSS.escape(ev.id)}"]`)?.addEventListener("click", (e)=>{ e.stopPropagation(); openEventDetail(ev); });
+      div.querySelector(`[data-open-photos="${CSS.escape(ev.id)}"]`)?.addEventListener("click", (e)=>{ e.stopPropagation(); openProofsAdmin(ev.id); });
       div.querySelector(`[data-open-day="${CSS.escape(ev.dateKey)}"]`)?.addEventListener("click", (e)=>{
         e.stopPropagation();
         selectedDateKey = ev.dateKey;
@@ -1310,7 +1302,6 @@
     dayCount.textContent = `${presta.length + books.length}`;
     dayTitle.textContent = `Jour — ${selectedDateKey}`;
 
-    // HEADER Réservations (sans bouton + réservation)
     const block = document.createElement("div");
     block.className = "item";
     block.innerHTML = `
@@ -1324,15 +1315,11 @@
     `;
     dayList.appendChild(block);
 
-    // LIST Réservations
     for(const b of books.slice(0, 80)){
       const src = (b.source || "import").toLowerCase();
       const allowEdit = (src === "manual");
 
-      const badge = allowEdit
-        ? `<span class="badge blue">MANUEL</span>`
-        : `<span class="badge">iCAL</span>`;
-
+      const badge = allowEdit ? `<span class="badge blue">MANUEL</span>` : `<span class="badge">iCAL</span>`;
       const title = `${b.homeName}${b.homeCity ? " — " + b.homeCity : ""}`;
 
       const div = document.createElement("div");
@@ -1398,7 +1385,6 @@
       });
     }
 
-    // HEADER Prestations
     const block2 = document.createElement("div");
     block2.className = "item";
     block2.innerHTML = `
@@ -1427,10 +1413,7 @@
 
     for(const ev of presta){
       const title = `${ev.homeName}${ev.homeCity ? " — " + ev.homeCity : ""}`;
-      const sub = [
-        ev.time ? `Heure: ${ev.time}` : null,
-        ev.assignedToName ? `Agent: ${ev.assignedToName}` : null,
-      ].filter(Boolean).join(" • ");
+      const sub = [ ev.time ? `Heure: ${ev.time}` : null, ev.assignedToName ? `Agent: ${ev.assignedToName}` : null ].filter(Boolean).join(" • ");
 
       const st = normalizeOpStatus(ev.opStatus);
       const bCls = opBadgeClass(st);
@@ -1470,13 +1453,11 @@
               <span class="ico">💶</span><span class="txt">Facture</span>
             </button>
 
-            ${
-              st === "A_VALIDER"
-                ? `<button class="mini" type="button" data-validate="${esc(ev.id)}" title="Valider">
-                    <span class="ico">✅</span><span class="txt">Valider</span>
-                  </button>`
-                : ``
-            }
+            ${ st === "A_VALIDER"
+              ? `<button class="mini" type="button" data-validate="${esc(ev.id)}" title="Valider">
+                   <span class="ico">✅</span><span class="txt">Valider</span>
+                 </button>`
+              : `` }
           </div>
         </div>
       `;
