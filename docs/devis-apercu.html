@@ -1,4 +1,4 @@
-<!-- docs/devis-apercu.html (LECTURE + ACCEPTATION PROPRIETAIRE — ACTIONS ACCEPTER/REFUSER) -->
+<!-- docs/devis-apercu.html (EVENT + SALES DOC — LECTURE + ACCEPTATION PROPRIETAIRE) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -81,7 +81,15 @@
     .boxTitle{ font-weight:1000; font-size:12px; color:#333; margin-bottom:6px; }
     .line{ font-size:13px; color:#222; font-weight:800; margin-top:4px; line-height:1.35; }
 
-    table{ width:100%; border-collapse:collapse; margin-top:12px; background:#fff; border-radius:14px; overflow:hidden; border:1px solid rgba(0,0,0,.10); }
+    table{
+      width:100%;
+      border-collapse:collapse;
+      margin-top:12px;
+      background:#fff;
+      border-radius:14px;
+      overflow:hidden;
+      border:1px solid rgba(0,0,0,.10);
+    }
     th,td{ padding:10px 10px; border-bottom:1px solid rgba(0,0,0,.08); text-align:left; vertical-align:top; font-size:13px; }
     th{ background: rgba(248,244,255,.7); font-weight:1000; }
     td.num, th.num{ text-align:right; white-space:nowrap; }
@@ -95,6 +103,7 @@
     }
     .r{ display:flex; justify-content:space-between; gap:10px; margin-top:6px; font-weight:900; }
     .big{ font-size:15px; }
+    .smallNote{ margin-top:6px; font-size:12px; color:#555; font-weight:800; line-height:1.35; }
 
     .alert{
       display:none;
@@ -165,8 +174,8 @@
 <body>
   <div class="page">
     <div class="topbar">
-      <a class="pill" href="owner-dashboard.html">← Retour</a>
-      <a class="pill" href="messagerie.html">Messages</a>
+      <a class="pill" id="backLink" href="owner-dashboard.html">← Retour</a>
+      <a class="pill" id="msgLink" href="owner-messages.html">Messages</a>
     </div>
 
     <div class="card">
@@ -177,7 +186,7 @@
             <div class="logoFallback" id="logoFallback">✓</div>
           </div>
           <div>
-            <div class="docTitle">DEVIS</div>
+            <div class="docTitle" id="docTypeLabel">DEVIS</div>
             <div class="docNum" id="docNum">—</div>
             <div class="statusPill" id="statusPill" style="display:none;"></div>
           </div>
@@ -218,7 +227,8 @@
             <th>Désignation</th>
             <th class="num">Qté</th>
             <th>Unité</th>
-            <th class="num">PU</th>
+            <th class="num">PU HT</th>
+            <th class="num" id="thTVA" style="display:none;">TVA</th>
             <th class="num">Total TTC</th>
           </tr>
         </thead>
@@ -243,7 +253,7 @@
 
       <textarea id="refuseNote" rows="3" placeholder="Motif de refus (optionnel)"></textarea>
 
-      <div class="actions">
+      <div class="actions" id="actionsBox">
         <button class="btn danger" id="refuseBtn" type="button">Refuser</button>
         <button class="btn primary" id="acceptBtn" type="button">Accepter le devis</button>
       </div>
@@ -259,6 +269,7 @@
     const logoImg = document.getElementById("logoImg");
     const logoFallback = document.getElementById("logoFallback");
 
+    const docTypeLabel = document.getElementById("docTypeLabel");
     const docNum = document.getElementById("docNum");
     const quoteDate = document.getElementById("quoteDate");
     const quoteValidity = document.getElementById("quoteValidity");
@@ -273,6 +284,7 @@
     const homeLine = document.getElementById("homeLine");
     const periodLine = document.getElementById("periodLine");
 
+    const thTVA = document.getElementById("thTVA");
     const linesTbody = document.getElementById("linesTbody");
     const totalsBox = document.getElementById("totalsBox");
 
@@ -288,6 +300,10 @@
     const refuseNote = document.getElementById("refuseNote");
 
     const statusPill = document.getElementById("statusPill");
+    const actionsBox = document.getElementById("actionsBox");
+
+    const backLink = document.getElementById("backLink");
+    const msgLink = document.getElementById("msgLink");
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -363,11 +379,6 @@
       return "—";
     }
 
-    function computeTotalFromLines(lines){
-      if(!Array.isArray(lines)) return 0;
-      return lines.reduce((s,l)=> s + (Number(l?.qty)||0) * (Number(l?.unitPrice)||0), 0);
-    }
-
     function lockActions(locked){
       acceptBtn.disabled = !!locked;
       refuseBtn.disabled = !!locked;
@@ -398,158 +409,311 @@
       if(x === "REFUSED") statusPill.classList.add("bad");
     }
 
+    function computeTotals(lines, tvaEnabled, tvaRate){
+      let ht = 0;
+      for(const l of (Array.isArray(lines) ? lines : [])){
+        const qty = Number(l?.qty)||0;
+        const up  = Number(l?.unitPrice)||0;
+        ht += qty * up;
+      }
+      const tva = tvaEnabled ? (ht * (Number(tvaRate)||0)) : 0;
+      const ttc = ht + tva;
+      return { ht, tva, ttc };
+    }
+
+    // ===== Params =====
     const eventId = getParam("eventId");
-    let eventRef = null;
-    let eventData = null;
+    const docId = getParam("docId");
+
+    let docMode = ""; // "event" | "sales"
+    let dataRef = null;
+    let data = null;
+    let profile = null;
+
+    function isOwnerAcceptanceAllowed(){
+      // seulement sur event, pas sur salesDocuments (prospect sans compte)
+      return docMode === "event";
+    }
+
+    function hideOwnerActions(){
+      actionsBox.style.display = "none";
+      refuseNote.style.display = "none";
+    }
+
+    function ensureOwnerAllowed(user, eventData){
+      // Priorité : ownerUid (auth uid) puis fallback email
+      const uEmail = normalizeEmail(user.email || "");
+      const oEmail = normalizeEmail(eventData.ownerEmail || "");
+      const ownerUid = String(eventData.ownerUid || eventData.ownerAuthUid || "").trim();
+
+      const allowed =
+        (!!ownerUid && ownerUid === user.uid) ||
+        (!!uEmail && !!oEmail && uEmail === oEmail);
+
+      return allowed;
+    }
+
+    function renderCompany(bp){
+      const logoUrl = String(bp.logoUrl || "").trim();
+      if(logoUrl){
+        logoImg.src = logoUrl;
+        logoImg.style.display = "block";
+        logoFallback.style.display = "none";
+      }else{
+        logoImg.style.display = "none";
+        logoFallback.style.display = "block";
+      }
+
+      bizName.textContent = String(bp.companyName || "Conciergerie").trim() || "Conciergerie";
+
+      const bLines = [];
+      const street = String(bp.address?.street || "").trim();
+      const zip = String(bp.address?.zip || "").trim();
+      const city = String(bp.address?.city || "").trim();
+      if(street) bLines.push(street);
+      if(zip || city) bLines.push([zip, city].filter(Boolean).join(" "));
+      const siret = String(bp.registration?.siret || "").trim();
+      if(siret) bLines.push(`SIRET ${siret}`);
+      const vatEnabled = !!bp.vat?.enabled;
+      const vatNumber = String(bp.vat?.number || "").trim();
+      if(vatEnabled && vatNumber) bLines.push(`TVA : ${vatNumber}`);
+
+      bizLines.textContent = bLines.filter(Boolean).join(" • ") || "—";
+    }
+
+    function renderClientFromEvent(ev){
+      // snapshot event
+      clientName.textContent = (ev.ownerName || "—");
+      const cLines = [];
+      const a1 = String(ev.ownerAddress1 || "").trim();
+      const a2 = String(ev.ownerAddress2 || "").trim();
+      const z = String(ev.ownerZip || "").trim();
+      const c = String(ev.ownerCity || "").trim();
+      if(a1) cLines.push(a1);
+      if(a2) cLines.push(a2);
+      if(z || c) cLines.push([z,c].filter(Boolean).join(" "));
+      if(ev.ownerEmail) cLines.push(ev.ownerEmail);
+      clientLines.textContent = cLines.filter(Boolean).join(" • ") || "—";
+    }
+
+    function renderClientFromSales(sd){
+      // client snapshot in salesDocuments
+      const cs = sd.clientSnapshot || {};
+      const name = String(cs.fullname || cs.name || sd.clientName || "—").trim() || "—";
+      const email = String(cs.email || sd.clientEmail || "").trim();
+      const phone = String(cs.phone || "").trim();
+      const a1 = String(cs.address1 || "").trim();
+      const a2 = String(cs.address2 || "").trim();
+      const z = String(cs.zip || "").trim();
+      const c = String(cs.city || "").trim();
+
+      clientName.textContent = name;
+      const lines = [];
+      if(a1) lines.push(a1);
+      if(a2) lines.push(a2);
+      if(z || c) lines.push([z,c].filter(Boolean).join(" "));
+      if(email) lines.push(email);
+      if(phone) lines.push(phone);
+      clientLines.textContent = lines.length ? lines.join(" • ") : "—";
+    }
+
+    function renderLinesAndTotals(lines, bp){
+      const vatEnabled = !!bp.vat?.enabled;
+      const vatRate = Number.isFinite(Number(bp.vat?.rate)) ? Number(bp.vat.rate) : 0;
+      thTVA.style.display = vatEnabled ? "" : "none";
+
+      linesTbody.innerHTML = "";
+      for(const l of (Array.isArray(lines) ? lines : [])){
+        const label = l?.label || "Ligne";
+        const qty = Number(l?.qty)||0;
+        const unit = l?.unit || "unité";
+        const up = Number(l?.unitPrice)||0;
+
+        const lineHT = qty * up;
+        const lineTVA = vatEnabled ? (lineHT * vatRate) : 0;
+        const lineTTC = lineHT + lineTVA;
+
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${esc(label)}</td>
+          <td class="num">${esc(qty)}</td>
+          <td>${esc(unit)}</td>
+          <td class="num">${esc(fmtMoney(up))}</td>
+          ${vatEnabled ? `<td class="num">${esc(fmtMoney(lineTVA))}</td>` : ``}
+          <td class="num">${esc(fmtMoney(lineTTC))}</td>
+        `;
+        linesTbody.appendChild(tr);
+      }
+
+      const totals = computeTotals(lines, vatEnabled, vatRate);
+
+      if(vatEnabled){
+        totalsBox.innerHTML = `
+          <div class="r"><span>Total HT</span><span>${esc(fmtMoney(totals.ht))}</span></div>
+          <div class="r"><span>TVA (${Math.round(vatRate*100)}%)</span><span>${esc(fmtMoney(totals.tva))}</span></div>
+          <div class="r big"><span>Total TTC</span><span>${esc(fmtMoney(totals.ttc))}</span></div>
+        `;
+      }else{
+        const ex = String(bp?.tvaExemptionText || "").trim() || "TVA non applicable, art. 293B du CGI.";
+        totalsBox.innerHTML = `
+          <div class="r big"><span>Total TTC</span><span>${esc(fmtMoney(totals.ttc))}</span></div>
+          <div class="smallNote">${esc(ex)}</div>
+        `;
+      }
+    }
+
+    function renderCommonMeta(fromData, bp){
+      const date = todayIso();
+      quoteDate.textContent = date;
+
+      const offerDays = Math.max(0, parseInt(fromData.quoteOfferValidityDays || fromData.offerValidityDays || "30", 10) || 30);
+      quoteValidity.textContent = `jusqu’au ${addDaysLabel(date, offerDays)}`;
+
+      const payTerm = String(fromData.quotePaymentTerm || fromData.paymentTerm || "RECEPTION");
+      const payMode = String(fromData.quotePaymentMode || fromData.paymentMode || "VIREMENT");
+      const dueDays = termToDays(payTerm);
+      quotePayment.textContent = `${termLabel(payTerm)} (échéance ${addDaysLabel(date, dueDays)}) • ${payModeLabel(payMode)}`;
+
+      const cancelPct = Number.isFinite(Number(bp?.conditions?.cancellationPercent))
+        ? Number(bp.conditions.cancellationPercent)
+        : 30;
+
+      cond1.textContent = `Validité : ${quoteValidity.textContent}`;
+      cond2.textContent = `Paiement : ${quotePayment.textContent}`;
+      cond3.textContent = `Annulation : ${cancelPct}% selon conditions`;
+      cond4.textContent = `Accès logement : clés/codes/consignes obligatoires`;
+
+      penaltyText.textContent = String(fromData.quotePenaltyText || fromData.penaltyText || "—");
+    }
+
+    function renderEvent(ev){
+      docTypeLabel.textContent = "DEVIS";
+      docMode = "event";
+
+      // backlink owner
+      backLink.href = "owner-dashboard.html";
+      msgLink.href = "owner-messages.html";
+
+      docNum.textContent = ev.quoteNumber ? ev.quoteNumber : "—";
+      renderStatusPill(ev.quoteStatus);
+
+      objLine.textContent = `Objet : ${String(ev.quoteObject || ev.object || "Prestation de conciergerie").trim()}`;
+      homeLine.textContent = `Logement : ${String(ev.homeName || "—")}${ev.homeCity ? " — " + ev.homeCity : ""}`;
+      periodLine.textContent = `Période : ${getStayPeriod(ev)}`;
+
+      renderClientFromEvent(ev);
+
+      const lines = Array.isArray(ev.lines) ? ev.lines : [];
+      renderLinesAndTotals(lines, profile?.businessProfile || {});
+
+      renderCommonMeta(ev, profile?.businessProfile || {});
+
+      // actions owner
+      if(!isOwnerAcceptanceAllowed()){
+        hideOwnerActions();
+        return;
+      }
+
+      const qs = String(ev.quoteStatus || "").toUpperCase();
+      if(qs === "ACCEPTED" || qs === "REFUSED"){
+        lockActions(true);
+        refuseNote.disabled = true;
+      }else{
+        lockActions(false);
+        refuseNote.disabled = false;
+      }
+    }
+
+    function renderSales(sd){
+      docTypeLabel.textContent = "DEVIS";
+      docMode = "sales";
+
+      // mode prospect : retour côté conciergerie (pas owner dashboard)
+      backLink.href = "devis-liste.html";
+      msgLink.href = "messagerie.html"; // conciergerie (tu peux changer si tu veux)
+      hideOwnerActions();
+
+      const number = String(sd.number || sd.quoteNumber || "").trim();
+      docNum.textContent = number || "—";
+      renderStatusPill(sd.status || sd.quoteStatus || "");
+
+      objLine.textContent = `Objet : ${String(sd.object || sd.quoteObject || "Prestation de conciergerie").trim()}`;
+      homeLine.textContent = sd.homeName ? `Logement : ${String(sd.homeName)}${sd.homeCity ? " — " + sd.homeCity : ""}` : `Logement : —`;
+      periodLine.textContent = `Période : ${String(sd.periodLabel || "—")}`;
+
+      renderClientFromSales(sd);
+
+      const lines = Array.isArray(sd.lines) ? sd.lines : [];
+      renderLinesAndTotals(lines, profile?.businessProfile || {});
+
+      renderCommonMeta(sd, profile?.businessProfile || {});
+    }
 
     onAuthStateChanged(auth, async (user)=>{
       if(!user){ location.href = "login.html?role=owner"; return; }
       hideAlert();
 
       try{
-        if(!eventId) throw new Error("eventId manquant.");
-        eventRef = doc(db, "events", eventId);
-        const snap = await getDoc(eventRef);
+        if(!eventId && !docId) throw new Error("Paramètre manquant : eventId ou docId.");
+
+        // 1) load data (event ou sales)
+        if(eventId){
+          dataRef = doc(db, "events", eventId);
+          const snap = await getDoc(dataRef);
+          if(!snap.exists()) throw new Error("Devis introuvable.");
+          data = { id:snap.id, ...(snap.data()||{}) };
+
+          // 2) access control owner
+          if(!ensureOwnerAllowed(user, data)){
+            throw new Error("Accès refusé : ce devis ne vous appartient pas.");
+          }
+
+          // 3) load conciergerie profile
+          profile = await loadConciergerieProfile(data.conciergerieUid);
+          const bp = profile?.businessProfile || {};
+          renderCompany(bp);
+
+          // 4) render
+          renderEvent(data);
+          return;
+        }
+
+        // docId mode (salesDocuments) : conciergerie only (même login)
+        dataRef = doc(db, "salesDocuments", docId);
+        const snap = await getDoc(dataRef);
         if(!snap.exists()) throw new Error("Devis introuvable.");
-        eventData = { id:snap.id, ...(snap.data()||{}) };
+        data = { id:snap.id, ...(snap.data()||{}) };
 
-        // ✅ contrôle d'accès : email (simple, robuste) + fallback uid si tu l'ajoutes plus tard
-        const uEmail = normalizeEmail(user.email || "");
-        const oEmail = normalizeEmail(eventData.ownerEmail || "");
-        const ownerAuthUid = String(eventData.ownerAuthUid || "").trim();
+        // contrôle basique : conciergerieUid == auth uid
+        if(String(data.conciergerieUid || "").trim() !== String(user.uid)){
+          throw new Error("Accès refusé : ce document n'est pas dans votre compta.");
+        }
 
-        const allowed =
-          (!!uEmail && !!oEmail && uEmail === oEmail) ||
-          (!!ownerAuthUid && ownerAuthUid === user.uid) ||
-          (String(eventData.ownerUid||"").trim() === user.uid);
-
-        if(!allowed) throw new Error("Accès refusé : ce devis ne vous appartient pas.");
-
-        // profile conciergerie (pour logo + société)
-        const profile = await loadConciergerieProfile(eventData.conciergerieUid);
-
+        profile = await loadConciergerieProfile(user.uid);
         const bp = profile?.businessProfile || {};
-        const logoUrl = String(bp.logoUrl || "").trim();
-        if(logoUrl){
-          logoImg.src = logoUrl;
-          logoImg.style.display = "block";
-          logoFallback.style.display = "none";
-        }else{
-          logoImg.style.display = "none";
-          logoFallback.style.display = "block";
-        }
+        renderCompany(bp);
 
-        // header doc
-        docNum.textContent = eventData.quoteNumber ? eventData.quoteNumber : "—";
-        renderStatusPill(eventData.quoteStatus);
-
-        const date = todayIso();
-        quoteDate.textContent = date;
-
-        const offerDays = Math.max(0, parseInt(eventData.quoteOfferValidityDays || "30", 10) || 30);
-        quoteValidity.textContent = `jusqu’au ${addDaysLabel(date, offerDays)}`;
-
-        const payTerm = String(eventData.quotePaymentTerm || "RECEPTION");
-        const payMode = String(eventData.quotePaymentMode || "VIREMENT");
-        const dueDays = termToDays(payTerm);
-        quotePayment.textContent = `${termLabel(payTerm)} (échéance ${addDaysLabel(date, dueDays)}) • ${payModeLabel(payMode)}`;
-
-        // société
-        bizName.textContent = String(bp.companyName || "Conciergerie").trim() || "Conciergerie";
-        const bLines = [];
-        const street = String(bp.address?.street || "").trim();
-        const zip = String(bp.address?.zip || "").trim();
-        const city = String(bp.address?.city || "").trim();
-        if(street) bLines.push(street);
-        if(zip || city) bLines.push([zip, city].filter(Boolean).join(" "));
-        const siret = String(bp.registration?.siret || "").trim();
-        if(siret) bLines.push(`SIRET ${siret}`);
-        bizLines.textContent = bLines.filter(Boolean).join(" • ") || "—";
-
-        // client (snapshot event)
-        clientName.textContent = (eventData.ownerName || "—");
-        const cLines = [];
-        const a1 = String(eventData.ownerAddress1 || "").trim();
-        const a2 = String(eventData.ownerAddress2 || "").trim();
-        const z = String(eventData.ownerZip || "").trim();
-        const c = String(eventData.ownerCity || "").trim();
-        if(a1) cLines.push(a1);
-        if(a2) cLines.push(a2);
-        if(z || c) cLines.push([z,c].filter(Boolean).join(" "));
-        if(eventData.ownerEmail) cLines.push(eventData.ownerEmail);
-        clientLines.textContent = cLines.filter(Boolean).join(" • ") || "—";
-
-        // objet / logement
-        objLine.textContent = `Objet : ${String(eventData.quoteObject || eventData.object || "Prestation de conciergerie").trim()}`;
-        homeLine.textContent = `Logement : ${String(eventData.homeName || "—")}${eventData.homeCity ? " — " + eventData.homeCity : ""}`;
-        periodLine.textContent = `Période : ${getStayPeriod(eventData)}`;
-
-        // lignes
-        const lines = Array.isArray(eventData.lines) ? eventData.lines : [];
-        linesTbody.innerHTML = "";
-        for(const l of lines){
-          const label = l?.label || "Ligne";
-          const qty = Number(l?.qty)||0;
-          const unit = l?.unit || "unité";
-          const up = Number(l?.unitPrice)||0;
-          const tot = qty * up; // TTC (chez toi sans TVA)
-          const tr = document.createElement("tr");
-          tr.innerHTML = `
-            <td>${esc(label)}</td>
-            <td class="num">${esc(qty)}</td>
-            <td>${esc(unit)}</td>
-            <td class="num">${esc(fmtMoney(up))}</td>
-            <td class="num">${esc(fmtMoney(tot))}</td>
-          `;
-          linesTbody.appendChild(tr);
-        }
-
-        const total = (eventData.quoteAmount != null && eventData.quoteAmount !== "")
-          ? Number(eventData.quoteAmount)
-          : (eventData.total != null && eventData.total !== "")
-            ? Number(eventData.total)
-            : computeTotalFromLines(lines);
-
-        totalsBox.innerHTML = `
-          <div class="r big"><span>Total TTC</span><span>${esc(fmtMoney(total))}</span></div>
-        `;
-
-        // conditions (simples)
-        const cancelPct = Number.isFinite(Number(bp?.conditions?.cancellationPercent))
-          ? Number(bp.conditions.cancellationPercent)
-          : 30;
-
-        cond1.textContent = `Validité : ${quoteValidity.textContent}`;
-        cond2.textContent = `Paiement : ${quotePayment.textContent}`;
-        cond3.textContent = `Annulation : ${cancelPct}% selon conditions`;
-        cond4.textContent = `Accès logement : clés/codes/consignes obligatoires`;
-
-        penaltyText.textContent = String(eventData.quotePenaltyText || "—");
-
-        // verrou actions si déjà répondu
-        const qs = String(eventData.quoteStatus || "").toUpperCase();
-        if(qs === "ACCEPTED" || qs === "REFUSED"){
-          lockActions(true);
-          refuseNote.disabled = true;
-        }
+        renderSales(data);
 
       }catch(e){
         showAlert("⛔ " + (e?.message || "Erreur"), false);
       }
     });
 
+    // ===== Accept/Refuse (event only) =====
     acceptBtn.addEventListener("click", async ()=>{
-      if(!eventRef) return;
+      if(!dataRef || docMode !== "event") return;
       if(!confirm("Confirmer l’acceptation du devis ?")) return;
       lockActions(true);
       try{
-        await updateDoc(eventRef, {
+        await updateDoc(dataRef, {
           quoteStatus: "ACCEPTED",
           commercialStatus: "DEVIS_ACCEPTE",
           quoteAnsweredAt: serverTimestamp(),
           quoteAnswerNote: "",
         });
         showAlert("✅ Devis accepté.", true);
+        renderStatusPill("ACCEPTED");
       }catch(e){
         console.error(e);
         showAlert("Erreur : " + (e?.message || "inconnue"));
@@ -558,17 +722,18 @@
     });
 
     refuseBtn.addEventListener("click", async ()=>{
-      if(!eventRef) return;
+      if(!dataRef || docMode !== "event") return;
       if(!confirm("Confirmer le refus du devis ?")) return;
       lockActions(true);
       try{
-        await updateDoc(eventRef, {
+        await updateDoc(dataRef, {
           quoteStatus: "REFUSED",
           commercialStatus: "DEVIS_REFUSE",
           quoteAnsweredAt: serverTimestamp(),
           quoteAnswerNote: (refuseNote.value || "").trim()
         });
         showAlert("✅ Devis refusé.", true);
+        renderStatusPill("REFUSED");
       }catch(e){
         console.error(e);
         showAlert("Erreur : " + (e?.message || "inconnue"));
