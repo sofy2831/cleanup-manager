@@ -1,4 +1,4 @@
-<!-- docs/devis-free.html (FINAL RULES-COMPAT: type:"QUOTE" obligatoire, aperçu auto-crée + sync Firestore, pas de v1, pas de Firestore côté client) -->
+<!-- docs/devis-free.html (FINAL RULES-COMPAT + businessSnapshot) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -670,6 +670,39 @@
       applyLogoFromProfile(profileData);
     }
 
+    // ✅ NEW : snapshot société à écrire dans salesDocuments
+    function buildBusinessSnapshotFromProfile(){
+      const bp = (profileData?.businessProfile || {});
+      return {
+        companyName: String(bp.companyName || "Conciergerie").trim(),
+        logoUrl: String(bp.logoUrl || "").trim(),
+        address: {
+          street: String(bp.address?.street || "").trim(),
+          zip: String(bp.address?.zip || "").trim(),
+          city: String(bp.address?.city || "").trim(),
+        },
+        registration: {
+          siret: String(bp.registration?.siret || "").trim(),
+          ape: String(bp.registration?.ape || "").trim(),
+        },
+        contact: {
+          email: String(bp.contact?.email || bp.email || "").trim(),
+          phone: String(bp.contact?.phone || bp.phone || "").trim(),
+        },
+        vat: {
+          enabled: !!bp.vat?.enabled,
+          rate: Number.isFinite(Number(bp.vat?.rate)) ? Number(bp.vat.rate) : 0,
+        },
+        tvaExemptionText: String(bp.tvaExemptionText || "").trim(),
+        conditions: {
+          cancellationPercent: Number.isFinite(Number(bp.conditions?.cancellationPercent))
+            ? Number(bp.conditions.cancellationPercent)
+            : 30
+        },
+        snapAtMs: Date.now()
+      };
+    }
+
     async function ensureQuoteNumber(uid, year){
       const counterId = `${uid}_${year}`;
       const counterRef = doc(db, "counters", counterId);
@@ -941,14 +974,12 @@
       if(!snap.exists()) throw new Error("Devis introuvable.");
       quoteData = { id: snap.id, ...(snap.data()||{}) };
 
-      // (sécurité logique)
       if(quoteData.conciergerieUid && quoteData.conciergerieUid !== currentUser.uid){
         throw new Error("Accès refusé (doc d’une autre conciergerie).");
       }
 
       renderClientInputsFromDoc(quoteData);
 
-      // sync lignes -> state
       lines = Array.isArray(quoteData.lines) ? quoteData.lines.map(x => ({
         label: String(x?.label || "").trim(),
         ref: String(x?.ref || "").trim(),
@@ -960,7 +991,6 @@
         suggestedPrice: String(x?.suggestedPrice || "").trim()
       })) : [];
 
-      // params
       if(quoteData.quotePaymentTerm) paymentTermEl.value = quoteData.quotePaymentTerm;
       if(quoteData.quotePaymentMode) setPayMode(quoteData.quotePaymentMode);
       else setPayMode("VIREMENT");
@@ -971,7 +1001,8 @@
 
       const pm = String(quoteData.quotePenaltyMode || "").toUpperCase();
       if(pm === "B2B") penB2BEl.checked = true;
-      else { penB2CEl.checked = true; }
+      else penB2CEl.checked = true;
+
       if(quoteData.quotePenaltyText) penaltyTextEl.value = quoteData.quotePenaltyText;
       else syncPenaltyText();
 
@@ -998,11 +1029,15 @@
       docId = newRef.id;
       quoteRef = newRef;
 
-      // ✅ IMPORTANT POUR TES RULES
       const patch = {
         conciergerieUid: currentUser.uid,
-        type: "QUOTE",              // ✅ requis par rules
-        docType: "QUOTE_FREE",      // (ton usage)
+
+        // ✅ snapshot société écrit dans le doc (pour devisfree-apercu.html)
+        businessSnapshot: buildBusinessSnapshotFromProfile(),
+
+        // ✅ IMPORTANT POUR TES RULES
+        type: "QUOTE",
+        docType: "QUOTE_FREE",
         quoteNumber,
         quoteStatus: "DRAFT",
         commercialStatus: "DEVIS",
@@ -1052,6 +1087,9 @@
       }
 
       const patch = {
+        // ✅ refresh snapshot (utile si tu changes ton profil société)
+        businessSnapshot: buildBusinessSnapshotFromProfile(),
+
         clientName: client.clientName,
         clientEmail: client.clientEmail,
         clientAddress1: client.clientAddress1,
@@ -1104,12 +1142,11 @@
       }
     });
 
-    // ✅ Aperçu = sync Firestore puis redirect
     previewBtn.addEventListener("click", async ()=>{
       hideAlert();
       lockUI(true);
       try{
-        await saveToFirestore({ requireLines:false }); // autorise aperçu même sans lignes
+        await saveToFirestore({ requireLines:false });
         const u = new URL("devisfree-apercu.html", location.href);
         u.searchParams.set("docId", docId);
         location.href = u.toString();
@@ -1125,7 +1162,6 @@
       const d = quoteData || {};
       docBannerInner.textContent = `DEVIS N° ${d.quoteNumber || "—"}`;
 
-      // on cache le statut quand brouillon
       const st = String(d.quoteStatus || "").toUpperCase();
       if(!st || st === "DRAFT"){
         statusBadge.classList.add("hidden");
@@ -1137,7 +1173,6 @@
       renderBusinessHeader();
     }
 
-    // ===== Boot =====
     onAuthStateChanged(auth, async (user)=>{
       if(!user){ location.href = "login.html?role=conciergerie"; return; }
       currentUser = user;
@@ -1146,7 +1181,6 @@
       try{
         await loadProfile(currentUser.uid);
 
-        // defaults
         penB2CEl.checked = true;
         syncPenaltyText();
         setPayMode("VIREMENT");
