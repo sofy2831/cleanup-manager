@@ -1,4 +1,4 @@
-<!-- docs/devis-free.html (PATCH: ajoute Référence catalogue dans lignes + preview) -->
+<!-- docs/devis-free.html (PATCH COMPLET: Réf catalogue desktop + badge mobile + auto-ref depuis label via catalog-templates.js) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -510,54 +510,51 @@
       doc, getDoc, setDoc, updateDoc, serverTimestamp, runTransaction
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
-    // ========= CATALOGUE (repris de nouvelle-prestation.html) =========
-    // Objectif : afficher une "référence catalogue" sur chaque ligne du devis.
-    const PRODUCT_TEMPLATES = [
-      { key:"MENAGE_STANDARD", label:"Ménage standard (inter-séjour)" },
-      { key:"MENAGE_INTERMEDIAIRE", label:"Ménage intermédiaire (long séjour)" },
-      { key:"BACK_TO_BACK", label:"Back-to-back (ménage en urgence)" },
-      { key:"REMISE_EN_ETAT", label:"Remise en état (logement non conforme)" },
+    // ========= CATALOGUE (source unique) =========
+    // IMPORTANT : ce fichier doit exister : docs/catalog-templates.js
+    import { PRODUCT_TEMPLATES, inferRefFromLabel } from "./catalog-templates.js";
 
-      { key:"RECHANGE_LINGE", label:"Rechange linge (rotation complète)" },
-      { key:"LAVAGE_SECHAGE", label:"Collecte + lavage + séchage" },
-      { key:"BLANCHISSERIE", label:"Dépose / reprise blanchisserie" },
+    // Normalisation pour matcher les ANCIENNES lignes (labels pas parfaitement identiques)
+    function normLabel(s){
+      return String(s||"")
+        .normalize("NFD").replace(/[\u0300-\u036f]/g,"")
+        .toLowerCase()
+        .replace(/[’']/g," ")
+        .replace(/[^a-z0-9]+/g," ")
+        .trim();
+    }
 
-      { key:"CHECKIN_AUTONOME", label:"Check-in autonome (boîte à clés)" },
-      { key:"CHECKIN_PHYSIQUE", label:"Check-in physique" },
-      { key:"CHECKOUT", label:"Check-out" },
-      { key:"GESTION_CLES", label:"Gestion clés / badges" },
-      { key:"RECUP_CLES", label:"Récupération clés après sortie" },
-
-      { key:"PETITE_MAINTENANCE", label:"Petite maintenance (ampoule, joint…)" },
-      { key:"URGENCE", label:"Intervention d’urgence (fuite, serrure)" },
-      { key:"COORD_ARTISANS", label:"Coordination artisans" },
-
-      { key:"MESSAGES", label:"Réponses messages voyageurs" },
-
-      { key:"KIT_ESSENTIEL", label:"Kit essentiel" },
-      { key:"KIT_CUISINE", label:"Kit cuisine" },
-      { key:"KIT_BAIN", label:"Kit bain" },
-      { key:"KIT_SEJOUR_2", label:"Kit séjour (Pack 2 pers)" },
-      { key:"KIT_SEJOUR_4", label:"Kit séjour (Pack 4 pers)" },
-      { key:"KIT_SEJOUR_6", label:"Kit séjour (Pack 6 pers)" },
-      { key:"KIT_SEJOUR_8", label:"Kit séjour (Pack 8 pers)" },
-      { key:"REASSORT", label:"Réassort produit unitaire (papier, café…)" },
-
-      { key:"__OTHER__", label:"Autre (texte libre)" }
-    ];
-
-    const TPL_BY_KEY = new Map(PRODUCT_TEMPLATES.map(p => [p.key, p]));
-    const KEY_BY_LABEL = new Map(PRODUCT_TEMPLATES.map(p => [String(p.label||"").trim(), p.key]));
+    // index "fuzzy" : label normalisé -> ref
+    const FUZZY_LABEL_TO_REF = new Map(
+      PRODUCT_TEMPLATES
+        .filter(x => x && x.label && x.key)
+        .map(x => [normLabel(x.label), String(x.key)])
+    );
 
     function inferRefFromLine(line){
-      // Priorité: champ déjà stocké dans le doc
+      // 1) déjà stocké
       const ref = String(line?.ref || line?.productRef || line?.catalogRef || line?.productKey || line?.key || "").trim();
       if(ref) return ref;
 
-      // Sinon: déduction depuis label (match exact sur template.label)
+      // 2) match exact (catalog-templates.js)
       const label = String(line?.label || "").trim();
       if(!label) return "";
-      return String(KEY_BY_LABEL.get(label) || "").trim();
+      const exact = String(inferRefFromLabel(label) || "").trim();
+      if(exact) return exact;
+
+      // 3) match "fuzzy" (pour anciennes variantes de libellés)
+      const n = normLabel(label);
+      const byNorm = String(FUZZY_LABEL_TO_REF.get(n) || "").trim();
+      if(byNorm) return byNorm;
+
+      // 4) fallback : contient / inclus
+      // (ex: "Remise en état (logement non conforme)" vs "(sale / non conforme)")
+      for(const [kNorm, refKey] of FUZZY_LABEL_TO_REF.entries()){
+        if(!kNorm) continue;
+        if(n.includes(kNorm) || kNorm.includes(n)) return String(refKey || "").trim();
+      }
+
+      return "";
     }
 
     // ===== UI =====
@@ -1347,7 +1344,6 @@
         clientZip: client.clientZip,
         clientCity: client.clientCity,
 
-        // lignes auto (mais désormais supporte ref)
         lines: [],
 
         quotePaymentTerm: paymentTermEl.value,
@@ -1503,7 +1499,6 @@
         if(docId){
           await loadQuoteById();
         }else{
-          // nouveau devis libre (pas encore créé)
           quoteData = { quoteVersion: 1, quoteStatus: "DRAFT", lines: [] };
           renderRecap();
           previewBtn.disabled = true;
