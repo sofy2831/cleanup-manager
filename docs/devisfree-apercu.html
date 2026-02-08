@@ -1,0 +1,621 @@
+<!-- docs/devisfree-apercu.html (COMPLET)
+     - Supporte 2 modes :
+       1) ?docId=XXXX -> charge salesDocuments/{docId} depuis Firestore
+       2) sinon -> lit sessionStorage "devisfree_preview_payload" (aperçu brouillon sans enregistrement)
+     - Affichage "version client" (propre, imprimable / PDF)
+-->
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CleanUp Manager – Aperçu devis libre</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+
+  <style>
+    :root{
+      --violet:#7A5CFF;
+      --violet2:#6238FF;
+      --bg1:#0f0f12;
+      --paper:#fff;
+      --muted:#666;
+      --border: rgba(0,0,0,.10);
+    }
+    *{ box-sizing:border-box; font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; }
+    body{ margin:0; background: var(--bg1); color:#111; }
+
+    .wrap{ min-height:100vh; display:flex; flex-direction:column; }
+    .topbar{
+      position:sticky; top:0; z-index:10;
+      background: rgba(255,255,255,.92);
+      backdrop-filter: blur(10px);
+      border-bottom:1px solid rgba(255,255,255,.12);
+      padding:10px;
+      display:flex; gap:8px; justify-content:space-between; align-items:center;
+    }
+    .leftBtns{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    .btn{
+      border:none; border-radius:999px;
+      padding:10px 12px;
+      font-weight:900; cursor:pointer;
+      background:#fff; color: var(--violet);
+      border:2px solid var(--violet);
+      white-space:nowrap;
+    }
+    .btn.primary{
+      background: linear-gradient(90deg,var(--violet),var(--violet2));
+      border-color: transparent;
+      color:#fff;
+    }
+    .btn:disabled{ opacity:.6; cursor:not-allowed; }
+
+    .status{
+      font-size:12px; font-weight:800; color:#222;
+      padding:6px 10px; border-radius:999px;
+      background:#fff; border:1px solid rgba(0,0,0,.08);
+      max-width: 55%;
+      overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+    }
+
+    .paper{
+      width:100%;
+      background: var(--paper);
+      max-width: 900px;
+      margin: 14px auto 24px;
+      border-radius: 14px;
+      padding: 14px;
+    }
+
+    /* print */
+    @media print{
+      body{ background:#fff; }
+      .topbar{ display:none; }
+      .paper{ max-width:210mm; min-height:297mm; margin:0 auto; border-radius:0; padding:0; }
+      @page{ size:A4; margin: 10mm; }
+    }
+
+    /* doc */
+    .docRow{
+      display:flex; justify-content:space-between; gap:14px; align-items:flex-start; flex-wrap:wrap;
+      margin-bottom: 10px;
+    }
+    .docLeft{ display:flex; gap:12px; align-items:flex-start; }
+    .logoBox{
+      width:60px; height:60px;
+      border-radius:12px;
+      border:1px solid var(--border);
+      overflow:hidden;
+      background:#fff;
+      display:flex; align-items:center; justify-content:center;
+      flex-shrink:0;
+    }
+    .logoBox img{ width:100%; height:100%; object-fit:cover; display:block; }
+    .logoFallback{ font-weight:900; color:var(--violet); font-size:22px; }
+    .docTitle{ font-weight:900; font-size:14px; letter-spacing:.3px; }
+    .docNum{ font-weight:900; font-size:20px; margin-top:2px; }
+    .metaLine{ font-size:13px; color:#222; font-weight:700; margin-top:4px; line-height:1.35; }
+
+    .topGrid{ display:grid; grid-template-columns: 1fr; gap:12px; }
+    @media(min-width:860px){ .topGrid{ grid-template-columns: 1fr 1fr; align-items:stretch; } .docRow{ grid-column:1 / -1; } }
+
+    .block,.box{
+      border:1px solid var(--border);
+      border-radius:12px;
+      padding:10px 12px;
+      background:#fff;
+    }
+    .btitle,.boxTitle{ font-weight:900; font-size:12px; color:#333; margin-bottom:6px; }
+    .pLine{ font-size:13px; color:#222; font-weight:700; margin-top:4px; line-height:1.35; }
+
+    .tbl{ width:100%; border-collapse:collapse; margin-top:12px; font-size:13px; }
+    .tbl th,.tbl td{ padding:9px 9px; border-bottom:1px solid rgba(0,0,0,.10); text-align:left; vertical-align:top; }
+    .tbl th{ background:#f6f3ff; font-weight:900; }
+    .num{ text-align:right; white-space:nowrap; }
+    .ref{ white-space:nowrap; width:110px; }
+
+    .tot{
+      margin-top:12px;
+      border:1px solid var(--border);
+      border-radius:12px;
+      padding:10px 12px;
+      background:#fff;
+    }
+    .r{ display:flex; justify-content:space-between; gap:10px; margin-top:6px; font-weight:800; }
+    .big{ font-weight:900; font-size:15px; }
+    .smallNote{ margin-top:6px; font-size:12px; color:#555; font-weight:700; line-height:1.35; }
+
+    .boxes{ display:grid; grid-template-columns:1fr; gap:10px; margin-top:12px; }
+    @media(min-width:760px){ .boxes{ grid-template-columns:1fr 1fr; } }
+
+    .signRow{ margin-top:12px; display:flex; justify-content:flex-start; }
+    .signBox{ width:320px; border:1px solid var(--border); border-radius:12px; padding:10px 12px; background:#fff; }
+    .signLine{ height:28px; border-bottom:1px dashed rgba(0,0,0,.35); margin-top:6px; }
+    .signName{ margin-top:6px; font-size:12px; font-weight:800; color:#333; }
+
+    .footer{
+      margin-top:14px;
+      border-top:1px solid rgba(0,0,0,.12);
+      padding-top:10px;
+      font-size:11px; color:#555; font-weight:700; line-height:1.35;
+      text-align:center;
+    }
+
+    .alert{
+      max-width:900px;
+      margin: 14px auto 0;
+      background:#fff;
+      border-radius:12px;
+      border-left:6px solid #b3261e;
+      padding:10px 12px;
+      font-size:13px;
+      font-weight:800;
+      color:#222;
+      display:none;
+      white-space:pre-wrap;
+    }
+    .alert.ok{ border-left-color:#1b8f4d; }
+  </style>
+</head>
+
+<body>
+  <div class="wrap">
+    <div class="topbar">
+      <div class="leftBtns">
+        <button class="btn" id="backBtn">← Retour</button>
+        <button class="btn primary" id="printBtn">Imprimer / PDF</button>
+      </div>
+      <div class="status" id="statusPill">Chargement…</div>
+    </div>
+
+    <div class="alert" id="alertBox"></div>
+
+    <div class="paper" id="paper">
+      <!-- inject -->
+    </div>
+  </div>
+
+  <script type="module">
+    import { auth, db } from "./firebase-init.js";
+    import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+    import { doc, getDoc } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+
+    // (optionnel) si tu as ton catalogue templates pour "ref" fallback
+    let KEY_BY_LABEL = null;
+    try{
+      const mod = await import("./catalog-templates.js");
+      const PRODUCT_TEMPLATES = mod?.PRODUCT_TEMPLATES || [];
+      KEY_BY_LABEL = new Map(PRODUCT_TEMPLATES.map(p => [String(p.label||"").trim(), String(p.key||"").trim()]));
+    }catch(e){
+      KEY_BY_LABEL = new Map();
+    }
+
+    const paper = document.getElementById("paper");
+    const statusPill = document.getElementById("statusPill");
+    const alertBox = document.getElementById("alertBox");
+    const backBtn = document.getElementById("backBtn");
+    const printBtn = document.getElementById("printBtn");
+
+    function showAlert(msg, ok=false){
+      alertBox.style.display = "block";
+      alertBox.classList.toggle("ok", !!ok);
+      alertBox.textContent = msg;
+    }
+    function hideAlert(){
+      alertBox.style.display = "none";
+      alertBox.classList.remove("ok");
+      alertBox.textContent = "";
+    }
+
+    function esc(s){
+      return String(s||"")
+        .replaceAll("&","&amp;")
+        .replaceAll("<","&lt;")
+        .replaceAll(">","&gt;")
+        .replaceAll('"',"&quot;")
+        .replaceAll("'","&#039;");
+    }
+
+    function getParam(name){
+      const p = new URLSearchParams(location.search);
+      return (p.get(name) || "").trim();
+    }
+
+    function fmtMoney(v){
+      const n = Number(v);
+      if(!Number.isFinite(n)) return "—";
+      return n.toLocaleString("fr-FR",{minimumFractionDigits:2, maximumFractionDigits:2}) + " €";
+    }
+
+    function todayIso(){
+      const d = new Date();
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth()+1).padStart(2,"0");
+      const dd = String(d.getDate()).padStart(2,"0");
+      return `${dd}/${mm}/${yyyy}`;
+    }
+
+    function addDaysLabel(ddmmyyyy, days){
+      const [dd,mm,yy] = String(ddmmyyyy).split("/").map(x=>parseInt(x,10));
+      const d = new Date(yy, (mm||1)-1, dd||1);
+      d.setDate(d.getDate() + (Number(days)||0));
+      return String(d.getDate()).padStart(2,"0") + "/" + String(d.getMonth()+1).padStart(2,"0") + "/" + d.getFullYear();
+    }
+
+    function quoteStatusLabel(s){
+      const x = String(s||"").toUpperCase().trim();
+      if(!x) return "—";
+      if(x === "DRAFT") return "BROUILLON";
+      if(x === "SENT") return "DEVIS ENVOYÉ";
+      if(x === "ACCEPTED") return "ACCEPTÉ";
+      if(x === "REFUSED") return "REFUSÉ";
+      return x;
+    }
+
+    function inferRefFromLine(line){
+      const ref = String(line?.ref || line?.productRef || line?.catalogRef || line?.productKey || line?.key || "").trim();
+      if(ref) return ref;
+      const label = String(line?.label || "").trim();
+      if(!label) return "";
+      return String(KEY_BY_LABEL?.get(label) || "").trim();
+    }
+
+    function termToDays(term){
+      if(term === "RECEPTION") return 0;
+      if(term === "8J") return 8;
+      if(term === "15J") return 15;
+      if(term === "30J") return 30;
+      if(term === "45J") return 45;
+      return 0;
+    }
+    function dueLabel(term){
+      if(term === "RECEPTION") return "À réception";
+      if(term === "8J") return "8 jours";
+      if(term === "15J") return "15 jours";
+      if(term === "30J") return "30 jours";
+      if(term === "45J") return "45 jours";
+      return term || "—";
+    }
+    function payModeLabel(m){
+      const x = String(m||"").toUpperCase();
+      if(x === "VIREMENT") return "Virement";
+      if(x === "ESPECES") return "Espèces";
+      if(x === "CHEQUE") return "Chèque";
+      return "—";
+    }
+
+    function computeTotals(linesArr, tvaEnabled, tvaRate){
+      let ht = 0;
+      for(const l of (Array.isArray(linesArr) ? linesArr : [])){
+        const qty = Number(l?.qty)||0;
+        const up  = Number(l?.unitPrice)||0;
+        ht += qty * up;
+      }
+      const tva = tvaEnabled ? (ht * (Number(tvaRate)||0)) : 0;
+      const ttc = ht + tva;
+      return { ht, tva, ttc };
+    }
+
+    function buildHtml({ profile, quote, client, lines, paymentTerm, paymentMode, offerValidityDays }){
+      const bp = (profile?.businessProfile || {});
+      const cName = String(bp.companyName || "Conciergerie").trim();
+      const cAddr1 = String(bp.address?.street || "").trim();
+      const cZip = String(bp.address?.zip || "").trim();
+      const cCity = String(bp.address?.city || "").trim();
+      const cAddr2 = [cZip, cCity].filter(Boolean).join(" ").trim();
+
+      const cSiret = String(bp.registration?.siret || "").trim();
+      const cApe = String(bp.registration?.ape || "").trim();
+      const cEmail = String(bp.contact?.email || bp.email || "").trim();
+      const cPhone = String(bp.contact?.phone || bp.phone || "").trim();
+
+      const tvaEnabled = !!bp.vat?.enabled;
+      const tvaRate = Number.isFinite(Number(bp.vat?.rate)) ? Number(bp.vat.rate) : 0;
+      const cVat = String(bp.vat?.number || "").trim();
+
+      const cIban = String(bp.bank?.iban || "").trim();
+      const cBic = String(bp.bank?.bic || "").trim();
+
+      const cSignName = String(bp.displayName || cName).trim();
+      const logoUrl = String(bp.logoUrl || "").trim();
+
+      const quoteDate = todayIso();
+      const offerDays = Math.max(0, parseInt(offerValidityDays || "30", 10) || 30);
+      const offerUntil = addDaysLabel(quoteDate, offerDays);
+
+      const payDays = termToDays(paymentTerm);
+      const dueUntil = addDaysLabel(quoteDate, payDays);
+
+      const totals = computeTotals(lines, tvaEnabled, tvaRate);
+
+      const footerLine = [
+        cName,
+        [cAddr1, cAddr2].filter(Boolean).join(" • "),
+        (cSiret ? `SIRET ${cSiret}` : ""),
+        (cApe ? `APE ${cApe}` : "")
+      ].filter(Boolean).join(" — ");
+
+      const tvaFooter = tvaEnabled
+        ? (cVat ? `TVA applicable • N° TVA: ${cVat}` : `TVA applicable`)
+        : `TVA non applicable, art. 293B du CGI.`;
+
+      const rowsLines = (lines||[]).map(l=>{
+        const label = String(l?.label || "Ligne").trim();
+        const ref = inferRefFromLine(l);
+
+        const qty = Number(l?.qty)||0;
+        const unit = String(l?.unit || "unité").trim();
+        const up = Number(l?.unitPrice)||0;
+
+        const lineHT = qty * up;
+        const lineTVA = tvaEnabled ? (lineHT * tvaRate) : 0;
+        const lineTotal = lineHT + lineTVA;
+
+        return `
+          <tr>
+            <td class="ref">${esc(ref || "—")}</td>
+            <td>${esc(label)}</td>
+            <td class="num">${esc(qty)}</td>
+            <td>${esc(unit)}</td>
+            <td class="num">${esc(fmtMoney(up))}</td>
+            ${tvaEnabled ? `<td class="num">${esc(fmtMoney(lineTVA))}</td>` : ``}
+            <td class="num">${esc(fmtMoney(lineTotal))}</td>
+          </tr>
+        `;
+      }).join("");
+
+      const status = quoteStatusLabel(quote?.quoteStatus || quote?.status);
+      const quoteNumber = quote?.quoteNumber || quote?.number || "—";
+
+      return `
+        <div class="topGrid">
+          <div class="docRow">
+            <div class="docLeft">
+              <div class="logoBox">
+                ${ logoUrl ? `<img src="${esc(logoUrl)}" alt="Logo">` : `<div class="logoFallback">✓</div>` }
+              </div>
+              <div>
+                <div class="docTitle">DEVIS</div>
+                <div class="docNum">${esc(quoteNumber)}</div>
+              </div>
+            </div>
+            <div class="docRight">
+              <div class="metaLine"><b>Date</b> : ${esc(quoteDate)}</div>
+              <div class="metaLine"><b>Validité de l’offre</b> : jusqu’au ${esc(offerUntil)}</div>
+              <div class="metaLine"><b>Échéance de paiement</b> : ${esc(dueUntil)} (${esc(dueLabel(paymentTerm))})</div>
+            </div>
+          </div>
+
+          <div class="block">
+            <div class="btitle">Société</div>
+            <div class="metaLine"><b>${esc(cName)}</b></div>
+            ${cAddr1 ? `<div class="metaLine">${esc(cAddr1)}</div>` : ``}
+            ${cAddr2 ? `<div class="metaLine">${esc(cAddr2)}</div>` : ``}
+            ${cSiret ? `<div class="metaLine">SIRET : ${esc(cSiret)}</div>` : ``}
+            ${cApe ? `<div class="metaLine">APE : ${esc(cApe)}</div>` : ``}
+            ${(cEmail || cPhone) ? `<div class="metaLine">${esc([cEmail,cPhone].filter(Boolean).join(" • "))}</div>` : ``}
+          </div>
+
+          <div class="block">
+            <div class="btitle">Client</div>
+            <div class="metaLine"><b>${esc(client?.clientName || "—")}</b></div>
+            ${client?.clientAddress1 ? `<div class="metaLine">${esc(client.clientAddress1)}</div>` : ``}
+            ${client?.clientAddress2 ? `<div class="metaLine">${esc(client.clientAddress2)}</div>` : ``}
+            ${(client?.clientZip || client?.clientCity) ? `<div class="metaLine">${esc([client.clientZip, client.clientCity].filter(Boolean).join(" "))}</div>` : ``}
+            ${client?.clientEmail ? `<div class="metaLine">${esc(client.clientEmail)}</div>` : ``}
+          </div>
+        </div>
+
+        <table class="tbl">
+          <thead>
+            <tr>
+              <th class="ref">Réf.</th>
+              <th>Désignation</th>
+              <th class="num">Qté</th>
+              <th>Unité</th>
+              <th class="num">PU HT</th>
+              ${tvaEnabled ? `<th class="num">TVA</th>` : ``}
+              <th class="num">Total TTC</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rowsLines || `<tr><td colspan="${tvaEnabled?7:6}">Aucune ligne</td></tr>`}
+          </tbody>
+        </table>
+
+        <div class="tot">
+          ${
+            tvaEnabled
+              ? `
+                <div class="r"><span>Total HT</span><span>${esc(fmtMoney(totals.ht))}</span></div>
+                <div class="r"><span>TVA (${Math.round(tvaRate*100)}%)</span><span>${esc(fmtMoney(totals.tva))}</span></div>
+                <div class="r big"><span>Total TTC</span><span>${esc(fmtMoney(totals.ttc))}</span></div>
+              `
+              : `
+                <div class="r big"><span>Total TTC</span><span>${esc(fmtMoney(totals.ttc))}</span></div>
+                ${String(bp?.tvaExemptionText||"").trim()
+                  ? `<div class="smallNote">${esc(bp.tvaExemptionText)}</div>`
+                  : `<div class="smallNote">TVA non applicable, art. 293B du CGI.</div>`
+                }
+              `
+          }
+        </div>
+
+        <div class="boxes">
+          <div class="box">
+            <div class="boxTitle">Paiement</div>
+            <div class="pLine"><b>Délai</b> : ${esc(dueLabel(paymentTerm))}</div>
+            <div class="pLine"><b>Mode</b> : ${esc(payModeLabel(paymentMode))}</div>
+            ${(cIban || cBic) ? `
+              <div style="margin-top:10px; border-top:1px solid rgba(0,0,0,.10); padding-top:8px;">
+                ${cIban ? `<div class="pLine">IBAN : ${esc(cIban)}</div>` : ``}
+                ${cBic ? `<div class="pLine">BIC : ${esc(cBic)}</div>` : ``}
+              </div>
+            ` : ``}
+          </div>
+
+          <div class="box">
+            <div class="boxTitle">Acceptation</div>
+            <div class="pLine">☐ J’accepte les conditions générales (CGV) accessibles dans l’app.</div>
+            <div class="pLine" style="margin-top:8px;"><b>Bon pour accord</b> (client)</div>
+            <div class="smallNote">Signature + date</div>
+            <div style="height:42px;border-bottom:1px dashed rgba(0,0,0,.35);margin-top:6px;"></div>
+            <div class="pLine" style="margin-top:8px;">Nom : ${esc(client?.clientName || "—")}</div>
+            ${status && status !== "BROUILLON" ? `<div class="smallNote" style="margin-top:10px;">Statut : ${esc(status)}</div>` : ``}
+          </div>
+        </div>
+
+        <div class="signRow">
+          <div class="signBox">
+            <div class="boxTitle">Signature conciergerie</div>
+            <div class="signLine"></div>
+            <div class="signName">${esc(cSignName)}</div>
+          </div>
+        </div>
+
+        <div class="footer">
+          <div>${esc(footerLine)}</div>
+          <div>${esc(tvaFooter)}</div>
+        </div>
+      `;
+    }
+
+    async function loadProfile(uid){
+      const ref = doc(db, "users", uid);
+      const snap = await getDoc(ref);
+      return snap.exists() ? (snap.data() || {}) : {};
+    }
+
+    async function loadQuote(docId){
+      const ref = doc(db, "salesDocuments", docId);
+      const snap = await getDoc(ref);
+      if(!snap.exists()) throw new Error("Devis introuvable.");
+      return { id: snap.id, ...(snap.data()||{}) };
+    }
+
+    function readPayloadFromSession(){
+      const raw = sessionStorage.getItem("devisfree_preview_payload");
+      if(!raw) return null;
+      try{ return JSON.parse(raw); }catch(e){ return null; }
+    }
+
+    function normalizeFromQuote(quote){
+      // Tolère tes champs "quote*" ou "sans quote"
+      const lines = Array.isArray(quote?.lines) ? quote.lines : [];
+
+      const client = {
+        clientName: (quote?.clientName || "").trim(),
+        clientEmail: (quote?.clientEmail || "").trim(),
+        clientAddress1: (quote?.clientAddress1 || "").trim(),
+        clientAddress2: (quote?.clientAddress2 || "").trim(),
+        clientZip: (quote?.clientZip || "").trim(),
+        clientCity: (quote?.clientCity || "").trim(),
+      };
+
+      const paymentTerm =
+        quote?.quotePaymentTerm || quote?.paymentTerm || "RECEPTION";
+
+      const paymentMode =
+        quote?.quotePaymentMode || quote?.paymentMode || "VIREMENT";
+
+      const offerValidityDays =
+        quote?.quoteOfferValidityDays ?? quote?.offerValidityDays ?? 30;
+
+      return { lines, client, paymentTerm, paymentMode, offerValidityDays };
+    }
+
+    backBtn.addEventListener("click", ()=>{
+      // retour "safe"
+      if(history.length > 1) history.back();
+      else location.href = "devis-free.html";
+    });
+
+    printBtn.addEventListener("click", ()=> window.print());
+
+    // ===== MAIN =====
+    const wantedDocId = getParam("docId");
+
+    onAuthStateChanged(auth, async (user)=>{
+      try{
+        hideAlert();
+
+        // MODE 1 : docId -> Firestore
+        if(wantedDocId){
+          if(!user){
+            // important : si tes rules exigent auth, sans user tu n'auras jamais accès
+            location.href = "login.html?role=conciergerie";
+            return;
+          }
+
+          statusPill.textContent = "Chargement du devis…";
+
+          const quote = await loadQuote(wantedDocId);
+
+          // petite sécurité UX (si quelqu'un tente un doc d'une autre conciergerie)
+          if(quote?.conciergerieUid && quote.conciergerieUid !== user.uid){
+            throw new Error("Accès refusé : devis d’une autre conciergerie.");
+          }
+
+          const profile = await loadProfile(user.uid);
+          const norm = normalizeFromQuote(quote);
+
+          paper.innerHTML = buildHtml({
+            profile,
+            quote,
+            client: norm.client,
+            lines: norm.lines,
+            paymentTerm: norm.paymentTerm,
+            paymentMode: norm.paymentMode,
+            offerValidityDays: norm.offerValidityDays,
+          });
+
+          const st = quoteStatusLabel(quote?.quoteStatus || quote?.status);
+          statusPill.textContent = `OK • ${st}`;
+
+          return;
+        }
+
+        // MODE 2 : brouillon via sessionStorage (sans Firestore)
+        const payload = readPayloadFromSession();
+        if(!payload){
+          statusPill.textContent = "Aucun brouillon";
+          showAlert("Aucun brouillon trouvé.\nRetourne sur devis-free.html puis clique Aperçu.", false);
+          paper.innerHTML = "";
+          return;
+        }
+
+        // si user connecté, on prend son profil business; sinon profil vide
+        let profile = {};
+        if(user){
+          try{ profile = await loadProfile(user.uid); }catch(e){ profile = {}; }
+        }
+
+        const quote = payload.quoteData || { quoteNumber: "Brouillon", quoteStatus: "DRAFT" };
+        const client = payload.clientInputs || {};
+        const lines = Array.isArray(payload.lines) ? payload.lines : [];
+        const paymentTerm = payload.paymentTerm || "RECEPTION";
+        const paymentMode = payload.paymentMode || "VIREMENT";
+        const offerValidityDays = payload.offerValidityDays ?? 30;
+
+        paper.innerHTML = buildHtml({
+          profile,
+          quote,
+          client,
+          lines,
+          paymentTerm,
+          paymentMode,
+          offerValidityDays,
+        });
+
+        statusPill.textContent = "Aperçu brouillon (non enregistré)";
+      }catch(err){
+        console.error(err);
+        statusPill.textContent = "Erreur";
+        showAlert("⛔ " + (err?.message || "Erreur inconnue"), false);
+      }
+    });
+  </script>
+</body>
+</html>
