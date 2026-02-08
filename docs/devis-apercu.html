@@ -1,4 +1,4 @@
-<!-- docs/devis-apercu.html (EVENT + SALES DOC — LECTURE + ACCEPTATION PROPRIETAIRE) -->
+<!-- docs/devis-apercu.html (EVENT + SALES DOC — LECTURE + ACCEPTATION PROPRIETAIRE, accès owner OU conciergerie, retour intelligent) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -334,7 +334,16 @@
       return (p.get(name) || "").trim();
     }
 
-    function todayIso(){
+    function isoToFr(iso){
+      const s = String(iso||"").trim();
+      if(!s) return "";
+      // "YYYY-MM-DD" => "DD/MM/YYYY"
+      const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if(m) return `${m[3]}/${m[2]}/${m[1]}`;
+      return s;
+    }
+
+    function todayFr(){
       const d = new Date();
       const yyyy = d.getFullYear();
       const mm = String(d.getMonth()+1).padStart(2,"0");
@@ -409,11 +418,19 @@
       if(x === "REFUSED") statusPill.classList.add("bad");
     }
 
+    function lineUnitPriceHT(l){
+      const a = Number(l?.unitPrice);
+      if(Number.isFinite(a)) return a;
+      const b = Number(l?.unitPriceHT);
+      if(Number.isFinite(b)) return b;
+      return 0;
+    }
+
     function computeTotals(lines, tvaEnabled, tvaRate){
       let ht = 0;
       for(const l of (Array.isArray(lines) ? lines : [])){
         const qty = Number(l?.qty)||0;
-        const up  = Number(l?.unitPrice)||0;
+        const up  = lineUnitPriceHT(l);
         ht += qty * up;
       }
       const tva = tvaEnabled ? (ht * (Number(tvaRate)||0)) : 0;
@@ -429,28 +446,42 @@
     let dataRef = null;
     let data = null;
     let profile = null;
-
-    function isOwnerAcceptanceAllowed(){
-      // seulement sur event, pas sur salesDocuments (prospect sans compte)
-      return docMode === "event";
-    }
+    let viewerRole = ""; // "owner" | "conciergerie"
 
     function hideOwnerActions(){
       actionsBox.style.display = "none";
       refuseNote.style.display = "none";
     }
 
-    function ensureOwnerAllowed(user, eventData){
-      // Priorité : ownerUid (auth uid) puis fallback email
+    function showOwnerActions(){
+      actionsBox.style.display = "";
+      refuseNote.style.display = "";
+    }
+
+    function viewerIsConciergerie(user, ev){
+      return !!ev?.conciergerieUid && String(ev.conciergerieUid) === String(user.uid);
+    }
+
+    function viewerIsOwner(user, ev){
       const uEmail = normalizeEmail(user.email || "");
-      const oEmail = normalizeEmail(eventData.ownerEmail || "");
-      const ownerUid = String(eventData.ownerUid || eventData.ownerAuthUid || "").trim();
+      const oEmail = normalizeEmail(ev.ownerEmail || "");
+      const ownerUid = String(ev.ownerUid || ev.ownerAuthUid || "").trim();
+      return (!!ownerUid && ownerUid === user.uid) || (!!uEmail && !!oEmail && uEmail === oEmail);
+    }
 
-      const allowed =
-        (!!ownerUid && ownerUid === user.uid) ||
-        (!!uEmail && !!oEmail && uEmail === oEmail);
+    function buildBackLink(mode, role){
+      if(mode === "sales"){
+        return "devis-liste.html";
+      }
+      // event
+      if(role === "conciergerie") return "planning.html";
+      return "owner-dashboard.html";
+    }
 
-      return allowed;
+    function buildMsgLink(mode, role){
+      if(mode === "sales") return "messagerie.html";
+      if(role === "conciergerie") return "messagerie.html";
+      return "owner-messages.html";
     }
 
     function renderCompany(bp){
@@ -482,7 +513,6 @@
     }
 
     function renderClientFromEvent(ev){
-      // snapshot event
       clientName.textContent = (ev.ownerName || "—");
       const cLines = [];
       const a1 = String(ev.ownerAddress1 || "").trim();
@@ -496,16 +526,17 @@
       clientLines.textContent = cLines.filter(Boolean).join(" • ") || "—";
     }
 
+    // ✅ support flat fields salesDocuments (tes docs), et snapshot map si tu ajoutes plus tard
     function renderClientFromSales(sd){
-      // client snapshot in salesDocuments
-      const cs = sd.clientSnapshot || {};
-      const name = String(cs.fullname || cs.name || sd.clientName || "—").trim() || "—";
+      const cs = sd.clientSnapshot || sd.client || {};
+      const name =
+        String(cs.fullname || cs.name || sd.clientName || "—").trim() || "—";
       const email = String(cs.email || sd.clientEmail || "").trim();
-      const phone = String(cs.phone || "").trim();
-      const a1 = String(cs.address1 || "").trim();
-      const a2 = String(cs.address2 || "").trim();
-      const z = String(cs.zip || "").trim();
-      const c = String(cs.city || "").trim();
+      const phone = String(cs.phone || sd.clientPhone || "").trim();
+      const a1 = String(cs.address1 || sd.clientAddress1 || "").trim();
+      const a2 = String(cs.address2 || sd.clientAddress2 || "").trim();
+      const z = String(cs.zip || sd.clientZip || "").trim();
+      const c = String(cs.city || sd.clientCity || "").trim();
 
       clientName.textContent = name;
       const lines = [];
@@ -527,7 +558,7 @@
         const label = l?.label || "Ligne";
         const qty = Number(l?.qty)||0;
         const unit = l?.unit || "unité";
-        const up = Number(l?.unitPrice)||0;
+        const up = lineUnitPriceHT(l);
 
         const lineHT = qty * up;
         const lineTVA = vatEnabled ? (lineHT * vatRate) : 0;
@@ -562,8 +593,14 @@
       }
     }
 
+    function baseDateFr(fromData){
+      const dk = String(fromData?.dateKey || fromData?.quoteDateKey || fromData?.date || "").trim();
+      const fr = isoToFr(dk);
+      return fr || todayFr();
+    }
+
     function renderCommonMeta(fromData, bp){
-      const date = todayIso();
+      const date = baseDateFr(fromData);
       quoteDate.textContent = date;
 
       const offerDays = Math.max(0, parseInt(fromData.quoteOfferValidityDays || fromData.offerValidityDays || "30", 10) || 30);
@@ -586,15 +623,18 @@
       penaltyText.textContent = String(fromData.quotePenaltyText || fromData.penaltyText || "—");
     }
 
+    function getNumberAny(d){
+      return String(d?.quoteNumber || d?.number || "").trim() || "—";
+    }
+
     function renderEvent(ev){
       docTypeLabel.textContent = "DEVIS";
       docMode = "event";
 
-      // backlink owner
-      backLink.href = "owner-dashboard.html";
-      msgLink.href = "owner-messages.html";
+      backLink.href = buildBackLink("event", viewerRole);
+      msgLink.href = buildMsgLink("event", viewerRole);
 
-      docNum.textContent = ev.quoteNumber ? ev.quoteNumber : "—";
+      docNum.textContent = getNumberAny(ev);
       renderStatusPill(ev.quoteStatus);
 
       objLine.textContent = `Objet : ${String(ev.quoteObject || ev.object || "Prestation de conciergerie").trim()}`;
@@ -605,14 +645,14 @@
 
       const lines = Array.isArray(ev.lines) ? ev.lines : [];
       renderLinesAndTotals(lines, profile?.businessProfile || {});
-
       renderCommonMeta(ev, profile?.businessProfile || {});
 
-      // actions owner
-      if(!isOwnerAcceptanceAllowed()){
+      // ✅ actions owner only
+      if(viewerRole !== "owner"){
         hideOwnerActions();
         return;
       }
+      showOwnerActions();
 
       const qs = String(ev.quoteStatus || "").toUpperCase();
       if(qs === "ACCEPTED" || qs === "REFUSED"){
@@ -628,13 +668,11 @@
       docTypeLabel.textContent = "DEVIS";
       docMode = "sales";
 
-      // mode prospect : retour côté conciergerie (pas owner dashboard)
-      backLink.href = "devis-liste.html";
-      msgLink.href = "messagerie.html"; // conciergerie (tu peux changer si tu veux)
+      backLink.href = buildBackLink("sales", "conciergerie");
+      msgLink.href = buildMsgLink("sales", "conciergerie");
       hideOwnerActions();
 
-      const number = String(sd.number || sd.quoteNumber || "").trim();
-      docNum.textContent = number || "—";
+      docNum.textContent = getNumberAny(sd);
       renderStatusPill(sd.status || sd.quoteStatus || "");
 
       objLine.textContent = `Objet : ${String(sd.object || sd.quoteObject || "Prestation de conciergerie").trim()}`;
@@ -645,49 +683,56 @@
 
       const lines = Array.isArray(sd.lines) ? sd.lines : [];
       renderLinesAndTotals(lines, profile?.businessProfile || {});
-
       renderCommonMeta(sd, profile?.businessProfile || {});
     }
 
     onAuthStateChanged(auth, async (user)=>{
-      if(!user){ location.href = "login.html?role=owner"; return; }
+      if(!user){
+        // page preview : si event => plutôt owner, si sales => conciergerie
+        location.href = eventId ? "login.html?role=owner" : "login.html?role=conciergerie";
+        return;
+      }
       hideAlert();
 
       try{
         if(!eventId && !docId) throw new Error("Paramètre manquant : eventId ou docId.");
 
-        // 1) load data (event ou sales)
+        // ===== EVENT =====
         if(eventId){
           dataRef = doc(db, "events", eventId);
           const snap = await getDoc(dataRef);
           if(!snap.exists()) throw new Error("Devis introuvable.");
           data = { id:snap.id, ...(snap.data()||{}) };
 
-          // 2) access control owner
-          if(!ensureOwnerAllowed(user, data)){
+          const isConc = viewerIsConciergerie(user, data);
+          const isOwn  = viewerIsOwner(user, data);
+
+          // ✅ accès owner OU conciergerie (le fix demandé)
+          if(!isConc && !isOwn){
             throw new Error("Accès refusé : ce devis ne vous appartient pas.");
           }
 
-          // 3) load conciergerie profile
+          viewerRole = isConc ? "conciergerie" : "owner";
+
           profile = await loadConciergerieProfile(data.conciergerieUid);
           const bp = profile?.businessProfile || {};
           renderCompany(bp);
 
-          // 4) render
           renderEvent(data);
           return;
         }
 
-        // docId mode (salesDocuments) : conciergerie only (même login)
+        // ===== SALES ===== (conciergerie uniquement ici)
         dataRef = doc(db, "salesDocuments", docId);
         const snap = await getDoc(dataRef);
         if(!snap.exists()) throw new Error("Devis introuvable.");
         data = { id:snap.id, ...(snap.data()||{}) };
 
-        // contrôle basique : conciergerieUid == auth uid
         if(String(data.conciergerieUid || "").trim() !== String(user.uid)){
           throw new Error("Accès refusé : ce document n'est pas dans votre compta.");
         }
+
+        viewerRole = "conciergerie";
 
         profile = await loadConciergerieProfile(user.uid);
         const bp = profile?.businessProfile || {};
@@ -700,9 +745,10 @@
       }
     });
 
-    // ===== Accept/Refuse (event only) =====
+    // ===== Accept/Refuse (event only, owner only) =====
     acceptBtn.addEventListener("click", async ()=>{
       if(!dataRef || docMode !== "event") return;
+      if(viewerRole !== "owner") return;
       if(!confirm("Confirmer l’acceptation du devis ?")) return;
       lockActions(true);
       try{
@@ -723,6 +769,7 @@
 
     refuseBtn.addEventListener("click", async ()=>{
       if(!dataRef || docMode !== "event") return;
+      if(viewerRole !== "owner") return;
       if(!confirm("Confirmer le refus du devis ?")) return;
       lockActions(true);
       try{
