@@ -1,4 +1,4 @@
-<!-- docs/devis.html (COMPLET + CORRIGÉ : 2 modes EVENT/FREE, preview -> devis-apercu.html, HT/TVA/TTC, pas de "blank", bouton client seulement en mode FREE) -->
+<!-- docs/devis.html (COMPLET + CORRIGÉ : 2 modes EVENT/FREE, preview -> devis-apercu.html, HT/TVA/TTC, create salesDocuments OK rules, counters safe) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -438,8 +438,6 @@
         </div>
 
         <div class="headActions" id="clientActions">
-          <!-- EVENT : plus de "choisir un client" (client auto) -->
-          <!-- FREE : bouton "vider" pratique -->
           <button class="miniBtn danger" type="button" id="clearFreeClientBtn" style="display:none;">Vider</button>
         </div>
       </div>
@@ -881,12 +879,21 @@
       return { enabled, rate, exemptionText: ex };
     }
 
+    // ✅ support unitPrice OU unitPriceHT (tes docs existants)
+    function lineUnitPriceHT(l){
+      const a = Number(l?.unitPrice);
+      if(Number.isFinite(a)) return a;
+      const b = Number(l?.unitPriceHT);
+      if(Number.isFinite(b)) return b;
+      return 0;
+    }
+
     function computeTotalsFromLines(lines){
       const { enabled, rate } = getVatConfig();
       let ht = 0;
       for(const l of (Array.isArray(lines) ? lines : [])){
         const qty = Number(l?.qty)||0;
-        const up  = Number(l?.unitPrice)||0;
+        const up  = lineUnitPriceHT(l);
         ht += qty * up;
       }
       const tva = enabled ? (ht * rate) : 0;
@@ -897,7 +904,7 @@
     function lockUI(locked){
       saveBtn.disabled = !!locked;
       previewBtn.disabled = !!locked;
-      sendBtn.disabled = !!locked || sendBtn.disabled; // ne force pas à true -> on recalculera après render
+      sendBtn.disabled = !!locked || sendBtn.disabled;
       saveBtn.style.opacity = locked ? "0.75" : "1";
     }
 
@@ -1005,7 +1012,6 @@
       const v = getVatConfig();
       thTVACol.style.display = v.enabled ? "" : "none";
 
-      // delete col visible only in FREE
       thDelCol.style.display = (MODE === "SALES") ? "" : "none";
 
       linesTbody.innerHTML = "";
@@ -1016,7 +1022,7 @@
         const label = l.label || "Ligne";
         const qty = Number(l.qty)||0;
         const unit = l.unit || "unité";
-        const up = Number(l.unitPrice)||0;
+        const up = lineUnitPriceHT(l);
 
         const lineHT = qty * up;
         const lineTVA = v.enabled ? (lineHT * v.rate) : 0;
@@ -1054,7 +1060,6 @@
         linesCards.appendChild(card);
       }
 
-      // delete handler
       if(MODE==="SALES"){
         document.querySelectorAll("[data-del]").forEach(btn=>{
           btn.addEventListener("click", ()=>{
@@ -1122,19 +1127,23 @@
     freeClientZip.addEventListener("input", renderAll);
     freeClientCity.addEventListener("input", renderAll);
 
-    // ===== COUNTERS =====
+    // ===== COUNTERS (✅ safe keys only) =====
     async function ensureQuoteNumber(uid, year){
       const counterId = `${uid}_${year}`;
       const counterRef = doc(db, "counters", counterId);
 
       const next = await runTransaction(db, async (tx)=>{
         const snap = await tx.get(counterRef);
-        if(!snap.exists()){
-          tx.set(counterRef, { quoteSeq: 0, invoiceSeq: 0, creditSeq: 0 });
-        }
-        const c = snap.exists() ? (snap.data() || {}) : { quoteSeq: 0 };
-        const n = (Number(c.quoteSeq)||0) + 1;
-        tx.set(counterRef, { ...c, quoteSeq: n }, { merge:true });
+        const cur = snap.exists() ? (snap.data() || {}) : {};
+        const quoteSeq = Number(cur.quoteSeq)||0;
+        const invoiceSeq = Number(cur.invoiceSeq)||0;
+        const creditSeq = Number(cur.creditSeq)||0;
+
+        const n = quoteSeq + 1;
+
+        // ✅ rules counters: keys must be ONLY quoteSeq/invoiceSeq/creditSeq
+        tx.set(counterRef, { quoteSeq: n, invoiceSeq, creditSeq }, { merge: true });
+
         return n;
       });
 
@@ -1217,7 +1226,15 @@
       await loadOwner_EVENT();
     }
 
-    // ===== LOAD / INIT SALES DOCUMENT =====
+    // ===== CREATE SALES (✅ minimal + compatible rules) =====
+    function nowDateKey(){
+      const d = new Date();
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth()+1).padStart(2,"0");
+      const dd = String(d.getDate()).padStart(2,"0");
+      return `${yyyy}-${mm}-${dd}`;
+    }
+
     async function createSalesDraftIfNeeded(){
       // mode=free sans docId : crée un draft QUOTE puis redirige avec docId
       if(docId) return;
@@ -1230,21 +1247,33 @@
       const quoteNumber = await ensureQuoteNumber(currentUser.uid, year);
 
       const ref = doc(collection(db, "salesDocuments"));
+
+      // ✅ champs minimum, + compat ta page (client via inputs)
       const payload = {
         conciergerieUid: currentUser.uid,
         type: "QUOTE",
         status: "DRAFT",
-        quoteNumber,
+        quoteNumber,         // affichage devis.html
+        number: quoteNumber, // compat si tu lis "number" ailleurs
         version: 1,
 
-        // client (sera saisi)
-        client: {
-          fullname: "",
-          email: "",
-          address1: "",
-          zip: "",
-          city: ""
-        },
+        dateKey: nowDateKey(),
+
+        // client (flat + map optionnelle)
+        clientName: "",
+        clientEmail: "",
+        clientPhone: "",
+        clientAddress1: "",
+        clientAddress2: "",
+        clientZip: "",
+        clientCity: "",
+        clientId: "",
+
+        // liaisons optionnelles
+        ownerUid: "",
+        ownerDocId: "",
+        homeId: "",
+        eventId: "",
 
         // lignes
         lines: [],
@@ -1258,12 +1287,16 @@
         penaltyText: getPenaltyTemplate("B2C"),
         privateNote: "",
 
+        totals: { currency: "EUR", ht: 0, tva: 0, ttc: 0, vatEnabled: false, vatRate: 0 },
+
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       };
 
       await setDoc(ref, payload);
-      location.replace(`devis.html?docId=${encodeURIComponent(ref.id)}`);
+
+      // ✅ conserve mode=free (utile pour debug / cohérence)
+      location.replace(`devis.html?mode=free&docId=${encodeURIComponent(ref.id)}`);
     }
 
     async function loadSalesDocument(){
@@ -1280,13 +1313,12 @@
         throw new Error("Accès refusé (document d’une autre conciergerie).");
       }
 
-      // hydrate UI from doc
-      const c = salesData.client || {};
-      freeClientFullname.value = String(c.fullname||"").trim();
-      freeClientEmail.value = String(c.email||"").trim();
-      freeClientAddress1.value = String(c.address1||"").trim();
-      freeClientZip.value = String(c.zip||"").trim();
-      freeClientCity.value = String(c.city||"").trim();
+      // hydrate UI from doc (flat)
+      freeClientFullname.value = String(salesData.clientName||"").trim();
+      freeClientEmail.value = String(salesData.clientEmail||"").trim();
+      freeClientAddress1.value = String(salesData.clientAddress1||"").trim();
+      freeClientZip.value = String(salesData.clientZip||"").trim();
+      freeClientCity.value = String(salesData.clientCity||"").trim();
 
       paymentTermEl.value = String(salesData.paymentTerm||"RECEPTION");
       setPayMode(String(salesData.paymentMode||"VIREMENT"));
@@ -1314,14 +1346,18 @@
     }
 
     // ===== RENDER =====
+    function getQuoteNumberAny(d){
+      return String(d?.quoteNumber || d?.number || "").trim();
+    }
+
     function canSend_EVENT(d){
       const st = String(d?.quoteStatus||"").toUpperCase().trim() || "DRAFT";
-      return st === "DRAFT" && !!String(d?.quoteNumber||"").trim();
+      return st === "DRAFT" && !!getQuoteNumberAny(d);
     }
     function canSend_SALES(d){
       const st = String(d?.status||"").toUpperCase().trim() || "DRAFT";
       const c = getFreeClientSnapshot();
-      return st === "DRAFT" && !!String(d?.quoteNumber||"").trim() && !!c.fullname && !!c.email;
+      return st === "DRAFT" && !!getQuoteNumberAny(d) && !!c.fullname && !!c.email;
     }
 
     function renderHeaderAndStatus(){
@@ -1338,7 +1374,7 @@
         const d = eventData || {};
         const v = Number(d.quoteVersion || 1);
         versionLine.textContent = `v${v}`;
-        docBannerInner.textContent = `DEVIS N° ${d.quoteNumber || "—"} • v${v}`;
+        docBannerInner.textContent = `DEVIS N° ${getQuoteNumberAny(d) || "—"} • v${v}`;
 
         const qs = quoteStatusLabel(d.quoteStatus || "DRAFT");
         const cs = String(d.commercialStatus || "—").toUpperCase().replaceAll("_"," ");
@@ -1356,7 +1392,7 @@
         const d = salesData || {};
         const v = Number(d.version || 1);
         versionLine.textContent = `v${v}`;
-        docBannerInner.textContent = `DEVIS N° ${d.quoteNumber || "—"} • v${v}`;
+        docBannerInner.textContent = `DEVIS N° ${getQuoteNumberAny(d) || "—"} • v${v}`;
 
         const qs = quoteStatusLabel(d.status || "DRAFT");
         statusBadge.textContent = `Devis : ${qs} • Mode : DEVIS LIBRE`;
@@ -1393,7 +1429,6 @@
         renderLinesAndTotals(lines);
       }
 
-      // preview active dès qu'on a un id
       previewBtn.disabled = (MODE==="EVENT" ? !eventId : !docId);
     }
 
@@ -1421,7 +1456,7 @@
       renderAll();
     });
 
-    // ===== Preview => devis-apercu.html (pas de blank) =====
+    // ===== Preview => devis-apercu.html =====
     previewBtn.addEventListener("click", ()=>{
       if(MODE === "EVENT"){
         if(!eventId) return;
@@ -1472,38 +1507,41 @@
 
     async function save_SALES(){
       if(!salesRef) throw new Error("Devis libre non chargé.");
-      // hydrate doc from inputs
       const c = getFreeClientSnapshot();
       const payMode = getSelectedPayMode() || "VIREMENT";
       const offerDays = Math.max(0, parseInt(offerValidityDaysEl.value || "30", 10) || 30);
 
+      const lines = Array.isArray(salesData?.lines) ? salesData.lines : [];
+      const totals = computeTotalsFromLines(lines);
+
       const patch = {
-        client: {
-          fullname: c.fullname,
-          email: c.email,
-          address1: c.address1,
-          zip: c.zip,
-          city: c.city
-        },
-        lines: Array.isArray(salesData?.lines) ? salesData.lines : [],
+        // client flat
+        clientName: c.fullname,
+        clientEmail: c.email,
+        clientAddress1: c.address1,
+        clientZip: c.zip,
+        clientCity: c.city,
+
+        lines,
+
         paymentTerm: paymentTermEl.value,
         paymentMode: payMode,
         offerValidityDays: offerDays,
+
         penaltyMode: getSelectedPenaltyMode() || "B2C",
         penaltyText: (penaltyTextEl.value || "").trim(),
         privateNote: (privateNoteEl.value || "").trim(),
+
+        totals: {
+          currency: "EUR",
+          ht: totals.ht, tva: totals.tva, ttc: totals.ttc,
+          vatEnabled: totals.vatEnabled,
+          vatRate: totals.vatRate
+        },
+
         updatedAt: serverTimestamp()
       };
 
-      // totals snapshot (utile pour journal des ventes)
-      const totals = computeTotalsFromLines(patch.lines);
-      patch.totals = {
-        ht: totals.ht, tva: totals.tva, ttc: totals.ttc,
-        vatEnabled: totals.vatEnabled,
-        vatRate: totals.vatRate
-      };
-
-      // statut si vide
       const st = String(salesData?.status||"").toUpperCase().trim() || "DRAFT";
       patch.status = (st === "SENT" || st === "ACCEPTED" || st === "REFUSED") ? st : "DRAFT";
 
@@ -1545,17 +1583,14 @@
     });
 
     async function send_EVENT(){
-      // garde-fous
-      if(!String(eventData?.quoteNumber || "").trim()) throw new Error("Enregistre d'abord le devis (numéro requis).");
+      if(!getQuoteNumberAny(eventData)) throw new Error("Enregistre d'abord le devis (numéro requis).");
       const st = String(eventData?.quoteStatus||"").toUpperCase().trim() || "DRAFT";
       if(st !== "DRAFT") throw new Error("Action impossible : le devis n'est plus en brouillon.");
 
-      // owner auth uid obligatoire
       const ownerAuthUid = String(ownerUser?.uid || "").trim();
       const ownerEmail = String(ownerUser?.email || eventData?.ownerEmail || "").trim();
       if(!ownerAuthUid) throw new Error("ownerUid (auth) manquant : impossible d'envoyer au propriétaire.");
 
-      // passe en SENT
       const payMode = getSelectedPayMode() || "VIREMENT";
       await updateDoc(eventRef, {
         commercialStatus: "DEVIS_ENVOYE",
@@ -1574,13 +1609,12 @@
 
       const link = `devis-apercu.html?eventId=${encodeURIComponent(eventData.id)}`;
       const msg = [
-        `Devis ${String(eventData.quoteNumber||"").trim()} envoyé.`,
+        `Devis ${getQuoteNumberAny(eventData)} envoyé.`,
         `Lien : ${link}`
       ].join("\n");
 
       await createInternalMessageForOwner(ownerAuthUid, ownerEmail, link, msg);
 
-      // backfill event.ownerUid si vide
       if(!String(eventData.ownerUid||"").trim()){
         try{
           await updateDoc(eventRef, { ownerUid: ownerAuthUid });
@@ -1591,16 +1625,15 @@
     }
 
     async function send_SALES(){
-      if(!String(salesData?.quoteNumber || "").trim()) throw new Error("Enregistre d'abord le devis (numéro requis).");
+      if(!getQuoteNumberAny(salesData)) throw new Error("Enregistre d'abord le devis (numéro requis).");
       const st = String(salesData?.status||"").toUpperCase().trim() || "DRAFT";
       if(st !== "DRAFT") throw new Error("Action impossible : le devis n'est plus en brouillon.");
 
-      // client minimal
       const c = getFreeClientSnapshot();
       if(!c.fullname || !c.email) throw new Error("Client incomplet : Nom + email obligatoires.");
 
-      // update status -> SENT + snapshot totals
-      await save_SALES(); // assure doc à jour
+      await save_SALES();
+
       const payMode = getSelectedPayMode() || "VIREMENT";
       await updateDoc(salesRef, {
         status: "SENT",
@@ -1616,11 +1649,9 @@
       let snap = await getDoc(salesRef);
       salesData = { id: snap.id, ...(snap.data()||{}) };
 
-      // Message interne : pour l’instant on le met dans requests avec ownerUid vide (client pas Auth)
-      // => tu le traiteras plus tard via email Cloud Function.
       const link = `devis-apercu.html?docId=${encodeURIComponent(salesData.id)}`;
       const msg = [
-        `Devis ${String(salesData.quoteNumber||"").trim()} envoyé (devis libre).`,
+        `Devis ${getQuoteNumberAny(salesData)} envoyé (devis libre).`,
         `Client : ${c.fullname} • ${c.email}`,
         `Lien : ${link}`
       ].join("\n");
@@ -1644,7 +1675,7 @@
         else await send_SALES();
 
         showAlert("✅ Devis envoyé (lien : devis-apercu.html).", true);
-        // reload
+
         if(MODE === "EVENT"){
           const snap = await getDoc(eventRef);
           eventData = { id: snap.id, ...(snap.data()||{}) };
@@ -1652,11 +1683,6 @@
         } else {
           const snap = await getDoc(salesRef);
           salesData = { id: snap.id, ...(snap.data()||{}) };
-        }
-
-        // email copy: placeholder (Cloud Function)
-        if(sendEmailCopy.checked){
-          // no-op ici
         }
 
         renderAll();
@@ -1677,7 +1703,6 @@
         await loadProfile(currentUser.uid);
         renderBusinessHeader();
 
-        // defaults UI
         if(!penB2BEl.checked && !penB2CEl.checked) penB2CEl.checked = true;
         syncPenaltyText();
         setPayMode("VIREMENT");
