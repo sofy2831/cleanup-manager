@@ -1,0 +1,188 @@
+<!-- docs/devis-free.html -->
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CleanUp Manager – Devis libre</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+
+  <!-- 👉 même CSS que devis-event.html -->
+  <!-- ⚠️ volontairement identique pour cohérence UX -->
+</head>
+
+<body>
+  <div class="page">
+
+    <!-- TOPBAR -->
+    <div class="topbar">
+      <a class="pill-link" href="devis-liste.html">← Retour devis</a>
+      <button class="pill-link" id="logoutBtn">Déconnexion</button>
+    </div>
+
+    <!-- HEADER -->
+    <div class="logo-title">
+      <div class="logo-icon">✓</div>
+      <h1>CleanUp Manager</h1>
+    </div>
+
+    <div class="subtitle">Devis libre (prospect)</div>
+    <div class="badge" id="statusBadge">BROUILLON</div>
+
+    <!-- NUMÉRO DEVIS -->
+    <div class="docBanner">
+      <div class="docBannerInner" id="docBannerInner">
+        DEVIS N° —
+      </div>
+    </div>
+
+    <!-- ENTÊTE -->
+    <div class="headCard">
+
+      <!-- SOCIÉTÉ -->
+      <div class="headBox">
+        <div class="headTitle">Société</div>
+        <div class="headMain" id="bizName">—</div>
+        <div class="headLines" id="bizLines">—</div>
+      </div>
+
+      <!-- CLIENT -->
+      <div class="headBox">
+        <div class="headTitle">Client</div>
+
+        <label>Nom *</label>
+        <input id="clientName" placeholder="Nom du client">
+
+        <label>Email *</label>
+        <input id="clientEmail" type="email" placeholder="email@client.fr">
+
+        <label>Adresse</label>
+        <input id="clientAddress1" placeholder="Adresse">
+
+        <div style="display:flex; gap:8px;">
+          <input id="clientZip" placeholder="Code postal">
+          <input id="clientCity" placeholder="Ville">
+        </div>
+      </div>
+    </div>
+
+    <!-- CONTENU -->
+    <div class="layout">
+
+      <!-- GAUCHE -->
+      <div class="card">
+        <div class="card-title">Lignes</div>
+
+        <div class="tableWrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Désignation</th>
+                <th class="num">Qté</th>
+                <th class="num">PU HT</th>
+                <th class="num">Total TTC</th>
+              </tr>
+            </thead>
+            <tbody id="linesTbody"></tbody>
+          </table>
+        </div>
+
+        <div class="totals" id="totalsBox"></div>
+      </div>
+
+      <!-- DROITE -->
+      <div class="card">
+        <div class="card-title">Paramètres</div>
+
+        <label>Validité (jours)</label>
+        <input id="offerValidityDays" type="number" value="30">
+
+        <label>Mode de paiement</label>
+        <select id="paymentMode">
+          <option value="VIREMENT">Virement</option>
+          <option value="CHEQUE">Chèque</option>
+          <option value="ESPECES">Espèces</option>
+        </select>
+
+        <label>Note privée</label>
+        <textarea id="privateNote"></textarea>
+
+        <div class="actions">
+          <button class="btn primary" id="saveBtn">Enregistrer</button>
+          <button class="btn" id="previewBtn">Aperçu</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SCRIPT -->
+  <script type="module">
+    import { auth, db } from "./firebase-init.js";
+    import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+    import {
+      collection, doc, getDoc, addDoc, updateDoc,
+      serverTimestamp
+    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+
+    let currentUser = null;
+    let docRef = null;
+    let docData = null;
+
+    onAuthStateChanged(auth, async (user)=>{
+      if(!user){
+        location.href = "login.html?role=conciergerie";
+        return;
+      }
+      currentUser = user;
+      await loadBusinessProfile();
+    });
+
+    async function loadBusinessProfile(){
+      const snap = await getDoc(doc(db,"users",currentUser.uid));
+      const bp = snap.data()?.businessProfile || {};
+      document.getElementById("bizName").textContent = bp.companyName || "Conciergerie";
+    }
+
+    async function createDocIfNeeded(){
+      if(docRef) return;
+
+      docRef = await addDoc(collection(db,"salesDocuments"),{
+        conciergerieUid: currentUser.uid,
+        type: "QUOTE",
+        status: "DRAFT",
+        clientName: "",
+        clientEmail: "",
+        lines: [],
+        totals: { ht:0, ttc:0, tva:0 },
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+
+      document.getElementById("docBannerInner").textContent = "DEVIS N° (en cours)";
+    }
+
+    document.getElementById("saveBtn").addEventListener("click", async ()=>{
+      await createDocIfNeeded();
+
+      const patch = {
+        clientName: document.getElementById("clientName").value.trim(),
+        clientEmail: document.getElementById("clientEmail").value.trim(),
+        clientAddress1: document.getElementById("clientAddress1").value.trim(),
+        clientZip: document.getElementById("clientZip").value.trim(),
+        clientCity: document.getElementById("clientCity").value.trim(),
+        updatedAt: serverTimestamp()
+      };
+
+      await updateDoc(docRef, patch);
+      alert("Devis libre enregistré");
+    });
+
+    document.getElementById("previewBtn").addEventListener("click", ()=>{
+      alert("Aperçu print identique à devis-event (à brancher)");
+    });
+  </script>
+</body>
+</html>
