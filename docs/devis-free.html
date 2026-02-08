@@ -1,4 +1,4 @@
-<!-- docs/devis-free.html (CLONE devis-event.html -> source salesDocuments) -->
+<!-- docs/devis-free.html (PATCH: supprime Déconnexion + supprime bloc Récapitulatif + cache bloc Références) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -270,7 +270,7 @@
   <div class="page">
     <div class="topbar">
       <a class="pill-link" href="devis-liste.html">← Retour devis</a>
-      <button class="pill-link" type="button" id="logoutBtn">Déconnexion</button>
+      <!-- (SUPPRIMÉ) bouton Déconnexion -->
     </div>
 
     <div class="logo-title">
@@ -337,12 +337,14 @@
       <!-- GAUCHE -->
       <div class="card">
         <div class="card-title">
-          <span>Récapitulatif</span>
+          <span>Lignes</span>
           <span class="small" id="versionLine">v—</span>
         </div>
 
         <div class="alert" id="alertBox"></div>
-        <div class="kv" id="recapKv"></div>
+
+        <!-- (SUPPRIMÉ) bloc récapitulatif -->
+        <div class="kv" id="recapKv" style="display:none;"></div>
 
         <div class="divider"></div>
 
@@ -384,14 +386,15 @@
 
         <div class="divider"></div>
 
-        <div class="card-title" style="font-size:14px; margin-bottom:6px;">
-          <span>Références</span>
-          <span class="small">devis libre</span>
+        <!-- (CACHÉ) bloc Références -->
+        <div id="refsBlock" style="display:none;">
+          <div class="card-title" style="font-size:14px; margin-bottom:6px;">
+            <span>Références</span>
+            <span class="small">devis libre</span>
+          </div>
+          <div class="kv" id="refsKv"></div>
+          <div class="divider"></div>
         </div>
-
-        <div class="kv" id="refsKv"></div>
-
-        <div class="divider"></div>
 
         <div class="card-title" style="font-size:14px; margin-bottom:6px;">
           <span>Paiement</span>
@@ -487,10 +490,10 @@
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     // ===== UI =====
-    const logoutBtn = document.getElementById("logoutBtn");
+    // (SUPPRIMÉ) logoutBtn
     const alertBox = document.getElementById("alertBox");
-    const recapKv = document.getElementById("recapKv");
-    const refsKv = document.getElementById("refsKv");
+    const recapKv = document.getElementById("recapKv"); // caché
+    const refsKv = document.getElementById("refsKv");   // existe mais bloc caché
     const keyConditionsKv = document.getElementById("keyConditionsKv");
     const statusBadge = document.getElementById("statusBadge");
     const versionLine = document.getElementById("versionLine");
@@ -846,14 +849,6 @@
       const offerUntil = addDaysLabel(todayIso(), offerDays);
       const dueUntil = addDaysLabel(todayIso(), payDays);
 
-      const obj = (d.quoteObject || d.object || "").toString().trim();
-
-      const refLines = [];
-      refLines.push(`<div class="line"><b>Type</b> : Devis libre (sans logement)</div>`);
-      refLines.push(`<div class="line"><b>Objet</b> : ${esc(obj || "Prestation de conciergerie")}</div>`);
-      refLines.push(`<div class="line"><b>ID doc</b> : ${esc(docId || "—")}</div>`);
-      refsKv.innerHTML = refLines.join("");
-
       const bp = (profileData?.businessProfile || {});
       const cancelPct = Number.isFinite(Number(bp?.conditions?.cancellationPercent))
         ? Number(bp.conditions.cancellationPercent)
@@ -865,18 +860,20 @@
       c.push(`<div class="line"><b>Annulation</b> : ${esc(cancelPct)}% du montant peuvent être retenus selon conditions</div>`);
       c.push(`<div class="line"><b>Statut</b> : ${esc(quoteStatusLabel(d.quoteStatus || d.status))}</div>`);
       keyConditionsKv.innerHTML = c.join("");
+
+      // refsKv existe mais bloc caché; on le remplit quand même (au cas où tu le réactives)
+      if(refsKv){
+        const obj = (d.quoteObject || d.object || "").toString().trim();
+        const refLines = [];
+        refLines.push(`<div class="line"><b>Type</b> : Devis libre (sans logement)</div>`);
+        refLines.push(`<div class="line"><b>Objet</b> : ${esc(obj || "Prestation de conciergerie")}</div>`);
+        refLines.push(`<div class="line"><b>ID doc</b> : ${esc(docId || "—")}</div>`);
+        refsKv.innerHTML = refLines.join("");
+      }
     }
 
     function renderRecap(){
       const d = quoteData || {};
-      const c = readClientInputs();
-
-      const rows = [];
-      rows.push(`<div class="line"><b>Devis</b> : libre (sans logement)</div>`);
-      rows.push(`<div class="line"><b>Client</b> : ${esc(c.clientName || "—")}${c.clientEmail ? " • " + esc(c.clientEmail) : ""}</div>`);
-      const addr = [c.clientAddress1, c.clientAddress2, [c.clientZip, c.clientCity].filter(Boolean).join(" ")].filter(Boolean);
-      if(addr.length) rows.push(`<div class="line"><b>Adresse client</b> : ${esc(addr.join(" • "))}</div>`);
-      recapKv.innerHTML = rows.join("");
 
       const qs = quoteStatusLabel(d.quoteStatus || d.status);
       statusBadge.textContent = `Devis: ${qs}`;
@@ -1218,12 +1215,6 @@
         </div>
       `;
     }
-
-    logoutBtn.addEventListener("click", async ()=>{
-      await signOut(auth);
-      localStorage.removeItem("cm_auth");
-      location.href = "index.html";
-    });
 
     previewBtn.addEventListener("click", ()=>{
       if(!docId) return alert("Enregistre d’abord le devis (docId manquant).");
