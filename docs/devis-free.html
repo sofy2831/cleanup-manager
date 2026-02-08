@@ -1,4 +1,4 @@
-<!-- docs/devis-free.html (PATCH: ajoute colonne Réf. (catalogue) + affiche ref dans cards + preview print) -->
+<!-- docs/devis-free.html (PATCH: ajoute Référence catalogue dans lignes + preview) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -147,7 +147,16 @@
     }
     td.num, th.num{ text-align:right; white-space:nowrap; }
     td.designation{ white-space:normal; word-break:break-word; }
-    td.ref, th.ref{ white-space:nowrap; color:#444; font-weight:1000; }
+    td.ref, th.ref{ width:110px; white-space:nowrap; }
+    td.ref .tagref{
+      display:inline-flex; align-items:center; gap:6px;
+      font-size:11px; font-weight:1000;
+      padding:3px 8px;
+      border-radius:999px;
+      background:var(--violet-light);
+      color:#5b45c8;
+      border:1px solid rgba(122,92,255,0.25);
+    }
 
     .linesCards{ display:none; }
     @media(max-width:720px){
@@ -159,12 +168,20 @@
         padding:10px 12px;
       }
       .lineCard .t{ font-weight:1000; }
-      .lineCard .sub{ margin-top:6px; font-size:12px; font-weight:900; color:#555; }
-      .lineCard .sub .pill{
-        display:inline-flex; align-items:center; gap:6px;
-        padding:2px 8px; border-radius:999px;
-        background:rgba(248,244,255,.75);
-        border:1px solid rgba(122,92,255,0.18);
+      .lineCard .refLine{
+        margin-top:6px;
+        font-size:12px;
+        font-weight:900;
+        color:#444;
+      }
+      .lineCard .refLine span{
+        display:inline-flex;
+        align-items:center;
+        gap:6px;
+        background:rgba(248,244,255,.9);
+        border:1px solid rgba(122,92,255,0.25);
+        padding:3px 8px;
+        border-radius:999px;
       }
       .lineCard .g{ display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:8px; font-size:12.5px; color:#222; font-weight:850; }
       .lineCard .g div{ background:rgba(248,244,255,.6); border-radius:10px; padding:8px 10px; }
@@ -277,7 +294,6 @@
   <div class="page">
     <div class="topbar">
       <a class="pill-link" href="devis-liste.html">← Retour devis</a>
-      <!-- (SUPPRIMÉ) bouton Déconnexion -->
     </div>
 
     <div class="logo-title">
@@ -314,7 +330,6 @@
       <div class="headBox">
         <div class="headTitle">Client</div>
 
-        <!-- ✅ Devis libre : champs éditables -->
         <label for="clientNameInput">Nom *</label>
         <input id="clientNameInput" type="text" placeholder="Nom du client">
 
@@ -350,7 +365,6 @@
 
         <div class="alert" id="alertBox"></div>
 
-        <!-- (SUPPRIMÉ) bloc récapitulatif -->
         <div class="kv" id="recapKv" style="display:none;"></div>
 
         <div class="divider"></div>
@@ -394,7 +408,6 @@
 
         <div class="divider"></div>
 
-        <!-- (CACHÉ) bloc Références -->
         <div id="refsBlock" style="display:none;">
           <div class="card-title" style="font-size:14px; margin-bottom:6px;">
             <span>Références</span>
@@ -497,10 +510,60 @@
       doc, getDoc, setDoc, updateDoc, serverTimestamp, runTransaction
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
+    // ========= CATALOGUE (repris de nouvelle-prestation.html) =========
+    // Objectif : afficher une "référence catalogue" sur chaque ligne du devis.
+    const PRODUCT_TEMPLATES = [
+      { key:"MENAGE_STANDARD", label:"Ménage standard (inter-séjour)" },
+      { key:"MENAGE_INTERMEDIAIRE", label:"Ménage intermédiaire (long séjour)" },
+      { key:"BACK_TO_BACK", label:"Back-to-back (ménage en urgence)" },
+      { key:"REMISE_EN_ETAT", label:"Remise en état (logement non conforme)" },
+
+      { key:"RECHANGE_LINGE", label:"Rechange linge (rotation complète)" },
+      { key:"LAVAGE_SECHAGE", label:"Collecte + lavage + séchage" },
+      { key:"BLANCHISSERIE", label:"Dépose / reprise blanchisserie" },
+
+      { key:"CHECKIN_AUTONOME", label:"Check-in autonome (boîte à clés)" },
+      { key:"CHECKIN_PHYSIQUE", label:"Check-in physique" },
+      { key:"CHECKOUT", label:"Check-out" },
+      { key:"GESTION_CLES", label:"Gestion clés / badges" },
+      { key:"RECUP_CLES", label:"Récupération clés après sortie" },
+
+      { key:"PETITE_MAINTENANCE", label:"Petite maintenance (ampoule, joint…)" },
+      { key:"URGENCE", label:"Intervention d’urgence (fuite, serrure)" },
+      { key:"COORD_ARTISANS", label:"Coordination artisans" },
+
+      { key:"MESSAGES", label:"Réponses messages voyageurs" },
+
+      { key:"KIT_ESSENTIEL", label:"Kit essentiel" },
+      { key:"KIT_CUISINE", label:"Kit cuisine" },
+      { key:"KIT_BAIN", label:"Kit bain" },
+      { key:"KIT_SEJOUR_2", label:"Kit séjour (Pack 2 pers)" },
+      { key:"KIT_SEJOUR_4", label:"Kit séjour (Pack 4 pers)" },
+      { key:"KIT_SEJOUR_6", label:"Kit séjour (Pack 6 pers)" },
+      { key:"KIT_SEJOUR_8", label:"Kit séjour (Pack 8 pers)" },
+      { key:"REASSORT", label:"Réassort produit unitaire (papier, café…)" },
+
+      { key:"__OTHER__", label:"Autre (texte libre)" }
+    ];
+
+    const TPL_BY_KEY = new Map(PRODUCT_TEMPLATES.map(p => [p.key, p]));
+    const KEY_BY_LABEL = new Map(PRODUCT_TEMPLATES.map(p => [String(p.label||"").trim(), p.key]));
+
+    function inferRefFromLine(line){
+      // Priorité: champ déjà stocké dans le doc
+      const ref = String(line?.ref || line?.productRef || line?.catalogRef || line?.productKey || line?.key || "").trim();
+      if(ref) return ref;
+
+      // Sinon: déduction depuis label (match exact sur template.label)
+      const label = String(line?.label || "").trim();
+      if(!label) return "";
+      return String(KEY_BY_LABEL.get(label) || "").trim();
+    }
+
     // ===== UI =====
     const alertBox = document.getElementById("alertBox");
-    const recapKv = document.getElementById("recapKv"); // caché
-    const refsKv = document.getElementById("refsKv");   // existe mais bloc caché
+    const recapKv = document.getElementById("recapKv");
+    const refsKv = document.getElementById("refsKv");
     const keyConditionsKv = document.getElementById("keyConditionsKv");
     const statusBadge = document.getElementById("statusBadge");
     const versionLine = document.getElementById("versionLine");
@@ -682,14 +745,6 @@
     penB2BEl.addEventListener("change", syncPenaltyText);
     penB2CEl.addEventListener("change", syncPenaltyText);
 
-    // ✅ Référence catalogue : accepte plusieurs noms de champ
-    function getLineRef(l){
-      // Priorité : ref / productKey (catalogue key) / key / templateKey / sku / code
-      const raw =
-        (l?.ref ?? l?.productKey ?? l?.key ?? l?.templateKey ?? l?.sku ?? l?.code ?? "").toString().trim();
-      return raw;
-    }
-
     async function loadProfile(uid){
       const ref = doc(db, "users", uid);
       const snap = await getDoc(ref);
@@ -806,10 +861,10 @@
       const lines = Array.isArray(d.lines) ? d.lines : [];
 
       for(const l of lines){
-        const ref = getLineRef(l);
-        const label = l?.label || "Ligne";
+        const label = String(l?.label || "Ligne").trim();
+        const ref = inferRefFromLine(l);
         const qty = Number(l?.qty)||0;
-        const unit = l?.unit || "unité";
+        const unit = String(l?.unit || "unité").trim();
         const up = Number(l?.unitPrice)||0;
 
         const lineHT = qty * up;
@@ -818,7 +873,7 @@
 
         const tr = document.createElement("tr");
         tr.innerHTML = `
-          <td class="ref">${esc(ref || "—")}</td>
+          <td class="ref">${ref ? `<span class="tagref">${esc(ref)}</span>` : `<span class="tagref">—</span>`}</td>
           <td class="designation">${esc(label)}</td>
           <td class="num">${esc(qty)}</td>
           <td>${esc(unit)}</td>
@@ -832,9 +887,7 @@
         card.className = "lineCard";
         card.innerHTML = `
           <div class="t">${esc(label)}</div>
-          <div class="sub">
-            <span class="pill"><b>Réf.</b> : ${esc(ref || "—")}</span>
-          </div>
+          <div class="refLine"><span><b>Réf.</b> : ${esc(ref || "—")}</span></div>
           <div class="g">
             <div><b>Qté</b> : ${esc(qty)}</div>
             <div><b>Unité</b> : ${esc(unit)}</div>
@@ -983,7 +1036,7 @@
           .tbl th,.tbl td{padding:9px 9px;border-bottom:1px solid rgba(0,0,0,.10);text-align:left;vertical-align:top}
           .tbl th{background:#f6f3ff;font-weight:900}
           .num{text-align:right;white-space:nowrap}
-          .ref{white-space:nowrap}
+          .ref{white-space:nowrap;width:110px}
 
           .tot{margin-top:12px;border:1px solid rgba(0,0,0,.10);border-radius:12px;padding:10px 12px}
           .r{display:flex;justify-content:space-between;gap:10px;margin-top:6px;font-weight:800}
@@ -1083,10 +1136,11 @@
         : `TVA non applicable, art. 293B du CGI.`;
 
       const rowsLines = lines.map(l=>{
-        const ref = getLineRef(l);
-        const label = l?.label || "Ligne";
+        const label = String(l?.label || "Ligne").trim();
+        const ref = inferRefFromLine(l);
+
         const qty = Number(l?.qty)||0;
-        const unit = l?.unit || "unité";
+        const unit = String(l?.unit || "unité").trim();
         const up = Number(l?.unitPrice)||0;
         const lineHT = qty*up;
         const lineTVA = tvaEnabled ? (lineHT*tvaRate) : 0;
@@ -1156,7 +1210,7 @@
         <table class="tbl">
           <thead>
             <tr>
-              <th>Réf.</th>
+              <th class="ref">Réf.</th>
               <th>Désignation</th>
               <th class="num">Qté</th>
               <th>Unité</th>
@@ -1293,9 +1347,7 @@
         clientZip: client.clientZip,
         clientCity: client.clientCity,
 
-        // ⚠️ lignes : ici tu gardes le format existant
-        // Pour la référence catalogue, chaque ligne peut contenir l’un de ces champs:
-        // ref / productKey / key / templateKey / sku / code
+        // lignes auto (mais désormais supporte ref)
         lines: [],
 
         quotePaymentTerm: paymentTermEl.value,
@@ -1451,6 +1503,7 @@
         if(docId){
           await loadQuoteById();
         }else{
+          // nouveau devis libre (pas encore créé)
           quoteData = { quoteVersion: 1, quoteStatus: "DRAFT", lines: [] };
           renderRecap();
           previewBtn.disabled = true;
