@@ -1,4 +1,4 @@
-<!-- docs/devis-free.html (PATCH: supprime Déconnexion + supprime bloc Récapitulatif + cache bloc Références) -->
+<!-- docs/devis-free.html (PATCH: ajoute colonne Réf. (catalogue) + affiche ref dans cards + preview print) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -147,6 +147,7 @@
     }
     td.num, th.num{ text-align:right; white-space:nowrap; }
     td.designation{ white-space:normal; word-break:break-word; }
+    td.ref, th.ref{ white-space:nowrap; color:#444; font-weight:1000; }
 
     .linesCards{ display:none; }
     @media(max-width:720px){
@@ -158,6 +159,13 @@
         padding:10px 12px;
       }
       .lineCard .t{ font-weight:1000; }
+      .lineCard .sub{ margin-top:6px; font-size:12px; font-weight:900; color:#555; }
+      .lineCard .sub .pill{
+        display:inline-flex; align-items:center; gap:6px;
+        padding:2px 8px; border-radius:999px;
+        background:rgba(248,244,255,.75);
+        border:1px solid rgba(122,92,255,0.18);
+      }
       .lineCard .g{ display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:8px; font-size:12.5px; color:#222; font-weight:850; }
       .lineCard .g div{ background:rgba(248,244,255,.6); border-radius:10px; padding:8px 10px; }
       .lineCard .g b{ font-weight:1000; }
@@ -242,7 +250,6 @@
     .headLines{ margin-top:6px; font-size:12.5px; color:#222; font-weight:850; line-height:1.35; }
     .headLines .mut{ color:#666; font-weight:900; }
 
-    /* bottom nav conservée mais tu peux la virer plus tard */
     .bottom-nav{
       position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
       display: flex; justify-content: space-around; gap: 6px;
@@ -359,6 +366,7 @@
           <table>
             <thead>
               <tr>
+                <th class="ref">Réf.</th>
                 <th>Désignation</th>
                 <th class="num">Qté</th>
                 <th>Unité</th>
@@ -484,13 +492,12 @@
 
   <script type="module">
     import { auth, db } from "./firebase-init.js";
-    import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+    import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
       doc, getDoc, setDoc, updateDoc, serverTimestamp, runTransaction
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     // ===== UI =====
-    // (SUPPRIMÉ) logoutBtn
     const alertBox = document.getElementById("alertBox");
     const recapKv = document.getElementById("recapKv"); // caché
     const refsKv = document.getElementById("refsKv");   // existe mais bloc caché
@@ -675,6 +682,14 @@
     penB2BEl.addEventListener("change", syncPenaltyText);
     penB2CEl.addEventListener("change", syncPenaltyText);
 
+    // ✅ Référence catalogue : accepte plusieurs noms de champ
+    function getLineRef(l){
+      // Priorité : ref / productKey (catalogue key) / key / templateKey / sku / code
+      const raw =
+        (l?.ref ?? l?.productKey ?? l?.key ?? l?.templateKey ?? l?.sku ?? l?.code ?? "").toString().trim();
+      return raw;
+    }
+
     async function loadProfile(uid){
       const ref = doc(db, "users", uid);
       const snap = await getDoc(ref);
@@ -791,6 +806,7 @@
       const lines = Array.isArray(d.lines) ? d.lines : [];
 
       for(const l of lines){
+        const ref = getLineRef(l);
         const label = l?.label || "Ligne";
         const qty = Number(l?.qty)||0;
         const unit = l?.unit || "unité";
@@ -802,6 +818,7 @@
 
         const tr = document.createElement("tr");
         tr.innerHTML = `
+          <td class="ref">${esc(ref || "—")}</td>
           <td class="designation">${esc(label)}</td>
           <td class="num">${esc(qty)}</td>
           <td>${esc(unit)}</td>
@@ -815,6 +832,9 @@
         card.className = "lineCard";
         card.innerHTML = `
           <div class="t">${esc(label)}</div>
+          <div class="sub">
+            <span class="pill"><b>Réf.</b> : ${esc(ref || "—")}</span>
+          </div>
           <div class="g">
             <div><b>Qté</b> : ${esc(qty)}</div>
             <div><b>Unité</b> : ${esc(unit)}</div>
@@ -861,7 +881,6 @@
       c.push(`<div class="line"><b>Statut</b> : ${esc(quoteStatusLabel(d.quoteStatus || d.status))}</div>`);
       keyConditionsKv.innerHTML = c.join("");
 
-      // refsKv existe mais bloc caché; on le remplit quand même (au cas où tu le réactives)
       if(refsKv){
         const obj = (d.quoteObject || d.object || "").toString().trim();
         const refLines = [];
@@ -914,7 +933,7 @@
       markAcceptedBtn.disabled = !(docId && canMarkAccepted(d));
     }
 
-    // ===== Preview HTML (copié du devis-event : même print) =====
+    // ===== Preview HTML =====
     function openPrintWindow(htmlInside){
       const w = window.open("", "_blank");
       if(!w) return alert("Pop-up bloquée. Autorise les pop-ups pour ce site.");
@@ -964,6 +983,7 @@
           .tbl th,.tbl td{padding:9px 9px;border-bottom:1px solid rgba(0,0,0,.10);text-align:left;vertical-align:top}
           .tbl th{background:#f6f3ff;font-weight:900}
           .num{text-align:right;white-space:nowrap}
+          .ref{white-space:nowrap}
 
           .tot{margin-top:12px;border:1px solid rgba(0,0,0,.10);border-radius:12px;padding:10px 12px}
           .r{display:flex;justify-content:space-between;gap:10px;margin-top:6px;font-weight:800}
@@ -1063,6 +1083,7 @@
         : `TVA non applicable, art. 293B du CGI.`;
 
       const rowsLines = lines.map(l=>{
+        const ref = getLineRef(l);
         const label = l?.label || "Ligne";
         const qty = Number(l?.qty)||0;
         const unit = l?.unit || "unité";
@@ -1073,6 +1094,7 @@
 
         return `
           <tr>
+            <td class="ref">${esc(ref || "—")}</td>
             <td>${esc(label)}</td>
             <td class="num">${esc(qty)}</td>
             <td>${esc(unit)}</td>
@@ -1134,6 +1156,7 @@
         <table class="tbl">
           <thead>
             <tr>
+              <th>Réf.</th>
               <th>Désignation</th>
               <th class="num">Qté</th>
               <th>Unité</th>
@@ -1143,7 +1166,7 @@
             </tr>
           </thead>
           <tbody>
-            ${rowsLines || `<tr><td colspan="${tvaEnabled?6:5}">Aucune ligne</td></tr>`}
+            ${rowsLines || `<tr><td colspan="${tvaEnabled?7:6}">Aucune ligne</td></tr>`}
           </tbody>
         </table>
 
@@ -1270,7 +1293,11 @@
         clientZip: client.clientZip,
         clientCity: client.clientCity,
 
+        // ⚠️ lignes : ici tu gardes le format existant
+        // Pour la référence catalogue, chaque ligne peut contenir l’un de ces champs:
+        // ref / productKey / key / templateKey / sku / code
         lines: [],
+
         quotePaymentTerm: paymentTermEl.value,
         quotePaymentMode: (getSelectedPayMode() || "VIREMENT"),
         quoteOfferValidityDays: Math.max(0, parseInt(offerValidityDaysEl.value || "30", 10) || 30),
@@ -1287,11 +1314,9 @@
 
       await setDoc(newRef, patch, { merge:false });
 
-      // refresh
       const snap = await getDoc(newRef);
       quoteData = { id: snap.id, ...(snap.data()||{}) };
 
-      // inject docId into URL for stability
       const url = new URL(location.href);
       url.searchParams.set("docId", docId);
       history.replaceState({}, "", url.toString());
@@ -1426,7 +1451,6 @@
         if(docId){
           await loadQuoteById();
         }else{
-          // nouveau devis libre (pas encore créé)
           quoteData = { quoteVersion: 1, quoteStatus: "DRAFT", lines: [] };
           renderRecap();
           previewBtn.disabled = true;
