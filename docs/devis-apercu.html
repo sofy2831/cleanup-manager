@@ -1,4 +1,4 @@
-<!-- docs/devis-apercu.html (FINAL: même présentation que devisfree-apercu, mais lit events + owners, bloc Client = adresse de facturation, pénalités auto) -->
+<!-- docs/devis-apercu.html (FIX: pénalités OK + affichage propre, bloc Client = adresse facturation owners/snapshot) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -417,8 +417,8 @@
         <div class="line" id="cond3">—</div>
       </div>
 
-      <div class="sectionTitle">Pénalités</div>
-      <div class="box">
+      <div class="sectionTitle" id="penSectionTitle">Pénalités</div>
+      <div class="box" id="penBox">
         <div class="line" id="penaltyText">—</div>
       </div>
 
@@ -450,9 +450,7 @@
   <script type="module">
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-    import {
-      doc, getDoc, collection, query, where, getDocs, limit
-    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import { doc, getDoc, collection, query, where, getDocs, limit } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const alertBox = document.getElementById("alertBox");
     const printBtn = document.getElementById("printBtn");
@@ -462,10 +460,9 @@
     const logoFallback = document.getElementById("logoFallback");
 
     const companyNameEl = document.getElementById("companyName");
-    const companySubEl  = document.getElementById("companySub");
 
     const docTitleEl = document.getElementById("docTitle");
-    const docMetaEl  = document.getElementById("docMeta"); // (masqué)
+    const docMetaEl  = document.getElementById("docMeta");
     const metaRightEl = document.getElementById("metaRight");
 
     const soc1 = document.getElementById("socLine1");
@@ -496,6 +493,9 @@
     const cond3 = document.getElementById("cond3");
 
     const penaltyTextEl = document.getElementById("penaltyText");
+    const penSectionTitle = document.getElementById("penSectionTitle");
+    const penBox = document.getElementById("penBox");
+
     const footerEl = document.getElementById("footer");
 
     function showError(msg){
@@ -557,15 +557,14 @@
     }
 
     function getPenaltyTemplate(mode){
-  const m = String(mode||"").toUpperCase();
-  if(m === "B2B"){
-    return "Pénalités de retard : 3 fois le taux d’intérêt légal en vigueur + indemnité forfaitaire de recouvrement de 40 €.";
-  }
-  // défaut B2C
-  return "Pénalités de retard : 3 fois le taux d’intérêt légal en vigueur.";
-}
-
-      return "—";
+      const m = String(mode||"").toUpperCase();
+      if(m === "B2B"){
+        return "Pénalités de retard : 3 fois le taux d’intérêt légal en vigueur + indemnité forfaitaire de recouvrement de 40 €.";
+      }
+      if(m === "B2C"){
+        return "Pénalités de retard : 3 fois le taux d’intérêt légal en vigueur.";
+      }
+      return "";
     }
 
     function getStayPeriod(d){
@@ -598,7 +597,6 @@
       const phone = String(bp.phone || "").trim();
 
       companyNameEl.textContent = companyName || "Conciergerie";
-      companySubEl.textContent = "";
 
       if(logoUrl){
         logoImg.src = logoUrl;
@@ -642,7 +640,7 @@
     function renderDocHeader(eventData){
       docTitleEl.textContent = `DEVIS N° ${eventData?.quoteNumber || "—"}`;
 
-      const created = new Date(); // event: pas de createdAt fiable -> on prend "aujourd'hui"
+      const created = new Date();
       const offerDays = Number.isFinite(Number(eventData?.quoteOfferValidityDays)) ? Number(eventData.quoteOfferValidityDays) : 30;
       const until = addDays(created, offerDays);
 
@@ -663,7 +661,6 @@
       homeLine2.textContent = `Période : ${getStayPeriod(d)}`;
     }
 
-    // ===== OWNER (facturation) : owners OU snapshot event =====
     async function lookupOwnerByEmailInOwners(conciergerieUid, emailLower){
       if(!emailLower) return null;
 
@@ -686,14 +683,11 @@
         address2: (o.address2 || "").toString().trim(),
         zip: (o.zip || "").toString().trim(),
         city: (o.city || "").toString().trim(),
-        phone: (o.phone || "").toString().trim(),
       };
     }
 
     async function loadOwnerForEvent(conciergerieUid, d){
-      const ownerDocId =
-        String(d?.ownerUid || "").trim() ||
-        String(d?.ownerDocId || "").trim();
+      const ownerDocId = String(d?.ownerUid || "").trim() || String(d?.ownerDocId || "").trim();
 
       if(ownerDocId){
         try{
@@ -703,13 +697,11 @@
             if(String(o.conciergerieUid||"") === String(conciergerieUid)){
               return {
                 docId: snap.id,
-                email: normalizeEmail(o.email || ""),
                 fullname: (o.fullname || o.displayName || "").trim(),
                 address1: (o.address1 || o.address || "").toString().trim(),
                 address2: (o.address2 || "").toString().trim(),
                 zip: (o.zip || "").toString().trim(),
                 city: (o.city || "").toString().trim(),
-                phone: (o.phone || "").toString().trim(),
               };
             }
           }
@@ -735,7 +727,6 @@
     }
 
     function renderClientHeader(ownerFromOwners, d){
-      // IMPORTANT: ici on met UNIQUEMENT (nom + adresse + CP + ville) dans le bloc Client, en face de Société.
       const o = ownerFromOwners || null;
       const s = ownerSnapshotFromEvent(d);
 
@@ -817,28 +808,31 @@
       cond3.innerHTML = `<b>Annulation</b> : ${esc(String(cancelPct))} % du montant en cas d’annulation moins de 48 h avant l’intervention.`;
     }
 
-   function renderPenalty(eventData){
-  // 1) on tente plusieurs champs possibles (ancien + nouveau)
-  const candidates = [
-    eventData?.quotePenaltyText,
-    eventData?.penaltyText,
-    eventData?.commercialPenaltyText
-  ].map(v => String(v || "").trim()).filter(Boolean);
+    function renderPenalty(eventData){
+      const explicit = String(eventData?.quotePenaltyText || "").trim();
+      const mode = String(eventData?.quotePenaltyMode || "").trim().toUpperCase();
 
-  if(candidates.length){
-    penaltyTextEl.textContent = candidates[0];
-    return;
-  }
+      if(explicit){
+        penaltyTextEl.textContent = explicit;
+        penSectionTitle.style.display = "";
+        penBox.style.display = "";
+        return;
+      }
 
-  // 2) sinon on force un template selon le mode (avec défaut B2C)
-  const mode = String(
-    eventData?.quotePenaltyMode ||
-    eventData?.penaltyMode ||
-    "B2C"
-  ).trim().toUpperCase();
+      if(mode){
+        const tpl = getPenaltyTemplate(mode);
+        if(tpl){
+          penaltyTextEl.textContent = tpl;
+          penSectionTitle.style.display = "";
+          penBox.style.display = "";
+          return;
+        }
+      }
 
-  penaltyTextEl.textContent = getPenaltyTemplate(mode);
-}
+      // Rien choisi / rien écrit => on cache pour que ce soit clean
+      penSectionTitle.style.display = "none";
+      penBox.style.display = "none";
+    }
 
     printBtn.addEventListener("click", ()=> window.print());
 
@@ -854,7 +848,6 @@
         return;
       }
 
-      // Retour = devis-liste.html (comme demandé) + on garde l’eventId si tu veux revenir direct sur l’éditeur
       backLink.href = `devis-liste.html`;
 
       try{
@@ -871,16 +864,13 @@
           return;
         }
 
-        // Business profile
         const userSnap = await getDoc(doc(db,"users", user.uid));
         const profile = userSnap.exists() ? (userSnap.data()||{}) : {};
         const bp = applyBusinessProfile(profile);
 
-        // Owner (facturation)
         const ownerFromOwners = await loadOwnerForEvent(user.uid, eventData);
         renderClientHeader(ownerFromOwners, eventData);
 
-        // Header / logement / lignes / conditions / pénalités
         renderDocHeader(eventData);
         renderHomeAndPeriod(eventData);
         renderLines(eventData, bp || {});
@@ -895,4 +885,3 @@
   </script>
 </body>
 </html>
-
