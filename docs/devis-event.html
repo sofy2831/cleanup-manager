@@ -212,7 +212,6 @@
     .radio input{ margin:0; width:auto; }
     .readonly{ background:rgba(248,244,255,.6); }
 
-    /* Entête pro : Société / Client */
     .headCard{
       max-width:1100px; width:100%;
       display:grid; grid-template-columns:1fr; gap:12px;
@@ -268,8 +267,8 @@
 <body>
   <div class="page">
     <div class="topbar">
-      <a class="pill-link" href="planning.html">← Retour planning</a>
-      <button class="pill-link" type="button" id="logoutBtn">Déconnexion</button>
+      <a class="pill-link" href="devis-liste.html">← Retour</a>
+      <span></span>
     </div>
 
     <div class="logo-title">
@@ -287,7 +286,6 @@
       <div class="docBannerInner" id="docBannerInner">DEVIS N° —</div>
     </div>
 
-    <!-- ENTÊTE PRO : Société / Client (sans bouton choisir client) -->
     <div class="headCard">
       <div class="headBox">
         <div class="headRow">
@@ -311,7 +309,6 @@
     </div>
 
     <div class="layout">
-      <!-- GAUCHE -->
       <div class="card">
         <div class="card-title">
           <span>Récapitulatif</span>
@@ -349,7 +346,6 @@
         <div class="totals" id="totalsBox"></div>
       </div>
 
-      <!-- DROITE -->
       <div class="card">
         <div class="card-title">
           <span>Paiement</span>
@@ -439,14 +435,13 @@
 
   <script type="module">
     import { auth, db } from "./firebase-init.js";
-    import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+    import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
       doc, getDoc, updateDoc, serverTimestamp, runTransaction,
       collection, query, where, getDocs, limit
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     // ===== UI =====
-    const logoutBtn = document.getElementById("logoutBtn");
     const alertBox = document.getElementById("alertBox");
     const recapKv = document.getElementById("recapKv");
     const keyConditionsKv = document.getElementById("keyConditionsKv");
@@ -527,12 +522,6 @@
     function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
 
     const eventId = getParam("eventId");
-
-    logoutBtn.addEventListener("click", async ()=>{
-      await signOut(auth);
-      localStorage.removeItem("cm_auth");
-      location.href = "index.html";
-    });
 
     function computeTotals(lines, tvaEnabled, tvaRate){
       let ht = 0;
@@ -674,12 +663,8 @@
     }
 
     function getStayPeriod(d){
-      const a = pickDate(
-        d?.arrivalDateKey || d?.arrivalDate || d?.checkinDate || d?.arrival || d?.dateArrivee
-      );
-      const b = pickDate(
-        d?.departureDateKey || d?.departureDate || d?.checkoutDate || d?.departure || d?.dateDepart
-      );
+      const a = pickDate(d?.arrivalDateKey || d?.arrivalDate || d?.checkinDate || d?.arrival || d?.dateArrivee);
+      const b = pickDate(d?.departureDateKey || d?.departureDate || d?.checkoutDate || d?.departure || d?.dateDepart);
       if(a && b) return { from:a, to:b, label:`Du ${a} au ${b}` };
       if(a && !b) return { from:a, to:"", label:`À partir du ${a}` };
       if(!a && b) return { from:"", to:b, label:`Jusqu’au ${b}` };
@@ -732,7 +717,6 @@
       const siret = String(bp.registration?.siret || "").trim();
       const ape = String(bp.registration?.ape || "").trim();
 
-      // profil-conciergerie.html utilise billingEmail + phone (pas bp.contact.*)
       const mail = String(bp.billingEmail || profileData?.email || "").trim();
       const phone = String(bp.phone || "").trim();
 
@@ -847,7 +831,7 @@
       const c = [];
       c.push(`<div class="line"><b>Validité</b> : jusqu’au ${esc(offerUntil)}</div>`);
       c.push(`<div class="line"><b>Paiement</b> : ${esc(dueUntil)} (${esc(dueLabel(paymentTermEl.value))})</div>`);
-     c.push(`<div class="line"><b>Annulation</b> : ${esc(cancelPct)} % du montant en cas d’annulation moins de 48 h avant l’intervention</div>`);
+      c.push(`<div class="line"><b>Annulation</b> : ${esc(cancelPct)} % du montant en cas d’annulation moins de 48 h avant l’intervention</div>`);
 
       keyConditionsKv.innerHTML = c.join("");
     }
@@ -856,7 +840,6 @@
       const d = eventData || {};
       const period = getStayPeriod(d);
 
-      // logement : on cache le NOM (interne) et on garde adresse + CP + ville
       const homeAddr = (d.homeAddress || "").trim();
       const homeZip = (d.homeZip || d.zip || d.postalCode || "").toString().trim();
       const homeCity = (d.homeCity || "").trim();
@@ -867,22 +850,15 @@
       rows.push(`<div class="line"><b>Période</b> : ${esc(period.label)}</div>`);
       recapKv.innerHTML = rows.join("");
 
-      // statut : BROUILLON tant que pas enregistré (pas de quoteNumber)
       const hasSaved = !!(d.quoteNumber && String(d.quoteNumber).trim());
       statusBadge.textContent = hasSaved ? quoteStatusLabel(d.quoteStatus) : "BROUILLON";
-
-      // bannière devis
       docBannerInner.textContent = `DEVIS N° ${d.quoteNumber || "—"}`;
 
       if(privateNoteEl.value === "" && d.quotePrivateNote) privateNoteEl.value = d.quotePrivateNote;
-
       if(d.quotePaymentTerm && paymentTermEl.value !== d.quotePaymentTerm) paymentTermEl.value = d.quotePaymentTerm;
 
-      if(d.quotePaymentMode){
-        setPayMode(d.quotePaymentMode);
-      }else{
-        setPayMode("VIREMENT");
-      }
+      if(d.quotePaymentMode) setPayMode(d.quotePaymentMode);
+      else setPayMode("VIREMENT");
 
       if(Number.isFinite(Number(d.quoteOfferValidityDays))){
         offerValidityDaysEl.value = String(Math.max(0, parseInt(d.quoteOfferValidityDays, 10) || 30));
@@ -915,7 +891,6 @@
       profileData = snap.exists() ? (snap.data() || {}) : {};
     }
 
-    // ===== OWNERS (propriétaires) =====
     async function lookupOwnerByEmailInOwners(emailLower){
       if(!emailLower) return null;
 
@@ -948,7 +923,6 @@
       const d = eventData || {};
       const ownerEmail = normalizeEmail(d.ownerEmail || "");
 
-      // priorité 1 : ownerUid/docId
       const ownerDocId =
         String(d.ownerUid || "").trim() ||
         String(d.ownerDocId || "").trim();
@@ -977,7 +951,6 @@
         }
       }
 
-      // fallback email
       if(ownerEmail){
         try{
           ownerUser = await lookupOwnerByEmailInOwners(ownerEmail);
@@ -1004,7 +977,6 @@
       renderRecap();
     }
 
-    // ===== UX lock =====
     function lockUI(locked){
       const d = eventData || {};
       saveBtn.disabled = !!locked || !eventRef;
@@ -1017,13 +989,11 @@
     paymentTermEl.addEventListener("change", renderConditions);
     offerValidityDaysEl.addEventListener("input", renderConditions);
 
-    // ===== Preview : page unique devis-apercu.html =====
     previewBtn.addEventListener("click", ()=>{
       if(!eventRef) return;
       location.href = `devis-apercu.html?eventId=${encodeURIComponent(eventId)}`;
     });
 
-    // ===== Save =====
     saveBtn.addEventListener("click", async ()=>{
       hideAlert();
       if(!eventRef) return showAlert("Event non chargé.");
@@ -1041,10 +1011,8 @@
 
         const patch = {
           quoteNumber,
-
           quoteStatus: String(eventData?.quoteStatus || "").toUpperCase() || "DRAFT",
           commercialStatus: "DEVIS",
-
           quoteOfferValidityDays: Math.max(0, parseInt(offerValidityDaysEl.value || "30", 10) || 30),
           quotePaymentTerm: paymentTermEl.value,
           quotePaymentMode: payMode,
@@ -1053,16 +1021,13 @@
             especes: payMode === "ESPECES",
             cheque: payMode === "CHEQUE"
           },
-
           quotePenaltyMode: getSelectedPenaltyMode(),
           quotePenaltyText: (penaltyTextEl.value || "").trim(),
-
           quotePrivateNote: (privateNoteEl.value || "").trim(),
           quoteUpdatedAt: serverTimestamp(),
           commercialUpdatedAt: serverTimestamp()
         };
 
-        // ne pas rétrograder un statut déjà finalisé
         const qs = String(eventData?.quoteStatus || "").toUpperCase();
         if(qs === "SENT" || qs === "ACCEPTED" || qs === "REFUSED"){
           patch.quoteStatus = qs;
@@ -1087,7 +1052,6 @@
       }
     });
 
-    // ===== Mark SENT =====
     markSentBtn.addEventListener("click", async ()=>{
       hideAlert();
       if(!eventRef) return showAlert("Event non chargé.");
@@ -1132,7 +1096,6 @@
       }
     });
 
-    // ===== Mark ACCEPTED (côté conciergerie) =====
     markAcceptedBtn.addEventListener("click", async ()=>{
       hideAlert();
       if(!eventRef) return showAlert("Event non chargé.");
@@ -1175,5 +1138,3 @@
   </script>
 </body>
 </html>
-
-
