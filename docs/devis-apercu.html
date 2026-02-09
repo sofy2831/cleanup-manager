@@ -1,4 +1,4 @@
-<!-- docs/devis-apercu.html (EVENT: présentation = devisfree-apercu, + client depuis owners, + logement+periode, + pénalités B2B/B2C) -->
+<!-- docs/devis-apercu.html (FINAL: même présentation que devisfree-apercu, mais lit events + owners, bloc Client = adresse de facturation, pénalités auto) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -66,7 +66,6 @@
       position:relative;
     }
 
-    /* HEADER */
     .header{
       display:flex;
       gap:12px;
@@ -328,10 +327,11 @@
     }
   </style>
 </head>
+
 <body>
   <div class="wrap">
     <div class="topbar">
-      <a class="pill" id="backLink" href="planning.html">← Retour</a>
+      <a class="pill" id="backLink" href="devis-liste.html">← Retour</a>
       <button class="pill primary" id="printBtn" type="button">Imprimer / PDF</button>
     </div>
 
@@ -350,13 +350,9 @@
           </div>
         </div>
 
-        <!-- ✅ maintenant: date/validité + adresse client -->
         <div class="metaRight" id="metaRight">
           <div><b>Émis le</b> —</div>
           <div><b>Valable jusqu’au</b> —</div>
-          <div style="height:6px"></div>
-          <div><b>Client</b> —</div>
-          <div>—</div>
         </div>
       </div>
 
@@ -380,11 +376,10 @@
         </div>
       </div>
 
-      <!-- ✅ logement + période AU-DESSUS des prestations -->
-      <div class="sectionTitle">Logement / Période</div>
+      <div class="sectionTitle">Logement & période</div>
       <div class="box">
         <div class="line" id="homeLine1">—</div>
-        <div class="line" id="homeLine2"></div>
+        <div class="line" id="homeLine2">—</div>
       </div>
 
       <table aria-label="Lignes devis">
@@ -424,7 +419,6 @@
 
       <div class="sectionTitle">Pénalités</div>
       <div class="box">
-        <div class="line" id="penaltyModeLine">—</div>
         <div class="line" id="penaltyText">—</div>
       </div>
 
@@ -456,11 +450,13 @@
   <script type="module">
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-    import { doc, getDoc } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import {
+      doc, getDoc, collection, query, where, getDocs, limit
+    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
-    const backLink = document.getElementById("backLink");
     const alertBox = document.getElementById("alertBox");
     const printBtn = document.getElementById("printBtn");
+    const backLink = document.getElementById("backLink");
 
     const logoImg = document.getElementById("logoImg");
     const logoFallback = document.getElementById("logoFallback");
@@ -499,7 +495,6 @@
     const cond2 = document.getElementById("cond2");
     const cond3 = document.getElementById("cond3");
 
-    const penaltyModeLineEl = document.getElementById("penaltyModeLine");
     const penaltyTextEl = document.getElementById("penaltyText");
     const footerEl = document.getElementById("footer");
 
@@ -535,12 +530,11 @@
       return d;
     }
     function termLabel(term){
-      const t = String(term||"").toUpperCase();
-      if(t === "RECEPTION") return "À réception";
-      if(t === "8J") return "8 jours";
-      if(t === "15J") return "15 jours";
-      if(t === "30J") return "30 jours";
-      if(t === "45J") return "45 jours";
+      if(term === "RECEPTION") return "À réception";
+      if(term === "8J") return "8 jours";
+      if(term === "15J") return "15 jours";
+      if(term === "30J") return "30 jours";
+      if(term === "45J") return "45 jours";
       return term || "—";
     }
     function modeLabel(mode){
@@ -550,6 +544,7 @@
       if(m === "CHEQUE") return "Chèque";
       return mode || "—";
     }
+    function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
 
     function computeTotals(linesArr, vatEnabled, vatRate){
       let ht = 0;
@@ -561,43 +556,32 @@
       return { ht, tva, ttc };
     }
 
-    function refreshClientSigState(){
-      const choice = document.querySelector('input[name="acceptChoice"]:checked')?.value || "";
-      sigClientTextEl.classList.remove("dim","ok","no");
-      if(choice === "ACCEPTE") sigClientTextEl.classList.add("ok");
-      else if(choice === "REFUSE") sigClientTextEl.classList.add("no");
-      else sigClientTextEl.classList.add("dim");
+    function getPenaltyTemplate(mode){
+      const m = String(mode||"").toUpperCase();
+      if(m === "B2B"){
+        return "Pénalités de retard : 3 fois le taux d’intérêt légal en vigueur + indemnité forfaitaire de recouvrement de 40 €.";
+      }
+      if(m === "B2C"){
+        return "Pénalités de retard : 3 fois le taux d’intérêt légal en vigueur.";
+      }
+      return "—";
     }
-    document.querySelectorAll('input[name="acceptChoice"]').forEach(r=>{
-      r.addEventListener("change", refreshClientSigState);
-    });
 
     function getStayPeriod(d){
-      const a = String(d?.arrivalDateKey || d?.arrivalDate || d?.checkinDate || d?.arrival || d?.dateArrivee || "").trim();
-      const b = String(d?.departureDateKey || d?.departureDate || d?.checkoutDate || d?.departure || d?.dateDepart || "").trim();
+      const pick = (v)=> (String(v||"").trim() || "");
+      const a = pick(d?.arrivalDateKey || d?.arrivalDate || d?.checkinDate || d?.arrival || d?.dateArrivee);
+      const b = pick(d?.departureDateKey || d?.departureDate || d?.checkoutDate || d?.departure || d?.dateDepart);
       if(a && b) return `Du ${a} au ${b}`;
       if(a && !b) return `À partir du ${a}`;
       if(!a && b) return `Jusqu’au ${b}`;
-      return "";
-    }
-
-    function penaltyTemplate(mode){
-      const m = String(mode||"").toUpperCase();
-      if(m === "B2B"){
-        return "Pénalités de retard : 3 fois le taux d’intérêt légal en vigueur + indemnité forfaitaire de recouvrement de 40 € (client professionnel).";
-      }
-      if(m === "B2C"){
-        return "Pénalités de retard : 3 fois le taux d’intérêt légal en vigueur (client particulier).";
-      }
-      return "";
+      return "—";
     }
 
     function applyBusinessProfile(profile){
-      const bp = profile?.businessProfile || {};
-
+      const bp = (profile?.businessProfile || {});
       const companyName = String(bp.companyName || "Conciergerie").trim();
 
-      const sigName = String(bp.displayName || companyName || "Conciergerie").trim();
+      const sigName = String(bp.signatureName || companyName || "Conciergerie").trim();
       sigCompanyTextEl.textContent = sigName || "Conciergerie";
 
       const logoUrl = String(bp.logoUrl || "").trim();
@@ -609,8 +593,8 @@
       const siret = String(bp.registration?.siret || "").trim();
       const ape   = String(bp.registration?.ape || "").trim();
 
-      const email = String(bp.contact?.email || profile?.email || "").trim();
-      const phone = String(bp.contact?.phone || profile?.phone || "").trim();
+      const email = String(bp.billingEmail || profile?.email || "").trim();
+      const phone = String(bp.phone || "").trim();
 
       companyNameEl.textContent = companyName || "Conciergerie";
       companySubEl.textContent = "";
@@ -643,135 +627,138 @@
       return bp;
     }
 
-    // ✅ charge owner depuis owners/{docId} (ownerUid / ownerDocId), fallback snapshot event
-    async function loadOwnerDocIfAny(e){
-      const ownerDocId =
-        String(e?.ownerUid || "").trim() ||
-        String(e?.ownerDocId || "").trim();
-
-      if(!ownerDocId) return null;
-
-      try{
-        const snap = await getDoc(doc(db, "owners", ownerDocId));
-        if(!snap.exists()) return null;
-        return { id:snap.id, ...(snap.data()||{}) };
-      }catch(err){
-        console.warn("load owners doc failed:", err?.message || err);
-        return null;
-      }
+    function refreshClientSigState(){
+      const choice = document.querySelector('input[name="acceptChoice"]:checked')?.value || "";
+      sigClientTextEl.classList.remove("dim","ok","no");
+      if(choice === "ACCEPTE") sigClientTextEl.classList.add("ok");
+      else if(choice === "REFUSE") sigClientTextEl.classList.add("no");
+      else sigClientTextEl.classList.add("dim");
     }
+    document.querySelectorAll('input[name="acceptChoice"]').forEach(r=>{
+      r.addEventListener("change", refreshClientSigState);
+    });
 
-    function ownerSnapshot(e, ownerDoc){
-      const od = ownerDoc || {};
+    function renderDocHeader(eventData){
+      docTitleEl.textContent = `DEVIS N° ${eventData?.quoteNumber || "—"}`;
 
-      const name =
-        String(od.fullname || od.displayName || "").trim() ||
-        String(e?.ownerName || "").trim() ||
-        "—";
+      const created = new Date(); // event: pas de createdAt fiable -> on prend "aujourd'hui"
+      const offerDays = Number.isFinite(Number(eventData?.quoteOfferValidityDays)) ? Number(eventData.quoteOfferValidityDays) : 30;
+      const until = addDays(created, offerDays);
 
-      const a1 =
-        String(od.address1 || od.address || "").trim() ||
-        String(e?.ownerAddress1 || "").trim() ||
-        "";
-
-      const a2 =
-        String(od.address2 || "").trim() ||
-        String(e?.ownerAddress2 || "").trim() ||
-        "";
-
-      const zip =
-        String(od.zip || "").trim() ||
-        String(e?.ownerZip || "").trim() ||
-        "";
-
-      const city =
-        String(od.city || "").trim() ||
-        String(e?.ownerCity || "").trim() ||
-        "";
-
-      const email =
-        String(od.email || "").trim() ||
-        String(e?.ownerEmail || "").trim() ||
-        "";
-
-      return { name, a1, a2, zip, city, email };
-    }
-
-    function renderClient(e, ownerDoc){
-      const c = ownerSnapshot(e, ownerDoc);
-
-      const line2 = [c.a1, c.a2].filter(Boolean).join(" ").trim();
-      const line3 = [c.zip, c.city].filter(Boolean).join(" ").trim();
-
-      cli1.textContent = c.name || "—";
-      cli2.textContent = line2 || "";
-      cli2.style.display = line2 ? "" : "none";
-      cli3.textContent = line3 || "";
-
-      sigClientTextEl.textContent = c.name || "—";
-      refreshClientSigState();
-
-      // ✅ client en haut à droite aussi
-      const rightLines = [];
-      rightLines.push(`<div><b>Client</b> ${esc(c.name || "—")}</div>`);
-      const a = [line2, line3].filter(Boolean).join("<br>");
-      rightLines.push(`<div>${a ? a : "—"}</div>`);
-      if(c.email) rightLines.push(`<div class="mut">${esc(c.email)}</div>`);
-      metaRightEl.dataset.clientHtml = rightLines.join("");
-    }
-
-    function renderHomeAndPeriod(e){
-      const addr = String(e?.homeAddress || "").trim();
-      const zip = String(e?.homeZip || e?.zip || e?.postalCode || "").trim();
-      const city = String(e?.homeCity || "").trim();
-      const full = [addr, [zip, city].filter(Boolean).join(" ")].filter(Boolean).join(" • ");
-
-      const period = getStayPeriod(e);
-
-      homeLine1.textContent = full ? full : "—";
-      homeLine2.textContent = period ? period : "";
-      homeLine2.style.display = period ? "" : "none";
-    }
-
-    function renderDocHeader(e){
-      const quoteNo = e?.quoteNumber || "—";
-      docTitleEl.textContent = `DEVIS N° ${quoteNo}`;
-
-      const dt =
-        (e?.quoteUpdatedAt?.toDate ? e.quoteUpdatedAt.toDate() : null) ||
-        (e?.quoteSentAt?.toDate ? e.quoteSentAt.toDate() : null) ||
-        (e?.commercialUpdatedAt?.toDate ? e.commercialUpdatedAt.toDate() : null) ||
-        new Date();
-
-      const offerDays = Number.isFinite(Number(e?.quoteOfferValidityDays)) ? Number(e.quoteOfferValidityDays) : 30;
-      const until = addDays(dt, offerDays);
-
-      const dateHtml = `
-        <div><b>Émis le</b> ${esc(ddmmyyyy(dt))}</div>
+      metaRightEl.innerHTML = `
+        <div><b>Émis le</b> ${esc(ddmmyyyy(created))}</div>
         <div><b>Valable jusqu’au</b> ${esc(ddmmyyyy(until))}</div>
       `;
-
-      // clientHtml injecté ensuite par renderClient()
-      metaRightEl.innerHTML = dateHtml + `<div style="height:6px"></div>` + `<div><b>Client</b> —</div><div>—</div>`;
-
-      metaRightEl.dataset.dateHtml = dateHtml;
-      docMetaEl.textContent = `Émis le ${ddmmyyyy(dt)} • Valable jusqu’au ${ddmmyyyy(until)}`;
+      docMetaEl.textContent = `Émis le ${ddmmyyyy(created)} • Valable jusqu’au ${ddmmyyyy(until)}`;
     }
 
-    function flushMetaRightClient(){
-      const dateHtml = metaRightEl.dataset.dateHtml || "";
-      const clientHtml = metaRightEl.dataset.clientHtml || "";
-      if(dateHtml && clientHtml){
-        metaRightEl.innerHTML = dateHtml + `<div style="height:6px"></div>` + clientHtml;
+    function renderHomeAndPeriod(d){
+      const homeAddr = String(d?.homeAddress || "").trim();
+      const homeZip  = String(d?.homeZip || d?.zip || d?.postalCode || "").trim();
+      const homeCity = String(d?.homeCity || "").trim();
+      const full = [homeAddr, [homeZip, homeCity].filter(Boolean).join(" ")].filter(Boolean).join(" • ");
+
+      homeLine1.textContent = full ? `Adresse : ${full}` : "Adresse : —";
+      homeLine2.textContent = `Période : ${getStayPeriod(d)}`;
+    }
+
+    // ===== OWNER (facturation) : owners OU snapshot event =====
+    async function lookupOwnerByEmailInOwners(conciergerieUid, emailLower){
+      if(!emailLower) return null;
+
+      const qO = query(
+        collection(db,"owners"),
+        where("conciergerieUid", "==", String(conciergerieUid)),
+        where("email", "==", emailLower),
+        limit(5)
+      );
+      const snap = await getDocs(qO);
+      if(snap.empty) return null;
+
+      const doc0 = snap.docs[0];
+      const o = doc0.data() || {};
+      return {
+        docId: doc0.id,
+        email: normalizeEmail(o.email || emailLower),
+        fullname: (o.fullname || o.displayName || "").trim(),
+        address1: (o.address1 || o.address || "").toString().trim(),
+        address2: (o.address2 || "").toString().trim(),
+        zip: (o.zip || "").toString().trim(),
+        city: (o.city || "").toString().trim(),
+        phone: (o.phone || "").toString().trim(),
+      };
+    }
+
+    async function loadOwnerForEvent(conciergerieUid, d){
+      const ownerDocId =
+        String(d?.ownerUid || "").trim() ||
+        String(d?.ownerDocId || "").trim();
+
+      if(ownerDocId){
+        try{
+          const snap = await getDoc(doc(db,"owners", ownerDocId));
+          if(snap.exists()){
+            const o = snap.data() || {};
+            if(String(o.conciergerieUid||"") === String(conciergerieUid)){
+              return {
+                docId: snap.id,
+                email: normalizeEmail(o.email || ""),
+                fullname: (o.fullname || o.displayName || "").trim(),
+                address1: (o.address1 || o.address || "").toString().trim(),
+                address2: (o.address2 || "").toString().trim(),
+                zip: (o.zip || "").toString().trim(),
+                city: (o.city || "").toString().trim(),
+                phone: (o.phone || "").toString().trim(),
+              };
+            }
+          }
+        }catch(e){ /* ignore */ }
       }
+
+      const ownerEmail = normalizeEmail(d?.ownerEmail || "");
+      if(ownerEmail){
+        try{ return await lookupOwnerByEmailInOwners(conciergerieUid, ownerEmail); }
+        catch(e){ return null; }
+      }
+      return null;
     }
 
-    function renderLines(e, bp){
-      const arr = Array.isArray(e?.lines) ? e.lines : [];
+    function ownerSnapshotFromEvent(d){
+      return {
+        fullname: String(d?.ownerName || "").trim(),
+        address1: String(d?.ownerAddress1 || "").trim(),
+        address2: String(d?.ownerAddress2 || "").trim(),
+        zip: String(d?.ownerZip || "").trim(),
+        city: String(d?.ownerCity || "").trim(),
+      };
+    }
+
+    function renderClientHeader(ownerFromOwners, d){
+      // IMPORTANT: ici on met UNIQUEMENT (nom + adresse + CP + ville) dans le bloc Client, en face de Société.
+      const o = ownerFromOwners || null;
+      const s = ownerSnapshotFromEvent(d);
+
+      const name = (o?.fullname || s.fullname || "—").trim();
+      const a1 = (o?.address1 || s.address1 || "").trim();
+      const a2 = (o?.address2 || s.address2 || "").trim();
+      const zip = (o?.zip || s.zip || "").trim();
+      const city = (o?.city || s.city || "").trim();
+
+      cli1.textContent = name || "—";
+      cli2.textContent = a1 || "";
+      cli2.style.display = a1 ? "" : "none";
+      cli3.textContent = [a2, [zip, city].filter(Boolean).join(" ")].filter(Boolean).join(" • ") || "";
+
+      sigClientTextEl.textContent = name || "—";
+      refreshClientSigState();
+    }
+
+    function renderLines(eventData, businessProfile){
+      const arr = Array.isArray(eventData?.lines) ? eventData.lines : [];
       linesBody.innerHTML = "";
 
-      const vatEnabled = !!bp?.vat?.enabled;
-      const vatRate = Number.isFinite(Number(bp?.vat?.rate)) ? Number(bp.vat.rate) : 0;
+      const vatEnabled = !!businessProfile?.vat?.enabled;
+      const vatRate = Number.isFinite(Number(businessProfile?.vat?.rate)) ? Number(businessProfile.vat.rate) : 0;
 
       if(!arr.length){
         const tr = document.createElement("tr");
@@ -780,9 +767,7 @@
       }else{
         for(const l of arr){
           const qty = Number(l?.qty)||0;
-          const unit = String(l?.unit || "unité").trim();
           const up = Number(l?.unitPrice)||0;
-
           const ht = qty * up;
           const tva = vatEnabled ? (ht * vatRate) : 0;
           const ttc = ht + tva;
@@ -792,7 +777,7 @@
           const tr = document.createElement("tr");
           tr.innerHTML = `
             <td>${esc(label)}</td>
-            <td class="right">${esc(String(qty))} ${esc(unit)}</td>
+            <td class="right">${esc(String(qty))}</td>
             <td class="right">${esc(money(up))}</td>
             <td class="right">${esc(money(ttc))}</td>
           `;
@@ -806,29 +791,24 @@
       if(vatEnabled){
         tvaLineEl.textContent = `HT ${money(totals.ht)} • TVA ${Math.round(vatRate*100)}% ${money(totals.tva)}`;
       }else{
-        const ex = String(bp?.tvaExemptionText || "").trim();
+        const ex = String(businessProfile?.tvaExemptionText || "").trim();
         tvaLineEl.textContent = ex || "TVA non applicable (art. 293B CGI)";
       }
     }
 
-    function renderPaymentAndConditions(e, bp){
-      const mode = String(e?.quotePaymentMode || "VIREMENT").toUpperCase();
-      const term = String(e?.quotePaymentTerm || "RECEPTION").toUpperCase();
+    function renderPaymentAndConditions(eventData, businessProfile){
+      const mode = String(eventData?.quotePaymentMode || "VIREMENT").toUpperCase();
+      const term = String(eventData?.quotePaymentTerm || "RECEPTION").toUpperCase();
 
       payModeEl.textContent = `Mode : ${modeLabel(mode)}`;
       payTermEl.textContent = `Délai : ${termLabel(term)}`;
 
-      const dt =
-        (e?.quoteUpdatedAt?.toDate ? e.quoteUpdatedAt.toDate() : null) ||
-        (e?.quoteSentAt?.toDate ? e.quoteSentAt.toDate() : null) ||
-        (e?.commercialUpdatedAt?.toDate ? e.commercialUpdatedAt.toDate() : null) ||
-        new Date();
+      const created = new Date();
+      const offerDays = Number.isFinite(Number(eventData?.quoteOfferValidityDays)) ? Number(eventData.quoteOfferValidityDays) : 30;
+      const offerUntil = addDays(created, offerDays);
 
-      const offerDays = Number.isFinite(Number(e?.quoteOfferValidityDays)) ? Number(e.quoteOfferValidityDays) : 30;
-      const offerUntil = addDays(dt, offerDays);
-
-      const cancelPct = Number.isFinite(Number(bp?.conditions?.cancellationPercent))
-        ? Number(bp.conditions.cancellationPercent)
+      const cancelPct = Number.isFinite(Number(businessProfile?.conditions?.cancellationPercent))
+        ? Number(businessProfile.conditions.cancellationPercent)
         : 30;
 
       cond1.innerHTML = `<b>Validité de l’offre</b> : ${esc(ddmmyyyy(offerUntil))}`;
@@ -836,18 +816,14 @@
       cond3.innerHTML = `<b>Annulation</b> : ${esc(String(cancelPct))} % du montant en cas d’annulation moins de 48 h avant l’intervention.`;
     }
 
-    function renderPenalty(e){
-      const mode = String(e?.quotePenaltyMode || "").toUpperCase();
-      const labelMode =
-        mode === "B2B" ? "Client professionnel (B2B)" :
-        mode === "B2C" ? "Client particulier (B2C)" :
-        "—";
-
-      penaltyModeLineEl.textContent = labelMode;
-
-      // texte: event.quotePenaltyText sinon template
-      const txt = String(e?.quotePenaltyText || "").trim() || penaltyTemplate(mode);
-      penaltyTextEl.textContent = txt || "—";
+    function renderPenalty(eventData){
+      const txt = String(eventData?.quotePenaltyText || "").trim();
+      if(txt){
+        penaltyTextEl.textContent = txt;
+        return;
+      }
+      const mode = String(eventData?.quotePenaltyMode || "").trim();
+      penaltyTextEl.textContent = getPenaltyTemplate(mode);
     }
 
     printBtn.addEventListener("click", ()=> window.print());
@@ -864,42 +840,42 @@
         return;
       }
 
-      backLink.href = `devis-event.html?eventId=${encodeURIComponent(eventId)}`;
+      // Retour = devis-liste.html (comme demandé) + on garde l’eventId si tu veux revenir direct sur l’éditeur
+      backLink.href = `devis-liste.html`;
 
       try{
-        const snapE = await getDoc(doc(db, "events", eventId));
-        if(!snapE.exists()){
+        const eventRef = doc(db, "events", eventId);
+        const es = await getDoc(eventRef);
+        if(!es.exists()){
           showError("Devis introuvable (event).");
           return;
         }
-        const e = { id: snapE.id, ...(snapE.data()||{}) };
+        const eventData = { id: es.id, ...(es.data()||{}) };
 
-        if(e.conciergerieUid && String(e.conciergerieUid) !== String(user.uid)){
+        if(eventData.conciergerieUid && eventData.conciergerieUid !== user.uid){
           showError("Accès refusé (event d’une autre conciergerie).");
           return;
         }
 
-        const concUid = String(e.conciergerieUid || user.uid).trim();
-        const snapP = await getDoc(doc(db, "users", concUid));
-        const profile = snapP.exists() ? (snapP.data()||{}) : {};
+        // Business profile
+        const userSnap = await getDoc(doc(db,"users", user.uid));
+        const profile = userSnap.exists() ? (userSnap.data()||{}) : {};
         const bp = applyBusinessProfile(profile);
 
-        renderDocHeader(e);
+        // Owner (facturation)
+        const ownerFromOwners = await loadOwnerForEvent(user.uid, eventData);
+        renderClientHeader(ownerFromOwners, eventData);
 
-        const ownerDoc = await loadOwnerDocIfAny(e);
-        renderClient(e, ownerDoc);
+        // Header / logement / lignes / conditions / pénalités
+        renderDocHeader(eventData);
+        renderHomeAndPeriod(eventData);
+        renderLines(eventData, bp || {});
+        renderPaymentAndConditions(eventData, bp || {});
+        renderPenalty(eventData);
 
-        // refresh metaRight after client
-        flushMetaRightClient();
-
-        renderHomeAndPeriod(e);
-        renderLines(e, bp || {});
-        renderPaymentAndConditions(e, bp || {});
-        renderPenalty(e);
-
-      }catch(err){
-        console.error(err);
-        showError(err?.message || "Erreur chargement aperçu.");
+      }catch(e){
+        console.error(e);
+        showError(e?.message || "Erreur chargement aperçu.");
       }
     });
   </script>
