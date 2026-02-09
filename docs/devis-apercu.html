@@ -1,4 +1,4 @@
-<!-- docs/devis-apercu.html (EVENT: lit events/{eventId} + users/{conciergerieUid}.businessProfile, présentation = devisfree-apercu, print A4 OK) -->
+<!-- docs/devis-apercu.html (EVENT: présentation = devisfree-apercu, + client depuis owners, + logement+periode, + pénalités B2B/B2C) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -66,7 +66,7 @@
       position:relative;
     }
 
-    /* HEADER: logo+nom à gauche, émis/valable à droite */
+    /* HEADER */
     .header{
       display:flex;
       gap:12px;
@@ -88,7 +88,6 @@
 
     .brand{ min-width:0; }
     .brand .name{ font-size:18px; font-weight:800; line-height:1.15; }
-    /* Adresse sous le logo/nom -> masquée */
     .brand .sub{ display:none; }
 
     .metaRight{
@@ -166,7 +165,6 @@
     tbody tr:last-child td{ border-bottom:none; }
     .right{ text-align:right; white-space:nowrap; }
 
-    /* ✅ Total puis Paiement EN DESSOUS (1 colonne, partout) */
     .summary{
       margin-top:12px;
       display:flex;
@@ -203,7 +201,6 @@
       color:#333;
     }
 
-    /* Signatures */
     .sigGrid{
       margin-top:10px;
       display:grid;
@@ -286,7 +283,6 @@
       white-space:pre-wrap;
     }
 
-    /* ✅ Print A4 */
     @media print{
       .topbar, .bottom-nav, .actions, button{ display:none !important; }
       body{ background:#fff !important; }
@@ -315,7 +311,6 @@
       .grid2{ grid-template-columns: 1fr 1fr !important; }
       .sigGrid{ grid-template-columns: 1fr 1fr !important; }
 
-      /* ✅ Footer en bas de page + réserve espace */
       .footer{
         position: fixed;
         bottom: 0;
@@ -355,9 +350,13 @@
           </div>
         </div>
 
+        <!-- ✅ maintenant: date/validité + adresse client -->
         <div class="metaRight" id="metaRight">
           <div><b>Émis le</b> —</div>
           <div><b>Valable jusqu’au</b> —</div>
+          <div style="height:6px"></div>
+          <div><b>Client</b> —</div>
+          <div>—</div>
         </div>
       </div>
 
@@ -379,6 +378,13 @@
           <div class="line" id="cliLine2"></div>
           <div class="line" id="cliLine3"></div>
         </div>
+      </div>
+
+      <!-- ✅ logement + période AU-DESSUS des prestations -->
+      <div class="sectionTitle">Logement / Période</div>
+      <div class="box">
+        <div class="line" id="homeLine1">—</div>
+        <div class="line" id="homeLine2"></div>
       </div>
 
       <table aria-label="Lignes devis">
@@ -418,6 +424,7 @@
 
       <div class="sectionTitle">Pénalités</div>
       <div class="box">
+        <div class="line" id="penaltyModeLine">—</div>
         <div class="line" id="penaltyText">—</div>
       </div>
 
@@ -474,6 +481,9 @@
     const cli2 = document.getElementById("cliLine2");
     const cli3 = document.getElementById("cliLine3");
 
+    const homeLine1 = document.getElementById("homeLine1");
+    const homeLine2 = document.getElementById("homeLine2");
+
     const sigCompanyTextEl = document.getElementById("sigCompanyText");
     const sigClientTextEl = document.getElementById("sigClientText");
 
@@ -489,6 +499,7 @@
     const cond2 = document.getElementById("cond2");
     const cond3 = document.getElementById("cond3");
 
+    const penaltyModeLineEl = document.getElementById("penaltyModeLine");
     const penaltyTextEl = document.getElementById("penaltyText");
     const footerEl = document.getElementById("footer");
 
@@ -561,12 +572,31 @@
       r.addEventListener("change", refreshClientSigState);
     });
 
+    function getStayPeriod(d){
+      const a = String(d?.arrivalDateKey || d?.arrivalDate || d?.checkinDate || d?.arrival || d?.dateArrivee || "").trim();
+      const b = String(d?.departureDateKey || d?.departureDate || d?.checkoutDate || d?.departure || d?.dateDepart || "").trim();
+      if(a && b) return `Du ${a} au ${b}`;
+      if(a && !b) return `À partir du ${a}`;
+      if(!a && b) return `Jusqu’au ${b}`;
+      return "";
+    }
+
+    function penaltyTemplate(mode){
+      const m = String(mode||"").toUpperCase();
+      if(m === "B2B"){
+        return "Pénalités de retard : 3 fois le taux d’intérêt légal en vigueur + indemnité forfaitaire de recouvrement de 40 € (client professionnel).";
+      }
+      if(m === "B2C"){
+        return "Pénalités de retard : 3 fois le taux d’intérêt légal en vigueur (client particulier).";
+      }
+      return "";
+    }
+
     function applyBusinessProfile(profile){
       const bp = profile?.businessProfile || {};
 
       const companyName = String(bp.companyName || "Conciergerie").trim();
 
-      // signature: displayName > companyName
       const sigName = String(bp.displayName || companyName || "Conciergerie").trim();
       sigCompanyTextEl.textContent = sigName || "Conciergerie";
 
@@ -613,31 +643,100 @@
       return bp;
     }
 
-    function renderClientFromEvent(e){
-      const name = String(e?.ownerName || "—").trim();
+    // ✅ charge owner depuis owners/{docId} (ownerUid / ownerDocId), fallback snapshot event
+    async function loadOwnerDocIfAny(e){
+      const ownerDocId =
+        String(e?.ownerUid || "").trim() ||
+        String(e?.ownerDocId || "").trim();
 
-      const a1 = String(e?.ownerAddress1 || "").trim();
-      const a2 = String(e?.ownerAddress2 || "").trim();
-      const zip = String(e?.ownerZip || "").trim();
-      const city = String(e?.ownerCity || "").trim();
+      if(!ownerDocId) return null;
 
-      const line2 = [a1, a2].filter(Boolean).join(" ");
-      const line3 = [zip, city].filter(Boolean).join(" ");
+      try{
+        const snap = await getDoc(doc(db, "owners", ownerDocId));
+        if(!snap.exists()) return null;
+        return { id:snap.id, ...(snap.data()||{}) };
+      }catch(err){
+        console.warn("load owners doc failed:", err?.message || err);
+        return null;
+      }
+    }
 
-      cli1.textContent = name || "—";
+    function ownerSnapshot(e, ownerDoc){
+      const od = ownerDoc || {};
+
+      const name =
+        String(od.fullname || od.displayName || "").trim() ||
+        String(e?.ownerName || "").trim() ||
+        "—";
+
+      const a1 =
+        String(od.address1 || od.address || "").trim() ||
+        String(e?.ownerAddress1 || "").trim() ||
+        "";
+
+      const a2 =
+        String(od.address2 || "").trim() ||
+        String(e?.ownerAddress2 || "").trim() ||
+        "";
+
+      const zip =
+        String(od.zip || "").trim() ||
+        String(e?.ownerZip || "").trim() ||
+        "";
+
+      const city =
+        String(od.city || "").trim() ||
+        String(e?.ownerCity || "").trim() ||
+        "";
+
+      const email =
+        String(od.email || "").trim() ||
+        String(e?.ownerEmail || "").trim() ||
+        "";
+
+      return { name, a1, a2, zip, city, email };
+    }
+
+    function renderClient(e, ownerDoc){
+      const c = ownerSnapshot(e, ownerDoc);
+
+      const line2 = [c.a1, c.a2].filter(Boolean).join(" ").trim();
+      const line3 = [c.zip, c.city].filter(Boolean).join(" ").trim();
+
+      cli1.textContent = c.name || "—";
       cli2.textContent = line2 || "";
       cli2.style.display = line2 ? "" : "none";
       cli3.textContent = line3 || "";
 
-      sigClientTextEl.textContent = name || "—";
+      sigClientTextEl.textContent = c.name || "—";
       refreshClientSigState();
+
+      // ✅ client en haut à droite aussi
+      const rightLines = [];
+      rightLines.push(`<div><b>Client</b> ${esc(c.name || "—")}</div>`);
+      const a = [line2, line3].filter(Boolean).join("<br>");
+      rightLines.push(`<div>${a ? a : "—"}</div>`);
+      if(c.email) rightLines.push(`<div class="mut">${esc(c.email)}</div>`);
+      metaRightEl.dataset.clientHtml = rightLines.join("");
     }
 
-    function renderDocHeaderFromEvent(e){
+    function renderHomeAndPeriod(e){
+      const addr = String(e?.homeAddress || "").trim();
+      const zip = String(e?.homeZip || e?.zip || e?.postalCode || "").trim();
+      const city = String(e?.homeCity || "").trim();
+      const full = [addr, [zip, city].filter(Boolean).join(" ")].filter(Boolean).join(" • ");
+
+      const period = getStayPeriod(e);
+
+      homeLine1.textContent = full ? full : "—";
+      homeLine2.textContent = period ? period : "";
+      homeLine2.style.display = period ? "" : "none";
+    }
+
+    function renderDocHeader(e){
       const quoteNo = e?.quoteNumber || "—";
       docTitleEl.textContent = `DEVIS N° ${quoteNo}`;
 
-      // date d’émission (on préfère quoteUpdatedAt/quoteSentAt)
       const dt =
         (e?.quoteUpdatedAt?.toDate ? e.quoteUpdatedAt.toDate() : null) ||
         (e?.quoteSentAt?.toDate ? e.quoteSentAt.toDate() : null) ||
@@ -647,14 +746,27 @@
       const offerDays = Number.isFinite(Number(e?.quoteOfferValidityDays)) ? Number(e.quoteOfferValidityDays) : 30;
       const until = addDays(dt, offerDays);
 
-      metaRightEl.innerHTML = `
+      const dateHtml = `
         <div><b>Émis le</b> ${esc(ddmmyyyy(dt))}</div>
         <div><b>Valable jusqu’au</b> ${esc(ddmmyyyy(until))}</div>
       `;
+
+      // clientHtml injecté ensuite par renderClient()
+      metaRightEl.innerHTML = dateHtml + `<div style="height:6px"></div>` + `<div><b>Client</b> —</div><div>—</div>`;
+
+      metaRightEl.dataset.dateHtml = dateHtml;
       docMetaEl.textContent = `Émis le ${ddmmyyyy(dt)} • Valable jusqu’au ${ddmmyyyy(until)}`;
     }
 
-    function renderLinesFromEvent(e, bp){
+    function flushMetaRightClient(){
+      const dateHtml = metaRightEl.dataset.dateHtml || "";
+      const clientHtml = metaRightEl.dataset.clientHtml || "";
+      if(dateHtml && clientHtml){
+        metaRightEl.innerHTML = dateHtml + `<div style="height:6px"></div>` + clientHtml;
+      }
+    }
+
+    function renderLines(e, bp){
       const arr = Array.isArray(e?.lines) ? e.lines : [];
       linesBody.innerHTML = "";
 
@@ -699,7 +811,7 @@
       }
     }
 
-    function renderPaymentAndConditionsFromEvent(e, bp){
+    function renderPaymentAndConditions(e, bp){
       const mode = String(e?.quotePaymentMode || "VIREMENT").toUpperCase();
       const term = String(e?.quotePaymentTerm || "RECEPTION").toUpperCase();
 
@@ -724,8 +836,17 @@
       cond3.innerHTML = `<b>Annulation</b> : ${esc(String(cancelPct))} % du montant en cas d’annulation moins de 48 h avant l’intervention.`;
     }
 
-    function renderPenaltyFromEvent(e){
-      const txt = String(e?.quotePenaltyText || "").trim();
+    function renderPenalty(e){
+      const mode = String(e?.quotePenaltyMode || "").toUpperCase();
+      const labelMode =
+        mode === "B2B" ? "Client professionnel (B2B)" :
+        mode === "B2C" ? "Client particulier (B2C)" :
+        "—";
+
+      penaltyModeLineEl.textContent = labelMode;
+
+      // texte: event.quotePenaltyText sinon template
+      const txt = String(e?.quotePenaltyText || "").trim() || penaltyTemplate(mode);
       penaltyTextEl.textContent = txt || "—";
     }
 
@@ -743,37 +864,38 @@
         return;
       }
 
-      // back link -> éditeur
       backLink.href = `devis-event.html?eventId=${encodeURIComponent(eventId)}`;
 
       try{
-        const refE = doc(db, "events", eventId);
-        const snapE = await getDoc(refE);
+        const snapE = await getDoc(doc(db, "events", eventId));
         if(!snapE.exists()){
           showError("Devis introuvable (event).");
           return;
         }
-
         const e = { id: snapE.id, ...(snapE.data()||{}) };
 
-        // contrôle accès conciergerie
         if(e.conciergerieUid && String(e.conciergerieUid) !== String(user.uid)){
           showError("Accès refusé (event d’une autre conciergerie).");
           return;
         }
 
-        // charge profil conciergerie
         const concUid = String(e.conciergerieUid || user.uid).trim();
         const snapP = await getDoc(doc(db, "users", concUid));
         const profile = snapP.exists() ? (snapP.data()||{}) : {};
-
         const bp = applyBusinessProfile(profile);
 
-        renderDocHeaderFromEvent(e);
-        renderClientFromEvent(e);
-        renderLinesFromEvent(e, bp || {});
-        renderPaymentAndConditionsFromEvent(e, bp || {});
-        renderPenaltyFromEvent(e);
+        renderDocHeader(e);
+
+        const ownerDoc = await loadOwnerDocIfAny(e);
+        renderClient(e, ownerDoc);
+
+        // refresh metaRight after client
+        flushMetaRightClient();
+
+        renderHomeAndPeriod(e);
+        renderLines(e, bp || {});
+        renderPaymentAndConditions(e, bp || {});
+        renderPenalty(e);
 
       }catch(err){
         console.error(err);
