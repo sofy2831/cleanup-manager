@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CleanUp Manager — Avoirs</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+
+  <style>
+    *{ box-sizing:border-box; font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; }
+    :root{
+      --violet:#7A5CFF; --violet2:#6238FF;
+      --bg1:#F8F4FF; --bg2:#EDE6FF;
+      --text:#111; --muted:#666; --border: rgba(122,92,255,0.18);
+      --shadow: 0 14px 36px rgba(0,0,0,0.08);
+      --bad:#b3261e; --ok:#1b8f4d;
+    }
+    body{ margin:0; background:linear-gradient(180deg,var(--bg1) 0%,var(--bg2) 80%); color:var(--text); }
+    .page{ min-height:100vh; display:flex; flex-direction:column; align-items:center; padding:16px 16px 32px; padding-bottom:96px; }
+
+    .topbar{ width:100%; max-width:980px; display:flex; justify-content:space-between; padding:10px 0; }
+    .pill{ padding:8px 12px; border-radius:999px; background:#fff; border:2px solid var(--violet); color:var(--violet); font-weight:900; }
+
+    .wrap{ width:100%; max-width:980px; margin-top:14px; display:flex; flex-direction:column; gap:12px; }
+    .card{ background:#fff; border-radius:18px; border:1px solid var(--border); box-shadow:var(--shadow); padding:14px; }
+
+    .toolbar{ display:grid; grid-template-columns:220px 1fr auto; gap:10px; }
+    .select, .input{ padding:10px 12px; border-radius:14px; border:1px solid rgba(122,92,255,0.35); font-weight:900; }
+    .btn{ padding:10px 12px; border-radius:999px; font-weight:900; border:1px solid rgba(122,92,255,0.35); background:#fff; color:var(--violet); cursor:pointer; }
+    .btn.primary{ background:linear-gradient(90deg,var(--violet),var(--violet2)); color:#fff; border:none; }
+
+    .line6{ display:grid; grid-template-columns:110px 160px 1.2fr 1.2fr 1.1fr 130px; gap:10px; }
+    .cell .t{ font-size:11px; color:#666; font-weight:900; }
+    .cell .v{ font-size:13px; font-weight:900; }
+
+    .tag{ padding:4px 8px; border-radius:999px; border:1px solid rgba(122,92,255,0.25); font-size:11px; font-weight:1000; }
+    .badge.ok{ color:var(--ok); }
+  </style>
+</head>
+
+<body>
+<div class="page">
+  <div class="topbar">
+    <a class="pill" href="compta.html">← Comptabilité</a>
+  </div>
+
+  <div class="wrap">
+    <div class="card">
+      <div class="toolbar">
+        <select class="select" id="filterStatus">
+          <option value="ALL">Tous</option>
+          <option value="DRAFT">Brouillons</option>
+          <option value="SENT">Envoyés</option>
+          <option value="APPLIED">Appliqués</option>
+        </select>
+        <input class="input" id="searchInput" placeholder="N° avoir, client, logement…" />
+        <button class="btn primary" id="exportBtn">Exporter CSV</button>
+      </div>
+    </div>
+
+    <div id="listBox" style="display:flex; flex-direction:column; gap:12px;"></div>
+  </div>
+</div>
+
+<script type="module">
+import { auth, db } from "./firebase-init.js";
+import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+import { collection, query, where, orderBy, getDocs } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+
+const listBox = document.getElementById("listBox");
+const filterStatus = document.getElementById("filterStatus");
+const searchInput = document.getElementById("searchInput");
+
+let all = [];
+
+function fmtMoney(v){ return Number(v||0).toLocaleString("fr-FR",{minimumFractionDigits:2})+" €"; }
+
+function render(){
+  listBox.innerHTML = "";
+  const f = filterStatus.value;
+  const q = searchInput.value.toLowerCase();
+
+  all.filter(a=>{
+    if(f!=="ALL" && a.avoirStatus!==f) return false;
+    return (a.avoirNumber||"").toLowerCase().includes(q)
+        || (a.ownerName||"").toLowerCase().includes(q)
+        || (a.homeName||"").toLowerCase().includes(q);
+  }).forEach(a=>{
+    const div = document.createElement("div");
+    div.className="card";
+    div.innerHTML=`
+      <div class="line6">
+        <div class="cell"><div class="t">Créé</div><div class="v">${a.avoirDate||"—"}</div></div>
+        <div class="cell"><div class="t">N°</div><div class="v"><span class="tag">AV</span> ${a.avoirNumber}</div></div>
+        <div class="cell"><div class="t">Client</div><div class="v">${a.ownerName||"—"}</div></div>
+        <div class="cell"><div class="t">Logement</div><div class="v">${a.homeName||"—"}</div></div>
+        <div class="cell"><div class="t">Montant</div><div class="v">${fmtMoney(a.total)}</div></div>
+        <div class="cell"><a class="btn primary" href="avoir.html?eventId=${a.id}">Ouvrir</a></div>
+      </div>
+    `;
+    listBox.appendChild(div);
+  });
+}
+
+onAuthStateChanged(auth, async (user)=>{
+  const qA = query(collection(db,"events"),
+    where("conciergerieUid","==",user.uid),
+    where("commercialStatus","==","AVOIR"),
+    orderBy("createdAt","desc")
+  );
+  const snap = await getDocs(qA);
+  all = snap.docs.map(d=>({ id:d.id, ...(d.data()||{}) }));
+  render();
+});
+
+filterStatus.onchange = render;
+searchInput.oninput = render;
+</script>
+</body>
+</html>
