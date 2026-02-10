@@ -191,26 +191,23 @@
       display:flex; gap:8px; flex-wrap:wrap; margin-top:12px;
     }
     .btn{
-  flex:1;
-  display:inline-flex;
-  align-items:center;
-  justify-content:center;
-
-  border:none;
-  border-radius:999px;
-  padding:10px 12px;
-  font-size:13px;
-  font-weight:1000;
-  cursor:pointer;
-
-  background:#fff;
-  color:var(--violet-main);
-  border:2px solid var(--violet-main);
-  box-shadow:0 3px 10px rgba(0,0,0,.06);
-  white-space:nowrap;
-  line-height:1;
-}
-
+      flex:1;
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      border:none;
+      border-radius:999px;
+      padding:10px 12px;
+      font-size:13px;
+      font-weight:1000;
+      cursor:pointer;
+      background:#fff;
+      color:var(--violet-main);
+      border:2px solid var(--violet-main);
+      box-shadow:0 3px 10px rgba(0,0,0,.06);
+      white-space:nowrap;
+      line-height:1;
+    }
     .btn.primary{
       background:linear-gradient(90deg,var(--violet-main),var(--violet-dark));
       border-color:transparent; color:#fff; box-shadow:0 10px 22px rgba(0,0,0,.12);
@@ -432,7 +429,6 @@
         <div class="actions">
           <button class="btn primary" type="button" id="saveBtn">Enregistrer</button>
           <button class="btn" type="button" id="previewBtn">Aperçu</button>
-          
 
           <!-- ✅ NOUVEAU : visible uniquement si ACCEPTED -->
           <button class="btn primary" type="button" id="goInvoiceBtn" style="display:none;">
@@ -527,6 +523,32 @@
       .replaceAll('"',"&quot;")
       .replaceAll("'","&#039;");
   }
+
+  // ✅ NOUVEAU : date FR robuste (Timestamp / Date / YYYY-MM-DD / DD/MM/YYYY)
+  function fmtDateFR(x){
+    if(!x) return "—";
+    try{
+      if(x?.toDate?.()) return x.toDate().toLocaleDateString("fr-FR");
+      if(x instanceof Date) return isNaN(x.getTime()) ? "—" : x.toLocaleDateString("fr-FR");
+      const s = String(x).trim();
+      if(!s) return "—";
+
+      // DD/MM/YYYY déjà OK
+      if(/^\d{2}\/\d{2}\/\d{4}$/.test(s)) return s;
+
+      // YYYY-MM-DD -> DD/MM/YYYY
+      const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+      if(m) return `${m[3]}/${m[2]}/${m[1]}`;
+
+      // fallback : Date(s)
+      const d = new Date(s);
+      if(!isNaN(d.getTime())) return d.toLocaleDateString("fr-FR");
+      return "—";
+    }catch{
+      return "—";
+    }
+  }
+
   function fmtMoney(v){
     const n = Number(v);
     if(!Number.isFinite(n)) return "—";
@@ -565,6 +587,7 @@
     return { ht, tva, ttc };
   }
 
+  // ✅ IMPORTANT : numéro DE (pas D)
   async function ensureQuoteNumber(uid, year){
     const counterId = `${uid}_${year}`;
     const counterRef = doc(db, "counters", counterId);
@@ -581,7 +604,7 @@
     });
 
     const padded = String(next).padStart(4,"0");
-    return `D${year}-${padded}`;
+    return `DE${year}-${padded}`;
   }
 
   function applyLogoFromProfile(profile){
@@ -726,6 +749,29 @@
     const d = new Date(yy, (mm||1)-1, dd||1);
     d.setDate(d.getDate() + (Number(days)||0));
     return String(d.getDate()).padStart(2,"0") + "/" + String(d.getMonth()+1).padStart(2,"0") + "/" + d.getFullYear();
+  }
+
+  // ✅ NOUVEAU : période basée sur arrivalDateKey / departureDateKey
+  function getStayPeriodFromEvent(ev){
+    const a0 = ev?.arrivalDateKey;
+    const b0 = ev?.departureDateKey;
+
+    const fa0 = fmtDateFR(a0);
+    const fb0 = fmtDateFR(b0);
+
+    if(fa0 !== "—" && fb0 !== "—") return `${fa0} → ${fb0}`;
+    if(fa0 !== "—" && fb0 === "—") return `${fa0} → —`;
+    if(fa0 === "—" && fb0 !== "—") return `— → ${fb0}`;
+    return "—";
+  }
+
+  function getHomeSnapshot(){
+    const d = eventData || {};
+    const name = String(d.homeName || d.homeTitle || d.homeLabel || "").trim() || "—";
+    const address = String(d.homeAddress || d.homeStreet || d.homeAddress1 || "").trim();
+    const zip = String(d.homeZip || d.homePostalCode || "").trim();
+    const city = String(d.homeCity || "").trim();
+    return { name, address, zip, city };
   }
 
   function renderLinesAndTotals(){
@@ -905,6 +951,17 @@
     if(d.quotePenaltyText) penaltyTextEl.value = d.quotePenaltyText;
     else syncPenaltyText();
 
+    // ✅ NOUVEAU : recap client + logement + adresse + CP/Ville + période
+    const home = getHomeSnapshot();
+    const period = getStayPeriodFromEvent(d);
+    const recap = [];
+    recap.push(`<div class="line"><b>Client</b> : ${esc(getOwnerSnapshot().name || "—")}</div>`);
+    recap.push(`<div class="line"><b>Logement</b> : ${esc(home.name || "—")}</div>`);
+    if(home.address) recap.push(`<div class="line"><b>Adresse logement</b> : ${esc(home.address)}</div>`);
+    recap.push(`<div class="line"><b>CP / Ville</b> : ${esc([home.zip, home.city].filter(Boolean).join(" ") || "—")}</div>`);
+    recap.push(`<div class="line"><b>Période</b> : ${esc(period)}</div>`);
+    recapKv.innerHTML = recap.join("");
+
     renderBusinessHeader();
     renderClientHeader();
     renderLinesAndTotals();
@@ -1033,14 +1090,3 @@
 
 </body>
 </html>
-
-
-
-
-
-
-
-
-
-
-
