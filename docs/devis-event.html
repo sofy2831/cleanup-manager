@@ -1,4 +1,4 @@
-<!-- docs/devis-event.html (ÉDITEUR LÉGER — preview = devis-apercu.html uniquement) -->
+<!-- docs/devis-event.html (ÉDITEUR LÉGER — preview = devis-apercu.html uniquement + PASSER EN FACTURE) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -420,6 +420,11 @@
           <button class="btn" type="button" id="previewBtn">Aperçu</button>
           <button class="btn" type="button" id="markSentBtn" disabled>Marquer “devis envoyé”</button>
           <button class="btn" type="button" id="markAcceptedBtn" disabled>Marquer “accepté”</button>
+
+          <!-- ✅ NOUVEAU : visible uniquement si ACCEPTED -->
+          <button class="btn primary" type="button" id="goInvoiceBtn" style="display:none;">
+            Passer en facture
+          </button>
         </div>
       </div>
     </div>
@@ -482,6 +487,9 @@
     const previewBtn = document.getElementById("previewBtn");
     const markSentBtn = document.getElementById("markSentBtn");
     const markAcceptedBtn = document.getElementById("markAcceptedBtn");
+
+    // ✅ NOUVEAU
+    const goInvoiceBtn = document.getElementById("goInvoiceBtn");
 
     // ===== State =====
     let currentUser = null;
@@ -551,6 +559,9 @@
     function canMarkAccepted(d){
       const qs = String(d?.quoteStatus || "").toUpperCase();
       return qs === "SENT";
+    }
+    function isAccepted(d){
+      return String(d?.quoteStatus || "").toUpperCase().trim() === "ACCEPTED";
     }
 
     async function ensureQuoteNumber(uid, year){
@@ -671,7 +682,6 @@
       return { from:"", to:"", label:"—" };
     }
 
-    // Snapshot client = owners OU snapshot event
     function getOwnerSnapshot(){
       const d = eventData || {};
 
@@ -883,6 +893,10 @@
       previewBtn.disabled = !eventRef;
       markSentBtn.disabled = !(eventRef && canMarkSent(d));
       markAcceptedBtn.disabled = !(eventRef && canMarkAccepted(d));
+
+      // ✅ NOUVEAU : bouton facture visible uniquement si ACCEPTED + si quoteNumber existe
+      const showInvoice = isAccepted(d) && !!String(d.quoteNumber || "").trim();
+      goInvoiceBtn.style.display = showInvoice ? "inline-flex" : "none";
     }
 
     async function loadProfile(uid){
@@ -984,6 +998,9 @@
       markSentBtn.disabled = !!locked || !eventRef || !canMarkSent(d);
       markAcceptedBtn.disabled = !!locked || !eventRef || !canMarkAccepted(d);
       saveBtn.style.opacity = locked ? "0.75" : "1";
+
+      // bouton facture (si lock -> disabled)
+      goInvoiceBtn.disabled = !!locked;
     }
 
     paymentTermEl.addEventListener("change", renderConditions);
@@ -992,6 +1009,15 @@
     previewBtn.addEventListener("click", ()=>{
       if(!eventRef) return;
       location.href = `devis-apercu.html?eventId=${encodeURIComponent(eventId)}`;
+    });
+
+    // ✅ NOUVEAU : ouvrir facture
+    goInvoiceBtn.addEventListener("click", ()=>{
+      hideAlert();
+      if(!eventData?.id) return showAlert("⛔ Event manquant.");
+      if(!isAccepted(eventData)) return showAlert("⛔ Le devis doit être ACCEPTÉ pour passer en facture.");
+      if(!String(eventData?.quoteNumber || "").trim()) return showAlert("⛔ Enregistre d’abord le devis (numéro) avant de facturer.");
+      location.href = `facture.html?eventId=${encodeURIComponent(eventData.id)}`;
     });
 
     saveBtn.addEventListener("click", async ()=>{
