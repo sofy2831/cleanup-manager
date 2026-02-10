@@ -329,7 +329,7 @@
         border-top: none;
         border: 1px solid rgba(122,92,255,0.18);
         border-radius: 999px;
-        box-shadow: 0 4px 12px rgba(0,0,0,.08);
+        box-shadow:0 4px 12px rgba(0,0,0,.08);
         padding: 12px 12px;
         gap: 10px;
       }
@@ -447,12 +447,23 @@
       return n.toLocaleString("fr-FR",{minimumFractionDigits:2, maximumFractionDigits:2})+" €";
     }
 
-    function fmtDateFR(d){
-      if(!d) return "—";
+    // ✅ date FR robuste : Timestamp / Date / YYYY-MM-DD / DD/MM/YYYY
+    function fmtDateFR(x){
+      if(!x) return "—";
       try{
-        const dt = (d?.toDate?.() ? d.toDate() : (d instanceof Date ? d : new Date(d)));
-        if(isNaN(dt.getTime())) return "—";
-        return dt.toLocaleDateString("fr-FR");
+        if(x?.toDate?.()) return x.toDate().toLocaleDateString("fr-FR");
+        if(x instanceof Date) return isNaN(x.getTime()) ? "—" : x.toLocaleDateString("fr-FR");
+
+        const s = String(x).trim();
+        if(!s) return "—";
+        if(/^\d{2}\/\d{2}\/\d{4}$/.test(s)) return s;
+
+        const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+        if(m) return `${m[3]}/${m[2]}/${m[1]}`;
+
+        const d = new Date(s);
+        if(!isNaN(d.getTime())) return d.toLocaleDateString("fr-FR");
+        return "—";
       }catch{
         return "—";
       }
@@ -517,7 +528,8 @@
     }
 
     function getCreatedAt(x){
-      return fmtDateFR(x?.createdAt) || "—";
+      // ✅ IMPORTANT : évite le "—" permanent (ton ancien code faisait "fmtDateFR(...) || '—'" donc jamais '—' utile)
+      return fmtDateFR(x?.createdAt);
     }
 
     function getQuoteNumber(x){
@@ -533,46 +545,45 @@
       return (x?.ownerName || "—");
     }
 
+    // ✅ Logement = NOM SEUL (pas ville) pour éviter de prendre trop de place
     function getHomeName(x){
-  if(x?.kind === "FREE") return "—";
-  return (x.homeName||"—");
-}
+      if(x?.kind === "FREE") return "—";
+      return (x.homeName||"—");
+    }
 
+    // ✅ Période basée en priorité sur tes champs réels : arrivalDateKey / departureDateKey
+    function getPeriodFromEvent(ev){
+      const a0 = ev?.arrivalDateKey;
+      const b0 = ev?.departureDateKey;
 
-  function getPeriodFromEvent(ev){
-  // ✅ PRIORITÉ : tes champs réels
-  const a0 = ev?.arrivalDateKey;
-  const b0 = ev?.departureDateKey;
-  if(a0 || b0){
-    const fa0 = fmtDateFR(a0);
-    const fb0 = fmtDateFR(b0);
-    if(fa0 !== "—" && fb0 !== "—") return `${fa0} → ${fb0}`;
-    if(fa0 !== "—") return `${fa0} → —`;
-    if(fb0 !== "—") return `— → ${fb0}`;
-  }
+      if(a0 || b0){
+        const fa0 = fmtDateFR(a0);
+        const fb0 = fmtDateFR(b0);
+        if(fa0 !== "—" && fb0 !== "—") return `${fa0} → ${fb0}`;
+        if(fa0 !== "—") return `${fa0} → —`;
+        if(fb0 !== "—") return `— → ${fb0}`;
+      }
 
-  // fallback (au cas où)
-  const a =
-    ev?.periodFrom || ev?.startDate || ev?.checkIn || ev?.dateFrom || ev?.start ||
-    ev?.arrivalDate || ev?.arrival || ev?.checkInDate || ev?.from || ev?.startAt;
+      // fallback (au cas où)
+      const a =
+        ev?.periodFrom || ev?.startDate || ev?.checkIn || ev?.dateFrom || ev?.start ||
+        ev?.arrivalDate || ev?.arrival || ev?.checkInDate || ev?.from || ev?.startAt;
 
-  const b =
-    ev?.periodTo || ev?.endDate || ev?.checkOut || ev?.dateTo || ev?.end ||
-    ev?.departureDate || ev?.departure || ev?.checkOutDate || ev?.to || ev?.endAt;
+      const b =
+        ev?.periodTo || ev?.endDate || ev?.checkOut || ev?.dateTo || ev?.end ||
+        ev?.departureDate || ev?.departure || ev?.checkOutDate || ev?.to || ev?.endAt;
 
-  const fa = fmtDateFR(a);
-  const fb = fmtDateFR(b);
+      const fa = fmtDateFR(a);
+      const fb = fmtDateFR(b);
 
-  if(fa !== "—" && fb !== "—") return `${fa} → ${fb}`;
-  if(fa !== "—" && fb === "—") return `${fa} → —`;
-  if(fa === "—" && fb !== "—") return `— → ${fb}`;
+      if(fa !== "—" && fb !== "—") return `${fa} → ${fb}`;
+      if(fa !== "—" && fb === "—") return `${fa} → —`;
+      if(fa === "—" && fb !== "—") return `— → ${fb}`;
 
-  if(ev?.dateKey) return String(ev.dateKey);
-  if(ev?.date) return fmtDateFR(ev.date);
-  return "—";
-}
-
-
+      if(ev?.dateKey) return String(ev.dateKey);
+      if(ev?.date) return fmtDateFR(ev.date);
+      return "—";
+    }
 
     async function acceptEventQuote(eventId){
       await updateDoc(doc(db,"events",eventId),{
@@ -797,6 +808,3 @@
   </script>
 </body>
 </html>
-
-
-
