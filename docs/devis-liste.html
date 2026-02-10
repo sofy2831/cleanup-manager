@@ -603,50 +603,59 @@
     }
 
     async function loadEventQuotes(){
-      // On récupère les events qui sont dans un flux "devis"
-      // NB: si tu as un autre champ filtre (ex: commercialStatus), adapte ici.
-      const qEv = query(
-        collection(db, "events"),
-        where("conciergerieUid", "==", currentUser.uid),
-        where("commercialStatus", "in", ["DEVIS","DEVIS_ENVOYE","DEVIS_ACCEPTE","DEVIS_REFUSE"]),
-        limit(200)
-      );
-      const snap = await getDocs(qEv);
+  // ✅ requête robuste : pas de where("commercialStatus","in"...)
+  const qEv = query(
+    collection(db, "events"),
+    where("conciergerieUid", "==", currentUser.uid),
+    limit(300)
+  );
+  const snap = await getDocs(qEv);
 
-      const out = [];
-      snap.forEach(ds=>{
-        const d = ds.data() || {};
-        const status = String(d.quoteStatus||"").toUpperCase().trim() || "DRAFT";
+  const out = [];
+  snap.forEach(ds=>{
+    const d = ds.data() || {};
 
-        const client = (d.ownerName || d.clientName || "").toString().trim();
-        const email  = normalizeEmail(d.ownerEmail || d.clientEmail || "");
-        const homeLabel = (d.homeName || d.homeLabel || d.homeTitle || "").toString().trim();
+    // ✅ ne garder que ce qui ressemble à un devis
+    const cs = String(d.commercialStatus || "").toUpperCase().trim();
+    const qs = String(d.quoteStatus || "").toUpperCase().trim();
+    const hasQuoteNumber = !!String(d.quoteNumber || "").trim();
+    const hasQuoteLines = Array.isArray(d.lines) && d.lines.length > 0;
 
-        // montant: recalcul côté liste (simple) — TVA dépend du profil, mais ici on met un indicateur, pas du juridique
-        const amount = computeAmountFromLines(d.lines || [], false, 0);
+    const looksLikeQuote =
+      cs.startsWith("DEVIS") || ["DRAFT","SENT","ACCEPTED","REFUSED"].includes(qs) || hasQuoteNumber || hasQuoteLines;
 
-        const quoteNumber = String(d.quoteNumber||"").trim();
-        out.push({
-          kind: "EVENT",
-          kindLabel: "Devis logement",
-          id: ds.id,
-          quoteNumber,
-          status,
-          statusLabel: quoteStatusLabel(status),
-          clientName: client,
-          clientEmail: email,
-          homeLabel,
-          amountLabel: (Array.isArray(d.lines) && d.lines.length) ? money(amount) : "",
-          title: homeLabel ? `Logement : ${homeLabel}` : "Devis logement",
-          sub: `${quoteNumber ? quoteNumber + " • " : ""}${client || "Client —"}`,
-          raw: d
-        });
-      });
+    if(!looksLikeQuote) return;
 
-      // tri par n° puis fallback
-      out.sort((a,b)=> (b.quoteNumber||"").localeCompare(a.quoteNumber||""));
-      return out;
-    }
+    const status = (qs || "DRAFT");
+    const client = (d.ownerName || d.clientName || "").toString().trim();
+    const email  = normalizeEmail(d.ownerEmail || d.clientEmail || "");
+    const homeLabel = (d.homeName || d.homeLabel || d.homeTitle || "").toString().trim();
+
+    const amount = computeAmountFromLines(d.lines || [], false, 0);
+    const quoteNumber = String(d.quoteNumber||"").trim();
+
+    out.push({
+      kind: "EVENT",
+      kindLabel: "Devis logement",
+      id: ds.id,
+      quoteNumber,
+      status,
+      statusLabel: quoteStatusLabel(status),
+      clientName: client,
+      clientEmail: email,
+      homeLabel,
+      amountLabel: hasQuoteLines ? money(amount) : "",
+      title: homeLabel ? `Logement : ${homeLabel}` : "Devis logement",
+      sub: `${quoteNumber ? quoteNumber + " • " : ""}${client || "Client —"}`,
+      raw: d
+    });
+  });
+
+  // tri : num si existe, sinon on garde l’ordre brut
+  out.sort((a,b)=> (b.quoteNumber||"").localeCompare(a.quoteNumber||""));
+  return out;
+}
+
 
     async function loadFreeQuotes(){
       const qQ = query(
@@ -721,3 +730,4 @@
   </script>
 </body>
 </html>
+
