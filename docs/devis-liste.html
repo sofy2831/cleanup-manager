@@ -1,4 +1,4 @@
-<!-- docs/devis-liste.html (FINAL — + bouton Passer en facture si ACCEPTED) -->
+<!-- docs/devis-liste.html (FINAL — events + salesDocuments, DE + DF, 3 actions pour logement, 2 pour prospect) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -188,12 +188,17 @@
       border:1px solid rgba(122,92,255,0.35);
       box-shadow:0 8px 18px rgba(0,0,0,0.06);
       white-space:nowrap;
+      user-select:none;
     }
     .btn.primary{
       background:linear-gradient(90deg,var(--violet),var(--violet2));
       color:#fff;
       border-color:transparent;
       box-shadow:0 12px 24px rgba(0,0,0,0.10);
+    }
+    .btn:disabled{
+      opacity:.45;
+      cursor:not-allowed;
     }
 
     .freeRow{
@@ -335,6 +340,7 @@
         <div class="freeRow">
           <div class="freeText">
             <p class="t">Devis (sans logement)</p>
+            <p class="p">Prospect : devis libre, sans séjour.</p>
           </div>
           <a class="btn primary" href="devis-free.html">Créer un devis</a>
         </div>
@@ -353,7 +359,7 @@
 
           <div class="searchbar" title="Recherche">
             <span class="s-ico">🔎</span>
-            <input class="input" id="searchInput" type="search" placeholder="Rechercher (logement, ville, client…)" autocomplete="off" />
+            <input class="input" id="searchInput" type="search" placeholder="Rechercher (n° devis, client, logement…)" autocomplete="off" />
           </div>
 
           <span></span>
@@ -376,7 +382,7 @@
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
-      doc, getDoc,
+      doc, getDoc, updateDoc, serverTimestamp,
       collection, query, where, orderBy, limit, getDocs
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
@@ -416,15 +422,32 @@
       return n.toLocaleString("fr-FR",{minimumFractionDigits:2, maximumFractionDigits:2})+" €";
     }
 
+    function fmtDateFR(d){
+      if(!d) return "—";
+      try{
+        const dt = (d?.toDate?.() ? d.toDate() : (d instanceof Date ? d : new Date(d)));
+        if(isNaN(dt.getTime())) return "—";
+        return dt.toLocaleDateString("fr-FR");
+      }catch{
+        return "—";
+      }
+    }
+
     function computeTotalFromLines(lines){
       if(!Array.isArray(lines)) return 0;
       return lines.reduce((s,l)=> s + (Number(l?.qty)||0) * (Number(l?.unitPrice)||0), 0);
     }
 
-    function getQuoteTotal(ev){
+    function getQuoteTotalEvent(ev){
       if(ev?.quoteAmount != null && ev.quoteAmount !== "") return Number(ev.quoteAmount);
       if(ev?.total != null && ev.total !== "") return Number(ev.total);
       return computeTotalFromLines(ev?.lines);
+    }
+
+    function getQuoteTotalFree(d){
+      if(d?.quoteAmount != null && d.quoteAmount !== "") return Number(d.quoteAmount);
+      if(d?.totalTTC != null && d.totalTTC !== "") return Number(d.totalTTC);
+      return computeTotalFromLines(d?.lines);
     }
 
     function badgeForQuoteStatus(s){
@@ -448,11 +471,16 @@
     function matchesSearch(item){
       const q = (searchInput.value||"").trim().toLowerCase();
       if(!q) return true;
+
       const hay = [
+        item.quoteNumber,
+        item.kind,
         item.homeName, item.homeCity, item.homeZip, item.homeAddress,
         item.ownerName, item.ownerEmail, item.ownerPhone,
+        item.clientName, item.clientEmail, item.clientCity, item.clientZip,
         item.summary
       ].filter(Boolean).join(" ").toLowerCase();
+
       return hay.includes(q);
     }
 
@@ -460,8 +488,60 @@
       return all.filter(e => matchesFilter(e) && matchesSearch(e));
     }
 
-    function isAccepted(ev){
-      return String(ev?.quoteStatus||"").toUpperCase().trim() === "ACCEPTED";
+    function isAccepted(x){
+      return String(x?.quoteStatus||"").toUpperCase().trim() === "ACCEPTED";
+    }
+
+    function getCreatedAt(x){
+      return fmtDateFR(x?.createdAt) || "—";
+    }
+
+    function getQuoteNumber(x){
+      const n = String(x?.quoteNumber || "").trim();
+      if(n) return n;
+      return (x?.kind === "FREE") ? "DF—" : "DE—";
+    }
+
+    function getClientName(x){
+      if(x?.kind === "FREE"){
+        return (x?.clientName || x?.clientCompany || x?.clientFullName || "—");
+      }
+      return (x?.ownerName || "—");
+    }
+
+    function getHomeName(x){
+      if(x?.kind === "FREE") return "—";
+      return (x.homeName||"—") + (x.homeCity ? (" — " + x.homeCity) : "");
+    }
+
+    function getPeriodFromEvent(ev){
+      const a = ev?.periodFrom || ev?.startDate || ev?.checkIn || ev?.dateFrom || ev?.start;
+      const b = ev?.periodTo   || ev?.endDate   || ev?.checkOut|| ev?.dateTo   || ev?.end;
+      const fa = fmtDateFR(a);
+      const fb = fmtDateFR(b);
+      if(fa !== "—" && fb !== "—") return `${fa} → ${fb}`;
+      if(ev?.dateKey) return String(ev.dateKey);
+      if(ev?.date) return fmtDateFR(ev.date);
+      return "—";
+    }
+
+    async function acceptEventQuote(eventId){
+      await updateDoc(doc(db,"events",eventId),{
+        quoteStatus:"ACCEPTED",
+        quoteAcceptedAt: serverTimestamp(),
+        quoteUpdatedAt: serverTimestamp(),
+        commercialUpdatedAt: serverTimestamp(),
+        commercialStatus: "DEVIS_ACCEPTE"
+      });
+    }
+
+    async function acceptFreeQuote(docId){
+      await updateDoc(doc(db,"salesDocuments",docId),{
+        quoteStatus:"ACCEPTED",
+        quoteAcceptedAt: serverTimestamp(),
+        quoteUpdatedAt: serverTimestamp(),
+        commercialUpdatedAt: serverTimestamp()
+      });
     }
 
     function render(){
@@ -479,71 +559,161 @@
         return;
       }
 
-      for(const ev of filtered){
-        const home = (ev.homeName||"—") + (ev.homeCity ? (" — " + ev.homeCity) : "");
-        const owner = (ev.ownerName||"—") + (ev.ownerEmail ? (" • " + ev.ownerEmail) : "");
-        const date = ev.dateKey || ev.date || "—";
-        const time = ev.time || "—";
-        const amount = getQuoteTotal(ev);
-        const canInvoice = isAccepted(ev);
+      for(const x of filtered){
+        const created = getCreatedAt(x);
+        const quoteNo = getQuoteNumber(x);
+        const client = getClientName(x);
+        const home = getHomeName(x);
+
+        const period = (x.kind === "EVENT") ? getPeriodFromEvent(x) : "—";
+        const total = (x.kind === "EVENT") ? getQuoteTotalEvent(x) : getQuoteTotalFree(x);
+
+        const accepted = isAccepted(x);
 
         const div = document.createElement("div");
         div.className = "card";
+
+        // actions
+        const openHref = (x.kind === "EVENT")
+          ? `devis-event.html?eventId=${encodeURIComponent(x.id)}`
+          : `devis-free.html?docId=${encodeURIComponent(x.id)}`;
+
+        const actionsHtml = (x.kind === "EVENT")
+          ? `
+            <a class="btn primary" href="${openHref}">Ouvrir</a>
+            <button class="btn" type="button" data-accept-kind="EVENT" data-accept-id="${esc(x.id)}" ${accepted ? "disabled" : ""}>
+              Accepter
+            </button>
+            <a class="btn"
+              href="facture.html?eventId=${encodeURIComponent(x.id)}"
+              ${accepted ? "" : "aria-disabled='true' onclick='return false;' style='pointer-events:none; opacity:.45;'"}
+              title="${accepted ? "Passer en facture" : "Grisé tant que le devis n’est pas accepté"}"
+            >Passer en facture</a>
+          `
+          : `
+            <a class="btn primary" href="${openHref}">Ouvrir</a>
+            <button class="btn" type="button" data-accept-kind="FREE" data-accept-id="${esc(x.id)}" ${accepted ? "disabled" : ""}>
+              Accepter
+            </button>
+          `;
+
         div.innerHTML = `
           <div class="row">
+            <div class="k">
+              <div class="t">Créé</div>
+              <div class="v">${esc(created)}</div>
+            </div>
+            <div class="k">
+              <div class="t">N° devis</div>
+              <div class="v">${esc(quoteNo)}</div>
+            </div>
+            <div class="k">
+              <div class="t">Client</div>
+              <div class="v ellipsis" title="${esc(client)}">${esc(client)}</div>
+            </div>
+          </div>
+
+          <div class="row" style="margin-top:10px;">
             <div class="k">
               <div class="t">Logement</div>
               <div class="v ellipsis" title="${esc(home)}">${esc(home)}</div>
             </div>
             <div class="k">
-              <div class="t">Client</div>
-              <div class="v ellipsis" title="${esc(owner)}">${esc(owner)}</div>
+              <div class="t">Période</div>
+              <div class="v">${esc(period)}</div>
             </div>
             <div class="k">
-              <div class="t">Date</div>
-              <div class="v">${esc(date)} • ${esc(time)}</div>
+              <div class="t">Total TTC</div>
+              <div class="v">${fmtMoney(total)}</div>
             </div>
           </div>
 
           <div class="row" style="margin-top:10px;">
             <div class="k">
               <div class="t">Statut</div>
-              <div class="v">${badgeForQuoteStatus(ev.quoteStatus)}</div>
-            </div>
-            <div class="k">
-              <div class="t">Montant</div>
-              <div class="v">${fmtMoney(amount)}</div>
+              <div class="v">${badgeForQuoteStatus(x.quoteStatus)}</div>
             </div>
 
-            <div class="k" style="align-items:flex-end; min-width:240px;">
+            <div class="k" style="align-items:flex-end; min-width:280px;">
               <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;">
-                ${canInvoice
-                  ? `<a class="btn" href="facture.html?eventId=${encodeURIComponent(ev.id)}">Passer en facture</a>`
-                  : ``
-                }
-                <a class="btn primary" href="devis-event.html?eventId=${encodeURIComponent(ev.id)}">Ouvrir devis</a>
+                ${actionsHtml}
               </div>
             </div>
           </div>
         `;
+
         listBox.appendChild(div);
+      }
+
+      // bind accept buttons (event + free)
+      for(const b of listBox.querySelectorAll("button[data-accept-id]")){
+        b.addEventListener("click", async ()=>{
+          const id = b.getAttribute("data-accept-id");
+          const kind = b.getAttribute("data-accept-kind");
+          if(!id || !kind) return;
+
+          b.disabled = true;
+          hideAlert();
+
+          try{
+            if(kind === "EVENT"){
+              await acceptEventQuote(id);
+              const idx = all.findIndex(z => z.id === id && z.kind === "EVENT");
+              if(idx >= 0) all[idx].quoteStatus = "ACCEPTED";
+              showAlert("✅ Devis logement accepté.", true);
+            }else{
+              await acceptFreeQuote(id);
+              const idx = all.findIndex(z => z.id === id && z.kind === "FREE");
+              if(idx >= 0) all[idx].quoteStatus = "ACCEPTED";
+              showAlert("✅ Devis prospect accepté.", true);
+            }
+            render();
+          }catch(e){
+            console.error(e);
+            showAlert("⛔ Impossible d’accepter : " + (e?.message || "inconnu"));
+            b.disabled = false;
+          }
+        });
       }
     }
 
     async function loadQuotes(uid){
+      // 1) events (devis logement)
       const qEvents = query(
         collection(db, "events"),
         where("conciergerieUid", "==", uid),
         orderBy("createdAt", "desc"),
         limit(400)
       );
-      const snap = await getDocs(qEvents);
-      const rows = snap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
+      const snapE = await getDocs(qEvents);
+      const events = snapE.docs.map(d => ({ kind:"EVENT", id: d.id, ...(d.data()||{}) }))
+        .filter(r => {
+          const qs = String(r.quoteStatus||"").toUpperCase().trim();
+          const cs = String(r.commercialStatus||"").toUpperCase().trim();
+          return qs === "DRAFT" || qs === "SENT" || qs === "ACCEPTED" || qs === "REFUSED" || cs === "DEVIS" || cs.startsWith("DEVIS");
+        });
 
-      all = rows.filter(r => {
-        const qs = String(r.quoteStatus||"").toUpperCase().trim();
-        const cs = String(r.commercialStatus||"").toUpperCase().trim();
-        return qs === "DRAFT" || qs === "SENT" || qs === "ACCEPTED" || qs === "REFUSED" || cs === "DEVIS" || cs.startsWith("DEVIS");
+      // 2) salesDocuments (devis prospect)
+      // REQUIERT INDEX COMPOSITE:
+      // salesDocuments: conciergerieUid ASC, type ASC, createdAt DESC
+      const qSales = query(
+        collection(db, "salesDocuments"),
+        where("conciergerieUid", "==", uid),
+        where("type", "==", "QUOTE"),
+        orderBy("createdAt", "desc"),
+        limit(400)
+      );
+      const snapS = await getDocs(qSales);
+
+      const sales = snapS.docs.map(d => ({ kind:"FREE", id: d.id, ...(d.data()||{}) }))
+        // on filtre docType côté client pour éviter un index supplémentaire
+        .filter(s => String(s.docType||"").toUpperCase().trim() === "QUOTE_FREE");
+
+      // merge + sort by createdAt desc
+      all = [...events, ...sales].sort((a,b)=>{
+        const ta = a?.createdAt?.toMillis?.() ? a.createdAt.toMillis() : (a?.createdAt ? new Date(a.createdAt).getTime() : 0);
+        const tb = b?.createdAt?.toMillis?.() ? b.createdAt.toMillis() : (b?.createdAt ? new Date(b.createdAt).getTime() : 0);
+        return tb - ta;
       });
 
       render();
