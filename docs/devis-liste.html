@@ -528,7 +528,6 @@
     }
 
     function getCreatedAt(x){
-      // ✅ IMPORTANT : évite le "—" permanent (ton ancien code faisait "fmtDateFR(...) || '—'" donc jamais '—' utile)
       return fmtDateFR(x?.createdAt);
     }
 
@@ -564,7 +563,6 @@
         if(fb0 !== "—") return `— → ${fb0}`;
       }
 
-      // fallback (au cas où)
       const a =
         ev?.periodFrom || ev?.startDate || ev?.checkIn || ev?.dateFrom || ev?.start ||
         ev?.arrivalDate || ev?.arrival || ev?.checkInDate || ev?.from || ev?.startAt;
@@ -754,23 +752,37 @@
         });
 
       // 2) salesDocuments (devis prospect)
-      // INDEX requis: salesDocuments (conciergerieUid ASC, type ASC, createdAt DESC)
-      const qSales = query(
-        collection(db, "salesDocuments"),
-        where("conciergerieUid", "==", uid),
-        where("type", "==", "QUOTE"),
-        orderBy("createdAt", "desc"),
-        limit(400)
-      );
-      const snapS = await getDocs(qSales);
-
-      const sales = snapS.docs.map(d => ({ kind:"FREE", id: d.id, ...(d.data()||{}) }))
-  .filter(s => {
-    const okType = String(s.docType||"").toUpperCase().trim() === "QUOTE_FREE";
-    const hasNumber = !!String(s.quoteNumber || s.number || "").trim(); // ✅ n’apparaît qu’après Enregistrer
-    return okType && hasNumber;
-  });
-
+      // ✅ Idéal: ne charger QUE les docs "listables" (donc uniquement après Enregistrer)
+      // Index probable: salesDocuments (conciergerieUid ASC, type ASC, docType ASC, listable ASC, createdAt DESC)
+      let sales = [];
+      try{
+        const qSales = query(
+          collection(db, "salesDocuments"),
+          where("conciergerieUid", "==", uid),
+          where("type", "==", "QUOTE"),
+          where("docType", "==", "QUOTE_FREE"),
+          where("listable", "==", true),
+          orderBy("createdAt", "desc"),
+          limit(400)
+        );
+        const snapS = await getDocs(qSales);
+        sales = snapS.docs.map(d => ({ kind:"FREE", id: d.id, ...(d.data()||{}) }));
+      }catch(e){
+        // ✅ fallback si index manquant: on charge large puis on filtre côté client
+        console.warn("SalesDocuments query with listable==true failed (likely missing index). Fallback.", e);
+        const qSalesFallback = query(
+          collection(db, "salesDocuments"),
+          where("conciergerieUid", "==", uid),
+          where("type", "==", "QUOTE"),
+          where("docType", "==", "QUOTE_FREE"),
+          orderBy("createdAt", "desc"),
+          limit(400)
+        );
+        const snapS2 = await getDocs(qSalesFallback);
+        sales = snapS2.docs
+          .map(d => ({ kind:"FREE", id: d.id, ...(d.data()||{}) }))
+          .filter(s => s.listable === true);
+      }
 
       all = [...events, ...sales].sort((a,b)=>{
         const ta = a?.createdAt?.toMillis?.() ? a.createdAt.toMillis() : (a?.createdAt ? new Date(a.createdAt).getTime() : 0);
@@ -813,4 +825,3 @@
   </script>
 </body>
 </html>
-
