@@ -1,4 +1,4 @@
-<!-- docs/factures-liste.html (PATCH — sans déconnexion / sans CSV + actions Ouvrir/Créer/Avoir/Refaire) -->
+<!-- docs/factures-liste.html (FINAL — source salesDocuments + actions) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -334,7 +334,7 @@
 
     <div class="subtitle">Suivi des factures</div>
     <div class="helloLine" id="helloLine">Bonjour,</div>
-    <div class="emailLine" id="companyLine">—</div>
+    <div class="emailLine" id="emailLine">—</div>
 
     <div class="wrap">
       <div class="alert" id="alertBox"></div>
@@ -371,7 +371,10 @@
   <script type="module">
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-    import { collection, query, where, orderBy, limit, getDocs } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import {
+      collection, query, where, orderBy, limit, getDocs,
+      doc, getDoc
+    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const helloLine = document.getElementById("helloLine");
     const emailLine = document.getElementById("emailLine");
@@ -414,14 +417,11 @@
       try{
         if(x?.toDate?.()) return x.toDate().toLocaleDateString("fr-FR");
         if(x instanceof Date) return isNaN(x.getTime()) ? "—" : x.toLocaleDateString("fr-FR");
-
         const s = String(x).trim();
         if(!s) return "—";
         if(/^\d{2}\/\d{2}\/\d{4}$/.test(s)) return s;
-
         const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
         if(m) return `${m[3]}/${m[2]}/${m[1]}`;
-
         const d = new Date(s);
         if(!isNaN(d.getTime())) return d.toLocaleDateString("fr-FR");
         return "—";
@@ -435,9 +435,9 @@
       return lines.reduce((s,l)=> s + (Number(l?.qty)||0) * (Number(l?.unitPrice)||0), 0);
     }
 
-    function getInvoiceTotal(ev){
+    function getInvoiceTotal(docu){
       const candidates = [
-        ev?.invoiceTotal, ev?.totalInvoice, ev?.invoiceAmount, ev?.invoiceTTC, ev?.totalTTC, ev?.total
+        docu?.invoiceTotal, docu?.totalInvoice, docu?.invoiceAmount, docu?.invoiceTTC, docu?.totalTTC, docu?.total
       ];
       for(const c of candidates){
         if(c != null && c !== ""){
@@ -445,7 +445,21 @@
           if(Number.isFinite(n)) return n;
         }
       }
-      return computeTotalFromLines(ev?.lines);
+      return computeTotalFromLines(docu?.lines);
+    }
+
+    function normalizeStatusFromCommercial(d){
+      const cs = String(d?.commercialStatus||"").toUpperCase().trim();
+      if(cs === "PAYE") return "PAID";
+      if(cs === "FACTURE_ENVOYEE") return "SENT";
+      if(cs === "FACTURE") return "DRAFT";
+      return "";
+    }
+
+    function getInvoiceStatus(d){
+      const st = String(d?.invoiceStatus||"").toUpperCase().trim();
+      if(st) return st;
+      return normalizeStatusFromCommercial(d) || "";
     }
 
     function badgeForInvoiceStatus(s){
@@ -455,20 +469,6 @@
       if(x === "SENT") return `<span class="badge">Envoyée</span>`;
       if(x === "DRAFT") return `<span class="badge">Brouillon</span>`;
       return `<span class="badge">${esc(x)}</span>`;
-    }
-
-    function normalizeStatusFromCommercial(ev){
-      const cs = String(ev?.commercialStatus||"").toUpperCase().trim();
-      if(cs === "PAYE") return "PAID";
-      if(cs === "FACTURE_ENVOYEE") return "SENT";
-      if(cs === "FACTURE") return "DRAFT";
-      return "";
-    }
-
-    function getInvoiceStatus(ev){
-      const st = String(ev?.invoiceStatus||"").toUpperCase().trim();
-      if(st) return st;
-      return normalizeStatusFromCommercial(ev) || "";
     }
 
     function matchesFilter(item){
@@ -486,7 +486,7 @@
       const hay = [
         item.invoiceNumber, item.quoteNumber,
         item.homeName, item.homeCity,
-        item.ownerName, item.ownerEmail
+        item.clientName, item.clientEmail
       ].filter(Boolean).join(" ").toLowerCase();
 
       return hay.includes(q);
@@ -499,8 +499,6 @@
     function getCreatedAt(x){
       if(x?.createdAt?.toDate?.()) return x.createdAt.toDate().toLocaleDateString("fr-FR");
       if(x?.createdAt) return fmtDateFR(x.createdAt);
-      if(x?.dateKey) return String(x.dateKey);
-      if(x?.date) return fmtDateFR(x.date);
       return "—";
     }
 
@@ -510,27 +508,49 @@
       return "FA—";
     }
 
-    // --- AVOIR / REFAIRE : on supporte plusieurs champs possibles, sans casser ton modèle ---
-    function getAvoirRef(ev){
-      // id direct d'un avoir lié, ou flag
+    function getPeriod(x){
+      const a = x?.arrivalDateKey || x?.arrivalDate || x?.startDateKey || x?.startDate;
+      const b = x?.departureDateKey || x?.departureDate || x?.endDateKey || x?.endDate;
+      const fa = fmtDateFR(a);
+      const fb = fmtDateFR(b);
+      if(fa !== "—" || fb !== "—") return `${fa} → ${fb}`;
+      return "—";
+    }
+
+    function getAvoirRef(d){
       const id =
-        ev?.avoirId ||
-        ev?.creditNoteId ||
-        ev?.refundId ||
-        ev?.lastAvoirId ||
+        d?.avoirId ||
+        d?.creditNoteId ||
+        d?.refundId ||
+        d?.lastAvoirId ||
+        d?.linkedCreditId ||
         "";
       if(String(id||"").trim()) return String(id).trim();
-
-      // fallback: bool
-      if(ev?.hasAvoir === true) return "__HAS__";
-      if(ev?.isCredited === true) return "__HAS__";
+      if(d?.hasAvoir === true) return "__HAS__";
+      if(d?.isCredited === true) return "__HAS__";
       return "";
     }
 
-    function canCreateNewInvoice(ev){
-      // "Créer" = refaire/dupliquer une facture pour ce logement/ce dossier.
-      // Si tu veux la désactiver dans certains cas, tu pourras resserrer ici.
-      return true;
+    function isInvoiceDoc(d){
+      // ✅ d'après ce que tu m'as envoyé:
+      // - docType: QUOTE_FREE / ... (donc facture sera probablement INVOICE / INVOICE_FREE / FACTURE / etc.)
+      // - type: QUOTE (donc facture sera probablement INVOICE)
+      const docType = String(d?.docType||"").toUpperCase().trim();
+      const type = String(d?.type||"").toUpperCase().trim();
+      const cs = String(d?.commercialStatus||"").toUpperCase().trim();
+
+      if(type === "INVOICE" || type === "FACTURE") return true;
+      if(docType.startsWith("INVOICE") || docType.startsWith("FACTURE")) return true;
+
+      // tolérance
+      if(cs.includes("FACTUR")) return true;  // FACTURE / FACTURE_ENVOYEE
+      if(cs.includes("INVOIC")) return true;
+
+      // si un numéro ou statut facture existe
+      if(String(d?.invoiceNumber||"").trim()) return true;
+      if(String(d?.invoiceStatus||"").trim()) return true;
+
+      return false;
     }
 
     function render(){
@@ -548,47 +568,41 @@
         return;
       }
 
-      for(const ev of filtered){
-        const created = getCreatedAt(ev);
-        const invNum = getInvoiceNumber(ev);
+      for(const d of filtered){
+        const created = getCreatedAt(d);
+        const invNum = getInvoiceNumber(d);
 
-        const client = (ev.ownerName || "—");
-        const home = (ev.homeName || "—");
-        const period = (ev.arrivalDateKey || ev.departureDateKey)
-          ? `${fmtDateFR(ev.arrivalDateKey)} → ${fmtDateFR(ev.departureDateKey)}`
-          : "—";
+        const client = (d.clientName || d.ownerName || "—");
+        const home = (d.homeName || d.homeTitle || "—");
+        const period = getPeriod(d);
 
-        const total = getInvoiceTotal(ev);
-        const st = getInvoiceStatus(ev);
+        const total = getInvoiceTotal(d);
+        const st = getInvoiceStatus(d);
 
-        const homeId = String(ev.homeId || "").trim();
-        const avoirRef = getAvoirRef(ev);
+        const homeId = String(d.homeId || "").trim();
+        const avoirRef = getAvoirRef(d);
         const hasAvoir = !!avoirRef;
 
-        // liens : on reste volontairement simple et "rules-friendly"
-        const openHref = `facture.html?eventId=${encodeURIComponent(ev.id)}`;
+        // OUVRIR facture : on passe docId + source=sd (salesDocuments)
+        const openHref = `facture.html?docId=${encodeURIComponent(d.id)}&source=sd`;
 
-        // "Créer" : nouvelle facture (dupliquer ou partir du logement)
-        // - si homeId dispo, on le passe
-        // - on passe aussi sourceEventId pour pré-remplir si tu veux
+        // CRÉER : nouvelle facture (si homeId dispo on le passe)
         const createHref =
           `facture.html?mode=create`
           + (homeId ? `&homeId=${encodeURIComponent(homeId)}` : "")
-          + `&sourceEventId=${encodeURIComponent(ev.id)}`;
+          + `&source=sd`;
 
-        // "Mettre en avoir" : vers avoir.html (à toi de faire la page)
-        // on passe l'eventId facture comme source
+        // AVOIR : page avoir (à toi)
         const avoirHref =
-          `avoir.html?fromInvoiceEventId=${encodeURIComponent(ev.id)}`
+          `avoir.html?fromDocId=${encodeURIComponent(d.id)}&source=sd`
           + (homeId ? `&homeId=${encodeURIComponent(homeId)}` : "");
 
-        // "Refaire facture" : si avoir existe, on peut recréer une facture
-        // si tu as un id d'avoir, on le passe pour reconstituer
+        // REFAIRE facture : si avoir lié, on peut repartir
         const redoHref =
-          `facture.html?mode=redo`
+          `facture.html?mode=redo&source=sd`
           + (homeId ? `&homeId=${encodeURIComponent(homeId)}` : "")
           + (avoirRef && avoirRef !== "__HAS__" ? `&fromAvoirId=${encodeURIComponent(avoirRef)}` : "")
-          + `&sourceEventId=${encodeURIComponent(ev.id)}`;
+          + `&fromDocId=${encodeURIComponent(d.id)}`;
 
         const div = document.createElement("div");
         div.className = "card";
@@ -637,8 +651,7 @@
             <div class="k" style="align-items:flex-end; min-width:280px;">
               <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;">
                 <a class="btn primary" href="${openHref}">Ouvrir</a>
-
-                <a class="btn" href="${createHref}" ${canCreateNewInvoice(ev) ? "" : "aria-disabled='true'"}>Créer</a>
+                <a class="btn" href="${createHref}">Créer</a>
 
                 <a class="btn danger" href="${avoirHref}" ${hasAvoir ? "style='opacity:.45; pointer-events:none;'" : ""}>
                   Mettre en avoir
@@ -655,30 +668,33 @@
       }
     }
 
-    async function loadInvoices(uid){
-      const qEvents = query(
-        collection(db, "events"),
+    async function loadCompanyName(uid){
+      try{
+        const snap = await getDoc(doc(db,"users",uid));
+        const u = snap.exists() ? (snap.data()||{}) : {};
+        const name = String(u?.businessProfile?.companyName || "").trim();
+        return name || "";
+      }catch{
+        return "";
+      }
+    }
+
+    async function loadInvoicesFromSalesDocuments(uid){
+      // ✅ 1 requête simple (évite les OR qui demandent 15 index)
+      const qDocs = query(
+        collection(db, "salesDocuments"),
         where("conciergerieUid", "==", uid),
         orderBy("createdAt", "desc"),
         limit(400)
       );
 
-      const snap = await getDocs(qEvents);
+      const snap = await getDocs(qDocs);
       const rows = snap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
 
-      all = rows.filter(r => {
-        const inv = String(r.invoiceStatus||"").toUpperCase().trim();
-        const cs  = String(r.commercialStatus||"").toUpperCase().trim();
-
-        if(inv === "DRAFT" || inv === "SENT" || inv === "PAID") return true;
-        if(cs === "FACTURE" || cs === "FACTURE_ENVOYEE" || cs === "PAYE") return true;
-
-        if(String(r.invoiceNumber||"").trim()) return true;
-        return false;
-      }).map(r => ({
-        ...r,
-        invoiceStatus: getInvoiceStatus(r)
-      }));
+      // ✅ on filtre client-side en "factures only"
+      all = rows
+        .filter(isInvoiceDoc)
+        .map(r => ({ ...r, invoiceStatus: getInvoiceStatus(r) }));
 
       render();
     }
@@ -691,12 +707,16 @@
         location.href = "login.html?role=conciergerie";
         return;
       }
-      if(helloLine) helloLine.textContent = "Bonjour,";
-      emailLine.textContent = user.email || user.uid;
+
+      helloLine.textContent = "Bonjour,";
+
+      // affiche raison sociale si dispo, sinon email
+      const company = await loadCompanyName(user.uid);
+      emailLine.textContent = company ? company : (user.email || user.uid);
 
       hideAlert();
       try{
-        await loadInvoices(user.uid);
+        await loadInvoicesFromSalesDocuments(user.uid);
       }catch(e){
         console.error(e);
         showAlert("⛔ Erreur chargement factures : " + (e?.message || "inconnue"));
@@ -705,4 +725,3 @@
   </script>
 </body>
 </html>
-
