@@ -1,4 +1,4 @@
-<!-- docs/facture.html (PATCH MICRO — client address OK, TVA non applicable, conditions + ref devis, paiement sans échéance, pénalités + banque) -->
+<!-- docs/facture.html (PATCH FINAL — 2 boutons seulement : Enregistrer(crée n° + SENT) + Aperçu/Imprimer) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -175,13 +175,13 @@
       display:block; font-size:12px; font-weight:1000; color:#333;
       margin:10px 0 4px; text-align:left;
     }
-    textarea{
+    textarea, input, select{
       width:100%; padding:10px 12px; border-radius:12px;
       border:1px solid #D3C7FF; font-size:14px; outline:none;
       background:#fff; font-weight:800; color:#111;
-      resize:vertical;
     }
-    textarea:focus{
+    textarea{ resize:vertical; }
+    textarea:focus, input:focus, select:focus{
       border-color:var(--violet-main);
       box-shadow:0 0 0 2px rgba(122,92,255,.15);
     }
@@ -302,7 +302,7 @@
       <div class="card">
         <div class="card-title">
           <span>Récapitulatif</span>
-          <span class="small">Logement + période</span>
+          <span class="small">Référence devis + logement</span>
         </div>
 
         <div class="alert" id="alertBox"></div>
@@ -324,8 +324,9 @@
                 <th>Désignation</th>
                 <th class="num">Qté</th>
                 <th>Unité</th>
-                <th class="num">PU</th>
-                <th class="num">Total</th>
+                <th class="num">PU HT</th>
+                <th class="num" id="thTVA" style="display:none;">TVA</th>
+                <th class="num">Total TTC</th>
               </tr>
             </thead>
             <tbody id="linesTbody"></tbody>
@@ -338,7 +339,7 @@
       <div class="card">
         <div class="card-title">
           <span>Gestion facture</span>
-          <span class="small">Actions</span>
+          <span class="small">2 actions</span>
         </div>
 
         <label for="invoiceNotes">Notes internes</label>
@@ -348,7 +349,7 @@
 
         <div class="card-title" style="font-size:14px; margin-bottom:6px;">
           <span>Paiement</span>
-          <span class="small">Mode + délai</span>
+          <span class="small">reprend le devis</span>
         </div>
         <div class="kv" id="paymentKv"></div>
 
@@ -356,7 +357,7 @@
 
         <div class="card-title" style="font-size:14px; margin-bottom:6px;">
           <span>Conditions</span>
-          <span class="small">Référence + échéance + annulation</span>
+          <span class="small">échéance + annulation</span>
         </div>
         <div class="kv" id="conditionsKv"></div>
 
@@ -364,26 +365,25 @@
 
         <div class="card-title" style="font-size:14px; margin-bottom:6px;">
           <span>Coordonnées bancaires</span>
-          <span class="small">IBAN / BIC</span>
+          <span class="small">IBAN/BIC</span>
         </div>
         <div class="kv" id="bankKv"></div>
 
         <div class="divider"></div>
 
         <div class="card-title" style="font-size:14px; margin-bottom:6px;">
-          <span>Pénalités de retard</span>
-          <span class="small">selon devis</span>
+          <span>Pénalités</span>
+          <span class="small">reprend le devis</span>
         </div>
-        <div class="kv" id="penaltiesKv"></div>
+        <div class="kv" id="penaltyKv"></div>
 
         <div class="actions">
-          <button class="btn primary" type="button" id="saveBtn">Enregistrer</button>
-          <button class="btn" type="button" id="confirmBtn">Confirmer</button>
-          <button class="btn" type="button" id="previewBtn">Aperçu</button>
+          <button class="btn primary" type="button" id="saveBtn">Enregistrer (créer numéro)</button>
+          <button class="btn" type="button" id="previewBtn">Aperçu / Imprimer</button>
         </div>
 
         <div class="mutedLine" style="margin-top:8px;">
-          Numéro facture attribué à la création. Confirmation = passage en <b>envoyée</b>. (Interne : aucun envoi automatique)
+          Le bouton <b>Enregistrer</b> attribue le numéro (séquentiel) et met la facture en <b>envoyée</b> automatiquement.
         </div>
       </div>
     </div>
@@ -413,7 +413,7 @@
     const paymentKv = document.getElementById("paymentKv");
     const conditionsKv = document.getElementById("conditionsKv");
     const bankKv = document.getElementById("bankKv");
-    const penaltiesKv = document.getElementById("penaltiesKv");
+    const penaltyKv = document.getElementById("penaltyKv");
 
     const appTitle = document.getElementById("appTitle");
 
@@ -427,6 +427,7 @@
     const clientNameEl = document.getElementById("clientName");
     const clientLinesEl = document.getElementById("clientLines");
 
+    const thTVA = document.getElementById("thTVA");
     const linesTbody = document.getElementById("linesTbody");
     const linesCards = document.getElementById("linesCards");
     const totalsBox = document.getElementById("totalsBox");
@@ -434,7 +435,6 @@
     const invoiceNotesEl = document.getElementById("invoiceNotes");
 
     const saveBtn = document.getElementById("saveBtn");
-    const confirmBtn = document.getElementById("confirmBtn");
     const previewBtn = document.getElementById("previewBtn");
 
     // ===== State =====
@@ -475,44 +475,50 @@
     }
     function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
 
-    const eventId = getParam("eventId");
+    // date FR robuste : Timestamp / Date / YYYY-MM-DD / DD/MM/YYYY
+    function fmtDateFR(x){
+      if(!x) return "—";
+      try{
+        if(x?.toDate?.()) return x.toDate().toLocaleDateString("fr-FR");
+        if(x instanceof Date) return isNaN(x.getTime()) ? "—" : x.toLocaleDateString("fr-FR");
+
+        const s = String(x).trim();
+        if(!s) return "—";
+        if(/^\d{2}\/\d{2}\/\d{4}$/.test(s)) return s;
+
+        const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+        if(m) return `${m[3]}/${m[2]}/${m[1]}`;
+
+        const d = new Date(s);
+        if(!isNaN(d.getTime())) return d.toLocaleDateString("fr-FR");
+        return "—";
+      }catch{
+        return "—";
+      }
+    }
+
+    function computeTotals(lines, tvaEnabled, tvaRate){
+      let ht = 0;
+      for(const l of (Array.isArray(lines) ? lines : [])){
+        const qty = Number(l?.qty)||0;
+        const up  = Number(l?.unitPrice)||0;
+        ht += qty * up;
+      }
+      const tva = tvaEnabled ? (ht * (Number(tvaRate)||0)) : 0;
+      const ttc = ht + tva;
+      return { ht, tva, ttc };
+    }
 
     function invoiceStatusLabel(s){
       const x = String(s||"").toUpperCase().trim();
       if(!x) return "—";
       if(x === "DRAFT") return "BROUILLON";
-      if(x === "SENT") return "ENVOYÉE";
+      if(x === "SENT") return "FACTURE ENVOYÉE";
       if(x === "PAID") return "PAYÉE";
       if(x === "CANCELLED") return "ANNULÉE";
       return x;
     }
-    function canConfirm(d){
-      const inv = String(d?.invoiceStatus || "").toUpperCase().trim();
-      return inv === "DRAFT";
-    }
 
-    function todayIso(){
-      const d = new Date();
-      const yyyy = d.getFullYear();
-      const mm = String(d.getMonth()+1).padStart(2,"0");
-      const dd = String(d.getDate()).padStart(2,"0");
-      return `${dd}/${mm}/${yyyy}`;
-    }
-    function termToDays(term){
-      const t = String(term||"").toUpperCase();
-      if(t === "RECEPTION") return 0;
-      if(t === "8J") return 8;
-      if(t === "15J") return 15;
-      if(t === "30J") return 30;
-      if(t === "45J") return 45;
-      return 0;
-    }
-    function addDaysLabel(ddmmyyyy, days){
-      const [dd,mm,yy] = String(ddmmyyyy).split("/").map(x=>parseInt(x,10));
-      const d = new Date(yy, (mm||1)-1, dd||1);
-      d.setDate(d.getDate() + (Number(days)||0));
-      return String(d.getDate()).padStart(2,"0") + "/" + String(d.getMonth()+1).padStart(2,"0") + "/" + d.getFullYear();
-    }
     function dueLabel(term){
       const t = String(term||"").toUpperCase();
       if(t === "RECEPTION") return "À réception";
@@ -529,10 +535,53 @@
       if(m === "CHEQUE") return "Chèque";
       return mode || "—";
     }
+    function termToDays(term){
+      const t = String(term||"").toUpperCase();
+      if(t === "RECEPTION") return 0;
+      if(t === "8J") return 8;
+      if(t === "15J") return 15;
+      if(t === "30J") return 30;
+      if(t === "45J") return 45;
+      return 0;
+    }
+    function todayIso(){
+      const d = new Date();
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth()+1).padStart(2,"0");
+      const dd = String(d.getDate()).padStart(2,"0");
+      return `${dd}/${mm}/${yyyy}`;
+    }
+    function addDaysLabel(ddmmyyyy, days){
+      const [dd,mm,yy] = String(ddmmyyyy).split("/").map(x=>parseInt(x,10));
+      const d = new Date(yy, (mm||1)-1, dd||1);
+      d.setDate(d.getDate() + (Number(days)||0));
+      const out = String(d.getDate()).padStart(2,"0") + "/" + String(d.getMonth()+1).padStart(2,"0") + "/" + d.getFullYear();
+      return out;
+    }
 
-    function computeTotal(lines){
-      if(!Array.isArray(lines)) return 0;
-      return lines.reduce((s,l)=> s + (Number(l?.qty)||0) * (Number(l?.unitPrice)||0), 0);
+    function pickDate(v){
+      const s = String(v||"").trim();
+      return s || "";
+    }
+    function getStayPeriod(d){
+      const a = pickDate(d?.arrivalDateKey || d?.arrivalDate || d?.checkinDate || d?.arrival || d?.dateArrivee);
+      const b = pickDate(d?.departureDateKey || d?.departureDate || d?.checkoutDate || d?.departure || d?.dateDepart);
+      if(a && b) return { from:a, to:b, label:`Du ${a} au ${b}` };
+      if(a && !b) return { from:a, to:"", label:`À partir du ${a}` };
+      if(!a && b) return { from:"", to:b, label:`Jusqu’au ${b}` };
+      return { from:"", to:"", label:"—" };
+    }
+
+    // Pénalités (fallback identique au devis-event)
+    function getPenaltyTemplate(mode){
+      const m = String(mode||"").toUpperCase();
+      if(m === "B2B"){
+        return "Pénalités de retard : 3 fois le taux d’intérêt légal en vigueur + indemnité forfaitaire de recouvrement de 40 € .";
+      }
+      if(m === "B2C"){
+        return "Pénalités de retard : 3 fois le taux d’intérêt légal en vigueur.";
+      }
+      return "";
     }
 
     async function ensureInvoiceNumber(uid, year){
@@ -551,8 +600,7 @@
       });
 
       const padded = String(next).padStart(4,"0");
-      // ✅ format cohérent avec ton existant : FA2026-0001
-      return `FA${year}-${padded}`;
+      return `F${year}-${padded}`;
     }
 
     function applyLogoFromProfile(profile){
@@ -563,17 +611,54 @@
         logoImg.src = url;
         logoImg.style.display = "block";
         logoFallback.style.display = "none";
+      }else{
+        logoImg.style.display = "none";
+        logoFallback.style.display = "block";
+      }
 
+      if(url){
         bizLogoImg.src = url;
         bizLogoImg.style.display = "block";
         bizLogoFallback.style.display = "none";
       }else{
-        logoImg.style.display = "none";
-        logoFallback.style.display = "block";
-
         bizLogoImg.style.display = "none";
         bizLogoFallback.style.display = "block";
       }
+    }
+
+    // Snapshot client = owners OU snapshot event (facturation)
+    function getOwnerSnapshot(){
+      const d = eventData || {};
+
+      const snapName  = (d.ownerName || "").trim();
+      const snapEmail = (d.ownerEmail || "").trim();
+      const snapPhone = (d.ownerPhone || "").trim();
+
+      const snapA1 = (d.ownerAddress1 || "").trim();
+      const snapA2 = (d.ownerAddress2 || "").trim();
+      const snapZip = (d.ownerZip || "").trim();
+      const snapCity = (d.ownerCity || "").trim();
+
+      const o = ownerUser || {};
+      const oName  = (o.fullname || "").trim();
+      const oEmail = (o.email || "").trim();
+      const oPhone = (o.phone || "").trim();
+
+      const oA1 = (o.address1 || "").trim();
+      const oA2 = (o.address2 || "").trim();
+      const oZip = (o.zip || "").trim();
+      const oCity = (o.city || "").trim();
+
+      const name = oName || snapName || "—";
+      const email = oEmail || snapEmail || "";
+      const phone = oPhone || snapPhone || "";
+
+      const address1 = oA1 || snapA1 || "";
+      const address2 = oA2 || snapA2 || "";
+      const zip = oZip || snapZip || "";
+      const city = oCity || snapCity || "";
+
+      return { name, email, phone, address1, address2, zip, city };
     }
 
     function renderBusinessHeader(){
@@ -607,32 +692,6 @@
       applyLogoFromProfile(profileData);
     }
 
-    // Client = owners (prioritaire) sinon snapshot event
-    function getOwnerSnapshot(){
-      const d = eventData || {};
-
-      const snapName  = (d.ownerName || "").trim();
-      const snapA1 = (d.ownerAddress1 || "").trim();
-      const snapA2 = (d.ownerAddress2 || "").trim();
-      const snapZip = (d.ownerZip || "").trim();
-      const snapCity = (d.ownerCity || "").trim();
-
-      const o = ownerUser || {};
-      const oName  = (o.fullname || "").trim();
-      const oA1 = (o.address1 || "").trim();
-      const oA2 = (o.address2 || "").trim();
-      const oZip = (o.zip || "").trim();
-      const oCity = (o.city || "").trim();
-
-      const name = oName || snapName || "—";
-      const address1 = oA1 || snapA1 || "";
-      const address2 = oA2 || snapA2 || "";
-      const zip = oZip || snapZip || "";
-      const city = oCity || snapCity || "";
-
-      return { name, address1, address2, zip, city };
-    }
-
     function renderClientHeader(){
       const c = getOwnerSnapshot();
       clientNameEl.textContent = (c.name || "—").trim();
@@ -650,18 +709,25 @@
     function renderLinesAndTotals(){
       const d = eventData || {};
       const bp = (profileData?.businessProfile || {});
-      const vatEnabled = !!bp.vat?.enabled; // micro => false
 
+      const tvaEnabled = !!bp.vat?.enabled;           // micro => false
+      const tvaRate = Number.isFinite(Number(bp.vat?.rate)) ? Number(bp.vat.rate) : 0;
+
+      thTVA.style.display = tvaEnabled ? "" : "none";
       linesTbody.innerHTML = "";
       linesCards.innerHTML = "";
 
       const lines = Array.isArray(d.lines) ? d.lines : [];
+
       for(const l of lines){
         const label = l?.label || "Ligne";
         const qty = Number(l?.qty)||0;
         const unit = l?.unit || "unité";
         const up = Number(l?.unitPrice)||0;
-        const total = qty * up;
+
+        const lineHT = qty * up;
+        const lineTVA = tvaEnabled ? (lineHT * tvaRate) : 0;
+        const lineTotal = lineHT + lineTVA;
 
         const tr = document.createElement("tr");
         tr.innerHTML = `
@@ -669,7 +735,8 @@
           <td class="num">${esc(qty)}</td>
           <td>${esc(unit)}</td>
           <td class="num">${esc(fmtMoney(up))}</td>
-          <td class="num">${esc(fmtMoney(total))}</td>
+          <td class="num" style="${tvaEnabled ? "" : "display:none;"}">${tvaEnabled ? esc(fmtMoney(lineTVA)) : ""}</td>
+          <td class="num">${esc(fmtMoney(lineTotal))}</td>
         `;
         linesTbody.appendChild(tr);
 
@@ -680,114 +747,124 @@
           <div class="g">
             <div><b>Qté</b> : ${esc(qty)}</div>
             <div><b>Unité</b> : ${esc(unit)}</div>
-            <div><b>PU</b> : ${esc(fmtMoney(up))}</div>
-            <div><b>Total</b> : ${esc(fmtMoney(total))}</div>
+            <div><b>PU HT</b> : ${esc(fmtMoney(up))}</div>
+            <div><b>Total TTC</b> : ${esc(fmtMoney(lineTotal))}</div>
           </div>
         `;
         linesCards.appendChild(card);
       }
 
-      const ttc = computeTotal(lines);
+      const totals = computeTotals(lines, tvaEnabled, tvaRate);
 
       const html = [];
-      html.push(`<div class="r"><span>Total TTC</span><span>${esc(fmtMoney(ttc))}</span></div>`);
-
-      // micro => mention TVA non applicable
-      if(!vatEnabled){
-        const txt = String(bp?.tvaExemptionText || bp?.vat?.tvaExemptionText || "").trim() || "TVA non applicable";
-        html.push(`<div class="mutedLine">${esc(txt)}</div>`);
+      if(tvaEnabled){
+        html.push(`<div class="r"><span>Total HT</span><span>${esc(fmtMoney(totals.ht))}</span></div>`);
+        html.push(`<div class="r"><span>TVA (${Math.round(tvaRate*100)}%)</span><span>${esc(fmtMoney(totals.tva))}</span></div>`);
+        html.push(`<div class="r"><span>Total TTC</span><span>${esc(fmtMoney(totals.ttc))}</span></div>`);
+      }else{
+        html.push(`<div class="r"><span>Total TTC</span><span>${esc(fmtMoney(totals.ttc))}</span></div>`);
+        const ex = String(bp?.tvaExemptionText || "TVA non applicable").trim();
+        if(ex) html.push(`<div class="mutedLine">${esc(ex)}</div>`);
       }
-
       totalsBox.innerHTML = html.join("");
     }
 
     function renderPaymentInfo(){
       const d = eventData || {};
 
-      // reprend facture si déjà, sinon devis
+      // reprend la facture si déjà créée, sinon reprend le devis
       const mode = String(d?.invoicePaymentMode || d?.quotePaymentMode || "VIREMENT").toUpperCase();
       const term = String(d?.invoicePaymentTerm || d?.quotePaymentTerm || "RECEPTION").toUpperCase();
+
+      const issued = String(d?.invoiceIssuedDate || todayIso()).trim();
+      const dueDays = termToDays(term);
+      const dueDate = addDaysLabel(issued, dueDays);
 
       const lines = [];
       lines.push(`<div class="line"><b>Mode</b> : ${esc(modeLabel(mode))}</div>`);
       lines.push(`<div class="line"><b>Délai</b> : ${esc(dueLabel(term))}</div>`);
+      lines.push(`<div class="line"><b>Échéance</b> : ${esc(dueDate)}</div>`);
       paymentKv.innerHTML = lines.join("");
     }
 
     function renderConditions(){
       const d = eventData || {};
       const bp = (profileData?.businessProfile || {});
-      const cond = (bp?.conditions || {});
-      const cancelPct = Number.isFinite(Number(cond?.cancellationPercent)) ? Number(cond.cancellationPercent) : 30;
 
-      const quoteRef = String(d?.quoteNumber || "").trim() || "—";
-
-      const issued = String(d?.invoiceIssuedDate || todayIso()).trim();
+      const mode = String(d?.invoicePaymentMode || d?.quotePaymentMode || "VIREMENT").toUpperCase();
       const term = String(d?.invoicePaymentTerm || d?.quotePaymentTerm || "RECEPTION").toUpperCase();
+      const issued = String(d?.invoiceIssuedDate || todayIso()).trim();
       const dueDate = addDaysLabel(issued, termToDays(term));
 
-      const lines = [];
-      lines.push(`<div class="line"><b>Référence devis</b> : ${esc(quoteRef)}</div>`);
-      lines.push(`<div class="line"><b>Échéance</b> : ${esc(dueDate)} (${esc(dueLabel(term))})</div>`);
-      lines.push(`<div class="line"><b>Annulation</b> : ${esc(cancelPct)} % du montant si annulation moins de 48 h avant l’intervention</div>`);
+      const cancelPct = Number.isFinite(Number(bp?.conditions?.cancellationPercent))
+        ? Number(bp.conditions.cancellationPercent)
+        : 30;
 
+      const quoteRef = String(d?.quoteNumber || "").trim();
+
+      const lines = [];
+      if(quoteRef) lines.push(`<div class="line"><b>Référence devis</b> : ${esc(quoteRef)}</div>`);
+      lines.push(`<div class="line"><b>Échéance de paiement</b> : ${esc(dueDate)} (${esc(dueLabel(term))})</div>`);
+      lines.push(`<div class="line"><b>Annulation</b> : ${esc(cancelPct)} % du montant en cas d’annulation moins de 48 h avant l’intervention</div>`);
       conditionsKv.innerHTML = lines.join("");
+
+      // (mode est déjà affiché dans paiement, mais on le garde si tu veux : actuellement non)
+      void(mode);
     }
 
     function renderBank(){
       const bp = (profileData?.businessProfile || {});
-      const bank = (bp?.bank || {});
-      const name = String(bank?.name || "").trim();
-      const iban = String(bank?.iban || "").trim();
-      const bic  = String(bank?.bic || "").trim();
+      const bank = (bp.bank || {});
+      const name = String(bank.name || "").trim();
+      const iban = String(bank.iban || "").trim();
+      const bic  = String(bank.bic  || "").trim();
 
       const lines = [];
       if(name) lines.push(`<div class="line"><b>Banque</b> : ${esc(name)}</div>`);
       if(iban) lines.push(`<div class="line"><b>IBAN</b> : ${esc(iban)}</div>`);
       if(bic)  lines.push(`<div class="line"><b>BIC</b> : ${esc(bic)}</div>`);
-
       bankKv.innerHTML = lines.length ? lines.join("") : `<div class="line">—</div>`;
     }
 
-    function penaltyTemplate(mode){
-      const m = String(mode||"").toUpperCase();
-      if(m === "B2B"){
-        return "Pénalités de retard : 3 fois le taux d’intérêt légal en vigueur + indemnité forfaitaire de recouvrement de 40 €.";
-      }
-      return "Pénalités de retard : 3 fois le taux d’intérêt légal en vigueur.";
-    }
-
-    function renderPenalties(){
+    function renderPenalty(){
       const d = eventData || {};
-      const txt = String(d?.invoicePenaltyText || d?.quotePenaltyText || "").trim();
       const mode = String(d?.invoicePenaltyMode || d?.quotePenaltyMode || "B2C").toUpperCase();
-
-      const finalText = txt || penaltyTemplate(mode);
-      penaltiesKv.innerHTML = `<div class="line">${esc(finalText)}</div>`;
+      const text = String(d?.invoicePenaltyText || d?.quotePenaltyText || getPenaltyTemplate(mode)).trim();
+      penaltyKv.innerHTML = `<div class="line">${esc(text || "—")}</div>`;
     }
 
     function renderRecap(){
       const d = eventData || {};
+      const period = getStayPeriod(d);
 
-      const invNum = String(d.invoiceNumber || "").trim();
-      docBannerInner.textContent = `FACTURE N° ${invNum || "—"}`;
-      statusBadge.textContent = invNum ? invoiceStatusLabel(d.invoiceStatus) : "À CRÉER (numéro manquant)";
+      const homeAddr = (d.homeAddress || "").trim();
+      const homeZip = (d.homeZip || d.zip || d.postalCode || "").toString().trim();
+      const homeCity = (d.homeCity || "").trim();
+      const homeAddrFull = [homeAddr, [homeZip, homeCity].filter(Boolean).join(" ")].filter(Boolean).join(" • ");
 
-      if(invoiceNotesEl.value === "" && d.invoiceNotes) invoiceNotesEl.value = d.invoiceNotes;
-
-      const homeAddr = String(d.homeAddress || "").trim();
-      const homeZip  = String(d.homeZip || "").trim();
-      const homeCity = String(d.homeCity || "").trim();
-
-      const a = String(d?.arrivalDateKey || "").trim();
-      const b = String(d?.departureDateKey || "").trim();
-      const period = (a || b) ? `${a || "—"} → ${b || "—"}` : "—";
+      const c = getOwnerSnapshot();
 
       const recap = [];
-      recap.push(`<div class="line"><b>Adresse logement</b> : ${esc(homeAddr || "—")}</div>`);
-      recap.push(`<div class="line"><b>CP / Ville</b> : ${esc([homeZip, homeCity].filter(Boolean).join(" ") || "—")}</div>`);
-      recap.push(`<div class="line"><b>Période</b> : ${esc(period)}</div>`);
+      recap.push(`<div class="line"><b>Client</b> : ${esc(c.name || "—")}</div>`);
+      const clientAddr = [c.address1, c.address2, [c.zip, c.city].filter(Boolean).join(" ")].filter(Boolean).join(" • ");
+      recap.push(`<div class="line"><b>Adresse client</b> : ${esc(clientAddr || "—")}</div>`);
+      if(homeAddrFull) recap.push(`<div class="line"><b>Adresse logement</b> : ${esc(homeAddrFull)}</div>`);
+      recap.push(`<div class="line"><b>Période</b> : ${esc(period.label)}</div>`);
       recapKv.innerHTML = recap.join("");
+
+      const invNum = String(d.invoiceNumber || "").trim();
+      const hasInvoice = !!invNum;
+
+      const qs = String(d?.quoteStatus || "").toUpperCase().trim();
+      const canInvoice = (qs === "ACCEPTED");
+
+      statusBadge.textContent = hasInvoice
+        ? invoiceStatusLabel(d.invoiceStatus)
+        : (canInvoice ? "PRÊT À FACTURER (devis accepté)" : "EN ATTENTE (devis non accepté)");
+
+      docBannerInner.textContent = `FACTURE N° ${invNum || "—"}`;
+
+      if(invoiceNotesEl.value === "" && d.invoiceNotes) invoiceNotesEl.value = d.invoiceNotes;
 
       renderBusinessHeader();
       renderClientHeader();
@@ -795,13 +872,11 @@
       renderPaymentInfo();
       renderConditions();
       renderBank();
-      renderPenalties();
+      renderPenalty();
 
-      // buttons
-      const hasInvoice = !!invNum;
+      // Buttons
       saveBtn.disabled = !eventRef;
       previewBtn.disabled = !(eventRef && hasInvoice);
-      confirmBtn.disabled = !(eventRef && hasInvoice && canConfirm(d));
     }
 
     async function loadProfile(uid){
@@ -841,7 +916,10 @@
 
       const d = eventData || {};
       const ownerEmail = normalizeEmail(d.ownerEmail || "");
-      const ownerDocId = String(d.ownerUid || "").trim() || String(d.ownerDocId || "").trim();
+
+      const ownerDocId =
+        String(d.ownerUid || "").trim() ||
+        String(d.ownerDocId || "").trim();
 
       if(ownerDocId){
         try{
@@ -877,6 +955,8 @@
       }
     }
 
+    const eventId = getParam("eventId");
+
     async function loadEvent(){
       if(!eventId) throw new Error("eventId manquant dans l’URL. Exemple : facture.html?eventId=XXXX");
       eventRef = doc(db, "events", eventId);
@@ -895,10 +975,8 @@
 
     function lockUI(locked){
       const d = eventData || {};
-      const hasInvoice = !!String(d.invoiceNumber||"").trim();
       saveBtn.disabled = !!locked || !eventRef;
-      previewBtn.disabled = !!locked || !eventRef || !hasInvoice;
-      confirmBtn.disabled = !!locked || !eventRef || !hasInvoice || !canConfirm(d);
+      previewBtn.disabled = !!locked || !eventRef || !String(d.invoiceNumber||"").trim();
       saveBtn.style.opacity = locked ? "0.75" : "1";
     }
 
@@ -913,7 +991,6 @@
 
       lockUI(true);
       try{
-        // garde-fou : facture uniquement si devis accepté
         const qs = String(eventData?.quoteStatus || "").toUpperCase().trim();
         if(qs !== "ACCEPTED"){
           throw new Error("Impossible : le devis doit être ACCEPTÉ avant facturation.");
@@ -924,40 +1001,46 @@
 
         const patch = {
           invoiceNotes: (invoiceNotesEl.value || "").trim(),
-          commercialStatus: "FACTURE",
-          commercialUpdatedAt: serverTimestamp(),
           invoiceUpdatedAt: serverTimestamp()
         };
 
-        // 1ère création -> numéro + brouillon + snapshot paiement + snapshot pénalités
+        // 1ère création -> numéro + SENT auto + snapshot paiement + snapshot pénalités
         if(!invoiceNumber){
           invoiceNumber = await ensureInvoiceNumber(currentUser.uid, year);
 
           patch.invoiceNumber = invoiceNumber;
-          patch.invoiceStatus = "DRAFT";
+
+          // ✅ statut "envoyée" automatique
+          patch.invoiceStatus = "SENT";
+          patch.invoiceSentAt = serverTimestamp();
+
           patch.invoiceIssuedAt = serverTimestamp();
-          patch.invoiceIssuedDate = String(eventData?.invoiceIssuedDate || todayIso()).trim() || todayIso();
+          patch.invoiceIssuedDate = todayIso();
 
-          patch.invoicePaymentMode = String(eventData?.invoicePaymentMode || eventData?.quotePaymentMode || "VIREMENT").toUpperCase();
-          patch.invoicePaymentTerm = String(eventData?.invoicePaymentTerm || eventData?.quotePaymentTerm || "RECEPTION").toUpperCase();
+          patch.invoicePaymentMode = String(eventData?.quotePaymentMode || "VIREMENT").toUpperCase();
+          patch.invoicePaymentTerm = String(eventData?.quotePaymentTerm || "RECEPTION").toUpperCase();
 
-          patch.invoicePenaltyMode = String(eventData?.invoicePenaltyMode || eventData?.quotePenaltyMode || "B2C").toUpperCase();
-          patch.invoicePenaltyText = String(eventData?.invoicePenaltyText || eventData?.quotePenaltyText || "").trim();
+          patch.invoicePenaltyMode = String(eventData?.quotePenaltyMode || "B2C").toUpperCase();
+          patch.invoicePenaltyText = String(eventData?.quotePenaltyText || getPenaltyTemplate(patch.invoicePenaltyMode)).trim();
+
+          // cohérence commercial
+          patch.commercialStatus = "FACTURE_ENVOYEE";
+          patch.commercialUpdatedAt = serverTimestamp();
         }else{
-          // maintien statut actuel
+          // si déjà numérotée, on garde le statut existant (sauf PAID/CANCELLED gérés plus bas)
           const inv = String(eventData?.invoiceStatus || "").toUpperCase().trim();
-          patch.invoiceStatus = inv || "DRAFT";
+          patch.invoiceStatus = inv || "SENT";
 
-          // complète si manque
           patch.invoicePaymentMode = String(eventData?.invoicePaymentMode || eventData?.quotePaymentMode || "VIREMENT").toUpperCase();
           patch.invoicePaymentTerm = String(eventData?.invoicePaymentTerm || eventData?.quotePaymentTerm || "RECEPTION").toUpperCase();
-          patch.invoiceIssuedDate = String(eventData?.invoiceIssuedDate || todayIso()).trim() || todayIso();
 
           patch.invoicePenaltyMode = String(eventData?.invoicePenaltyMode || eventData?.quotePenaltyMode || "B2C").toUpperCase();
-          patch.invoicePenaltyText = String(eventData?.invoicePenaltyText || eventData?.quotePenaltyText || "").trim();
+          patch.invoicePenaltyText = String(eventData?.invoicePenaltyText || eventData?.quotePenaltyText || getPenaltyTemplate(patch.invoicePenaltyMode)).trim();
+
+          patch.invoiceIssuedDate = String(eventData?.invoiceIssuedDate || todayIso()).trim();
         }
 
-        // ne jamais rétrograder PAID/CANCELLED
+        // si déjà payée/annulée, on ne rétrograde pas
         const invNow = String(eventData?.invoiceStatus || "").toUpperCase().trim();
         if(invNow === "PAID" || invNow === "CANCELLED"){
           patch.invoiceStatus = invNow;
@@ -968,39 +1051,9 @@
         const snap2 = await getDoc(eventRef);
         eventData = { id: snap2.id, ...(snap2.data()||{}) };
 
-        showAlert("✅ Facture enregistrée.", true);
+        showAlert("✅ Facture enregistrée (envoyée).", true);
+
         await loadOwner();
-        renderRecap();
-      }catch(err){
-        console.error(err);
-        showAlert("Erreur : " + (err?.message || "inconnue"));
-      }finally{
-        lockUI(false);
-      }
-    });
-
-    confirmBtn.addEventListener("click", async ()=>{
-      hideAlert();
-      if(!eventRef) return showAlert("Event non chargé.");
-
-      const d = eventData || {};
-      if(!String(d.invoiceNumber||"").trim()) return showAlert("Crée la facture (numéro) avant.");
-      if(!canConfirm(d)) return showAlert("⛔ Action impossible : la facture doit être en brouillon.");
-
-      lockUI(true);
-      try{
-        await updateDoc(eventRef, {
-          invoiceStatus: "SENT",
-          invoiceSentAt: serverTimestamp(),
-          commercialStatus: "FACTURE_ENVOYEE",
-          commercialUpdatedAt: serverTimestamp(),
-          invoiceNotes: (invoiceNotesEl.value || "").trim()
-        });
-
-        const snap2 = await getDoc(eventRef);
-        eventData = { id: snap2.id, ...(snap2.data()||{}) };
-
-        showAlert("✅ Statut : facture envoyée.", true);
         renderRecap();
       }catch(err){
         console.error(err);
