@@ -1,4 +1,4 @@
-<!-- docs/facture-apercu.html (CLONE devis-apercu.html -> lit events + owners, bloc Client = adresse de facturation, pénalités = event.quotePenaltyText ou template, TVA selon businessProfile, imprime/PDF, pas de doublon échéance) -->
+<!-- docs/facture-apercu.html (FIX: coordonnées bancaires + pas d'échéance en Conditions + impression 2 colonnes Société/Client) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -243,6 +243,10 @@
 
       .docTitle{ margin-top:6px !important; }
       .grid2{ gap:6px !important; }
+
+      /* ✅ FORCER 2 COLONNES EN IMPRESSION */
+      .grid2{ grid-template-columns: 1fr 1fr !important; }
+
       .summary{ gap:6px !important; }
       .box, .totalBox, .payBox{ padding:6px 8px !important; }
       table{ margin-top:8px !important; }
@@ -346,7 +350,6 @@
           <h3>Paiement</h3>
           <div class="line" id="payMode">Mode : —</div>
           <div class="line" id="payTerm">Délai : —</div>
-          <!-- ✅ pas d'échéance ici (doublon). Elle est dans le header et dans Conditions -->
         </div>
       </div>
 
@@ -357,8 +360,16 @@
         <div class="line" id="cond3">—</div>
       </div>
 
-      <div class="sectionTitle">Pénalités</div>
-      <div class="box">
+      <!-- ✅ COORDONNÉES BANCAIRES -->
+      <div class="sectionTitle" id="bankTitle">Coordonnées bancaires</div>
+      <div class="box" id="bankBox">
+        <div class="line" id="bankLine1">—</div>
+        <div class="line" id="bankLine2"></div>
+        <div class="line" id="bankLine3"></div>
+      </div>
+
+      <div class="sectionTitle" id="penTitle">Pénalités</div>
+      <div class="box" id="penBox">
         <div class="line" id="penaltyText">—</div>
       </div>
 
@@ -379,10 +390,9 @@
     const logoFallback = document.getElementById("logoFallback");
 
     const companyNameEl = document.getElementById("companyName");
-    const companySubEl  = document.getElementById("companySub");
 
     const docTitleEl = document.getElementById("docTitle");
-    const docMetaEl  = document.getElementById("docMeta"); // masqué
+    const docMetaEl  = document.getElementById("docMeta");
     const metaRightEl = document.getElementById("metaRight");
 
     const soc1 = document.getElementById("socLine1");
@@ -409,7 +419,16 @@
     const cond2 = document.getElementById("cond2");
     const cond3 = document.getElementById("cond3");
 
+    const bankTitle = document.getElementById("bankTitle");
+    const bankBox   = document.getElementById("bankBox");
+    const bank1 = document.getElementById("bankLine1");
+    const bank2 = document.getElementById("bankLine2");
+    const bank3 = document.getElementById("bankLine3");
+
     const penaltyTextEl = document.getElementById("penaltyText");
+    const penTitle = document.getElementById("penTitle");
+    const penBox = document.getElementById("penBox");
+
     const footerEl = document.getElementById("footer");
 
     function showError(msg){
@@ -523,7 +542,6 @@
       const phone = String(bp.phone || "").trim();
 
       companyNameEl.textContent = companyName || "Conciergerie";
-      companySubEl.textContent = "";
 
       if(logoUrl){
         logoImg.src = logoUrl;
@@ -554,7 +572,6 @@
     }
 
     function computeInvoiceDates(eventData){
-      // émission : invoiceIssuedDate si présent sinon aujourd'hui
       const issuedStr = String(eventData?.invoiceIssuedDate || "").trim();
       const issuedDate = parseDDMMYYYY(issuedStr) || new Date();
       const issuedLabel = issuedStr || ddmmyyyy(issuedDate);
@@ -566,7 +583,6 @@
 
     function renderDocHeader(eventData){
       docTitleEl.textContent = `FACTURE N° ${eventData?.invoiceNumber || "—"}`;
-
       const { issuedLabel, due } = computeInvoiceDates(eventData);
 
       metaRightEl.innerHTML = `
@@ -586,10 +602,8 @@
       homeLine2.textContent = `Période : ${getStayPeriod(d)}`;
     }
 
-    // ===== OWNER (facturation) : owners OU snapshot event =====
     async function lookupOwnerByEmailInOwners(conciergerieUid, emailLower){
       if(!emailLower) return null;
-
       const qO = query(
         collection(db,"owners"),
         where("conciergerieUid", "==", String(conciergerieUid)),
@@ -614,9 +628,7 @@
     }
 
     async function loadOwnerForEvent(conciergerieUid, d){
-      const ownerDocId =
-        String(d?.ownerUid || "").trim() ||
-        String(d?.ownerDocId || "").trim();
+      const ownerDocId = String(d?.ownerUid || "").trim() || String(d?.ownerDocId || "").trim();
 
       if(ownerDocId){
         try{
@@ -723,37 +735,66 @@
       payModeEl.textContent = `Mode : ${modeLabel(mode)}`;
       payTermEl.textContent = `Délai : ${termLabel(term)}`;
 
-      const { due } = computeInvoiceDates(eventData);
-
       const cancelPct = Number.isFinite(Number(businessProfile?.conditions?.cancellationPercent))
         ? Number(businessProfile.conditions.cancellationPercent)
         : 30;
 
+      // ✅ SUPPRIMÉ: "Échéance de paiement : 10/02/2026 (À réception)" -> tu ne veux plus cette ligne
       cond1.innerHTML = `<b>Référence devis</b> : ${esc(eventData?.quoteNumber || "—")}`;
-      cond2.innerHTML = `<b>Échéance de paiement</b> : ${esc(ddmmyyyy(due))} (${esc(termLabel(term))})`;
-      cond3.innerHTML = `<b>Annulation</b> : ${esc(String(cancelPct))} % du montant en cas d’annulation moins de 48 h avant l’intervention.`;
+      cond2.innerHTML = `<b>Annulation</b> : ${esc(String(cancelPct))} % du montant en cas d’annulation moins de 48 h avant l’intervention.`;
+      cond3.innerHTML = `&nbsp;`;
+    }
+
+    function renderBank(businessProfile){
+      const bank = (businessProfile?.bank || businessProfile?.banking || businessProfile?.bankDetails || {});
+      const holder = String(bank.accountHolder || bank.holder || businessProfile?.companyName || "").trim();
+      const bankName = String(bank.bankName || bank.name || "").trim();
+      const iban = String(bank.iban || "").trim();
+      const bic = String(bank.bic || bank.swift || "").trim();
+
+      // Fallbacks possibles si tu stockes ailleurs
+      const iban2 = iban || String(businessProfile?.iban || "").trim();
+      const bic2  = bic  || String(businessProfile?.bic  || businessProfile?.swift || "").trim();
+
+      const hasAny = !!(holder || bankName || iban2 || bic2);
+
+      if(!hasAny){
+        bankTitle.style.display = "none";
+        bankBox.style.display = "none";
+        return;
+      }
+
+      bankTitle.style.display = "";
+      bankBox.style.display = "";
+
+      const l1 = [holder ? `Titulaire : ${holder}` : "", bankName ? `Banque : ${bankName}` : ""].filter(Boolean).join(" • ");
+      bank1.textContent = l1 || "—";
+
+      bank2.textContent = iban2 ? `IBAN : ${iban2}` : "";
+      bank2.style.display = iban2 ? "" : "none";
+
+      bank3.textContent = bic2 ? `BIC : ${bic2}` : "";
+      bank3.style.display = bic2 ? "" : "none";
     }
 
     function renderPenalty(eventData){
       const candidates = [
-        eventData?.invoicePenaltyText,     // optionnel plus tard
+        eventData?.invoicePenaltyText,
         eventData?.quotePenaltyText,
-        eventData?.penaltyText,
-        eventData?.commercialPenaltyText
+        eventData?.penaltyText
       ].map(v => String(v || "").trim()).filter(Boolean);
 
       if(candidates.length){
         penaltyTextEl.textContent = candidates[0];
+        penTitle.style.display = "";
+        penBox.style.display = "";
         return;
       }
 
-      const mode = String(
-        eventData?.quotePenaltyMode ||
-        eventData?.penaltyMode ||
-        "B2C"
-      ).trim().toUpperCase();
-
+      const mode = String(eventData?.quotePenaltyMode || "B2C").trim().toUpperCase();
       penaltyTextEl.textContent = getPenaltyTemplate(mode);
+      penTitle.style.display = "";
+      penBox.style.display = "";
     }
 
     printBtn.addEventListener("click", ()=> window.print());
@@ -770,12 +811,10 @@
         return;
       }
 
-      // retour liste factures
       backLink.href = `factures-liste.html`;
 
       try{
-        const eventRef = doc(db, "events", eventId);
-        const es = await getDoc(eventRef);
+        const es = await getDoc(doc(db, "events", eventId));
         if(!es.exists()){
           showError("Facture introuvable (event).");
           return;
@@ -787,7 +826,6 @@
           return;
         }
 
-        // preview facture => nécessite un invoiceNumber
         if(!String(eventData.invoiceNumber || "").trim()){
           showError("Numéro de facture manquant. Enregistre la facture avant l’aperçu.");
           return;
@@ -798,15 +836,16 @@
         const profile = userSnap.exists() ? (userSnap.data()||{}) : {};
         const bp = applyBusinessProfile(profile);
 
-        // Owner (facturation)
+        // Client
         const ownerFromOwners = await loadOwnerForEvent(user.uid, eventData);
         renderClientHeader(ownerFromOwners, eventData);
 
-        // Header / logement / lignes / conditions / pénalités
+        // Rendu
         renderDocHeader(eventData);
         renderHomeAndPeriod(eventData);
         renderLines(eventData, bp || {});
         renderPaymentAndConditions(eventData, bp || {});
+        renderBank(bp || {});
         renderPenalty(eventData);
 
       }catch(e){
