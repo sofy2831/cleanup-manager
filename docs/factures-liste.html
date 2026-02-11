@@ -1,4 +1,4 @@
-<!-- docs/factures-liste.html (FINAL — UI alignée sur devis-liste.html) -->
+<!-- docs/factures-liste.html (PATCH — sans déconnexion / sans CSV + actions Ouvrir/Créer/Avoir/Refaire) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -125,10 +125,9 @@
     }
     .alert.ok{ border-left-color: var(--ok); }
 
-    /* toolbar alignée sur devis-liste */
     .toolbar{
       display:grid;
-      grid-template-columns: 220px 1fr auto;
+      grid-template-columns: 220px 1fr;
       gap:10px;
       align-items:center;
       min-width:0;
@@ -197,6 +196,10 @@
       border-color:transparent;
       box-shadow:0 12px 24px rgba(0,0,0,0.10);
     }
+    .btn.danger{
+      color: var(--bad);
+      border-color: rgba(179,38,30,0.30);
+    }
     .btn:disabled{ opacity:.45; cursor:not-allowed; }
 
     .badge{
@@ -215,7 +218,6 @@
     .badge.ok{ border-color: rgba(27,143,77,0.35); color: var(--ok); }
     .badge.bad{ border-color: rgba(179,38,30,0.30); color: var(--bad); }
 
-    /* 1 ligne 6 colonnes (même logique que devis-liste) */
     .line6{
       display:grid;
       grid-template-columns: 110px 160px 1.2fr 1.2fr 1.1fr 130px;
@@ -322,7 +324,7 @@
   <div class="page">
     <div class="topbar">
       <a class="pill" href="compta.html">← Retour</a>
-      <button class="pill" id="logoutBtn" type="button">Déconnexion</button>
+      <span></span>
     </div>
 
     <div class="logo-title">
@@ -330,11 +332,11 @@
       <h1>Factures</h1>
     </div>
 
-    <div class="subtitle">Suivi des factures • export CSV</div>
-     <div class="helloLine" id="helloLine">Bonjour,</div>
-    <div class="emailLine" id="companyLine">—</div>
-    
-        <div class="wrap">
+    <div class="subtitle">Suivi des factures</div>
+    <div class="helloLine" id="helloLine">Bonjour,</div>
+    <div class="emailLine" id="emailLine">—</div>
+
+    <div class="wrap">
       <div class="alert" id="alertBox"></div>
 
       <div class="card">
@@ -351,8 +353,6 @@
             <span class="s-ico">🔎</span>
             <input class="input" id="searchInput" type="search" placeholder="Rechercher (n° facture, client, logement…)" autocomplete="off" />
           </div>
-
-          <button class="btn primary" id="exportBtn" type="button">Exporter CSV</button>
         </div>
       </div>
 
@@ -370,18 +370,16 @@
 
   <script type="module">
     import { auth, db } from "./firebase-init.js";
-    import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+    import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import { collection, query, where, orderBy, limit, getDocs } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const helloLine = document.getElementById("helloLine");
     const emailLine = document.getElementById("emailLine");
-    const logoutBtn = document.getElementById("logoutBtn");
     const alertBox = document.getElementById("alertBox");
 
     const filterStatus = document.getElementById("filterStatus");
     const searchInput = document.getElementById("searchInput");
     const listBox = document.getElementById("listBox");
-    const exportBtn = document.getElementById("exportBtn");
 
     let all = [];
 
@@ -411,7 +409,6 @@
       return n.toLocaleString("fr-FR",{minimumFractionDigits:2, maximumFractionDigits:2})+" €";
     }
 
-    // date FR robuste : Timestamp / Date / YYYY-MM-DD / DD/MM/YYYY
     function fmtDateFR(x){
       if(!x) return "—";
       try{
@@ -439,7 +436,6 @@
     }
 
     function getInvoiceTotal(ev){
-      // on essaie plusieurs champs possibles, sinon calc sur lignes
       const candidates = [
         ev?.invoiceTotal, ev?.totalInvoice, ev?.invoiceAmount, ev?.invoiceTTC, ev?.totalTTC, ev?.total
       ];
@@ -462,7 +458,6 @@
     }
 
     function normalizeStatusFromCommercial(ev){
-      // compat vieux flow
       const cs = String(ev?.commercialStatus||"").toUpperCase().trim();
       if(cs === "PAYE") return "PAID";
       if(cs === "FACTURE_ENVOYEE") return "SENT";
@@ -502,7 +497,6 @@
     }
 
     function getCreatedAt(x){
-      // createdAt (Timestamp) sinon dateKey sinon date
       if(x?.createdAt?.toDate?.()) return x.createdAt.toDate().toLocaleDateString("fr-FR");
       if(x?.createdAt) return fmtDateFR(x.createdAt);
       if(x?.dateKey) return String(x.dateKey);
@@ -514,6 +508,29 @@
       const n = String(x?.invoiceNumber || "").trim();
       if(n) return n;
       return "FA—";
+    }
+
+    // --- AVOIR / REFAIRE : on supporte plusieurs champs possibles, sans casser ton modèle ---
+    function getAvoirRef(ev){
+      // id direct d'un avoir lié, ou flag
+      const id =
+        ev?.avoirId ||
+        ev?.creditNoteId ||
+        ev?.refundId ||
+        ev?.lastAvoirId ||
+        "";
+      if(String(id||"").trim()) return String(id).trim();
+
+      // fallback: bool
+      if(ev?.hasAvoir === true) return "__HAS__";
+      if(ev?.isCredited === true) return "__HAS__";
+      return "";
+    }
+
+    function canCreateNewInvoice(ev){
+      // "Créer" = refaire/dupliquer une facture pour ce logement/ce dossier.
+      // Si tu veux la désactiver dans certains cas, tu pourras resserrer ici.
+      return true;
     }
 
     function render(){
@@ -543,6 +560,35 @@
 
         const total = getInvoiceTotal(ev);
         const st = getInvoiceStatus(ev);
+
+        const homeId = String(ev.homeId || "").trim();
+        const avoirRef = getAvoirRef(ev);
+        const hasAvoir = !!avoirRef;
+
+        // liens : on reste volontairement simple et "rules-friendly"
+        const openHref = `facture.html?eventId=${encodeURIComponent(ev.id)}`;
+
+        // "Créer" : nouvelle facture (dupliquer ou partir du logement)
+        // - si homeId dispo, on le passe
+        // - on passe aussi sourceEventId pour pré-remplir si tu veux
+        const createHref =
+          `facture.html?mode=create`
+          + (homeId ? `&homeId=${encodeURIComponent(homeId)}` : "")
+          + `&sourceEventId=${encodeURIComponent(ev.id)}`;
+
+        // "Mettre en avoir" : vers avoir.html (à toi de faire la page)
+        // on passe l'eventId facture comme source
+        const avoirHref =
+          `avoir.html?fromInvoiceEventId=${encodeURIComponent(ev.id)}`
+          + (homeId ? `&homeId=${encodeURIComponent(homeId)}` : "");
+
+        // "Refaire facture" : si avoir existe, on peut recréer une facture
+        // si tu as un id d'avoir, on le passe pour reconstituer
+        const redoHref =
+          `facture.html?mode=redo`
+          + (homeId ? `&homeId=${encodeURIComponent(homeId)}` : "")
+          + (avoirRef && avoirRef !== "__HAS__" ? `&fromAvoirId=${encodeURIComponent(avoirRef)}` : "")
+          + `&sourceEventId=${encodeURIComponent(ev.id)}`;
 
         const div = document.createElement("div");
         div.className = "card";
@@ -590,56 +636,23 @@
 
             <div class="k" style="align-items:flex-end; min-width:280px;">
               <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;">
-                <a class="btn primary" href="facture.html?eventId=${encodeURIComponent(ev.id)}">Ouvrir</a>
+                <a class="btn primary" href="${openHref}">Ouvrir</a>
+
+                <a class="btn" href="${createHref}" ${canCreateNewInvoice(ev) ? "" : "aria-disabled='true'"}>Créer</a>
+
+                <a class="btn danger" href="${avoirHref}" ${hasAvoir ? "style='opacity:.45; pointer-events:none;'" : ""}>
+                  Mettre en avoir
+                </a>
+
+                <a class="btn" href="${redoHref}" ${hasAvoir ? "" : "style='opacity:.45; pointer-events:none;'"}>
+                  Refaire facture
+                </a>
               </div>
             </div>
           </div>
         `;
         listBox.appendChild(div);
       }
-    }
-
-    function toCsvValue(v){
-      const s = String(v ?? "");
-      return `"${s.replaceAll('"','""')}"`;
-    }
-
-    function exportCsv(){
-      const rows = getFiltered();
-      const header = [
-        "eventId","date","heure","logement","ville","client","email",
-        "numero_facture","statut","montant"
-      ];
-      const lines = [header.join(";")];
-
-      for(const r of rows){
-        const total = getInvoiceTotal(r);
-
-        const line = [
-          r.id,
-          (r.dateKey || r.date || ""),
-          (r.time || ""),
-          (r.homeName || ""),
-          (r.homeCity || ""),
-          (r.ownerName || ""),
-          (r.ownerEmail || ""),
-          (r.invoiceNumber || ""),
-          (getInvoiceStatus(r) || ""),
-          (Number.isFinite(total) ? total.toFixed(2) : "")
-        ].map(toCsvValue).join(";");
-
-        lines.push(line);
-      }
-
-      const blob = new Blob([lines.join("\n")], { type:"text/csv;charset=utf-8" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `factures_${new Date().toISOString().slice(0,10)}.csv`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
     }
 
     async function loadInvoices(uid){
@@ -653,7 +666,6 @@
       const snap = await getDocs(qEvents);
       const rows = snap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
 
-      // liste = seulement les events qui sont des factures (status invoice ou commercial)
       all = rows.filter(r => {
         const inv = String(r.invoiceStatus||"").toUpperCase().trim();
         const cs  = String(r.commercialStatus||"").toUpperCase().trim();
@@ -661,27 +673,18 @@
         if(inv === "DRAFT" || inv === "SENT" || inv === "PAID") return true;
         if(cs === "FACTURE" || cs === "FACTURE_ENVOYEE" || cs === "PAYE") return true;
 
-        // si tu as juste un invoiceNumber, on le garde aussi
         if(String(r.invoiceNumber||"").trim()) return true;
-
         return false;
       }).map(r => ({
         ...r,
-        invoiceStatus: getInvoiceStatus(r) // normalise pour l’UI/filtre
+        invoiceStatus: getInvoiceStatus(r)
       }));
 
       render();
     }
 
-    logoutBtn.addEventListener("click", async ()=>{
-      await signOut(auth);
-      localStorage.removeItem("cm_auth");
-      location.href = "index.html";
-    });
-
     filterStatus.addEventListener("change", render);
     searchInput.addEventListener("input", render);
-    exportBtn.addEventListener("click", exportCsv);
 
     onAuthStateChanged(auth, async (user)=>{
       if(!user){
@@ -702,4 +705,3 @@
   </script>
 </body>
 </html>
-
