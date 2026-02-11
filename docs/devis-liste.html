@@ -1,4 +1,4 @@
-<!-- docs/devis-liste.html (FINAL — events + salesDocuments, DE/DF, 1 ligne + actions, facture grisée si pas accepté) -->
+<!-- docs/devis-liste.html (FINAL — events + salesDocuments, DE/DF, 1 ligne + actions, FACTURE = création salesDocuments INVOICE depuis EVENT) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -407,7 +407,7 @@
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
-      doc, getDoc, updateDoc, serverTimestamp,
+      doc, getDoc, updateDoc, setDoc, runTransaction, serverTimestamp,
       collection, query, where, orderBy, limit, getDocs
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
@@ -420,6 +420,7 @@
     const listBox = document.getElementById("listBox");
 
     let all = [];
+    let currentUid = null;
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -544,13 +545,13 @@
       return (x?.ownerName || "—");
     }
 
-    // ✅ Logement = NOM SEUL (pas ville) pour éviter de prendre trop de place
+    // ✅ Logement = NOM SEUL
     function getHomeName(x){
       if(x?.kind === "FREE") return "—";
       return (x.homeName||"—");
     }
 
-    // ✅ Période basée en priorité sur tes champs réels : arrivalDateKey / departureDateKey
+    // ✅ Période basée sur arrivalDateKey / departureDateKey
     function getPeriodFromEvent(ev){
       const a0 = ev?.arrivalDateKey;
       const b0 = ev?.departureDateKey;
@@ -562,21 +563,6 @@
         if(fa0 !== "—") return `${fa0} → —`;
         if(fb0 !== "—") return `— → ${fb0}`;
       }
-
-      const a =
-        ev?.periodFrom || ev?.startDate || ev?.checkIn || ev?.dateFrom || ev?.start ||
-        ev?.arrivalDate || ev?.arrival || ev?.checkInDate || ev?.from || ev?.startAt;
-
-      const b =
-        ev?.periodTo || ev?.endDate || ev?.checkOut || ev?.dateTo || ev?.end ||
-        ev?.departureDate || ev?.departure || ev?.checkOutDate || ev?.to || ev?.endAt;
-
-      const fa = fmtDateFR(a);
-      const fb = fmtDateFR(b);
-
-      if(fa !== "—" && fb !== "—") return `${fa} → ${fb}`;
-      if(fa !== "—" && fb === "—") return `${fa} → —`;
-      if(fa === "—" && fb !== "—") return `— → ${fb}`;
 
       if(ev?.dateKey) return String(ev.dateKey);
       if(ev?.date) return fmtDateFR(ev.date);
@@ -600,6 +586,79 @@
         quoteUpdatedAt: serverTimestamp(),
         commercialUpdatedAt: serverTimestamp()
       });
+    }
+
+    // ===== FACTURE : création d'une INVOICE dans salesDocuments depuis EVENT =====
+    async function ensureInvoiceNumber(uid){
+      const year = new Date().getFullYear();
+      const counterId = `${uid}_${year}`;
+      const counterRef = doc(db, "counters", counterId);
+
+      const next = await runTransaction(db, async (tx)=>{
+        const snap = await tx.get(counterRef);
+        if(!snap.exists()){
+          tx.set(counterRef, { quoteSeq: 0, invoiceSeq: 0, creditSeq: 0 });
+        }
+        const c = snap.exists() ? (snap.data() || {}) : { invoiceSeq: 0 };
+        const n = (Number(c.invoiceSeq)||0) + 1;
+        tx.set(counterRef, { ...c, invoiceSeq: n }, { merge:true });
+        return n;
+      });
+
+      return `FA${year}-${String(next).padStart(4,"0")}`;
+    }
+
+    async function createInvoiceFromEvent(eventId, uid){
+      const evRef = doc(db, "events", eventId);
+      const evSnap = await getDoc(evRef);
+      if(!evSnap.exists()) throw new Error("Event introuvable.");
+      const ev = evSnap.data() || {};
+
+      if(String(ev.conciergerieUid||"") !== String(uid)) throw new Error("Accès refusé.");
+
+      const invoiceNumber = await ensureInvoiceNumber(uid);
+      const invRef = doc(collection(db,"salesDocuments"));
+
+      const inv = {
+        conciergerieUid: uid,
+
+        type: "INVOICE",
+        docType: "INVOICE_EVENT",
+        commercialStatus: "FACTURE",
+        invoiceStatus: "DRAFT",
+        invoiceNumber,
+
+        listable: true,
+        createdAt: serverTimestamp(),
+        commercialUpdatedAt: serverTimestamp(),
+
+        // lien source
+        sourceKind: "EVENT",
+        sourceEventId: eventId,
+
+        // recap logement
+        homeId: ev.homeId || "",
+        homeName: ev.homeName || "",
+        homeAddress: ev.homeAddress || "",
+        homeZip: ev.homeZip || "",
+        homeCity: ev.homeCity || "",
+
+        // client (sur event, parfois ownerName/email, parfois assignedTo)
+        clientName: (ev.ownerName || ev.assignedToName || "").trim(),
+        clientEmail: (ev.ownerEmail || ev.assignedToEmail || "").trim(),
+
+        arrivalDateKey: ev.arrivalDateKey || ev.dateKey || ev.date || "",
+        departureDateKey: ev.departureDateKey || "",
+
+        lines: Array.isArray(ev.lines) ? ev.lines : [],
+        total: Number(ev.total) || computeTotalFromLines(ev.lines),
+
+        // optionnel : garder le devis N° si tu l'as sur l'event
+        quoteNumber: ev.quoteNumber || "",
+      };
+
+      await setDoc(invRef, inv);
+      return { invoiceId: invRef.id, invoiceNumber };
     }
 
     function render(){
@@ -635,16 +694,25 @@
         const actionsHtml = (x.kind === "EVENT")
           ? `
             <a class="btn primary" href="${openHref}">Ouvrir</a>
-            <button class="btn" type="button" data-accept-kind="EVENT" data-accept-id="${esc(x.id)}" ${accepted ? "disabled" : ""}>Accepter</button>
-            <a class="btn"
-              href="facture.html?eventId=${encodeURIComponent(x.id)}"
-              ${accepted ? "" : "aria-disabled='true' onclick='return false;' style='pointer-events:none; opacity:.45;'"}
-              title="${accepted ? "Passer en facture" : "Grisé tant que le devis n’est pas accepté"}"
-            >Passer en facture</a>
+            <button class="btn" type="button"
+              data-accept-kind="EVENT" data-accept-id="${esc(x.id)}"
+              ${accepted ? "disabled" : ""}>
+              Accepter
+            </button>
+            <button class="btn" type="button"
+              data-invoice-kind="EVENT" data-invoice-id="${esc(x.id)}"
+              ${accepted ? "" : "disabled"}
+              title="${accepted ? "Créer la facture (salesDocuments)" : "Grisé tant que le devis n’est pas accepté"}">
+              Passer en facture
+            </button>
           `
           : `
             <a class="btn primary" href="${openHref}">Ouvrir</a>
-            <button class="btn" type="button" data-accept-kind="FREE" data-accept-id="${esc(x.id)}" ${accepted ? "disabled" : ""}>Accepter</button>
+            <button class="btn" type="button"
+              data-accept-kind="FREE" data-accept-id="${esc(x.id)}"
+              ${accepted ? "disabled" : ""}>
+              Accepter
+            </button>
           `;
 
         const prefix = (x.kind === "FREE") ? "DF" : "DE";
@@ -703,37 +771,72 @@
         `;
         listBox.appendChild(div);
       }
-
-      for(const b of listBox.querySelectorAll("button[data-accept-id]")){
-        b.addEventListener("click", async ()=>{
-          const id = b.getAttribute("data-accept-id");
-          const kind = b.getAttribute("data-accept-kind");
-          if(!id || !kind) return;
-
-          b.disabled = true;
-          hideAlert();
-
-          try{
-            if(kind === "EVENT"){
-              await acceptEventQuote(id);
-              const idx = all.findIndex(z => z.id === id && z.kind === "EVENT");
-              if(idx >= 0) all[idx].quoteStatus = "ACCEPTED";
-              showAlert("✅ Devis logement accepté.", true);
-            }else{
-              await acceptFreeQuote(id);
-              const idx = all.findIndex(z => z.id === id && z.kind === "FREE");
-              if(idx >= 0) all[idx].quoteStatus = "ACCEPTED";
-              showAlert("✅ Devis prospect accepté.", true);
-            }
-            render();
-          }catch(e){
-            console.error(e);
-            showAlert("⛔ Impossible d’accepter : " + (e?.message || "inconnu"));
-            b.disabled = false;
-          }
-        });
-      }
     }
+
+    // ✅ 1 seul handler (pas 400 listeners à chaque render)
+    document.addEventListener("click", async (e)=>{
+      const acceptBtn = e.target.closest("button[data-accept-id]");
+      const invoiceBtn = e.target.closest("button[data-invoice-id]");
+
+      if(acceptBtn){
+        const id = acceptBtn.getAttribute("data-accept-id");
+        const kind = acceptBtn.getAttribute("data-accept-kind");
+        if(!id || !kind) return;
+
+        acceptBtn.disabled = true;
+        hideAlert();
+
+        try{
+          if(kind === "EVENT"){
+            await acceptEventQuote(id);
+            const idx = all.findIndex(z => z.id === id && z.kind === "EVENT");
+            if(idx >= 0) all[idx].quoteStatus = "ACCEPTED";
+            showAlert("✅ Devis logement accepté.", true);
+          }else{
+            await acceptFreeQuote(id);
+            const idx = all.findIndex(z => z.id === id && z.kind === "FREE");
+            if(idx >= 0) all[idx].quoteStatus = "ACCEPTED";
+            showAlert("✅ Devis prospect accepté.", true);
+          }
+          render();
+        }catch(err){
+          console.error(err);
+          showAlert("⛔ Impossible d’accepter : " + (err?.message || "inconnu"));
+          acceptBtn.disabled = false;
+        }
+        return;
+      }
+
+      if(invoiceBtn){
+        const id = invoiceBtn.getAttribute("data-invoice-id");
+        const kind = invoiceBtn.getAttribute("data-invoice-kind");
+        if(!id || !kind) return;
+
+        if(kind !== "EVENT"){
+          // tu as dit: on ne facture jamais un prospect
+          return;
+        }
+
+        invoiceBtn.disabled = true;
+        const oldText = invoiceBtn.textContent;
+        invoiceBtn.textContent = "Création…";
+        hideAlert();
+
+        try{
+          if(!currentUid) throw new Error("Utilisateur non connecté.");
+          const { invoiceId } = await createInvoiceFromEvent(id, currentUid);
+
+          showAlert("✅ Facture créée.", true);
+          // redirection vers page facture basée sur salesDocuments
+          location.href = `facture.html?docId=${encodeURIComponent(invoiceId)}`;
+        }catch(err){
+          console.error(err);
+          showAlert("⛔ Erreur création facture : " + (err?.message || "inconnue"));
+          invoiceBtn.disabled = false;
+          invoiceBtn.textContent = oldText;
+        }
+      }
+    });
 
     async function loadQuotes(uid){
       // 1) events (devis logement)
@@ -751,9 +854,7 @@
           return qs === "DRAFT" || qs === "SENT" || qs === "ACCEPTED" || qs === "REFUSED" || cs === "DEVIS" || cs.startsWith("DEVIS");
         });
 
-      // 2) salesDocuments (devis prospect)
-      // ✅ Idéal: ne charger QUE les docs "listables" (donc uniquement après Enregistrer)
-      // Index probable: salesDocuments (conciergerieUid ASC, type ASC, docType ASC, listable ASC, createdAt DESC)
+      // 2) salesDocuments (devis prospect) — on garde (même si tu ne factures pas)
       let sales = [];
       try{
         const qSales = query(
@@ -768,8 +869,7 @@
         const snapS = await getDocs(qSales);
         sales = snapS.docs.map(d => ({ kind:"FREE", id: d.id, ...(d.data()||{}) }));
       }catch(e){
-        // ✅ fallback si index manquant: on charge large puis on filtre côté client
-        console.warn("SalesDocuments query with listable==true failed (likely missing index). Fallback.", e);
+        console.warn("SalesDocuments query failed (index). Fallback.", e);
         const qSalesFallback = query(
           collection(db, "salesDocuments"),
           where("conciergerieUid", "==", uid),
@@ -811,6 +911,8 @@
         location.href = "login.html?role=conciergerie";
         return;
       }
+      currentUid = user.uid;
+
       if(helloLine) helloLine.textContent = "Bonjour,";
       await loadCompanyName(user);
 
