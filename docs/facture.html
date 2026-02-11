@@ -1,4 +1,4 @@
-<!-- docs/facture.html (CLONE devis-event.html -> events + owners, même UI, preview = facture-apercu.html, numérotation facture, garde-fous devis accepté) -->
+<!-- docs/facture.html (PATCH — recap sans client, paiement + RIB conciergerie, actions: Confirmer -> invoiceStatus=SENT, suppression "marqué envoyée/payée", preview -> facture-apercu.html) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -185,7 +185,6 @@
       border-color:var(--violet-main);
       box-shadow:0 0 0 2px rgba(122,92,255,.15);
     }
-    .readonly{ background:rgba(248,244,255,.6); }
 
     .actions{
       display:flex; gap:8px; flex-wrap:wrap; margin-top:12px;
@@ -303,7 +302,7 @@
       <div class="card">
         <div class="card-title">
           <span>Récapitulatif</span>
-          <span class="small">Client + logement</span>
+          <span class="small">Logement</span>
         </div>
 
         <div class="alert" id="alertBox"></div>
@@ -350,21 +349,19 @@
 
         <div class="card-title" style="font-size:14px; margin-bottom:6px;">
           <span>Paiement</span>
-          <span class="small">repris du devis</span>
+          <span class="small">+ coordonnées bancaires</span>
         </div>
         <div class="kv" id="paymentKv"></div>
 
         <div class="divider"></div>
 
         <div class="actions">
-          <button class="btn primary" type="button" id="saveBtn">Créer / Enregistrer</button>
+          <button class="btn primary" type="button" id="confirmBtn">Confirmer</button>
           <button class="btn" type="button" id="previewBtn">Aperçu</button>
-          <button class="btn" type="button" id="markSentBtn" disabled>Marquer “envoyée”</button>
-          <button class="btn" type="button" id="markPaidBtn" disabled>Marquer “payée”</button>
         </div>
 
         <div class="mutedLine" style="margin-top:8px;">
-          Numéro facture : attribué automatiquement à la création (séquentiel par année). Facture possible uniquement si le devis est <b>accepté</b>.
+          Confirmer = facture <b>envoyée</b> (invoiceStatus = SENT). Possible uniquement si le devis est <b>accepté</b>.
         </div>
       </div>
     </div>
@@ -382,8 +379,7 @@
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
-      doc, getDoc, updateDoc, serverTimestamp, runTransaction,
-      collection, query, where, getDocs, limit
+      doc, getDoc, updateDoc, serverTimestamp, runTransaction
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     // ===== UI =====
@@ -412,10 +408,8 @@
 
     const invoiceNotesEl = document.getElementById("invoiceNotes");
 
-    const saveBtn = document.getElementById("saveBtn");
+    const confirmBtn = document.getElementById("confirmBtn");
     const previewBtn = document.getElementById("previewBtn");
-    const markSentBtn = document.getElementById("markSentBtn");
-    const markPaidBtn = document.getElementById("markPaidBtn");
 
     // ===== State =====
     let currentUser = null;
@@ -423,7 +417,7 @@
     let eventData = null;
 
     let profileData = null; // users/{conciergerieUid}
-    let ownerUser = null;   // owners/{docId}
+    let ownerUser = null;   // owners/{docId} (si présent dans ton flow)
 
     // ===== Helpers =====
     function showAlert(msg, ok=false){
@@ -453,7 +447,6 @@
       const p = new URLSearchParams(location.search);
       return (p.get(name) || "").trim();
     }
-    function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
 
     const eventId = getParam("eventId");
 
@@ -477,14 +470,6 @@
       if(x === "PAID") return "PAYÉE";
       if(x === "CANCELLED") return "ANNULÉE";
       return x;
-    }
-    function canMarkSent(d){
-      const inv = String(d?.invoiceStatus || "").toUpperCase();
-      return inv === "DRAFT";
-    }
-    function canMarkPaid(d){
-      const inv = String(d?.invoiceStatus || "").toUpperCase();
-      return inv === "SENT";
     }
 
     function dueLabel(term){
@@ -556,7 +541,7 @@
       });
 
       const padded = String(next).padStart(4,"0");
-      return `F${year}-${padded}`;
+      return `FA${year}-${padded}`;
     }
 
     function applyLogoFromProfile(profile){
@@ -582,7 +567,6 @@
       }
     }
 
-    // Snapshot client = owners OU snapshot event (facturation)
     function getOwnerSnapshot(){
       const d = eventData || {};
 
@@ -728,6 +712,8 @@
 
     function renderPaymentInfo(){
       const d = eventData || {};
+      const bp = (profileData?.businessProfile || {});
+      const bank = (bp.bank || {});
 
       const mode = String(d?.invoicePaymentMode || d?.quotePaymentMode || "VIREMENT").toUpperCase();
       const term = String(d?.invoicePaymentTerm || d?.quotePaymentTerm || "RECEPTION").toUpperCase();
@@ -736,10 +722,21 @@
       const dueDays = termToDays(term);
       const dueDate = addDaysLabel(issued, dueDays);
 
+      const bankName = String(bank?.name || "").trim();
+      const iban = String(bank?.iban || "").trim();
+      const bic  = String(bank?.bic  || "").trim();
+
       const lines = [];
       lines.push(`<div class="line"><b>Mode</b> : ${esc(modeLabel(mode))}</div>`);
       lines.push(`<div class="line"><b>Délai</b> : ${esc(dueLabel(term))}</div>`);
       lines.push(`<div class="line"><b>Échéance</b> : ${esc(dueDate)}</div>`);
+
+      lines.push(`<div class="divider" style="margin:10px 0;"></div>`);
+      lines.push(`<div class="line"><b>Coordonnées bancaires</b></div>`);
+      if(bankName) lines.push(`<div class="line"><b>Banque</b> : ${esc(bankName)}</div>`);
+      lines.push(`<div class="line"><b>IBAN</b> : ${esc(iban || "—")}</div>`);
+      lines.push(`<div class="line"><b>BIC</b> : ${esc(bic || "—")}</div>`);
+
       paymentKv.innerHTML = lines.join("");
     }
 
@@ -752,11 +749,8 @@
       const homeCity = (d.homeCity || "").trim();
       const homeAddrFull = [homeAddr, [homeZip, homeCity].filter(Boolean).join(" ")].filter(Boolean).join(" • ");
 
-      const c = getOwnerSnapshot();
-      const clientLabel = [c.name, c.email].filter(Boolean).join(" • ");
-
+      // ✅ recap = SANS client + email (tu gardes le client dans l’en-tête si tu veux)
       const rows = [];
-      rows.push(`<div class="line"><b>Client</b> : ${esc(clientLabel || "—")}</div>`);
       if(homeAddrFull) rows.push(`<div class="line"><b>Adresse logement</b> : ${esc(homeAddrFull)}</div>`);
       rows.push(`<div class="line"><b>Période</b> : ${esc(period.label)}</div>`);
       recapKv.innerHTML = rows.join("");
@@ -781,10 +775,10 @@
       renderPaymentInfo();
 
       // Buttons
-      saveBtn.disabled = !eventRef;
+      const inv = String(d?.invoiceStatus || "").toUpperCase().trim();
+      const locked = (inv === "SENT" || inv === "PAID" || inv === "CANCELLED");
+      confirmBtn.disabled = !eventRef || !canInvoice || locked;
       previewBtn.disabled = !(eventRef && hasInvoice);
-      markSentBtn.disabled = !(eventRef && hasInvoice && canMarkSent(d));
-      markPaidBtn.disabled = !(eventRef && hasInvoice && canMarkPaid(d));
     }
 
     async function loadProfile(uid){
@@ -793,73 +787,30 @@
       profileData = snap.exists() ? (snap.data() || {}) : {};
     }
 
-    async function lookupOwnerByEmailInOwners(emailLower){
-      if(!emailLower) return null;
-
-      const qO = query(
-        collection(db,"owners"),
-        where("conciergerieUid", "==", String(currentUser.uid)),
-        where("email", "==", emailLower),
-        limit(5)
-      );
-      const snap = await getDocs(qO);
-      if(snap.empty) return null;
-
-      const doc0 = snap.docs[0];
-      const o = doc0.data() || {};
-      return {
-        docId: doc0.id,
-        email: normalizeEmail(o.email || emailLower),
-        fullname: (o.fullname || o.displayName || "").trim(),
-        address1: (o.address1 || o.address || "").toString().trim(),
-        address2: (o.address2 || "").toString().trim(),
-        zip: (o.zip || "").toString().trim(),
-        city: (o.city || "").toString().trim(),
-        phone: (o.phone || "").toString().trim(),
-      };
-    }
-
     async function loadOwner(){
+      // Tu avais déjà ce mécanisme owners. Je le laisse tel quel pour ne pas casser.
       ownerUser = null;
-
       const d = eventData || {};
-      const ownerEmail = normalizeEmail(d.ownerEmail || "");
+      const ownerDocId = String(d.ownerUid || "").trim() || String(d.ownerDocId || "").trim();
+      if(!ownerDocId) return;
 
-      const ownerDocId =
-        String(d.ownerUid || "").trim() ||
-        String(d.ownerDocId || "").trim();
-
-      if(ownerDocId){
-        try{
-          const snap = await getDoc(doc(db,"owners", ownerDocId));
-          if(snap.exists()){
-            const o = snap.data() || {};
-            if(String(o.conciergerieUid||"") === String(currentUser.uid)){
-              ownerUser = {
-                docId: snap.id,
-                email: normalizeEmail(o.email || ownerEmail),
-                fullname: (o.fullname || o.displayName || "").trim(),
-                address1: (o.address1 || o.address || "").toString().trim(),
-                address2: (o.address2 || "").toString().trim(),
-                zip: (o.zip || "").toString().trim(),
-                city: (o.city || "").toString().trim(),
-                phone: (o.phone || "").toString().trim(),
-              };
-              return;
-            }
-          }
-        }catch(e){
-          console.warn("load owner by docId failed:", e?.message || e);
+      try{
+        const snap = await getDoc(doc(db,"owners", ownerDocId));
+        if(snap.exists()){
+          const o = snap.data() || {};
+          ownerUser = {
+            docId: snap.id,
+            email: String(o.email || "").trim().toLowerCase(),
+            fullname: (o.fullname || o.displayName || "").trim(),
+            address1: (o.address1 || o.address || "").toString().trim(),
+            address2: (o.address2 || "").toString().trim(),
+            zip: (o.zip || "").toString().trim(),
+            city: (o.city || "").toString().trim(),
+            phone: (o.phone || "").toString().trim(),
+          };
         }
-      }
-
-      if(ownerEmail){
-        try{
-          ownerUser = await lookupOwnerByEmailInOwners(ownerEmail);
-        }catch(e){
-          console.warn("lookup owner by email failed:", e?.message || e);
-          ownerUser = null;
-        }
+      }catch(e){
+        console.warn("loadOwner failed:", e?.message || e);
       }
     }
 
@@ -880,12 +831,9 @@
     }
 
     function lockUI(locked){
-      const d = eventData || {};
-      saveBtn.disabled = !!locked || !eventRef;
-      previewBtn.disabled = !!locked || !eventRef || !String(d.invoiceNumber||"").trim();
-      markSentBtn.disabled = !!locked || !eventRef || !String(d.invoiceNumber||"").trim() || !canMarkSent(d);
-      markPaidBtn.disabled = !!locked || !eventRef || !String(d.invoiceNumber||"").trim() || !canMarkPaid(d);
-      saveBtn.style.opacity = locked ? "0.75" : "1";
+      confirmBtn.disabled = !!locked || confirmBtn.disabled;
+      previewBtn.disabled = !!locked || previewBtn.disabled;
+      confirmBtn.style.opacity = locked ? "0.75" : "1";
     }
 
     previewBtn.addEventListener("click", ()=>{
@@ -893,7 +841,8 @@
       location.href = `facture-apercu.html?eventId=${encodeURIComponent(eventId)}`;
     });
 
-    saveBtn.addEventListener("click", async ()=>{
+    // ✅ CONFIRMER = invoiceStatus -> SENT (pas de confirmed:true)
+    confirmBtn.addEventListener("click", async ()=>{
       hideAlert();
       if(!eventRef) return showAlert("Event non chargé.");
 
@@ -904,41 +853,44 @@
           throw new Error("Impossible : le devis doit être ACCEPTÉ avant facturation.");
         }
 
+        const invNow = String(eventData?.invoiceStatus || "").toUpperCase().trim();
+        if(invNow === "SENT" || invNow === "PAID" || invNow === "CANCELLED"){
+          throw new Error("Action impossible : facture déjà confirmée / payée / annulée.");
+        }
+
         const year = new Date().getFullYear();
         let invoiceNumber = String(eventData?.invoiceNumber || "").trim();
 
         const patch = {
           invoiceNotes: (invoiceNotesEl.value || "").trim(),
-          commercialStatus: "FACTURE",
+
+          // statut facture
+          invoiceStatus: "SENT",
+          invoiceSentAt: serverTimestamp(),
+
+          // compat ancien flow
+          commercialStatus: "FACTURE_ENVOYEE",
           commercialUpdatedAt: serverTimestamp(),
-          invoiceUpdatedAt: serverTimestamp()
+
+          invoiceUpdatedAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
         };
 
-        // 1ère création -> numéro + brouillon + snapshot paiement (repris du devis)
+        // si première confirmation sans numéro -> on le crée + snapshot paiement
         if(!invoiceNumber){
           invoiceNumber = await ensureInvoiceNumber(currentUser.uid, year);
-
           patch.invoiceNumber = invoiceNumber;
-          patch.invoiceStatus = "DRAFT";
+
           patch.invoiceIssuedAt = serverTimestamp();
           patch.invoiceIssuedDate = todayIso();
 
           patch.invoicePaymentMode = String(eventData?.quotePaymentMode || "VIREMENT").toUpperCase();
           patch.invoicePaymentTerm = String(eventData?.quotePaymentTerm || "RECEPTION").toUpperCase();
         }else{
-          // garde le statut actuel
-          const inv = String(eventData?.invoiceStatus || "").toUpperCase().trim();
-          patch.invoiceStatus = inv || "DRAFT";
-          // si jamais les champs paiement facture manquent, on les complète
+          // garde/synchronise paiement si manquant
           patch.invoicePaymentMode = String(eventData?.invoicePaymentMode || eventData?.quotePaymentMode || "VIREMENT").toUpperCase();
           patch.invoicePaymentTerm = String(eventData?.invoicePaymentTerm || eventData?.quotePaymentTerm || "RECEPTION").toUpperCase();
           patch.invoiceIssuedDate = String(eventData?.invoiceIssuedDate || todayIso()).trim();
-        }
-
-        // si déjà payée/annulée, on ne rétrograde pas
-        const invNow = String(eventData?.invoiceStatus || "").toUpperCase().trim();
-        if(invNow === "PAID" || invNow === "CANCELLED"){
-          patch.invoiceStatus = invNow;
         }
 
         await updateDoc(eventRef, patch);
@@ -946,76 +898,12 @@
         const snap2 = await getDoc(eventRef);
         eventData = { id: snap2.id, ...(snap2.data()||{}) };
 
-        showAlert("✅ Facture enregistrée.", true);
-
+        showAlert("✅ Facture confirmée (envoyée).", true);
         await loadOwner();
         renderRecap();
       }catch(err){
         console.error(err);
         showAlert("Erreur : " + (err?.message || "inconnue"));
-      }finally{
-        lockUI(false);
-      }
-    });
-
-    markSentBtn.addEventListener("click", async ()=>{
-      hideAlert();
-      if(!eventRef) return showAlert("Event non chargé.");
-
-      const d = eventData || {};
-      if(!String(d.invoiceNumber||"").trim()) return showAlert("Crée la facture (numéro) avant.");
-      if(!canMarkSent(d)) return showAlert("⛔ Action impossible : la facture doit être en brouillon.");
-
-      lockUI(true);
-      try{
-        await updateDoc(eventRef, {
-          invoiceStatus: "SENT",
-          invoiceSentAt: serverTimestamp(),
-          commercialStatus: "FACTURE_ENVOYEE",
-          commercialUpdatedAt: serverTimestamp(),
-          invoiceNotes: (invoiceNotesEl.value || "").trim()
-        });
-
-        const snap2 = await getDoc(eventRef);
-        eventData = { id: snap2.id, ...(snap2.data()||{}) };
-
-        showAlert("✅ Statut : facture envoyée.", true);
-        renderRecap();
-      }catch(err){
-        console.error(err);
-        showAlert("Erreur statut : " + (err?.message || "inconnue"));
-      }finally{
-        lockUI(false);
-      }
-    });
-
-    markPaidBtn.addEventListener("click", async ()=>{
-      hideAlert();
-      if(!eventRef) return showAlert("Event non chargé.");
-
-      const d = eventData || {};
-      if(!String(d.invoiceNumber||"").trim()) return showAlert("Numéro facture manquant.");
-      if(!canMarkPaid(d)) return showAlert("⛔ Action impossible : la facture doit être “envoyée” avant “payée”.");
-      if(!confirm("Marquer cette facture comme PAYÉE ?")) return;
-
-      lockUI(true);
-      try{
-        await updateDoc(eventRef, {
-          invoiceStatus: "PAID",
-          invoicePaidAt: serverTimestamp(),
-          commercialStatus: "PAYE",
-          commercialUpdatedAt: serverTimestamp(),
-          invoiceNotes: (invoiceNotesEl.value || "").trim()
-        });
-
-        const snap2 = await getDoc(eventRef);
-        eventData = { id: snap2.id, ...(snap2.data()||{}) };
-
-        showAlert("✅ Facture payée.", true);
-        renderRecap();
-      }catch(err){
-        console.error(err);
-        showAlert("Erreur statut : " + (err?.message || "inconnue"));
       }finally{
         lockUI(false);
       }
