@@ -1,4 +1,4 @@
-<!-- docs/factures-liste.html (FINAL — UI alignée sur devis-liste.html) -->
+<!-- docs/factures-liste.html (PATCH — remove déconnexion+CSV, add company line, add Avoir/Créer buttons) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -89,8 +89,9 @@
     }
     h1{ margin:0; font-size:24px; font-weight:900; letter-spacing:-0.2px; }
     .subtitle{ margin-top:2px; font-size:14px; color:#444; text-align:center; }
+
     .helloLine{ margin-top:10px; font-size:13px; color:#333; font-weight:900; text-align:center; }
-    .emailLine{ margin-top:4px; font-size:13px; color:var(--muted); font-weight:800; text-align:center; }
+    .companyLine{ margin-top:4px; font-size:13px; color:var(--muted); font-weight:900; text-align:center; }
 
     .wrap{
       width:100%;
@@ -125,10 +126,10 @@
     }
     .alert.ok{ border-left-color: var(--ok); }
 
-    /* toolbar alignée sur devis-liste */
+    /* toolbar */
     .toolbar{
       display:grid;
-      grid-template-columns: 220px 1fr auto;
+      grid-template-columns: 220px 1fr;
       gap:10px;
       align-items:center;
       min-width:0;
@@ -215,7 +216,7 @@
     .badge.ok{ border-color: rgba(27,143,77,0.35); color: var(--ok); }
     .badge.bad{ border-color: rgba(179,38,30,0.30); color: var(--bad); }
 
-    /* 1 ligne 6 colonnes (même logique que devis-liste) */
+    /* 1 ligne 6 colonnes */
     .line6{
       display:grid;
       grid-template-columns: 110px 160px 1.2fr 1.2fr 1.1fr 130px;
@@ -322,7 +323,7 @@
   <div class="page">
     <div class="topbar">
       <a class="pill" href="compta.html">← Retour</a>
-      <button class="pill" id="logoutBtn" type="button">Déconnexion</button>
+      <span></span>
     </div>
 
     <div class="logo-title">
@@ -330,9 +331,9 @@
       <h1>Factures</h1>
     </div>
 
-    <div class="subtitle">Suivi des factures • export CSV</div>
+    <div class="subtitle">Suivi des factures</div>
     <div class="helloLine" id="helloLine">Bonjour,</div>
-    <div class="emailLine" id="emailLine">—</div>
+    <div class="companyLine" id="companyLine">—</div>
 
     <div class="wrap">
       <div class="alert" id="alertBox"></div>
@@ -351,8 +352,6 @@
             <span class="s-ico">🔎</span>
             <input class="input" id="searchInput" type="search" placeholder="Rechercher (n° facture, client, logement…)" autocomplete="off" />
           </div>
-
-          <button class="btn primary" id="exportBtn" type="button">Exporter CSV</button>
         </div>
       </div>
 
@@ -370,18 +369,19 @@
 
   <script type="module">
     import { auth, db } from "./firebase-init.js";
-    import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-    import { collection, query, where, orderBy, limit, getDocs } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+    import {
+      collection, query, where, orderBy, limit, getDocs,
+      doc, getDoc
+    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const helloLine = document.getElementById("helloLine");
-    const emailLine = document.getElementById("emailLine");
-    const logoutBtn = document.getElementById("logoutBtn");
+    const companyLine = document.getElementById("companyLine");
     const alertBox = document.getElementById("alertBox");
 
     const filterStatus = document.getElementById("filterStatus");
     const searchInput = document.getElementById("searchInput");
     const listBox = document.getElementById("listBox");
-    const exportBtn = document.getElementById("exportBtn");
 
     let all = [];
 
@@ -439,7 +439,6 @@
     }
 
     function getInvoiceTotal(ev){
-      // on essaie plusieurs champs possibles, sinon calc sur lignes
       const candidates = [
         ev?.invoiceTotal, ev?.totalInvoice, ev?.invoiceAmount, ev?.invoiceTTC, ev?.totalTTC, ev?.total
       ];
@@ -462,7 +461,6 @@
     }
 
     function normalizeStatusFromCommercial(ev){
-      // compat vieux flow
       const cs = String(ev?.commercialStatus||"").toUpperCase().trim();
       if(cs === "PAYE") return "PAID";
       if(cs === "FACTURE_ENVOYEE") return "SENT";
@@ -502,7 +500,6 @@
     }
 
     function getCreatedAt(x){
-      // createdAt (Timestamp) sinon dateKey sinon date
       if(x?.createdAt?.toDate?.()) return x.createdAt.toDate().toLocaleDateString("fr-FR");
       if(x?.createdAt) return fmtDateFR(x.createdAt);
       if(x?.dateKey) return String(x.dateKey);
@@ -514,6 +511,16 @@
       const n = String(x?.invoiceNumber || "").trim();
       if(n) return n;
       return "FA—";
+    }
+
+    function isAvoirEnabled(ev){
+      // tolérant : plusieurs noms possibles selon tes versions
+      return !!(
+        ev?.avoirEnabled ||
+        ev?.creditNoteEnabled ||
+        ev?.allowCreditNote ||
+        ev?.allowAvoir
+      );
     }
 
     function render(){
@@ -543,6 +550,7 @@
 
         const total = getInvoiceTotal(ev);
         const st = getInvoiceStatus(ev);
+        const avoirOn = isAvoirEnabled(ev);
 
         const div = document.createElement("div");
         div.className = "card";
@@ -591,6 +599,15 @@
             <div class="k" style="align-items:flex-end; min-width:280px;">
               <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;">
                 <a class="btn primary" href="facture.html?eventId=${encodeURIComponent(ev.id)}">Ouvrir</a>
+
+                ${
+                  avoirOn
+                    ? `
+                      <a class="btn" href="avoir-liste.html?invoiceEventId=${encodeURIComponent(ev.id)}">Avoir</a>
+                      <a class="btn" href="avoir.html?invoiceEventId=${encodeURIComponent(ev.id)}">Créer</a>
+                    `
+                    : ``
+                }
               </div>
             </div>
           </div>
@@ -599,47 +616,15 @@
       }
     }
 
-    function toCsvValue(v){
-      const s = String(v ?? "");
-      return `"${s.replaceAll('"','""')}"`;
-    }
-
-    function exportCsv(){
-      const rows = getFiltered();
-      const header = [
-        "eventId","date","heure","logement","ville","client","email",
-        "numero_facture","statut","montant"
-      ];
-      const lines = [header.join(";")];
-
-      for(const r of rows){
-        const total = getInvoiceTotal(r);
-
-        const line = [
-          r.id,
-          (r.dateKey || r.date || ""),
-          (r.time || ""),
-          (r.homeName || ""),
-          (r.homeCity || ""),
-          (r.ownerName || ""),
-          (r.ownerEmail || ""),
-          (r.invoiceNumber || ""),
-          (getInvoiceStatus(r) || ""),
-          (Number.isFinite(total) ? total.toFixed(2) : "")
-        ].map(toCsvValue).join(";");
-
-        lines.push(line);
+    async function loadCompanyName(uid){
+      try{
+        const snap = await getDoc(doc(db, "users", uid));
+        const data = snap.exists() ? (snap.data()||{}) : {};
+        const name = String(data?.businessProfile?.companyName || "").trim();
+        return name || "Conciergerie";
+      }catch{
+        return "Conciergerie";
       }
-
-      const blob = new Blob([lines.join("\n")], { type:"text/csv;charset=utf-8" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `factures_${new Date().toISOString().slice(0,10)}.csv`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
     }
 
     async function loadInvoices(uid){
@@ -653,7 +638,6 @@
       const snap = await getDocs(qEvents);
       const rows = snap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
 
-      // liste = seulement les events qui sont des factures (status invoice ou commercial)
       all = rows.filter(r => {
         const inv = String(r.invoiceStatus||"").toUpperCase().trim();
         const cs  = String(r.commercialStatus||"").toUpperCase().trim();
@@ -661,35 +645,27 @@
         if(inv === "DRAFT" || inv === "SENT" || inv === "PAID") return true;
         if(cs === "FACTURE" || cs === "FACTURE_ENVOYEE" || cs === "PAYE") return true;
 
-        // si tu as juste un invoiceNumber, on le garde aussi
         if(String(r.invoiceNumber||"").trim()) return true;
-
         return false;
       }).map(r => ({
         ...r,
-        invoiceStatus: getInvoiceStatus(r) // normalise pour l’UI/filtre
+        invoiceStatus: getInvoiceStatus(r)
       }));
 
       render();
     }
 
-    logoutBtn.addEventListener("click", async ()=>{
-      await signOut(auth);
-      localStorage.removeItem("cm_auth");
-      location.href = "index.html";
-    });
-
     filterStatus.addEventListener("change", render);
     searchInput.addEventListener("input", render);
-    exportBtn.addEventListener("click", exportCsv);
 
     onAuthStateChanged(auth, async (user)=>{
       if(!user){
         location.href = "login.html?role=conciergerie";
         return;
       }
-      if(helloLine) helloLine.textContent = "Bonjour,";
-      emailLine.textContent = user.email || user.uid;
+
+      helloLine.textContent = "Bonjour,";
+      companyLine.textContent = await loadCompanyName(user.uid);
 
       hideAlert();
       try{
