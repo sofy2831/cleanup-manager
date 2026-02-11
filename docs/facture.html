@@ -1,4 +1,4 @@
-<!-- docs/facture.html (PATCH — recap sans client, paiement + RIB conciergerie, actions: Confirmer -> invoiceStatus=SENT, suppression "marqué envoyée/payée", preview -> facture-apercu.html) -->
+<!-- docs/facture.html (FINAL PATCH — client header OK, paiement reprend devis, pénalités, RIB, pas de note "confirmer=") -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -175,13 +175,13 @@
       display:block; font-size:12px; font-weight:1000; color:#333;
       margin:10px 0 4px; text-align:left;
     }
-    textarea, input, select{
+    textarea{
       width:100%; padding:10px 12px; border-radius:12px;
       border:1px solid #D3C7FF; font-size:14px; outline:none;
       background:#fff; font-weight:800; color:#111;
+      resize:vertical;
     }
-    textarea{ resize:vertical; }
-    textarea:focus, input:focus, select:focus{
+    textarea:focus{
       border-color:var(--violet-main);
       box-shadow:0 0 0 2px rgba(122,92,255,.15);
     }
@@ -302,7 +302,7 @@
       <div class="card">
         <div class="card-title">
           <span>Récapitulatif</span>
-          <span class="small">Logement</span>
+          <span class="small">Logement + période</span>
         </div>
 
         <div class="alert" id="alertBox"></div>
@@ -349,19 +349,23 @@
 
         <div class="card-title" style="font-size:14px; margin-bottom:6px;">
           <span>Paiement</span>
-          <span class="small">+ coordonnées bancaires</span>
+          <span class="small">repris du devis accepté</span>
         </div>
         <div class="kv" id="paymentKv"></div>
+
+        <div class="divider"></div>
+
+        <div class="card-title" style="font-size:14px; margin-bottom:6px;">
+          <span>Pénalités</span>
+          <span class="small">repris du devis</span>
+        </div>
+        <div class="kv" id="penaltiesKv"></div>
 
         <div class="divider"></div>
 
         <div class="actions">
           <button class="btn primary" type="button" id="confirmBtn">Confirmer</button>
           <button class="btn" type="button" id="previewBtn">Aperçu</button>
-        </div>
-
-        <div class="mutedLine" style="margin-top:8px;">
-          Confirmer = facture <b>envoyée</b> (invoiceStatus = SENT). Possible uniquement si le devis est <b>accepté</b>.
         </div>
       </div>
     </div>
@@ -379,7 +383,8 @@
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
-      doc, getDoc, updateDoc, serverTimestamp, runTransaction
+      doc, getDoc, updateDoc, serverTimestamp, runTransaction,
+      collection, query, where, getDocs, limit
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     // ===== UI =====
@@ -388,6 +393,7 @@
     const statusBadge = document.getElementById("statusBadge");
     const docBannerInner = document.getElementById("docBannerInner");
     const paymentKv = document.getElementById("paymentKv");
+    const penaltiesKv = document.getElementById("penaltiesKv");
 
     const appTitle = document.getElementById("appTitle");
 
@@ -417,7 +423,7 @@
     let eventData = null;
 
     let profileData = null; // users/{conciergerieUid}
-    let ownerUser = null;   // owners/{docId} (si présent dans ton flow)
+    let ownerUser = null;   // owners/{docId}
 
     // ===== Helpers =====
     function showAlert(msg, ok=false){
@@ -447,31 +453,48 @@
       const p = new URLSearchParams(location.search);
       return (p.get(name) || "").trim();
     }
+    function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
 
-    const eventId = getParam("eventId");
-
-    function computeTotals(lines, tvaEnabled, tvaRate){
-      let ht = 0;
-      for(const l of (Array.isArray(lines) ? lines : [])){
-        const qty = Number(l?.qty)||0;
-        const up  = Number(l?.unitPrice)||0;
-        ht += qty * up;
-      }
-      const tva = tvaEnabled ? (ht * (Number(tvaRate)||0)) : 0;
-      const ttc = ht + tva;
-      return { ht, tva, ttc };
-    }
-
-    function invoiceStatusLabel(s){
-      const x = String(s||"").toUpperCase().trim();
+    // date helpers
+    function fmtDateFR(x){
       if(!x) return "—";
-      if(x === "DRAFT") return "BROUILLON";
-      if(x === "SENT") return "FACTURE ENVOYÉE";
-      if(x === "PAID") return "PAYÉE";
-      if(x === "CANCELLED") return "ANNULÉE";
-      return x;
+      try{
+        if(x?.toDate?.()) return x.toDate().toLocaleDateString("fr-FR");
+        if(x instanceof Date) return isNaN(x.getTime()) ? "—" : x.toLocaleDateString("fr-FR");
+        const s = String(x).trim();
+        if(!s) return "—";
+        if(/^\d{2}\/\d{2}\/\d{4}$/.test(s)) return s;
+        const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+        if(m) return `${m[3]}/${m[2]}/${m[1]}`;
+        const d = new Date(s);
+        if(!isNaN(d.getTime())) return d.toLocaleDateString("fr-FR");
+        return "—";
+      }catch{
+        return "—";
+      }
     }
-
+    function todayIso(){
+      const d = new Date();
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth()+1).padStart(2,"0");
+      const dd = String(d.getDate()).padStart(2,"0");
+      return `${dd}/${mm}/${yyyy}`;
+    }
+    function termToDays(term){
+      const t = String(term||"").toUpperCase();
+      if(t === "RECEPTION") return 0;
+      if(t === "8J") return 8;
+      if(t === "15J") return 15;
+      if(t === "30J") return 30;
+      if(t === "45J") return 45;
+      return 0;
+    }
+    function addDaysLabel(ddmmyyyy, days){
+      const [dd,mm,yy] = String(ddmmyyyy).split("/").map(x=>parseInt(x,10));
+      const d = new Date(yy, (mm||1)-1, dd||1);
+      d.setDate(d.getDate() + (Number(days)||0));
+      return String(d.getDate()).padStart(2,"0") + "/" + String(d.getMonth()+1).padStart(2,"0") + "/" + d.getFullYear();
+    }
     function dueLabel(term){
       const t = String(term||"").toUpperCase();
       if(t === "RECEPTION") return "À réception";
@@ -488,43 +511,30 @@
       if(m === "CHEQUE") return "Chèque";
       return mode || "—";
     }
-    function termToDays(term){
-      const t = String(term||"").toUpperCase();
-      if(t === "RECEPTION") return 0;
-      if(t === "8J") return 8;
-      if(t === "15J") return 15;
-      if(t === "30J") return 30;
-      if(t === "45J") return 45;
-      return 0;
-    }
-    function todayIso(){
-      const d = new Date();
-      const yyyy = d.getFullYear();
-      const mm = String(d.getMonth()+1).padStart(2,"0");
-      const dd = String(d.getDate()).padStart(2,"0");
-      return `${dd}/${mm}/${yyyy}`;
-    }
-    function addDaysLabel(ddmmyyyy, days){
-      const [dd,mm,yy] = String(ddmmyyyy).split("/").map(x=>parseInt(x,10));
-      const d = new Date(yy, (mm||1)-1, dd||1);
-      d.setDate(d.getDate() + (Number(days)||0));
-      const out = String(d.getDate()).padStart(2,"0") + "/" + String(d.getMonth()+1).padStart(2,"0") + "/" + d.getFullYear();
-      return out;
+
+    function invoiceStatusLabel(s){
+      const x = String(s||"").toUpperCase().trim();
+      if(!x) return "—";
+      if(x === "DRAFT") return "BROUILLON";
+      if(x === "SENT") return "FACTURE ENVOYÉE";
+      if(x === "PAID") return "PAYÉE";
+      if(x === "CANCELLED") return "ANNULÉE";
+      return x;
     }
 
-    function pickDate(v){
-      const s = String(v||"").trim();
-      return s || "";
-    }
-    function getStayPeriod(d){
-      const a = pickDate(d?.arrivalDateKey || d?.arrivalDate || d?.checkinDate || d?.arrival || d?.dateArrivee);
-      const b = pickDate(d?.departureDateKey || d?.departureDate || d?.checkoutDate || d?.departure || d?.dateDepart);
-      if(a && b) return { from:a, to:b, label:`Du ${a} au ${b}` };
-      if(a && !b) return { from:a, to:"", label:`À partir du ${a}` };
-      if(!a && b) return { from:"", to:b, label:`Jusqu’au ${b}` };
-      return { from:"", to:"", label:"—" };
+    function computeTotals(lines, tvaEnabled, tvaRate){
+      let ht = 0;
+      for(const l of (Array.isArray(lines) ? lines : [])){
+        const qty = Number(l?.qty)||0;
+        const up  = Number(l?.unitPrice)||0;
+        ht += qty * up;
+      }
+      const tva = tvaEnabled ? (ht * (Number(tvaRate)||0)) : 0;
+      const ttc = ht + tva;
+      return { ht, tva, ttc };
     }
 
+    // invoice number seq
     async function ensureInvoiceNumber(uid, year){
       const counterId = `${uid}_${year}`;
       const counterRef = doc(db, "counters", counterId);
@@ -544,61 +554,19 @@
       return `FA${year}-${padded}`;
     }
 
+    const eventId = getParam("eventId");
+
     function applyLogoFromProfile(profile){
       const bp = (profile?.businessProfile || {});
       const url = String(bp.logoUrl || "").trim();
 
       if(url){
-        logoImg.src = url;
-        logoImg.style.display = "block";
-        logoFallback.style.display = "none";
+        logoImg.src = url; logoImg.style.display = "block"; logoFallback.style.display = "none";
+        bizLogoImg.src = url; bizLogoImg.style.display = "block"; bizLogoFallback.style.display = "none";
       }else{
-        logoImg.style.display = "none";
-        logoFallback.style.display = "block";
+        logoImg.style.display = "none"; logoFallback.style.display = "block";
+        bizLogoImg.style.display = "none"; bizLogoFallback.style.display = "block";
       }
-
-      if(url){
-        bizLogoImg.src = url;
-        bizLogoImg.style.display = "block";
-        bizLogoFallback.style.display = "none";
-      }else{
-        bizLogoImg.style.display = "none";
-        bizLogoFallback.style.display = "block";
-      }
-    }
-
-    function getOwnerSnapshot(){
-      const d = eventData || {};
-
-      const snapName  = (d.ownerName || "").trim();
-      const snapEmail = (d.ownerEmail || "").trim();
-      const snapPhone = (d.ownerPhone || "").trim();
-
-      const snapA1 = (d.ownerAddress1 || "").trim();
-      const snapA2 = (d.ownerAddress2 || "").trim();
-      const snapZip = (d.ownerZip || "").trim();
-      const snapCity = (d.ownerCity || "").trim();
-
-      const o = ownerUser || {};
-      const oName  = (o.fullname || "").trim();
-      const oEmail = (o.email || "").trim();
-      const oPhone = (o.phone || "").trim();
-
-      const oA1 = (o.address1 || "").trim();
-      const oA2 = (o.address2 || "").trim();
-      const oZip = (o.zip || "").trim();
-      const oCity = (o.city || "").trim();
-
-      const name = oName || snapName || "—";
-      const email = oEmail || snapEmail || "";
-      const phone = oPhone || snapPhone || "";
-
-      const address1 = oA1 || snapA1 || "";
-      const address2 = oA2 || snapA2 || "";
-      const zip = oZip || snapZip || "";
-      const city = oCity || snapCity || "";
-
-      return { name, email, phone, address1, address2, zip, city };
     }
 
     function renderBusinessHeader(){
@@ -629,22 +597,54 @@
       if(contact) lines.push(`<span class="mut">${esc(contact)}</span>`);
 
       bizLinesEl.innerHTML = lines.length ? lines.join("<br>") : "—";
-
       applyLogoFromProfile(profileData);
     }
 
+    // owner snapshot like devis-event
+    function getOwnerSnapshot(){
+      const d = eventData || {};
+
+      const snapName  = (d.ownerName || "").trim();
+      const snapA1 = (d.ownerAddress1 || "").trim();
+      const snapA2 = (d.ownerAddress2 || "").trim();
+      const snapZip = (d.ownerZip || "").trim();
+      const snapCity = (d.ownerCity || "").trim();
+
+      const o = ownerUser || {};
+      const oName  = (o.fullname || "").trim();
+      const oA1 = (o.address1 || "").trim();
+      const oA2 = (o.address2 || "").trim();
+      const oZip = (o.zip || "").trim();
+      const oCity = (o.city || "").trim();
+
+      const name = oName || snapName || "—";
+      const address1 = oA1 || snapA1 || "";
+      const address2 = oA2 || snapA2 || "";
+      const zip = oZip || snapZip || "";
+      const city = oCity || snapCity || "";
+
+      return { name, address1, address2, zip, city };
+    }
+
+    // ✅ CLIENT HEADER = nom + CP/Ville (pas homeName)
     function renderClientHeader(){
       const c = getOwnerSnapshot();
       clientNameEl.textContent = (c.name || "—").trim();
 
       const lines = [];
-      if(c.address1) lines.push(esc(c.address1));
-      if(c.address2) lines.push(esc(c.address2));
-      if(c.zip || c.city) lines.push(esc([c.zip, c.city].filter(Boolean).join(" ")));
+      // on ne met pas l'adresse complète si tu ne veux que CP/Ville : je garde léger.
+      const cpVille = [c.zip, c.city].filter(Boolean).join(" ");
+      if(cpVille) lines.push(esc(cpVille));
+      clientLinesEl.innerHTML = lines.length ? lines.join("<br>") : `<span class="mut">CP / Ville manquants</span>`;
+    }
 
-      clientLinesEl.innerHTML = lines.length
-        ? lines.join("<br>")
-        : `<span class="mut">Adresse manquante</span>`;
+    function getStayPeriodLabel(d){
+      const a = fmtDateFR(d?.arrivalDateKey || d?.arrivalDate);
+      const b = fmtDateFR(d?.departureDateKey || d?.departureDate);
+      if(a !== "—" && b !== "—") return `Du ${a} au ${b}`;
+      if(a !== "—" && b === "—") return `À partir du ${a}`;
+      if(a === "—" && b !== "—") return `Jusqu’au ${b}`;
+      return "—";
     }
 
     function renderLinesAndTotals(){
@@ -710,15 +710,33 @@
       totalsBox.innerHTML = html.join("");
     }
 
+    function getPenaltyTemplate(mode){
+      if(mode === "B2B"){
+        return "Pénalités de retard : 3 fois le taux d’intérêt légal en vigueur + indemnité forfaitaire de recouvrement de 40 €.";
+      }
+      // B2C
+      return "Pénalités de retard : 3 fois le taux d’intérêt légal en vigueur.";
+    }
+
+    function renderPenalties(){
+      const d = eventData || {};
+      const mode = String(d?.quotePenaltyMode || "B2C").toUpperCase();
+      const txt = String(d?.quotePenaltyText || "").trim() || getPenaltyTemplate(mode);
+
+      penaltiesKv.innerHTML = `<div class="line">${esc(txt)}</div>`;
+    }
+
+    // ✅ Paiement doit reprendre le devis accepté (fallback) + échéance + RIB
     function renderPaymentInfo(){
       const d = eventData || {};
       const bp = (profileData?.businessProfile || {});
       const bank = (bp.bank || {});
 
+      // priorité facture si existe, sinon devis
       const mode = String(d?.invoicePaymentMode || d?.quotePaymentMode || "VIREMENT").toUpperCase();
       const term = String(d?.invoicePaymentTerm || d?.quotePaymentTerm || "RECEPTION").toUpperCase();
 
-      const issued = d?.invoiceIssuedDate || todayIso();
+      const issued = String(d?.invoiceIssuedDate || todayIso()).trim();
       const dueDays = termToDays(term);
       const dueDate = addDaysLabel(issued, dueDays);
 
@@ -742,18 +760,12 @@
 
     function renderRecap(){
       const d = eventData || {};
-      const period = getStayPeriod(d);
+      const periodLabel = getStayPeriodLabel(d);
 
       const homeAddr = (d.homeAddress || "").trim();
-      const homeZip = (d.homeZip || d.zip || d.postalCode || "").toString().trim();
+      const homeZip = (d.homeZip || "").toString().trim();
       const homeCity = (d.homeCity || "").trim();
       const homeAddrFull = [homeAddr, [homeZip, homeCity].filter(Boolean).join(" ")].filter(Boolean).join(" • ");
-
-      // ✅ recap = SANS client + email (tu gardes le client dans l’en-tête si tu veux)
-      const rows = [];
-      if(homeAddrFull) rows.push(`<div class="line"><b>Adresse logement</b> : ${esc(homeAddrFull)}</div>`);
-      rows.push(`<div class="line"><b>Période</b> : ${esc(period.label)}</div>`);
-      recapKv.innerHTML = rows.join("");
 
       const invNum = String(d.invoiceNumber || "").trim();
       const hasInvoice = !!invNum;
@@ -769,12 +781,19 @@
 
       if(invoiceNotesEl.value === "" && d.invoiceNotes) invoiceNotesEl.value = d.invoiceNotes;
 
+      // recap = logement + période (pas client)
+      const rows = [];
+      if(homeAddrFull) rows.push(`<div class="line"><b>Adresse logement</b> : ${esc(homeAddrFull)}</div>`);
+      rows.push(`<div class="line"><b>Période</b> : ${esc(periodLabel)}</div>`);
+      recapKv.innerHTML = rows.join("");
+
       renderBusinessHeader();
       renderClientHeader();
       renderLinesAndTotals();
       renderPaymentInfo();
+      renderPenalties();
 
-      // Buttons
+      // buttons
       const inv = String(d?.invoiceStatus || "").toUpperCase().trim();
       const locked = (inv === "SENT" || inv === "PAID" || inv === "CANCELLED");
       confirmBtn.disabled = !eventRef || !canInvoice || locked;
@@ -787,30 +806,70 @@
       profileData = snap.exists() ? (snap.data() || {}) : {};
     }
 
-    async function loadOwner(){
-      // Tu avais déjà ce mécanisme owners. Je le laisse tel quel pour ne pas casser.
-      ownerUser = null;
-      const d = eventData || {};
-      const ownerDocId = String(d.ownerUid || "").trim() || String(d.ownerDocId || "").trim();
-      if(!ownerDocId) return;
+    async function lookupOwnerByEmailInOwners(emailLower){
+      if(!emailLower) return null;
 
-      try{
-        const snap = await getDoc(doc(db,"owners", ownerDocId));
-        if(snap.exists()){
-          const o = snap.data() || {};
-          ownerUser = {
-            docId: snap.id,
-            email: String(o.email || "").trim().toLowerCase(),
-            fullname: (o.fullname || o.displayName || "").trim(),
-            address1: (o.address1 || o.address || "").toString().trim(),
-            address2: (o.address2 || "").toString().trim(),
-            zip: (o.zip || "").toString().trim(),
-            city: (o.city || "").toString().trim(),
-            phone: (o.phone || "").toString().trim(),
-          };
+      const qO = query(
+        collection(db,"owners"),
+        where("conciergerieUid", "==", String(currentUser.uid)),
+        where("email", "==", emailLower),
+        limit(5)
+      );
+      const snap = await getDocs(qO);
+      if(snap.empty) return null;
+
+      const doc0 = snap.docs[0];
+      const o = doc0.data() || {};
+      return {
+        docId: doc0.id,
+        email: normalizeEmail(o.email || emailLower),
+        fullname: (o.fullname || o.displayName || "").trim(),
+        address1: (o.address1 || o.address || "").toString().trim(),
+        address2: (o.address2 || "").toString().trim(),
+        zip: (o.zip || "").toString().trim(),
+        city: (o.city || "").toString().trim(),
+        phone: (o.phone || "").toString().trim(),
+      };
+    }
+
+    async function loadOwner(){
+      ownerUser = null;
+
+      const d = eventData || {};
+      const ownerEmail = normalizeEmail(d.ownerEmail || "");
+      const ownerDocId = String(d.ownerUid || "").trim() || String(d.ownerDocId || "").trim();
+
+      if(ownerDocId){
+        try{
+          const snap = await getDoc(doc(db,"owners", ownerDocId));
+          if(snap.exists()){
+            const o = snap.data() || {};
+            if(String(o.conciergerieUid||"") === String(currentUser.uid)){
+              ownerUser = {
+                docId: snap.id,
+                email: normalizeEmail(o.email || ownerEmail),
+                fullname: (o.fullname || o.displayName || "").trim(),
+                address1: (o.address1 || o.address || "").toString().trim(),
+                address2: (o.address2 || "").toString().trim(),
+                zip: (o.zip || "").toString().trim(),
+                city: (o.city || "").toString().trim(),
+                phone: (o.phone || "").toString().trim(),
+              };
+              return;
+            }
+          }
+        }catch(e){
+          console.warn("load owner by docId failed:", e?.message || e);
         }
-      }catch(e){
-        console.warn("loadOwner failed:", e?.message || e);
+      }
+
+      if(ownerEmail){
+        try{
+          ownerUser = await lookupOwnerByEmailInOwners(ownerEmail);
+        }catch(e){
+          console.warn("lookup owner by email failed:", e?.message || e);
+          ownerUser = null;
+        }
       }
     }
 
@@ -841,7 +900,7 @@
       location.href = `facture-apercu.html?eventId=${encodeURIComponent(eventId)}`;
     });
 
-    // ✅ CONFIRMER = invoiceStatus -> SENT (pas de confirmed:true)
+    // CONFIRMER = met invoiceStatus SENT + crée numéro si absent + snapshot paiement si absent
     confirmBtn.addEventListener("click", async ()=>{
       hideAlert();
       if(!eventRef) return showAlert("Event non chargé.");
@@ -849,9 +908,7 @@
       lockUI(true);
       try{
         const qs = String(eventData?.quoteStatus || "").toUpperCase().trim();
-        if(qs !== "ACCEPTED"){
-          throw new Error("Impossible : le devis doit être ACCEPTÉ avant facturation.");
-        }
+        if(qs !== "ACCEPTED") throw new Error("Impossible : le devis doit être ACCEPTÉ avant facturation.");
 
         const invNow = String(eventData?.invoiceStatus || "").toUpperCase().trim();
         if(invNow === "SENT" || invNow === "PAID" || invNow === "CANCELLED"){
@@ -863,20 +920,14 @@
 
         const patch = {
           invoiceNotes: (invoiceNotesEl.value || "").trim(),
-
-          // statut facture
           invoiceStatus: "SENT",
           invoiceSentAt: serverTimestamp(),
-
-          // compat ancien flow
+          invoiceUpdatedAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
           commercialStatus: "FACTURE_ENVOYEE",
           commercialUpdatedAt: serverTimestamp(),
-
-          invoiceUpdatedAt: serverTimestamp(),
-          updatedAt: serverTimestamp()
         };
 
-        // si première confirmation sans numéro -> on le crée + snapshot paiement
         if(!invoiceNumber){
           invoiceNumber = await ensureInvoiceNumber(currentUser.uid, year);
           patch.invoiceNumber = invoiceNumber;
@@ -884,10 +935,11 @@
           patch.invoiceIssuedAt = serverTimestamp();
           patch.invoiceIssuedDate = todayIso();
 
+          // snapshot paiement depuis devis
           patch.invoicePaymentMode = String(eventData?.quotePaymentMode || "VIREMENT").toUpperCase();
           patch.invoicePaymentTerm = String(eventData?.quotePaymentTerm || "RECEPTION").toUpperCase();
         }else{
-          // garde/synchronise paiement si manquant
+          // si champs invoice paiement manquent, on les complète (sans écraser)
           patch.invoicePaymentMode = String(eventData?.invoicePaymentMode || eventData?.quotePaymentMode || "VIREMENT").toUpperCase();
           patch.invoicePaymentTerm = String(eventData?.invoicePaymentTerm || eventData?.quotePaymentTerm || "RECEPTION").toUpperCase();
           patch.invoiceIssuedDate = String(eventData?.invoiceIssuedDate || todayIso()).trim();
@@ -898,7 +950,7 @@
         const snap2 = await getDoc(eventRef);
         eventData = { id: snap2.id, ...(snap2.data()||{}) };
 
-        showAlert("✅ Facture confirmée (envoyée).", true);
+        showAlert("✅ Facture confirmée.", true);
         await loadOwner();
         renderRecap();
       }catch(err){
