@@ -1,4 +1,4 @@
-<!-- docs/facture-apercu.html (CLONE devis-apercu.html -> lit events + owners, bloc Client = adresse de facturation, pénalités = event.quotePenaltyText ou template, TVA selon businessProfile, imprime/PDF) -->
+<!-- docs/facture-apercu.html (CLONE devis-apercu.html -> lit events + owners, bloc Client = adresse de facturation, pénalités = event.quotePenaltyText ou template, TVA selon businessProfile, imprime/PDF, pas de doublon échéance) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -346,7 +346,7 @@
           <h3>Paiement</h3>
           <div class="line" id="payMode">Mode : —</div>
           <div class="line" id="payTerm">Délai : —</div>
-          
+          <!-- ✅ pas d'échéance ici (doublon). Elle est dans le header et dans Conditions -->
         </div>
       </div>
 
@@ -369,9 +369,7 @@
   <script type="module">
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-    import {
-      doc, getDoc, collection, query, where, getDocs, limit
-    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import { doc, getDoc, collection, query, where, getDocs, limit } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const alertBox = document.getElementById("alertBox");
     const printBtn = document.getElementById("printBtn");
@@ -384,7 +382,7 @@
     const companySubEl  = document.getElementById("companySub");
 
     const docTitleEl = document.getElementById("docTitle");
-    const docMetaEl  = document.getElementById("docMeta"); // (masqué)
+    const docMetaEl  = document.getElementById("docMeta"); // masqué
     const metaRightEl = document.getElementById("metaRight");
 
     const soc1 = document.getElementById("socLine1");
@@ -406,7 +404,6 @@
 
     const payModeEl = document.getElementById("payMode");
     const payTermEl = document.getElementById("payTerm");
-    c
 
     const cond1 = document.getElementById("cond1");
     const cond2 = document.getElementById("cond2");
@@ -501,6 +498,14 @@
       return "—";
     }
 
+    function parseDDMMYYYY(s){
+      const x = String(s||"").trim();
+      if(!/^\d{2}\/\d{2}\/\d{4}$/.test(x)) return null;
+      const [dd,mm,yy] = x.split("/").map(n=>parseInt(n,10));
+      const d = new Date(yy, (mm||1)-1, dd||1);
+      return isNaN(d.getTime()) ? null : d;
+    }
+
     function applyBusinessProfile(profile){
       const bp = (profile?.businessProfile || {});
       const companyName = String(bp.companyName || "Conciergerie").trim();
@@ -548,25 +553,21 @@
       return bp;
     }
 
+    function computeInvoiceDates(eventData){
+      // émission : invoiceIssuedDate si présent sinon aujourd'hui
+      const issuedStr = String(eventData?.invoiceIssuedDate || "").trim();
+      const issuedDate = parseDDMMYYYY(issuedStr) || new Date();
+      const issuedLabel = issuedStr || ddmmyyyy(issuedDate);
+
+      const term = String(eventData?.invoicePaymentTerm || eventData?.quotePaymentTerm || "RECEPTION").toUpperCase();
+      const due = addDays(issuedDate, termToDays(term));
+      return { issuedLabel, term, due };
+    }
+
     function renderDocHeader(eventData){
       docTitleEl.textContent = `FACTURE N° ${eventData?.invoiceNumber || "—"}`;
 
-      const issued = String(eventData?.invoiceIssuedDate || "").trim();
-      const created = issued ? null : new Date();
-
-      // date d'émission (affichage)
-      const issuedLabel = issued || ddmmyyyy(new Date());
-
-      const term = String(eventData?.invoicePaymentTerm || eventData?.quotePaymentTerm || "RECEPTION").toUpperCase();
-      const dueDays = termToDays(term);
-
-      // échéance calculée (si invoiceIssuedDate existe -> on calcule en JS sur Date)
-      let baseDate = new Date();
-      if(issued && /^[0-9]{2}\/[0-9]{2}\/[0-9]{4}$/.test(issued)){
-        const [dd,mm,yy] = issued.split("/").map(x=>parseInt(x,10));
-        baseDate = new Date(yy, (mm||1)-1, dd||1);
-      }
-      const due = addDays(baseDate, dueDays);
+      const { issuedLabel, due } = computeInvoiceDates(eventData);
 
       metaRightEl.innerHTML = `
         <div><b>Émise le</b> ${esc(issuedLabel)}</div>
@@ -722,29 +723,20 @@
       payModeEl.textContent = `Mode : ${modeLabel(mode)}`;
       payTermEl.textContent = `Délai : ${termLabel(term)}`;
 
-      // échéance = émission + term
-      const issued = String(eventData?.invoiceIssuedDate || "").trim();
-      let baseDate = new Date();
-      if(issued && /^[0-9]{2}\/[0-9]{2}\/[0-9]{4}$/.test(issued)){
-        const [dd,mm,yy] = issued.split("/").map(x=>parseInt(x,10));
-        baseDate = new Date(yy, (mm||1)-1, dd||1);
-      }
-      const due = addDays(baseDate, termToDays(term));
-      payDueEl.textContent = `Échéance : ${ddmmyyyy(due)}`;
+      const { due } = computeInvoiceDates(eventData);
 
-      // conditions (on reste simple et propre)
       const cancelPct = Number.isFinite(Number(businessProfile?.conditions?.cancellationPercent))
         ? Number(businessProfile.conditions.cancellationPercent)
         : 30;
 
       cond1.innerHTML = `<b>Référence devis</b> : ${esc(eventData?.quoteNumber || "—")}`;
-      cond2.innerHTML = `<b>Échéance de paiement</b> : ${esc(termLabel(term))}`;
+      cond2.innerHTML = `<b>Échéance de paiement</b> : ${esc(ddmmyyyy(due))} (${esc(termLabel(term))})`;
       cond3.innerHTML = `<b>Annulation</b> : ${esc(String(cancelPct))} % du montant en cas d’annulation moins de 48 h avant l’intervention.`;
     }
 
     function renderPenalty(eventData){
       const candidates = [
-        eventData?.invoicePenaltyText,     // si tu veux plus tard
+        eventData?.invoicePenaltyText,     // optionnel plus tard
         eventData?.quotePenaltyText,
         eventData?.penaltyText,
         eventData?.commercialPenaltyText
@@ -778,6 +770,7 @@
         return;
       }
 
+      // retour liste factures
       backLink.href = `factures-liste.html`;
 
       try{
@@ -794,9 +787,9 @@
           return;
         }
 
-        // sécurité UX : pas de preview propre si pas de numéro facture
+        // preview facture => nécessite un invoiceNumber
         if(!String(eventData.invoiceNumber || "").trim()){
-          showError("Numéro de facture manquant. Crée / enregistre la facture avant l’aperçu.");
+          showError("Numéro de facture manquant. Enregistre la facture avant l’aperçu.");
           return;
         }
 
@@ -824,5 +817,3 @@
   </script>
 </body>
 </html>
-
-
