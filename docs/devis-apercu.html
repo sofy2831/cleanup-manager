@@ -1,4 +1,4 @@
-<!-- docs/devis-apercu.html (FIXED — période formatée FR + propre) -->
+<!-- docs/devis-apercu.html (FINAL FIX — businessProfile + users.address/contact compatibles + ownerDocId prioritaire) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -595,26 +595,29 @@
       return "—";
     }
 
+    // ✅ compat: businessProfile + users.address + users.contact
     function applyBusinessProfile(profile){
       const bp = (profile?.businessProfile || {});
-      const companyName = String(bp.companyName || "Conciergerie").trim();
+      const addr = (profile?.address || bp.address || {});
+      const ctc  = (profile?.contact || {});
+
+      const companyName = String(bp.companyName || profile?.fullname || "Conciergerie").trim();
+      companyNameEl.textContent = companyName || "Conciergerie";
 
       const sigName = String(bp.signatureName || companyName || "Conciergerie").trim();
       sigCompanyTextEl.textContent = sigName || "Conciergerie";
 
-      const logoUrl = String(bp.logoUrl || "").trim();
+      const logoUrl = String(bp.logoUrl || ctc.logoUrl || "").trim();
 
-      const street = String(bp.address?.street || "").trim();
-      const zip = String(bp.address?.zip || "").trim();
-      const city = String(bp.address?.city || "").trim();
+      const street = String(addr.street || "").trim();
+      const zip = String(addr.zip || "").trim();
+      const city = String(addr.city || "").trim();
 
-      const siret = String(bp.registration?.siret || "").trim();
+      const siret = String(bp.registration?.siret || profile?.siret || "").trim();
       const ape   = String(bp.registration?.ape || "").trim();
 
-      const email = String(bp.billingEmail || profile?.email || "").trim();
-      const phone = String(bp.phone || "").trim();
-
-      companyNameEl.textContent = companyName || "Conciergerie";
+      const email = String(ctc.email || bp.billingEmail || profile?.email || "").trim();
+      const phone = String(ctc.phone || bp.phone || profile?.phone || "").trim();
 
       if(logoUrl){
         logoImg.src = logoUrl;
@@ -704,11 +707,13 @@
         address2: (o.address2 || "").toString().trim(),
         zip: (o.zip || "").toString().trim(),
         city: (o.city || "").toString().trim(),
+        phone: (o.phone || "").toString().trim(),
       };
     }
 
+    // ✅ ownerDocId prioritaire (owners/{docId})
     async function loadOwnerForEvent(conciergerieUid, d){
-      const ownerDocId = String(d?.ownerUid || "").trim() || String(d?.ownerDocId || "").trim();
+      const ownerDocId = String(d?.ownerDocId || "").trim() || String(d?.ownerUid || "").trim(); // fallback, au cas où legacy
 
       if(ownerDocId){
         try{
@@ -719,6 +724,8 @@
               return {
                 docId: snap.id,
                 fullname: (o.fullname || o.displayName || "").trim(),
+                email: normalizeEmail(o.email || ""),
+                phone: (o.phone || "").toString().trim(),
                 address1: (o.address1 || o.address || "").toString().trim(),
                 address2: (o.address2 || "").toString().trim(),
                 zip: (o.zip || "").toString().trim(),
@@ -740,6 +747,8 @@
     function ownerSnapshotFromEvent(d){
       return {
         fullname: String(d?.ownerName || "").trim(),
+        email: String(d?.ownerEmail || "").trim(),
+        phone: String(d?.ownerPhone || "").trim(),
         address1: String(d?.ownerAddress1 || "").trim(),
         address2: String(d?.ownerAddress2 || "").trim(),
         zip: String(d?.ownerZip || "").trim(),
@@ -756,11 +765,17 @@
       const a2 = (o?.address2 || s.address2 || "").trim();
       const zip = (o?.zip || s.zip || "").trim();
       const city = (o?.city || s.city || "").trim();
+      const email = (o?.email || s.email || "").trim();
+      const phone = (o?.phone || s.phone || "").trim();
 
       cli1.textContent = name || "—";
+
       cli2.textContent = a1 || "";
       cli2.style.display = a1 ? "" : "none";
-      cli3.textContent = [a2, [zip, city].filter(Boolean).join(" • ")].filter(Boolean).join(" • ") || "";
+
+      const l3 = [a2, [zip, city].filter(Boolean).join(" ")].filter(Boolean).join(" • ");
+      const l4 = [email, phone].filter(Boolean).join(" • ");
+      cli3.textContent = [l3, l4].filter(Boolean).join(" • ") || "";
 
       sigClientTextEl.textContent = name || "—";
       refreshClientSigState();
