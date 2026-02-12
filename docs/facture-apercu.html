@@ -1,4 +1,5 @@
-<!-- docs/facture-apercu.html (FIX: coordonnées bancaires + pas d'échéance en Conditions + impression 2 colonnes Société/Client) -->
+<!-- docs/facture-apercu.html (FINAL — support docId (salesDocuments) + fallback eventId (events)
+     FIX: coordonnées bancaires + pas d'échéance en Conditions + impression 2 colonnes Société/Client) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -431,6 +432,10 @@
 
     const footerEl = document.getElementById("footer");
 
+    // state
+    let docKind = ""; // "SALES" | "EVENT"
+    let docData = null; // facture data
+
     function showError(msg){
       alertBox.style.display = "block";
       alertBox.textContent = "⛔ " + msg;
@@ -571,19 +576,19 @@
       return bp;
     }
 
-    function computeInvoiceDates(eventData){
-      const issuedStr = String(eventData?.invoiceIssuedDate || "").trim();
+    function computeInvoiceDates(d){
+      const issuedStr = String(d?.invoiceIssuedDate || "").trim();
       const issuedDate = parseDDMMYYYY(issuedStr) || new Date();
       const issuedLabel = issuedStr || ddmmyyyy(issuedDate);
 
-      const term = String(eventData?.invoicePaymentTerm || eventData?.quotePaymentTerm || "RECEPTION").toUpperCase();
+      const term = String(d?.invoicePaymentTerm || d?.quotePaymentTerm || "RECEPTION").toUpperCase();
       const due = addDays(issuedDate, termToDays(term));
       return { issuedLabel, term, due };
     }
 
-    function renderDocHeader(eventData){
-      docTitleEl.textContent = `FACTURE N° ${eventData?.invoiceNumber || "—"}`;
-      const { issuedLabel, due } = computeInvoiceDates(eventData);
+    function renderDocHeader(d){
+      docTitleEl.textContent = `FACTURE N° ${d?.invoiceNumber || "—"}`;
+      const { issuedLabel, due } = computeInvoiceDates(d);
 
       metaRightEl.innerHTML = `
         <div><b>Émise le</b> ${esc(issuedLabel)}</div>
@@ -606,12 +611,12 @@
       if(!emailLower) return null;
 
       const qO = query(
-  collection(db,"owners"),
-  where("conciergerieUid", "==", String(conciergerieUid)),
-  where("emailLower", "==", emailLower),
-  where("isActive", "==", true),
-  limit(1)
-);
+        collection(db,"owners"),
+        where("conciergerieUid", "==", String(conciergerieUid)),
+        where("emailLower", "==", emailLower),
+        where("isActive", "==", true),
+        limit(1)
+      );
 
       const snap = await getDocs(qO);
       if(snap.empty) return null;
@@ -630,9 +635,9 @@
       };
     }
 
-    async function loadOwnerForEvent(conciergerieUid, d){
+    async function loadOwnerFromDoc(conciergerieUid, d){
+      // EVENT-style
       const ownerDocId = String(d?.ownerUid || "").trim() || String(d?.ownerDocId || "").trim();
-
       if(ownerDocId){
         try{
           const snap = await getDoc(doc(db,"owners", ownerDocId));
@@ -654,27 +659,42 @@
         }catch(e){ /* ignore */ }
       }
 
-      const ownerEmail = normalizeEmail(d?.ownerEmail || "");
-      if(ownerEmail){
-        try{ return await lookupOwnerByEmailInOwners(conciergerieUid, ownerEmail); }
+      // SALES-style: clientEmail / ownerEmail
+      const emailLower = normalizeEmail(d?.clientEmail || d?.ownerEmail || "");
+      if(emailLower){
+        try{ return await lookupOwnerByEmailInOwners(conciergerieUid, emailLower); }
         catch(e){ return null; }
       }
       return null;
     }
 
-    function ownerSnapshotFromEvent(d){
+    function clientSnapshot(d){
+      // SALES snapshot priority
+      const sName = String(d?.clientName || "").trim();
+      const sA1   = String(d?.clientAddress1 || d?.clientAddress || "").trim();
+      const sA2   = String(d?.clientAddress2 || "").trim();
+      const sZip  = String(d?.clientZip || "").trim();
+      const sCity = String(d?.clientCity || "").trim();
+
+      // EVENT snapshot fallback
+      const eName = String(d?.ownerName || "").trim();
+      const eA1   = String(d?.ownerAddress1 || "").trim();
+      const eA2   = String(d?.ownerAddress2 || "").trim();
+      const eZip  = String(d?.ownerZip || "").trim();
+      const eCity = String(d?.ownerCity || "").trim();
+
       return {
-        fullname: String(d?.ownerName || "").trim(),
-        address1: String(d?.ownerAddress1 || "").trim(),
-        address2: String(d?.ownerAddress2 || "").trim(),
-        zip: String(d?.ownerZip || "").trim(),
-        city: String(d?.ownerCity || "").trim(),
+        fullname: sName || eName,
+        address1: sA1 || eA1,
+        address2: sA2 || eA2,
+        zip: sZip || eZip,
+        city: sCity || eCity
       };
     }
 
     function renderClientHeader(ownerFromOwners, d){
       const o = ownerFromOwners || null;
-      const s = ownerSnapshotFromEvent(d);
+      const s = clientSnapshot(d);
 
       const name = (o?.fullname || s.fullname || "—").trim();
       const a1 = (o?.address1 || s.address1 || "").trim();
@@ -688,8 +708,8 @@
       cli3.textContent = [a2, [zip, city].filter(Boolean).join(" ")].filter(Boolean).join(" • ") || "";
     }
 
-    function renderLines(eventData, businessProfile){
-      const arr = Array.isArray(eventData?.lines) ? eventData.lines : [];
+    function renderLines(d, businessProfile){
+      const arr = Array.isArray(d?.lines) ? d.lines : [];
       linesBody.innerHTML = "";
 
       const vatEnabled = !!businessProfile?.vat?.enabled;
@@ -731,9 +751,9 @@
       }
     }
 
-    function renderPaymentAndConditions(eventData, businessProfile){
-      const mode = String(eventData?.invoicePaymentMode || eventData?.quotePaymentMode || "VIREMENT").toUpperCase();
-      const term = String(eventData?.invoicePaymentTerm || eventData?.quotePaymentTerm || "RECEPTION").toUpperCase();
+    function renderPaymentAndConditions(d, businessProfile){
+      const mode = String(d?.invoicePaymentMode || d?.quotePaymentMode || "VIREMENT").toUpperCase();
+      const term = String(d?.invoicePaymentTerm || d?.quotePaymentTerm || "RECEPTION").toUpperCase();
 
       payModeEl.textContent = `Mode : ${modeLabel(mode)}`;
       payTermEl.textContent = `Délai : ${termLabel(term)}`;
@@ -742,8 +762,8 @@
         ? Number(businessProfile.conditions.cancellationPercent)
         : 30;
 
-      // ✅ SUPPRIMÉ: "Échéance de paiement : 10/02/2026 (À réception)" -> tu ne veux plus cette ligne
-      cond1.innerHTML = `<b>Référence devis</b> : ${esc(eventData?.quoteNumber || "—")}`;
+      // ✅ pas d’échéance en Conditions
+      cond1.innerHTML = `<b>Référence devis</b> : ${esc(d?.quoteNumber || "—")}`;
       cond2.innerHTML = `<b>Annulation</b> : ${esc(String(cancelPct))} % du montant en cas d’annulation moins de 48 h avant l’intervention.`;
       cond3.innerHTML = `&nbsp;`;
     }
@@ -755,7 +775,6 @@
       const iban = String(bank.iban || "").trim();
       const bic = String(bank.bic || bank.swift || "").trim();
 
-      // Fallbacks possibles si tu stockes ailleurs
       const iban2 = iban || String(businessProfile?.iban || "").trim();
       const bic2  = bic  || String(businessProfile?.bic  || businessProfile?.swift || "").trim();
 
@@ -780,11 +799,11 @@
       bank3.style.display = bic2 ? "" : "none";
     }
 
-    function renderPenalty(eventData){
+    function renderPenalty(d){
       const candidates = [
-        eventData?.invoicePenaltyText,
-        eventData?.quotePenaltyText,
-        eventData?.penaltyText
+        d?.invoicePenaltyText,
+        d?.quotePenaltyText,
+        d?.penaltyText
       ].map(v => String(v || "").trim()).filter(Boolean);
 
       if(candidates.length){
@@ -794,7 +813,7 @@
         return;
       }
 
-      const mode = String(eventData?.quotePenaltyMode || "B2C").trim().toUpperCase();
+      const mode = String(d?.invoicePenaltyMode || d?.quotePenaltyMode || "B2C").trim().toUpperCase();
       penaltyTextEl.textContent = getPenaltyTemplate(mode);
       penTitle.style.display = "";
       penBox.style.display = "";
@@ -808,52 +827,70 @@
         return;
       }
 
+      const docId = getParam("docId");
       const eventId = getParam("eventId");
 
-if(!eventId){
-  backLink.href = "factures-liste.html";
-  showError("eventId manquant.");
-  return;
-}
+      if(!docId && !eventId){
+        backLink.href = "factures-liste.html";
+        showError("docId ou eventId manquant.");
+        return;
+      }
 
-// ✅ retour vers la page édition facture (pas la liste)
-backLink.href = `facture.html?eventId=${encodeURIComponent(eventId)}`;
-
+      // retour vers la page édition facture
+      backLink.href = docId
+        ? `facture.html?docId=${encodeURIComponent(docId)}`
+        : `facture.html?eventId=${encodeURIComponent(eventId)}`;
 
       try{
-        const es = await getDoc(doc(db, "events", eventId));
-        if(!es.exists()){
-          showError("Facture introuvable (event).");
+        // 1) charger le document
+        let snap = null;
+
+        if(docId){
+          docKind = "SALES";
+          snap = await getDoc(doc(db, "salesDocuments", docId));
+          if(!snap.exists()){
+            showError("Facture introuvable (salesDocuments).");
+            return;
+          }
+        }else{
+          docKind = "EVENT";
+          snap = await getDoc(doc(db, "events", eventId));
+          if(!snap.exists()){
+            showError("Facture introuvable (event).");
+            return;
+          }
+        }
+
+        docData = { id: snap.id, ...(snap.data()||{}) };
+
+        // 2) sécurité conciergerie
+        if(String(docData.conciergerieUid||"") && String(docData.conciergerieUid) !== String(user.uid)){
+          showError("Accès refusé (document d’une autre conciergerie).");
           return;
         }
-        const eventData = { id: es.id, ...(es.data()||{}) };
 
-        if(eventData.conciergerieUid && eventData.conciergerieUid !== user.uid){
-          showError("Accès refusé (event d’une autre conciergerie).");
-          return;
-        }
-
-        if(!String(eventData.invoiceNumber || "").trim()){
+        // 3) numéro obligatoire
+        if(!String(docData.invoiceNumber || "").trim()){
           showError("Numéro de facture manquant. Enregistre la facture avant l’aperçu.");
           return;
         }
 
-        // Business profile
+        // 4) Business profile
         const userSnap = await getDoc(doc(db,"users", user.uid));
         const profile = userSnap.exists() ? (userSnap.data()||{}) : {};
         const bp = applyBusinessProfile(profile);
 
-        // Client
-        const ownerFromOwners = await loadOwnerForEvent(user.uid, eventData);
-        renderClientHeader(ownerFromOwners, eventData);
+        // 5) Client (owners si possible, sinon snapshot doc)
+        const ownerFromOwners = await loadOwnerFromDoc(user.uid, docData);
+        renderClientHeader(ownerFromOwners, docData);
 
-        // Rendu
-        renderDocHeader(eventData);
-        renderHomeAndPeriod(eventData);
-        renderLines(eventData, bp || {});
-        renderPaymentAndConditions(eventData, bp || {});
+        // 6) Rendu
+        renderDocHeader(docData);
+        renderHomeAndPeriod(docData);
+        renderLines(docData, bp || {});
+        renderPaymentAndConditions(docData, bp || {});
         renderBank(bp || {});
-        renderPenalty(eventData);
+        renderPenalty(docData);
 
       }catch(e){
         console.error(e);
@@ -863,8 +900,3 @@ backLink.href = `facture.html?eventId=${encodeURIComponent(eventId)}`;
   </script>
 </body>
 </html>
-
-
-
-
-
