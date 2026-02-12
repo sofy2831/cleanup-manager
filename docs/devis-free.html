@@ -635,7 +635,7 @@
 
       bizNameEl.textContent = cName || "—";
       pageTitleEl.textContent = cName || "Conciergerie";
-      document.title = `${cName || "Conciergerie"} – Devis libre`;
+      document.title = `${cName || "Conciergerie"} – Devis prospect`;
 
       const linesHtml = [];
       if(street) linesHtml.push(esc(street));
@@ -651,7 +651,7 @@
 
     function buildBusinessSnapshotFromProfile(){
       const bp = (profileData?.businessProfile || {});
-      const rootSignature = String(profileData?.signatureName || "").trim(); // ✅ signature à la racine users
+      const rootSignature = String(profileData?.signatureName || "").trim(); // ✅ users.signatureName
       const signatureName =
         rootSignature ||
         String(bp.signatureName || "").trim() ||
@@ -734,7 +734,8 @@
     }
 
     function getTemplateByKey(key){
-      return (PRODUCT_TEMPLATES || []).find(p => String(p.key||"").trim() === String(key||"").trim()) || null;
+      return (Array.isArray(PRODUCT_TEMPLATES) ? PRODUCT_TEMPLATES : [])
+        .find(p => String(p.key||"").trim() === String(key||"").trim()) || null;
     }
 
     function buildProductSelect(){
@@ -764,9 +765,7 @@
         return `<optgroup label="${esc(cat)}">${opts}</optgroup>`;
       }).join("");
 
-      // ✅ ajoute une option "Autre" manuelle (utilisée par le code __OTHER__)
       const otherOpt = `<option value="__OTHER__">Autre… (saisie manuelle)</option>`;
-
       productSelect.innerHTML = `<option value="">— Choisir —</option>` + optGroups + otherOpt;
     }
 
@@ -1007,7 +1006,7 @@
 
       const client = readClientInputs();
       if(!client.clientName || !client.clientEmail){
-        throw new Error("Client : nom + email obligatoires (création devis libre).");
+        throw new Error("Client : nom + email obligatoires (création devis prospect).");
       }
 
       const year = new Date().getFullYear();
@@ -1021,8 +1020,7 @@
         conciergerieUid: currentUser.uid,
         businessSnapshot: buildBusinessSnapshotFromProfile(),
 
-        // ✅ tant que pas "Enregistrer" => pas listé
-        listable: false,
+        listable: false, // ✅ pas listé tant que pas Enregistrer
 
         type: "QUOTE",
         docType: "QUOTE_FREE",
@@ -1103,8 +1101,7 @@
 
         quotePrivateNote: (privateNoteEl.value || "").trim(),
 
-        // ✅ le devis devient listable UNIQUEMENT sur Enregistrer
-        ...(makeListable ? { listable: true } : {}),
+        ...(makeListable ? { listable: true } : {}), // ✅ 1 seule écriture
 
         quoteUpdatedAt: serverTimestamp(),
         commercialUpdatedAt: serverTimestamp()
@@ -1117,27 +1114,25 @@
       renderRecap();
     }
 
-   saveBtn.addEventListener("click", async ()=>{
-  hideAlert();
-  lockUI(true);
-  try{
-    await saveToFirestore({ requireLines:true, makeListable:true }); // ✅ 1 seule écriture
-    showAlert("✅ Devis enregistré.", true);
-  }catch(e){
-    console.error(e);
-    showAlert("⛔ " + (e?.message || "Erreur sauvegarde"), false);
-  }finally{
-    lockUI(false);
-  }
-});
-
+    saveBtn.addEventListener("click", async ()=>{
+      hideAlert();
+      lockUI(true);
+      try{
+        await saveToFirestore({ requireLines:true, makeListable:true }); // ✅ listable en 1 write
+        showAlert("✅ Devis enregistré.", true);
+      }catch(e){
+        console.error(e);
+        showAlert("⛔ " + (e?.message || "Erreur sauvegarde"), false);
+      }finally{
+        lockUI(false);
+      }
+    });
 
     previewBtn.addEventListener("click", async ()=>{
       hideAlert();
       lockUI(true);
       try{
-        // ✅ APERÇU => sauvegarde (brouillon), listable reste false
-        await saveToFirestore({ requireLines:false, makeListable:false });
+        await saveToFirestore({ requireLines:false, makeListable:false }); // brouillon non listable
         const u = new URL("devisfree-apercu.html", location.href);
         u.searchParams.set("docId", docId);
         location.href = u.toString();
@@ -1198,4 +1193,3 @@
   </script>
 </body>
 </html>
-
