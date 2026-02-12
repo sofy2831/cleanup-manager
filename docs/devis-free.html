@@ -1,4 +1,4 @@
-<!-- docs/devis-free.html (FINAL: DRAFT non listable + devient listable uniquement au clic "Enregistrer") -->
+<!-- docs/devis-free.html (FINAL — PROSPECT: pas de logement/owner, DRAFT non listable, listable uniquement au clic "Enregistrer") -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -202,6 +202,7 @@
   <div class="page">
     <div class="topbar">
       <a class="pill-link" href="devis-liste.html">← Retour devis</a>
+      <span></span>
     </div>
 
     <div class="logo-title">
@@ -212,7 +213,7 @@
       <h1 id="pageTitle">Conciergerie</h1>
     </div>
 
-    <div class="subtitle">Devis</div>
+    <div class="subtitle">Devis prospect</div>
     <div class="badge hidden" id="statusBadge">—</div>
 
     <div class="docBanner">
@@ -266,6 +267,7 @@
       <div class="card">
         <div class="card-title">
           <span>Lignes</span>
+          <span class="small">prestations</span>
         </div>
 
         <div class="alert" id="alertBox"></div>
@@ -322,19 +324,6 @@
         </div>
 
         <div class="inline">
-          <div class="hidden">
-            <label for="category">Catégorie</label>
-            <select id="category">
-              <option value="Essentiel">Essentiel</option>
-              <option value="Ménage">Ménage</option>
-              <option value="Linge">Linge</option>
-              <option value="Check-in/out">Check-in/out</option>
-              <option value="Maintenance">Maintenance</option>
-              <option value="Messages voyageurs">Messages voyageurs</option>
-              <option value="Kits & consommables">Kits & consommables</option>
-              <option value="Autre">Autre</option>
-            </select>
-          </div>
           <div style="flex:1; display:flex; align-items:flex-end;">
             <button class="btnline" type="button" id="addLineBtn">+ Ajouter la ligne</button>
           </div>
@@ -449,7 +438,7 @@
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
-      doc, getDoc, setDoc, updateDoc, serverTimestamp, runTransaction
+      doc, collection, getDoc, setDoc, updateDoc, serverTimestamp, runTransaction
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
     import { PRODUCT_TEMPLATES } from "./catalog-templates.js";
 
@@ -499,7 +488,6 @@
     const unitEl = document.getElementById("unit");
     const unitPriceEl = document.getElementById("unitPrice");
     const lineNoteEl = document.getElementById("lineNote");
-    const categoryEl = document.getElementById("category");
     const addLineBtn = document.getElementById("addLineBtn");
     const suggestLine = document.getElementById("suggestLine");
     const suggestText = document.getElementById("suggestText");
@@ -663,6 +651,13 @@
 
     function buildBusinessSnapshotFromProfile(){
       const bp = (profileData?.businessProfile || {});
+      const rootSignature = String(profileData?.signatureName || "").trim(); // ✅ signature à la racine users
+      const signatureName =
+        rootSignature ||
+        String(bp.signatureName || "").trim() ||
+        String(bp.companyName || "").trim() ||
+        "Conciergerie";
+
       return {
         companyName: String(bp.companyName || "Conciergerie").trim(),
         logoUrl: String(bp.logoUrl || "").trim(),
@@ -689,9 +684,7 @@
             ? Number(bp.conditions.cancellationPercent)
             : 30
         },
-        signatureName: String(
-          bp.displayName || bp.signatureName || bp.companyName || "Conciergerie"
-        ).trim(),
+        signatureName,
         snapAtMs: Date.now()
       };
     }
@@ -743,13 +736,16 @@
     function getTemplateByKey(key){
       return (PRODUCT_TEMPLATES || []).find(p => String(p.key||"").trim() === String(key||"").trim()) || null;
     }
+
     function buildProductSelect(){
+      const templates = Array.isArray(PRODUCT_TEMPLATES) ? PRODUCT_TEMPLATES : [];
       const byCat = new Map();
-      for(const p of (PRODUCT_TEMPLATES || [])){
+      for(const p of templates){
         const cat = p.category || "Autre";
         if(!byCat.has(cat)) byCat.set(cat, []);
         byCat.get(cat).push(p);
       }
+
       const catOrder = ["Ménage","Linge","Check-in/out","Maintenance","Messages voyageurs","Kits & consommables","Essentiel","Autre"];
       const cats = Array.from(byCat.keys()).sort((a,b)=>{
         const ia = catOrder.indexOf(a); const ib = catOrder.indexOf(b);
@@ -759,31 +755,38 @@
         return ia - ib;
       });
 
-      productSelect.innerHTML =
-        `<option value="">— Choisir —</option>` +
-        cats.map(cat=>{
-          const opts = (byCat.get(cat) || []).map(p=>{
-            const key = String(p.key||"").trim();
-            const label = String(p.label||"").trim();
-            return `<option value="${esc(key)}">${esc(label)}</option>`;
-          }).join("");
-          return `<optgroup label="${esc(cat)}">${opts}</optgroup>`;
+      const optGroups = cats.map(cat=>{
+        const opts = (byCat.get(cat) || []).map(p=>{
+          const key = String(p.key||"").trim();
+          const label = String(p.label||"").trim();
+          return `<option value="${esc(key)}">${esc(label)}</option>`;
         }).join("");
+        return `<optgroup label="${esc(cat)}">${opts}</optgroup>`;
+      }).join("");
+
+      // ✅ ajoute une option "Autre" manuelle (utilisée par le code __OTHER__)
+      const otherOpt = `<option value="__OTHER__">Autre… (saisie manuelle)</option>`;
+
+      productSelect.innerHTML = `<option value="">— Choisir —</option>` + optGroups + otherOpt;
     }
+
     function refreshSuggest(){
-      const key = productSelect.value;
+      const key = (productSelect.value || "").trim();
+
+      if(key === "__OTHER__"){
+        suggestLine.style.display = "none";
+        otherNameWrap.style.display = "block";
+        return;
+      }
+
+      otherNameWrap.style.display = "none";
+      otherNameEl.value = "";
+
       const t = getTemplateByKey(key);
       if(!t){
         suggestLine.style.display = "none";
-        otherNameWrap.style.display = "none";
-        otherNameEl.value = "";
         return;
       }
-      if(String(key) === "__OTHER__") otherNameWrap.style.display = "block";
-      else { otherNameWrap.style.display = "none"; otherNameEl.value = ""; }
-
-      if(t.category && t.category !== "Autre") categoryEl.value = t.category;
-      if(t.unit) unitEl.value = t.unit;
 
       if(t.suggested){
         suggestText.textContent = t.suggested;
@@ -804,7 +807,7 @@
         if(!label) return { ok:false, msg:"Renseigne le nom du produit (Autre)." };
       }else{
         const t = getTemplateByKey(key);
-        label = t?.label || "";
+        label = (t?.label || "").trim();
         if(!label) return { ok:false, msg:"Prestation invalide." };
       }
 
@@ -816,21 +819,18 @@
       const unitPrice = Number(unitPriceEl.value);
       if(!(unitPrice >= 0)) return { ok:false, msg:"Prix unitaire invalide." };
 
-      const category = (categoryEl.value || "").trim();
       const note = (lineNoteEl.value || "").trim();
-
-      const tpl = getTemplateByKey(key);
-      const suggested = tpl?.suggested || "";
+      const tpl = (key && key !== "__OTHER__") ? getTemplateByKey(key) : null;
+      const suggested = (tpl?.suggested || "");
 
       return {
         ok:true,
         line: {
           label,
-          ref: key === "__OTHER__" ? "" : (String(key||"").trim()),
+          ref: key === "__OTHER__" ? "" : key,
           qty,
           unit,
           unitPrice,
-          category: category || "",
           note,
           suggestedPrice: suggested
         }
@@ -845,12 +845,12 @@
       unitEl.value = "unité";
       unitPriceEl.value = "";
       lineNoteEl.value = "";
-      categoryEl.value = "Essentiel";
       suggestLine.style.display = "none";
     }
 
     function renderLines(){
       linesList.innerHTML = "";
+
       if(!lines.length){
         const empty = document.createElement("div");
         empty.style.background = "#fff";
@@ -975,7 +975,6 @@
         qty: Number(x?.qty)||0,
         unit: String(x?.unit || "unité").trim(),
         unitPrice: Number(x?.unitPrice)||0,
-        category: String(x?.category || "").trim(),
         note: String(x?.note || "").trim(),
         suggestedPrice: String(x?.suggestedPrice || "").trim()
       })) : [];
@@ -1014,19 +1013,16 @@
       const year = new Date().getFullYear();
       const quoteNumber = await ensureQuoteNumber(currentUser.uid, year);
 
-      const newRef = doc(db, "salesDocuments", crypto.randomUUID());
+      const newRef = doc(collection(db, "salesDocuments")); // auto-id
       docId = newRef.id;
       quoteRef = newRef;
 
       const patch = {
         conciergerieUid: currentUser.uid,
-
         businessSnapshot: buildBusinessSnapshotFromProfile(),
-        
-        // ✅ IMPORTANT : tant que pas "Enregistrer" => pas listé
-        listable: false,
 
-        
+        // ✅ tant que pas "Enregistrer" => pas listé
+        listable: false,
 
         type: "QUOTE",
         docType: "QUOTE_FREE",
@@ -1094,7 +1090,6 @@
           qty: Number(l.qty)||0,
           unit: String(l.unit||"unité").trim(),
           unitPrice: Number(l.unitPrice)||0,
-          category: String(l.category||"").trim(),
           note: String(l.note||"").trim(),
           suggestedPrice: String(l.suggestedPrice||"").trim()
         })),
@@ -1108,7 +1103,7 @@
 
         quotePrivateNote: (privateNoteEl.value || "").trim(),
 
-        // ✅ le devis ne devient "listable" QUE sur Enregistrer
+        // ✅ le devis devient listable UNIQUEMENT sur Enregistrer
         ...(makeListable ? { listable: true } : {}),
 
         quoteUpdatedAt: serverTimestamp(),
@@ -1122,15 +1117,13 @@
       renderRecap();
     }
 
-        saveBtn.addEventListener("click", async ()=>{
+    saveBtn.addEventListener("click", async ()=>{
       hideAlert();
       lockUI(true);
       try{
-        await saveToFirestore({ requireLines:true });
-        await updateDoc(quoteRef, { listable: true });
+        await saveToFirestore({ requireLines:true, makeListable:true }); // ✅ listable ici
         showAlert("✅ Devis enregistré.", true);
       }catch(e){
-
         console.error(e);
         showAlert("⛔ " + (e?.message || "Erreur sauvegarde"), false);
       }finally{
@@ -1142,7 +1135,7 @@
       hideAlert();
       lockUI(true);
       try{
-        // ✅ APERÇU => on sauvegarde (brouillon), mais listable reste false
+        // ✅ APERÇU => sauvegarde (brouillon), listable reste false
         await saveToFirestore({ requireLines:false, makeListable:false });
         const u = new URL("devisfree-apercu.html", location.href);
         u.searchParams.set("docId", docId);
@@ -1204,5 +1197,3 @@
   </script>
 </body>
 </html>
-
-
