@@ -1,4 +1,4 @@
-<!-- docs/factures-liste.html (FINAL — boutons Ouvrir/Avoir/Paiement selon invoiceNumber + creditedAt + paid, + bouton global Nouvelle facture) -->
+<!-- docs/factures-liste.html (FINAL FIX — LISTE = salesDocuments(type INVOICE), ouvre via docId, aperçu via docId) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -126,7 +126,6 @@
     }
     .alert.ok{ border-left-color: var(--ok); }
 
-    /* toolbar */
     .toolbar{
       display:grid;
       grid-template-columns: 220px 1fr auto;
@@ -216,7 +215,6 @@
     .badge.ok{ border-color: rgba(27,143,77,0.35); color: var(--ok); }
     .badge.bad{ border-color: rgba(179,38,30,0.30); color: var(--bad); }
 
-    /* 1 ligne 6 colonnes */
     .line6{
       display:grid;
       grid-template-columns: 110px 160px 1.2fr 1.2fr 1.1fr 130px;
@@ -415,7 +413,6 @@
       return n.toLocaleString("fr-FR",{minimumFractionDigits:2, maximumFractionDigits:2})+" €";
     }
 
-    // date FR robuste : Timestamp / Date / YYYY-MM-DD / DD/MM/YYYY
     function fmtDateFR(x){
       if(!x) return "—";
       try{
@@ -442,9 +439,9 @@
       return lines.reduce((s,l)=> s + (Number(l?.qty)||0) * (Number(l?.unitPrice)||0), 0);
     }
 
-    function getInvoiceTotal(ev){
+    function getInvoiceTotal(docu){
       const candidates = [
-        ev?.invoiceTotal, ev?.totalInvoice, ev?.invoiceAmount, ev?.invoiceTTC, ev?.totalTTC, ev?.total
+        docu?.invoiceTotal, docu?.totalInvoice, docu?.invoiceAmount, docu?.invoiceTTC, docu?.totalTTC, docu?.total
       ];
       for(const c of candidates){
         if(c != null && c !== ""){
@@ -452,41 +449,21 @@
           if(Number.isFinite(n)) return n;
         }
       }
-      return computeTotalFromLines(ev?.lines);
+      return computeTotalFromLines(docu?.lines);
     }
 
-    function badgeForInvoiceStatus(s, paymentStatus=""){
+    function badgeForInvoiceStatus(s){
       const x = String(s||"").toUpperCase().trim();
-      const ps = String(paymentStatus||"").toUpperCase().trim();
-
       if(!x) return `<span class="badge bad">Sans statut</span>`;
-      if(x === "PAID" || ps === "PAID") return `<span class="badge ok">Payée</span>`;
+      if(x === "PAID") return `<span class="badge ok">Payée</span>`;
       if(x === "CREDITED") return `<span class="badge bad">Créditée</span>`;
       if(x === "SENT" || x === "ISSUED") return `<span class="badge">Envoyée</span>`;
       if(x === "DRAFT") return `<span class="badge">Brouillon</span>`;
       return `<span class="badge">${esc(x)}</span>`;
     }
 
-    function normalizeStatusFromCommercial(ev){
-      const cs = String(ev?.commercialStatus||"").toUpperCase().trim();
-      if(cs === "PAYE") return "PAID";
-      if(cs === "FACTURE_ENVOYEE") return "SENT";
-      if(cs === "FACTURE") return "DRAFT";
-      return "";
-    }
-
-    function getInvoiceStatus(ev){
-      const st = String(ev?.invoiceStatus||"").toUpperCase().trim();
-      if(st) return st;
-      return normalizeStatusFromCommercial(ev) || "";
-    }
-
-    function getPaymentStatus(ev){
-      const ps = String(ev?.paymentStatus||"").toUpperCase().trim();
-      if(ps) return ps;
-      // fallback possible : paidAt => PAID
-      if(ev?.paidAt) return "PAID";
-      return "";
+    function getInvoiceStatus(x){
+      return String(x?.invoiceStatus||"").toUpperCase().trim();
     }
 
     function matchesFilter(item){
@@ -517,29 +494,22 @@
     function getCreatedAt(x){
       if(x?.createdAt?.toDate?.()) return x.createdAt.toDate().toLocaleDateString("fr-FR");
       if(x?.createdAt) return fmtDateFR(x.createdAt);
-      if(x?.dateKey) return String(x.dateKey);
-      if(x?.date) return fmtDateFR(x.date);
+      if(x?.createdAtMs) return fmtDateFR(new Date(Number(x.createdAtMs)));
+      if(x?.snapAtMs) return fmtDateFR(new Date(Number(x.snapAtMs)));
       return "—";
     }
 
     function getInvoiceNumber(x){
       const n = String(x?.invoiceNumber || "").trim();
-      if(n) return n;
-      return "FA—";
+      return n || "—";
     }
 
-    function hasInvoiceNumber(ev){
-      return !!String(ev?.invoiceNumber || "").trim();
+    function isCredited(x){
+      return !!x?.creditedAt || getInvoiceStatus(x) === "CREDITED";
     }
 
-    function isCredited(ev){
-      return !!ev?.creditedAt || String(getInvoiceStatus(ev)||"").toUpperCase() === "CREDITED";
-    }
-
-    function isPaid(ev){
-      const st = String(getInvoiceStatus(ev)||"").toUpperCase();
-      const ps = String(getPaymentStatus(ev)||"").toUpperCase();
-      return (st === "PAID") || (ps === "PAID") || !!ev?.paidAt;
+    function isPaid(x){
+      return getInvoiceStatus(x) === "PAID" || !!x?.paidAt;
     }
 
     function render(){
@@ -557,31 +527,28 @@
         return;
       }
 
-      for(const ev of filtered){
-        const created = getCreatedAt(ev);
-        const invNum = getInvoiceNumber(ev);
+      for(const x of filtered){
+        const created = getCreatedAt(x);
+        const invNum = getInvoiceNumber(x);
 
-        const client = (ev.ownerName || "—");
-        const home = (ev.homeName || "—");
-        const period = (ev.arrivalDateKey || ev.departureDateKey)
-          ? `${fmtDateFR(ev.arrivalDateKey)} → ${fmtDateFR(ev.departureDateKey)}`
+        const client = (x.ownerName || "—");
+        const home = (x.homeName || "—");
+        const period = (x.arrivalDateKey || x.departureDateKey)
+          ? `${fmtDateFR(x.arrivalDateKey)} → ${fmtDateFR(x.departureDateKey)}`
           : "—";
 
-        const total = getInvoiceTotal(ev);
+        const total = getInvoiceTotal(x);
+        const st = getInvoiceStatus(x);
 
-        const st = getInvoiceStatus(ev);
-        const ps = getPaymentStatus(ev);
+        const credited = isCredited(x);
+        const paid = isPaid(x);
 
-        const hasNum = hasInvoiceNumber(ev);
-        const credited = isCredited(ev);
-        const paid = isPaid(ev);
+        // ✅ ouvre par docId (salesDocuments)
+        const openHref = `facture.html?docId=${encodeURIComponent(x.id)}`;
+        const previewHref = `facture-apercu.html?docId=${encodeURIComponent(x.id)}`;
 
-        const openHref = hasNum
-          ? `facture.html?eventId=${encodeURIComponent(ev.id)}`
-          : `facture.html?eventId=${encodeURIComponent(ev.id)}`;
-
-        const allowAvoir = hasNum && !credited && !paid;         // règle carrée
-        const allowPayment = hasNum && !credited && !paid;       // simple : pas de paiement si déjà payé/crédité
+        const allowAvoir = !!String(x.invoiceNumber||"").trim() && !credited && !paid;
+        const allowPayment = !!String(x.invoiceNumber||"").trim() && !credited && !paid;
 
         const div = document.createElement("div");
         div.className = "card";
@@ -624,22 +591,23 @@
           <div class="row" style="margin-top:10px;">
             <div class="k">
               <div class="t">Statut</div>
-              <div class="v">${badgeForInvoiceStatus(st, ps)}</div>
+              <div class="v">${badgeForInvoiceStatus(st)}</div>
             </div>
 
-            <div class="k" style="align-items:flex-end; min-width:280px;">
+            <div class="k" style="align-items:flex-end; min-width:320px;">
               <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;">
                 <a class="btn primary" href="${openHref}">Ouvrir</a>
+                <a class="btn" href="${previewHref}">PDF</a>
 
                 ${
                   allowAvoir
-                    ? `<a class="btn" href="avoir.html?invoiceEventId=${encodeURIComponent(ev.id)}">Avoir</a>`
+                    ? `<a class="btn" href="avoir.html?fromDocId=${encodeURIComponent(x.id)}">Avoir</a>`
                     : ``
                 }
 
                 ${
                   allowPayment
-                    ? `<a class="btn" href="reglement.html?eventId=${encodeURIComponent(ev.id)}">Paiement</a>`
+                    ? `<a class="btn" href="reglement.html?docId=${encodeURIComponent(x.id)}">Paiement</a>`
                     : ``
                 }
               </div>
@@ -662,30 +630,18 @@
     }
 
     async function loadInvoices(uid){
-      const qEvents = query(
-        collection(db, "events"),
+      // ✅ source unique : salesDocuments (INVOICE)
+      const qInv = query(
+        collection(db, "salesDocuments"),
         where("conciergerieUid", "==", uid),
+        where("type", "==", "INVOICE"),
+        where("listable", "==", true),
         orderBy("createdAt", "desc"),
         limit(400)
       );
 
-      const snap = await getDocs(qEvents);
-      const rows = snap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
-
-      all = rows.filter(r => {
-        const st = String(getInvoiceStatus(r)||"").toUpperCase().trim();
-        const cs = String(r.commercialStatus||"").toUpperCase().trim();
-
-        if(st === "DRAFT" || st === "ISSUED" || st === "SENT" || st === "PAID" || st === "CREDITED") return true;
-        if(cs === "FACTURE" || cs === "FACTURE_ENVOYEE" || cs === "PAYE") return true;
-
-        if(String(r.invoiceNumber||"").trim()) return true;
-        return false;
-      }).map(r => ({
-        ...r,
-        invoiceStatus: getInvoiceStatus(r),
-        paymentStatus: getPaymentStatus(r)
-      }));
+      const snap = await getDocs(qInv);
+      all = snap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
 
       render();
     }
@@ -713,5 +669,3 @@
   </script>
 </body>
 </html>
-
-
