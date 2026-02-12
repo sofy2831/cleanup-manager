@@ -1,4 +1,4 @@
-<!-- docs/devisfree-apercu.html (FINAL: lit salesDocuments + businessSnapshot, mise en page demandée + signatures dans les cadres + paiement sous total + print A4 OK) -->
+<!-- docs/devisfree-apercu.html (FINAL FIX: signature société = users.signatureName (racine) puis fallback businessSnapshot.signatureName, jamais companyName en 1er) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -66,7 +66,6 @@
       position:relative;
     }
 
-    /* HEADER: logo+nom à gauche, émis/valable à droite */
     .header{
       display:flex;
       gap:12px;
@@ -88,7 +87,6 @@
 
     .brand{ min-width:0; }
     .brand .name{ font-size:18px; font-weight:800; line-height:1.15; }
-    /* Adresse sous le logo/nom -> masquée */
     .brand .sub{ display:none; }
 
     .metaRight{
@@ -166,7 +164,6 @@
     tbody tr:last-child td{ border-bottom:none; }
     .right{ text-align:right; white-space:nowrap; }
 
-    /* ✅ Total puis Paiement EN DESSOUS (1 colonne, partout) */
     .summary{
       margin-top:12px;
       display:flex;
@@ -203,7 +200,6 @@
       color:#333;
     }
 
-    /* Signatures */
     .sigGrid{
       margin-top:10px;
       display:grid;
@@ -286,7 +282,6 @@
       white-space:pre-wrap;
     }
 
-    /* ✅ Print A4: garde 2 colonnes seulement pour Société/Client + Signatures, mais Total/Paiement reste empilé */
     @media print{
       .topbar, .bottom-nav, .actions, button{ display:none !important; }
       body{ background:#fff !important; }
@@ -303,7 +298,7 @@
 
       .docTitle{ margin-top:6px !important; }
       .grid2, .sigGrid{ gap:6px !important; }
-      .summary{ gap:6px !important; } /* reste en colonne */
+      .summary{ gap:6px !important; }
       .box, .totalBox, .payBox, .sigBox{ padding:6px 8px !important; }
       table{ margin-top:8px !important; }
       table thead th, table tbody td{ padding:6px 7px !important; }
@@ -315,7 +310,6 @@
       .grid2{ grid-template-columns: 1fr 1fr !important; }
       .sigGrid{ grid-template-columns: 1fr 1fr !important; }
 
-      /* ✅ Footer en bas de page + réserve espace */
       .footer{
         position: fixed;
         bottom: 0;
@@ -393,7 +387,6 @@
         <tbody id="linesBody"></tbody>
       </table>
 
-      <!-- ✅ Total puis Paiement dessous -->
       <div class="summary">
         <div class="totalBox">
           <div class="totalRow">
@@ -464,7 +457,7 @@
     const companySubEl  = document.getElementById("companySub");
 
     const docTitleEl = document.getElementById("docTitle");
-    const docMetaEl  = document.getElementById("docMeta"); // (masqué)
+    const docMetaEl  = document.getElementById("docMeta");
     const metaRightEl = document.getElementById("metaRight");
 
     const soc1 = document.getElementById("socLine1");
@@ -551,13 +544,18 @@
       return { ht, tva, ttc };
     }
 
+    // ✅ signature = users.signatureName (racine) puis fallback businessSnapshot.signatureName
+    function applyCompanySignature({ userSignatureName, bsSignatureName, fallbackCompanyName }){
+      const name =
+        String(userSignatureName || "").trim() ||
+        String(bsSignatureName || "").trim() ||
+        String(fallbackCompanyName || "").trim() ||
+        "Conciergerie";
+      sigCompanyTextEl.textContent = name;
+    }
+
     function applyBusinessSnapshot(bs){
       const companyName = String(bs?.companyName || "Conciergerie").trim();
-
-      // ✅ signature figée depuis snapshot (si tu l'as mis dans businessSnapshot.signatureName)
-      const sigName = String(bs?.signatureName || companyName || "Conciergerie").trim();
-      sigCompanyTextEl.textContent = sigName || "Conciergerie";
-
       const logoUrl = String(bs?.logoUrl || "").trim();
 
       const street = String(bs?.address?.street || "").trim();
@@ -610,7 +608,6 @@
       r.addEventListener("change", refreshClientSigState);
     });
 
-    // ✅ FIX: client address + email (robuste, sans champs fantômes)
     function renderClient(d){
       const name  = String(d?.clientName || "").trim();
       const email = String(d?.clientEmail || "").trim();
@@ -732,7 +729,6 @@
 
       const docId = getParam("docId");
 
-      // ✅ Retour vers le devis en cours (garde docId)
       if(backBtn){
         backBtn.href = docId ? `devis-free.html?docId=${encodeURIComponent(docId)}` : "devis-free.html";
       }
@@ -743,13 +739,13 @@
       }
 
       try{
+        // 1) charge devis
         const ref = doc(db, "salesDocuments", docId);
         const snap = await getDoc(ref);
         if(!snap.exists()){
           showError("Devis introuvable.");
           return;
         }
-
         const d = snap.data() || {};
 
         if(d.conciergerieUid && d.conciergerieUid !== user.uid){
@@ -757,8 +753,27 @@
           return;
         }
 
+        // 2) charge user (signatureName racine)
+        let userSignatureName = "";
+        try{
+          const uSnap = await getDoc(doc(db, "users", user.uid));
+          if(uSnap.exists()){
+            userSignatureName = String(uSnap.data()?.signatureName || "").trim();
+          }
+        }catch(e){
+          console.warn("users/{uid} non lisible (signatureName).", e);
+        }
+
         const bs = d.businessSnapshot || null;
+
         applyBusinessSnapshot(bs || { companyName: "Conciergerie" });
+
+        // ✅ signature: user.signatureName -> businessSnapshot.signatureName -> companyName
+        applyCompanySignature({
+          userSignatureName,
+          bsSignatureName: bs?.signatureName,
+          fallbackCompanyName: bs?.companyName || "Conciergerie"
+        });
 
         renderDocHeader(d);
         renderClient(d);
