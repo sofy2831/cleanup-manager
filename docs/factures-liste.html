@@ -1,4 +1,4 @@
-<!-- docs/factures-liste.html (PATCH — remove déconnexion+CSV, add company line, add Avoir/Créer buttons) -->
+<!-- docs/factures-liste.html (FINAL — boutons Ouvrir/Avoir/Paiement selon invoiceNumber + creditedAt + paid, + bouton global Nouvelle facture) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -129,7 +129,7 @@
     /* toolbar */
     .toolbar{
       display:grid;
-      grid-template-columns: 220px 1fr;
+      grid-template-columns: 220px 1fr auto;
       gap:10px;
       align-items:center;
       min-width:0;
@@ -343,8 +343,10 @@
           <select class="select" id="filterStatus">
             <option value="ALL">Toutes</option>
             <option value="DRAFT">Brouillons</option>
+            <option value="ISSUED">Émises</option>
             <option value="SENT">Envoyées</option>
             <option value="PAID">Payées</option>
+            <option value="CREDITED">Créditées</option>
             <option value="MISSING">Sans statut</option>
           </select>
 
@@ -352,6 +354,8 @@
             <span class="s-ico">🔎</span>
             <input class="input" id="searchInput" type="search" placeholder="Rechercher (n° facture, client, logement…)" autocomplete="off" />
           </div>
+
+          <a class="btn primary" href="facture.html?mode=new">Nouvelle facture</a>
         </div>
       </div>
 
@@ -451,10 +455,14 @@
       return computeTotalFromLines(ev?.lines);
     }
 
-    function badgeForInvoiceStatus(s){
+    function badgeForInvoiceStatus(s, paymentStatus=""){
       const x = String(s||"").toUpperCase().trim();
+      const ps = String(paymentStatus||"").toUpperCase().trim();
+
       if(!x) return `<span class="badge bad">Sans statut</span>`;
-      if(x === "PAID") return `<span class="badge ok">Payée</span>`;
+      if(x === "PAID" || ps === "PAID") return `<span class="badge ok">Payée</span>`;
+      if(x === "CREDITED") return `<span class="badge bad">Créditée</span>`;
+      if(x === "ISSUED") return `<span class="badge">Émise</span>`;
       if(x === "SENT") return `<span class="badge">Envoyée</span>`;
       if(x === "DRAFT") return `<span class="badge">Brouillon</span>`;
       return `<span class="badge">${esc(x)}</span>`;
@@ -472,6 +480,14 @@
       const st = String(ev?.invoiceStatus||"").toUpperCase().trim();
       if(st) return st;
       return normalizeStatusFromCommercial(ev) || "";
+    }
+
+    function getPaymentStatus(ev){
+      const ps = String(ev?.paymentStatus||"").toUpperCase().trim();
+      if(ps) return ps;
+      // fallback possible : paidAt => PAID
+      if(ev?.paidAt) return "PAID";
+      return "";
     }
 
     function matchesFilter(item){
@@ -513,14 +529,18 @@
       return "FA—";
     }
 
-    function isAvoirEnabled(ev){
-      // tolérant : plusieurs noms possibles selon tes versions
-      return !!(
-        ev?.avoirEnabled ||
-        ev?.creditNoteEnabled ||
-        ev?.allowCreditNote ||
-        ev?.allowAvoir
-      );
+    function hasInvoiceNumber(ev){
+      return !!String(ev?.invoiceNumber || "").trim();
+    }
+
+    function isCredited(ev){
+      return !!ev?.creditedAt || String(getInvoiceStatus(ev)||"").toUpperCase() === "CREDITED";
+    }
+
+    function isPaid(ev){
+      const st = String(getInvoiceStatus(ev)||"").toUpperCase();
+      const ps = String(getPaymentStatus(ev)||"").toUpperCase();
+      return (st === "PAID") || (ps === "PAID") || !!ev?.paidAt;
     }
 
     function render(){
@@ -549,8 +569,20 @@
           : "—";
 
         const total = getInvoiceTotal(ev);
+
         const st = getInvoiceStatus(ev);
-        const avoirOn = isAvoirEnabled(ev);
+        const ps = getPaymentStatus(ev);
+
+        const hasNum = hasInvoiceNumber(ev);
+        const credited = isCredited(ev);
+        const paid = isPaid(ev);
+
+        const openHref = hasNum
+          ? `facture-apercu.html?eventId=${encodeURIComponent(ev.id)}`
+          : `facture.html?eventId=${encodeURIComponent(ev.id)}`;
+
+        const allowAvoir = hasNum && !credited && !paid;         // règle carrée
+        const allowPayment = hasNum && !credited && !paid;       // simple : pas de paiement si déjà payé/crédité
 
         const div = document.createElement("div");
         div.className = "card";
@@ -593,19 +625,22 @@
           <div class="row" style="margin-top:10px;">
             <div class="k">
               <div class="t">Statut</div>
-              <div class="v">${badgeForInvoiceStatus(st)}</div>
+              <div class="v">${badgeForInvoiceStatus(st, ps)}</div>
             </div>
 
             <div class="k" style="align-items:flex-end; min-width:280px;">
               <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;">
-                <a class="btn primary" href="facture.html?eventId=${encodeURIComponent(ev.id)}">Ouvrir</a>
+                <a class="btn primary" href="${openHref}">Ouvrir</a>
 
                 ${
-                  avoirOn
-                    ? `
-                      <a class="btn" href="avoir-liste.html?invoiceEventId=${encodeURIComponent(ev.id)}">Avoir</a>
-                      <a class="btn" href="avoir.html?invoiceEventId=${encodeURIComponent(ev.id)}">Créer</a>
-                    `
+                  allowAvoir
+                    ? `<a class="btn" href="avoir.html?invoiceEventId=${encodeURIComponent(ev.id)}">Avoir</a>`
+                    : ``
+                }
+
+                ${
+                  allowPayment
+                    ? `<a class="btn" href="reglement.html?eventId=${encodeURIComponent(ev.id)}">Paiement</a>`
                     : ``
                 }
               </div>
@@ -639,17 +674,18 @@
       const rows = snap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
 
       all = rows.filter(r => {
-        const inv = String(r.invoiceStatus||"").toUpperCase().trim();
-        const cs  = String(r.commercialStatus||"").toUpperCase().trim();
+        const st = String(getInvoiceStatus(r)||"").toUpperCase().trim();
+        const cs = String(r.commercialStatus||"").toUpperCase().trim();
 
-        if(inv === "DRAFT" || inv === "SENT" || inv === "PAID") return true;
+        if(st === "DRAFT" || st === "ISSUED" || st === "SENT" || st === "PAID" || st === "CREDITED") return true;
         if(cs === "FACTURE" || cs === "FACTURE_ENVOYEE" || cs === "PAYE") return true;
 
         if(String(r.invoiceNumber||"").trim()) return true;
         return false;
       }).map(r => ({
         ...r,
-        invoiceStatus: getInvoiceStatus(r)
+        invoiceStatus: getInvoiceStatus(r),
+        paymentStatus: getPaymentStatus(r)
       }));
 
       render();
