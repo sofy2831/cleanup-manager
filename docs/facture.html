@@ -1,4 +1,4 @@
-<!-- docs/facture.html (FINAL — support docId (salesDocuments) + fallback eventId (events), snapshot client address on save) -->
+<!-- docs/facture.html (FINAL — support docId (salesDocuments) + fallback eventId (events), snapshot client address on save, statut ÉMISE propre) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -485,7 +485,16 @@
       return { ht, tva, ttc };
     }
 
-    invoiceStatusLabel
+    function invoiceStatusLabel(s){
+      const x = String(s||"").toUpperCase().trim();
+      if(!x) return "—";
+      if(x === "DRAFT") return "BROUILLON";
+      if(x === "ISSUED") return "ÉMISE";
+      if(x === "SENT") return "ENVOYÉE";
+      if(x === "PAID") return "PAYÉE";
+      if(x === "CANCELLED") return "ANNULÉE";
+      return x;
+    }
 
     function dueLabel(term){
       const t = String(term||"").toUpperCase();
@@ -594,157 +603,151 @@
 
     // ====== CLIENT SNAPSHOT RESOLUTION (owners -> homes -> doc snapshot) ======
     function extractAddr(obj){
-  const o = obj || {};
-  const a = (o.address && typeof o.address === "object") ? o.address : null;
-  const ba = (o.billingAddress && typeof o.billingAddress === "object") ? o.billingAddress : null;
+      const o = obj || {};
+      const a = (o.address && typeof o.address === "object") ? o.address : null;
+      const ba = (o.billingAddress && typeof o.billingAddress === "object") ? o.billingAddress : null;
 
-  const street =
-    String(o.address1 || o.street || o.addr1 || o.line1 || "").trim() ||
-    String(o.address || "").trim() || // si c’est une string
-    String(a?.street || a?.line1 || a?.address1 || a?.addr1 || "").trim() ||
-    String(ba?.street || ba?.line1 || ba?.address1 || "").trim();
+      const street =
+        String(o.address1 || o.street || o.addr1 || o.line1 || "").trim() ||
+        (typeof o.address === "string" ? String(o.address).trim() : "") ||
+        String(a?.street || a?.line1 || a?.address1 || a?.addr1 || "").trim() ||
+        String(ba?.street || ba?.line1 || ba?.address1 || "").trim();
 
-  const address2 =
-    String(o.address2 || o.addr2 || o.line2 || "").trim() ||
-    String(a?.address2 || a?.line2 || a?.addr2 || "").trim() ||
-    String(ba?.address2 || ba?.line2 || "").trim();
+      const address2 =
+        String(o.address2 || o.addr2 || o.line2 || "").trim() ||
+        String(a?.address2 || a?.line2 || a?.addr2 || "").trim() ||
+        String(ba?.address2 || ba?.line2 || "").trim();
 
-  const zip =
-    String(o.zip || o.postalCode || o.cp || "").trim() ||
-    String(a?.zip || a?.postalCode || a?.cp || "").trim() ||
-    String(ba?.zip || ba?.postalCode || "").trim();
+      const zip =
+        String(o.zip || o.postalCode || o.cp || "").trim() ||
+        String(a?.zip || a?.postalCode || a?.cp || "").trim() ||
+        String(ba?.zip || ba?.postalCode || "").trim();
 
-  const city =
-    String(o.city || o.town || o.locality || "").trim() ||
-    String(a?.city || a?.town || a?.locality || "").trim() ||
-    String(ba?.city || ba?.town || "").trim();
+      const city =
+        String(o.city || o.town || o.locality || "").trim() ||
+        String(a?.city || a?.town || a?.locality || "").trim() ||
+        String(ba?.city || ba?.town || "").trim();
 
-  const country =
-    String(o.country || "").trim() ||
-    String(a?.country || "").trim() ||
-    String(ba?.country || "").trim() ||
-    "FR";
+      const country =
+        String(o.country || "").trim() ||
+        String(a?.country || "").trim() ||
+        String(ba?.country || "").trim() ||
+        "FR";
 
-  return { street, address2, zip, city, country };
-}
+      return { street, address2, zip, city, country };
+    }
 
-async function lookupOwnerByEmailInOwners(conciergerieUid, emailLower){
-  if(!emailLower) return null;
+    async function lookupOwnerByEmailInOwners(conciergerieUid, emailLower){
+      if(!emailLower) return null;
 
-  const qO = query(
-    collection(db,"owners"),
-    where("conciergerieUid", "==", String(conciergerieUid)),
-    where("emailLower", "==", emailLower),
-    where("isActive", "==", true),
-    limit(1)
-  );
+      const qO = query(
+        collection(db,"owners"),
+        where("conciergerieUid", "==", String(conciergerieUid)),
+        where("emailLower", "==", emailLower),
+        where("isActive", "==", true),
+        limit(1)
+      );
 
-  const snap = await getDocs(qO);
-  if(snap.empty) return null;
+      const snap = await getDocs(qO);
+      if(snap.empty) return null;
 
-  const doc0 = snap.docs[0];
-  const o = doc0.data() || {};
-  const addr = extractAddr(o);
+      const doc0 = snap.docs[0];
+      const o = doc0.data() || {};
+      const addr = extractAddr(o);
 
-  return {
-    docId: doc0.id,
-    email: normalizeEmail(o.email || emailLower),
-    fullname: (o.fullname || o.displayName || o.name || "").trim(),
-    address1: addr.street,
-    address2: addr.address2,
-    zip: addr.zip,
-    city: addr.city,
-    country: addr.country,
-    phone: String(o.phone || o.tel || o.mobile || "").trim(),
-  };
-}
+      return {
+        docId: doc0.id,
+        email: normalizeEmail(o.email || emailLower),
+        fullname: (o.fullname || o.displayName || o.name || "").trim(),
+        address1: addr.street,
+        address2: addr.address2,
+        zip: addr.zip,
+        city: addr.city,
+        country: addr.country,
+        phone: String(o.phone || o.tel || o.mobile || "").trim(),
+      };
+    }
 
+    async function loadOwnerFromOwnersOrNull(conciergerieUid, d){
+      const ownerDocId =
+        String(d?.ownerUid || "").trim() ||
+        String(d?.ownerDocId || "").trim() ||
+        String(d?.clientOwnerDocId || "").trim();
 
- async function loadOwnerFromOwnersOrNull(conciergerieUid, d){
-  const ownerDocId =
-    String(d?.ownerUid || "").trim() ||
-    String(d?.ownerDocId || "").trim() ||
-    String(d?.clientOwnerDocId || "").trim();
-
-  if(ownerDocId){
-    try{
-      const snap = await getDoc(doc(db,"owners", ownerDocId));
-      if(snap.exists()){
-        const o = snap.data() || {};
-        if(String(o.conciergerieUid||"") === String(conciergerieUid)){
-          const addr = extractAddr(o);
-          return {
-            docId: snap.id,
-            email: normalizeEmail(o.email || ""),
-            fullname: (o.fullname || o.displayName || o.name || "").trim(),
-            address1: addr.street,
-            address2: addr.address2,
-            zip: addr.zip,
-            city: addr.city,
-            country: addr.country,
-            phone: String(o.phone || o.tel || o.mobile || "").trim(),
-          };
+      if(ownerDocId){
+        try{
+          const snap = await getDoc(doc(db,"owners", ownerDocId));
+          if(snap.exists()){
+            const o = snap.data() || {};
+            if(String(o.conciergerieUid||"") === String(conciergerieUid)){
+              const addr = extractAddr(o);
+              return {
+                docId: snap.id,
+                email: normalizeEmail(o.email || ""),
+                fullname: (o.fullname || o.displayName || o.name || "").trim(),
+                address1: addr.street,
+                address2: addr.address2,
+                zip: addr.zip,
+                city: addr.city,
+                country: addr.country,
+                phone: String(o.phone || o.tel || o.mobile || "").trim(),
+              };
+            }
+          }
+        }catch(e){
+          console.warn("load owner by docId failed:", e?.message || e);
         }
       }
-    }catch(e){
-      console.warn("load owner by docId failed:", e?.message || e);
+
+      const emailLower = normalizeEmail(d?.clientEmail || d?.ownerEmail || "");
+      if(emailLower){
+        try{ return await lookupOwnerByEmailInOwners(conciergerieUid, emailLower); }
+        catch(e){ return null; }
+      }
+
+      return null;
     }
-  }
 
-  const emailLower = normalizeEmail(d?.clientEmail || d?.ownerEmail || "");
-  if(emailLower){
-    try{ return await lookupOwnerByEmailInOwners(conciergerieUid, emailLower); }
-    catch(e){ return null; }
-  }
+    async function loadHomeOwnerSnapshotOrNull(d){
+      const hid = String(d?.homeId || d?.homeDocId || "").trim();
+      if(!hid) return null;
 
-  return null;
-}
+      try{
+        const snap = await getDoc(doc(db,"homes", hid));
+        if(!snap.exists()) return null;
+        const h = snap.data() || {};
 
+        const ownerName = String(
+          h.ownerName || h.ownerFullname || h.ownerDisplayName || h.owner || ""
+        ).trim();
 
-   async function loadHomeOwnerSnapshotOrNull(d){
-  const hid = String(d?.homeId || d?.homeDocId || "").trim(); // ✅ tolère homeDocId
-  if(!hid) return null;
+        const ownerPhone = String(
+          h.ownerPhone || h.ownerTel || h.phone || ""
+        ).trim();
 
-  try{
-    const snap = await getDoc(doc(db,"homes", hid));
-    if(!snap.exists()) return null;
-    const h = snap.data() || {};
+        const ownerEmail = normalizeEmail(
+          h.ownerEmail || h.ownerAccountEmail || h.email || ""
+        );
 
-    // propriétaire : tolérant
-    const ownerName = String(
-      h.ownerName || h.ownerFullname || h.ownerDisplayName || h.owner || ""
-    ).trim();
+        const addr = extractAddr(h.owner || h);
 
-    const ownerPhone = String(
-      h.ownerPhone || h.ownerTel || h.phone || ""
-    ).trim();
-
-    const ownerEmail = normalizeEmail(
-      h.ownerEmail || h.ownerAccountEmail || h.email || ""
-    );
-
-    // adresse : tolérant (map ou champs plats)
-    const addr = extractAddr(h.owner || h); // si tu as un sous-objet owner, on le prend
-
-    return {
-      fullname: ownerName,
-      email: ownerEmail,
-      phone: ownerPhone,
-      address1: addr.street,
-      address2: addr.address2,
-      zip: addr.zip,
-      city: addr.city,
-      country: addr.country
-    };
-  }catch(e){
-    console.warn("loadHomeOwnerSnapshotOrNull failed:", e?.message || e);
-    return null;
-  }
-}
-
+        return {
+          fullname: ownerName,
+          email: ownerEmail,
+          phone: ownerPhone,
+          address1: addr.street,
+          address2: addr.address2,
+          zip: addr.zip,
+          city: addr.city,
+          country: addr.country
+        };
+      }catch(e){
+        console.warn("loadHomeOwnerSnapshotOrNull failed:", e?.message || e);
+        return null;
+      }
+    }
 
     function docSnapshotClient(d){
-      // SALES snapshot priority
       const sName = String(d?.clientName || d?.clientCompany || d?.clientFullName || "").trim();
       const sEmail = normalizeEmail(d?.clientEmail || "");
       const sPhone = String(d?.clientPhone || "").trim();
@@ -754,7 +757,6 @@ async function lookupOwnerByEmailInOwners(conciergerieUid, emailLower){
       const sCity = String(d?.clientCity || "").trim();
       const sCountry = String(d?.clientCountry || "FR").trim();
 
-      // EVENT snapshot fallback
       const eName = String(d?.ownerName || "").trim();
       const eEmail = normalizeEmail(d?.ownerEmail || "");
       const ePhone = String(d?.ownerPhone || "").trim();
@@ -911,7 +913,7 @@ async function lookupOwnerByEmailInOwners(conciergerieUid, emailLower){
         html.push(`<div class="r"><span>Total TTC</span><span>${esc(fmtMoney(totals.ttc))}</span></div>`);
       }else{
         html.push(`<div class="r"><span>Total TTC</span><span>${esc(fmtMoney(totals.ttc))}</span></div>`);
-        const ex = String(bp?.tvaExemptionText || "TVA non applicable").trim();
+        const ex = String(bp?.tvaExemptionText || "TVA non applicable (art. 293B CGI)").trim();
         if(ex) html.push(`<div class="mutedLine">${esc(ex)}</div>`);
       }
       totalsBox.innerHTML = html.join("");
@@ -987,7 +989,11 @@ async function lookupOwnerByEmailInOwners(conciergerieUid, emailLower){
       const invNum = String(d.invoiceNumber || "").trim();
       const hasInvoice = !!invNum;
 
-      statusBadge.textContent = hasInvoice ? invoiceStatusLabel(d.invoiceStatus) : "BROUILLON";
+      // ✅ si N° existe mais status vide/DRAFT => on affiche ÉMISE (cohérence UI)
+      const rawStatus = String(d.invoiceStatus || "").toUpperCase().trim();
+      const statusForUi = (hasInvoice && (!rawStatus || rawStatus === "DRAFT")) ? "ISSUED" : (rawStatus || "");
+      statusBadge.textContent = hasInvoice ? invoiceStatusLabel(statusForUi) : "BROUILLON";
+
       docBannerInner.textContent = `FACTURE N° ${invNum || "—"}`;
 
       if(invoiceNotesEl.value === "" && d.invoiceNotes) invoiceNotesEl.value = d.invoiceNotes;
@@ -1076,7 +1082,7 @@ async function lookupOwnerByEmailInOwners(conciergerieUid, emailLower){
         const year = new Date().getFullYear();
         let invoiceNumber = String(docData?.invoiceNumber || "").trim();
 
-        // ====== NEW: snapshot client fields in SALES on save ======
+        // ====== snapshot client fields in SALES on save ======
         let clientPatch = {};
         if(docKind === "SALES"){
           const missingAddr =
@@ -1090,7 +1096,6 @@ async function lookupOwnerByEmailInOwners(conciergerieUid, emailLower){
           if(missingAddr || missingName || missingEmail){
             const resolved = await resolveClientSnapshot(currentUser.uid, docData);
 
-            // only set if resolved yields something useful (avoid overwriting with blanks)
             clientPatch = {
               clientOwnerDocId: resolved.clientOwnerDocId || docData.clientOwnerDocId || null,
               clientName: resolved.name || docData.clientName || "",
@@ -1111,43 +1116,37 @@ async function lookupOwnerByEmailInOwners(conciergerieUid, emailLower){
           ...clientPatch
         };
 
-        // Mode SALES (facture existe déjà dans salesDocuments)
-        // Mode SALES (facture existe déjà dans salesDocuments)
-if(docKind === "SALES"){
-  if(!invoiceNumber){
-    invoiceNumber = await ensureInvoiceNumber(currentUser.uid, year);
-    patch.invoiceNumber = invoiceNumber;
+        // ===== SALES =====
+        if(docKind === "SALES"){
+          if(!invoiceNumber){
+            invoiceNumber = await ensureInvoiceNumber(currentUser.uid, year);
+            patch.invoiceNumber = invoiceNumber;
 
-    // ✅ PROPRE : dès création du numéro => ÉMISE
-    patch.invoiceStatus = "ISSUED";
-    patch.invoiceIssuedAt = serverTimestamp();
-    patch.invoiceIssuedDate = todayIso();
+            // ✅ PROPRE : dès création du numéro => ÉMISE
+            patch.invoiceStatus = "ISSUED";
+            patch.invoiceIssuedAt = serverTimestamp();
+            patch.invoiceIssuedDate = todayIso();
+            patch.invoiceIssuedBy = currentUser.uid;
 
-    // (optionnel) si tu veux tracer "émise" séparément
-    patch.invoiceIssuedBy = currentUser.uid;
+            patch.commercialStatus = "FACTURE_EMISE";
+            patch.commercialUpdatedAt = serverTimestamp();
+          }else{
+            const cur = String(docData?.invoiceStatus || "").toUpperCase().trim();
+            patch.invoiceStatus = (cur === "DRAFT" || !cur) ? "ISSUED" : cur;
+            patch.invoiceIssuedDate = String(docData?.invoiceIssuedDate || todayIso()).trim();
+          }
 
-    // garde tes champs commerciaux si tu veux
-    patch.commercialStatus = "FACTURE_EMISE";
-    patch.commercialUpdatedAt = serverTimestamp();
-  }else{
-    // ✅ si elle avait un numéro mais restait DRAFT, on normalise à ÉMISE au prochain save
-    const cur = String(docData?.invoiceStatus || "").toUpperCase().trim();
-    patch.invoiceStatus = (cur === "DRAFT" || !cur) ? "ISSUED" : cur;
+          await updateDoc(docRef, patch);
 
-    patch.invoiceIssuedDate = String(docData?.invoiceIssuedDate || todayIso()).trim();
-  }
+          const snap2 = await getDoc(docRef);
+          docData = { id: snap2.id, ...(snap2.data()||{}) };
 
-  await updateDoc(docRef, patch);
+          showAlert("✅ Facture enregistrée (émise).", true);
+          renderRecap();
+          return;
+        }
 
-  const snap2 = await getDoc(docRef);
-  docData = { id: snap2.id, ...(snap2.data()||{}) };
-
-  showAlert("✅ Facture enregistrée (émise).", true);
-  renderRecap();
-  return;
-}
-
-        // Mode EVENT (fallback ancien modèle)
+        // ===== EVENT fallback =====
         const qs = String(docData?.quoteStatus || "").toUpperCase().trim();
         if(qs !== "ACCEPTED"){
           throw new Error("Impossible : le devis doit être ACCEPTÉ avant facturation.");
@@ -1194,7 +1193,7 @@ if(docKind === "SALES"){
         const snap2 = await getDoc(docRef);
         docData = { id: snap2.id, ...(snap2.data()||{}) };
 
-        showAlert("✅ Facture enregistrée (envoyée).", true);
+        showAlert("✅ Facture enregistrée.", true);
         renderRecap();
       }catch(err){
         console.error(err);
@@ -1217,9 +1216,3 @@ if(docKind === "SALES"){
   </script>
 </body>
 </html>
-
-
-
-
-
-
