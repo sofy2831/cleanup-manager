@@ -709,39 +709,47 @@ async function lookupOwnerByEmailInOwners(conciergerieUid, emailLower){
 }
 
 
-    async function loadHomeOwnerSnapshotOrNull(d){
-      const hid = String(d?.homeId || "").trim();
-      if(!hid) return null;
+   async function loadHomeOwnerSnapshotOrNull(d){
+  const hid = String(d?.homeId || d?.homeDocId || "").trim(); // ✅ tolère homeDocId
+  if(!hid) return null;
 
-      try{
-        const snap = await getDoc(doc(db,"homes", hid));
-        if(!snap.exists()) return null;
-        const h = snap.data() || {};
+  try{
+    const snap = await getDoc(doc(db,"homes", hid));
+    if(!snap.exists()) return null;
+    const h = snap.data() || {};
 
-        // tolérant sur les noms (tes versions)
-        const ownerName = String(h.ownerName || h.ownerFullname || h.owner || "").trim();
-        const ownerPhone = String(h.ownerPhone || h.ownerTel || h.phone || "").trim();
-        const ownerEmail = normalizeEmail(h.ownerEmail || h.ownerAccountEmail || "");
+    // propriétaire : tolérant
+    const ownerName = String(
+      h.ownerName || h.ownerFullname || h.ownerDisplayName || h.owner || ""
+    ).trim();
 
-        const a1 = String(h.ownerAddress1 || h.ownerAddress || h.address1 || h.address || "").trim();
-        const a2 = String(h.ownerAddress2 || h.address2 || "").trim();
-        const zip = String(h.ownerZip || h.zip || h.postalCode || "").trim();
-        const city = String(h.ownerCity || h.city || "").trim();
-        const country = String(h.ownerCountry || h.country || "FR").trim();
+    const ownerPhone = String(
+      h.ownerPhone || h.ownerTel || h.phone || ""
+    ).trim();
 
-        return {
-          fullname: ownerName,
-          email: ownerEmail,
-          phone: ownerPhone,
-          address1: a1,
-          address2: a2,
-          zip, city, country
-        };
-      }catch(e){
-        console.warn("loadHomeOwnerSnapshotOrNull failed:", e?.message || e);
-        return null;
-      }
-    }
+    const ownerEmail = normalizeEmail(
+      h.ownerEmail || h.ownerAccountEmail || h.email || ""
+    );
+
+    // adresse : tolérant (map ou champs plats)
+    const addr = extractAddr(h.owner || h); // si tu as un sous-objet owner, on le prend
+
+    return {
+      fullname: ownerName,
+      email: ownerEmail,
+      phone: ownerPhone,
+      address1: addr.street,
+      address2: addr.address2,
+      zip: addr.zip,
+      city: addr.city,
+      country: addr.country
+    };
+  }catch(e){
+    console.warn("loadHomeOwnerSnapshotOrNull failed:", e?.message || e);
+    return null;
+  }
+}
+
 
     function docSnapshotClient(d){
       // SALES snapshot priority
@@ -1207,5 +1215,6 @@ async function lookupOwnerByEmailInOwners(conciergerieUid, emailLower){
   </script>
 </body>
 </html>
+
 
 
