@@ -1,4 +1,4 @@
-<!-- docs/devis-event.html (CORRIGÉ — client adresse/CP/ville affichés sur la page + fallback owners robuste) -->
+<!-- docs/devis-event.html (CORRIGÉ COMPLET — client header aligné avec devis-apercu : ownerDocId prioritaire + fallback ownerUid + fallback email/emailLower) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -634,41 +634,39 @@
       applyLogoFromProfile(profileData);
     }
 
-    // ✅ FIX: snapshot client robuste (eventData client/billing/ownerAccount* -> owners -> fallback)
     function getOwnerSnapshot(){
       const d = eventData || {};
 
-      // --- event fields (compat) ---
-      const evName  = String(d.clientName || d.customerName || d.ownerAccountName || d.ownerFullname || d.ownerName || "").trim();
-      const evEmail = String(d.clientEmail || d.customerEmail || d.ownerAccountEmail || d.ownerEmail || "").trim();
-      const evPhone = String(d.clientPhone || d.customerPhone || d.ownerPhone || "").trim();
+      // snapshot event
+      const snapName  = (d.ownerName || "").trim();
+      const snapEmail = (d.ownerEmail || "").trim();
+      const snapPhone = (d.ownerPhone || "").trim();
+      const snapA1 = (d.ownerAddress1 || "").trim();
+      const snapA2 = (d.ownerAddress2 || "").trim();
+      const snapZip = (d.ownerZip || "").trim();
+      const snapCity = (d.ownerCity || "").trim();
+      const snapCountry = (d.ownerCountry || "FR").trim();
 
-      const evA1 = String(d.clientAddress1 || d.customerAddress1 || d.billingAddress1 || d.ownerAddress1 || "").trim();
-      const evA2 = String(d.clientAddress2 || d.customerAddress2 || d.billingAddress2 || d.ownerAddress2 || "").trim();
-      const evZip = String(d.clientZip || d.customerZip || d.billingZip || d.ownerZip || "").trim();
-      const evCity = String(d.clientCity || d.customerCity || d.billingCity || d.ownerCity || "").trim();
-      const evCountry = String(d.clientCountry || d.customerCountry || d.billingCountry || d.ownerCountry || "FR").trim();
-
-      // --- owners/{docId} fallback ---
+      // owners/{docId}
       const o = ownerUser || {};
-      const oName  = String(o.fullname || o.displayName || "").trim();
-      const oEmail = String(o.email || "").trim();
-      const oPhone = String(o.phone || "").trim();
-      const oA1 = String(o.address1 || o.address || "").trim();
-      const oA2 = String(o.address2 || "").trim();
-      const oZip = String(o.zip || "").trim();
-      const oCity = String(o.city || "").trim();
-      const oCountry = String(o.country || "FR").trim();
+      const oName  = (o.fullname || "").trim();
+      const oEmail = (o.email || "").trim();
+      const oPhone = (o.phone || "").trim();
+      const oA1 = (o.address1 || "").trim();
+      const oA2 = (o.address2 || "").trim();
+      const oZip = (o.zip || "").trim();
+      const oCity = (o.city || "").trim();
+      const oCountry = (o.country || "FR").trim();
 
       return {
-        name: oName || evName || "—",
-        email: oEmail || evEmail || "",
-        phone: oPhone || evPhone || "",
-        address1: oA1 || evA1 || "",
-        address2: oA2 || evA2 || "",
-        zip: oZip || evZip || "",
-        city: oCity || evCity || "",
-        country: oCountry || evCountry || "FR"
+        name: oName || snapName || "—",
+        email: oEmail || snapEmail || "",
+        phone: oPhone || snapPhone || "",
+        address1: oA1 || snapA1 || "",
+        address2: oA2 || snapA2 || "",
+        zip: oZip || snapZip || "",
+        city: oCity || snapCity || "",
+        country: oCountry || snapCountry || "FR"
       };
     }
 
@@ -768,11 +766,11 @@
       profileData = snap.exists() ? (snap.data() || {}) : {};
     }
 
-    // ✅ fallback owners: try emailLower, then email (no isActive requirement)
-    async function lookupOwnerByEmail(conciergerieUid, emailLower){
+    // ✅ aligné avec devis-apercu: emailLower si présent, sinon email
+    async function lookupOwnerByEmailInOwners(conciergerieUid, emailLower){
       if(!emailLower) return null;
 
-      // 1) try emailLower
+      // A) emailLower
       try{
         const q1 = query(
           collection(db,"owners"),
@@ -784,13 +782,23 @@
         if(!s1.empty){
           const doc0 = s1.docs[0];
           const o = doc0.data() || {};
-          return { docId: doc0.id, ...(o||{}) };
+          return {
+            docId: doc0.id,
+            email: normalizeEmail(o.email || emailLower),
+            fullname: (o.fullname || o.displayName || "").trim(),
+            address1: (o.address1 || o.address || "").toString().trim(),
+            address2: (o.address2 || "").toString().trim(),
+            zip: (o.zip || "").toString().trim(),
+            city: (o.city || "").toString().trim(),
+            country: (o.country || "FR").toString().trim(),
+            phone: (o.phone || "").toString().trim(),
+          };
         }
       }catch(e){
-        console.warn("lookupOwner emailLower failed:", e?.message || e);
+        console.warn("lookup owners by emailLower failed:", e?.message || e);
       }
 
-      // 2) try email
+      // B) email (fallback)
       try{
         const q2 = query(
           collection(db,"owners"),
@@ -799,24 +807,35 @@
           limit(1)
         );
         const s2 = await getDocs(q2);
-        if(!s2.empty){
-          const doc0 = s2.docs[0];
-          const o = doc0.data() || {};
-          return { docId: doc0.id, ...(o||{}) };
-        }
-      }catch(e){
-        console.warn("lookupOwner email failed:", e?.message || e);
-      }
+        if(s2.empty) return null;
 
-      return null;
+        const doc0 = s2.docs[0];
+        const o = doc0.data() || {};
+        return {
+          docId: doc0.id,
+          email: normalizeEmail(o.email || emailLower),
+          fullname: (o.fullname || o.displayName || "").trim(),
+          address1: (o.address1 || o.address || "").toString().trim(),
+          address2: (o.address2 || "").toString().trim(),
+          zip: (o.zip || "").toString().trim(),
+          city: (o.city || "").toString().trim(),
+          country: (o.country || "FR").toString().trim(),
+          phone: (o.phone || "").toString().trim(),
+        };
+      }catch(e){
+        console.warn("lookup owners by email failed:", e?.message || e);
+        return null;
+      }
     }
 
+    // ✅ aligné avec devis-apercu: ownerDocId prioritaire, fallback ownerUid, puis email
     async function loadOwner(){
       ownerUser = null;
 
       const d = eventData || {};
-      const ownerEmail = normalizeEmail(d.ownerEmail || d.ownerAccountEmail || d.clientEmail || "");
-      const ownerDocId = String(d.ownerDocId || "").trim(); // owners/{docId}
+      const ownerEmail = normalizeEmail(d.ownerEmail || "");
+
+      const ownerDocId = String(d.ownerDocId || "").trim() || String(d.ownerUid || "").trim();
 
       // 1) Try by docId
       if(ownerDocId){
@@ -840,27 +859,14 @@
             }
           }
         }catch(e){
-          console.warn("load owner by ownerDocId failed:", e?.message || e);
+          console.warn("load owner by ownerDocId/ownerUid failed:", e?.message || e);
         }
       }
 
       // 2) Fallback by email
       if(ownerEmail){
         try{
-          const o = await lookupOwnerByEmail(currentUser.uid, ownerEmail);
-          if(o){
-            ownerUser = {
-              docId: String(o.ownerDocId || o.docId || ""),
-              email: normalizeEmail(o.email || ownerEmail),
-              fullname: (o.fullname || o.displayName || "").trim(),
-              address1: (o.address1 || o.address || "").toString().trim(),
-              address2: (o.address2 || "").toString().trim(),
-              zip: (o.zip || "").toString().trim(),
-              city: (o.city || "").toString().trim(),
-              country: (o.country || "FR").toString().trim(),
-              phone: (o.phone || "").toString().trim(),
-            };
-          }
+          ownerUser = await lookupOwnerByEmailInOwners(currentUser.uid, ownerEmail);
         }catch(e){
           console.warn("lookup owner by email failed:", e?.message || e);
           ownerUser = null;
