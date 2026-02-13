@@ -601,34 +601,72 @@
     }
 
     // ====== CLIENT SNAPSHOT RESOLUTION (owners -> homes -> doc snapshot) ======
-    async function lookupOwnerByEmailInOwners(conciergerieUid, emailLower){
-      if(!emailLower) return null;
+    function extractAddr(obj){
+  const o = obj || {};
+  const a = (o.address && typeof o.address === "object") ? o.address : null;
+  const ba = (o.billingAddress && typeof o.billingAddress === "object") ? o.billingAddress : null;
 
-      const qO = query(
-        collection(db,"owners"),
-        where("conciergerieUid", "==", String(conciergerieUid)),
-        where("emailLower", "==", emailLower),
-        where("isActive", "==", true),
-        limit(1)
-      );
+  const street =
+    String(o.address1 || o.street || o.addr1 || o.line1 || "").trim() ||
+    String(o.address || "").trim() || // si c’est une string
+    String(a?.street || a?.line1 || a?.address1 || a?.addr1 || "").trim() ||
+    String(ba?.street || ba?.line1 || ba?.address1 || "").trim();
 
-      const snap = await getDocs(qO);
-      if(snap.empty) return null;
+  const address2 =
+    String(o.address2 || o.addr2 || o.line2 || "").trim() ||
+    String(a?.address2 || a?.line2 || a?.addr2 || "").trim() ||
+    String(ba?.address2 || ba?.line2 || "").trim();
 
-      const doc0 = snap.docs[0];
-      const o = doc0.data() || {};
-      return {
-        docId: doc0.id,
-        email: normalizeEmail(o.email || emailLower),
-        fullname: (o.fullname || o.displayName || "").trim(),
-        address1: (o.address1 || o.address || "").toString().trim(),
-        address2: (o.address2 || "").toString().trim(),
-        zip: (o.zip || "").toString().trim(),
-        city: (o.city || "").toString().trim(),
-        country: (o.country || "FR").toString().trim(),
-        phone: (o.phone || "").toString().trim(),
-      };
-    }
+  const zip =
+    String(o.zip || o.postalCode || o.cp || "").trim() ||
+    String(a?.zip || a?.postalCode || a?.cp || "").trim() ||
+    String(ba?.zip || ba?.postalCode || "").trim();
+
+  const city =
+    String(o.city || o.town || o.locality || "").trim() ||
+    String(a?.city || a?.town || a?.locality || "").trim() ||
+    String(ba?.city || ba?.town || "").trim();
+
+  const country =
+    String(o.country || "").trim() ||
+    String(a?.country || "").trim() ||
+    String(ba?.country || "").trim() ||
+    "FR";
+
+  return { street, address2, zip, city, country };
+}
+
+async function lookupOwnerByEmailInOwners(conciergerieUid, emailLower){
+  if(!emailLower) return null;
+
+  const qO = query(
+    collection(db,"owners"),
+    where("conciergerieUid", "==", String(conciergerieUid)),
+    where("emailLower", "==", emailLower),
+    where("isActive", "==", true),
+    limit(1)
+  );
+
+  const snap = await getDocs(qO);
+  if(snap.empty) return null;
+
+  const doc0 = snap.docs[0];
+  const o = doc0.data() || {};
+  const addr = extractAddr(o);
+
+  return {
+    docId: doc0.id,
+    email: normalizeEmail(o.email || emailLower),
+    fullname: (o.fullname || o.displayName || o.name || "").trim(),
+    address1: addr.street,
+    address2: addr.address2,
+    zip: addr.zip,
+    city: addr.city,
+    country: addr.country,
+    phone: String(o.phone || o.tel || o.mobile || "").trim(),
+  };
+}
+
 
     async function loadOwnerFromOwnersOrNull(conciergerieUid, d){
       const ownerDocId =
@@ -1167,3 +1205,4 @@
   </script>
 </body>
 </html>
+
