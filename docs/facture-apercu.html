@@ -1,5 +1,5 @@
 <!-- docs/facture-apercu.html (FINAL — support docId (salesDocuments) + fallback eventId (events)
-     FIX: coordonnées bancaires + pas d'échéance en Conditions + impression 2 colonnes Société/Client) -->
+     FIX: adresse client robuste (owners -> homes -> snapshot), bank ok, conditions sans échéance, impression 2 colonnes) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -243,10 +243,9 @@
       }
 
       .docTitle{ margin-top:6px !important; }
-      .grid2{ gap:6px !important; }
 
       /* ✅ FORCER 2 COLONNES EN IMPRESSION */
-      .grid2{ grid-template-columns: 1fr 1fr !important; }
+      .grid2{ grid-template-columns: 1fr 1fr !important; gap:6px !important; }
 
       .summary{ gap:6px !important; }
       .box, .totalBox, .payBox{ padding:6px 8px !important; }
@@ -317,6 +316,7 @@
           <div class="line" id="cliLine1">—</div>
           <div class="line" id="cliLine2"></div>
           <div class="line" id="cliLine3"></div>
+          <div class="line mut" id="cliLine4"></div>
         </div>
       </div>
 
@@ -361,7 +361,6 @@
         <div class="line" id="cond3">—</div>
       </div>
 
-      <!-- ✅ COORDONNÉES BANCAIRES -->
       <div class="sectionTitle" id="bankTitle">Coordonnées bancaires</div>
       <div class="box" id="bankBox">
         <div class="line" id="bankLine1">—</div>
@@ -381,7 +380,10 @@
   <script type="module">
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-    import { doc, getDoc, collection, query, where, getDocs, limit } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import {
+      doc, getDoc,
+      collection, query, where, getDocs, limit
+    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const alertBox = document.getElementById("alertBox");
     const printBtn = document.getElementById("printBtn");
@@ -404,6 +406,7 @@
     const cli1 = document.getElementById("cliLine1");
     const cli2 = document.getElementById("cliLine2");
     const cli3 = document.getElementById("cliLine3");
+    const cli4 = document.getElementById("cliLine4");
 
     const homeLine1 = document.getElementById("homeLine1");
     const homeLine2 = document.getElementById("homeLine2");
@@ -434,7 +437,10 @@
 
     // state
     let docKind = ""; // "SALES" | "EVENT"
-    let docData = null; // facture data
+    let docData = null;
+
+    // ✅ fallback client via homes/{homeId}
+    let homeClientFallback = null; // {name,email,phone,address1,address2,zip,city}
 
     function showError(msg){
       alertBox.style.display = "block";
@@ -636,8 +642,11 @@
     }
 
     async function loadOwnerFromDoc(conciergerieUid, d){
-      // EVENT-style
-      const ownerDocId = String(d?.ownerUid || "").trim() || String(d?.ownerDocId || "").trim();
+      const ownerDocId =
+        String(d?.ownerUid || "").trim() ||
+        String(d?.ownerDocId || "").trim() ||
+        String(d?.clientOwnerDocId || "").trim();
+
       if(ownerDocId){
         try{
           const snap = await getDoc(doc(db,"owners", ownerDocId));
@@ -659,7 +668,6 @@
         }catch(e){ /* ignore */ }
       }
 
-      // SALES-style: clientEmail / ownerEmail
       const emailLower = normalizeEmail(d?.clientEmail || d?.ownerEmail || "");
       if(emailLower){
         try{ return await lookupOwnerByEmailInOwners(conciergerieUid, emailLower); }
@@ -668,44 +676,101 @@
       return null;
     }
 
+    async function loadHomeClientFallback(d){
+      homeClientFallback = null;
+      const hid = String(d?.homeId || "").trim();
+      if(!hid) return;
+
+      try{
+        const hSnap = await getDoc(doc(db,"homes", hid));
+        if(!hSnap.exists()) return;
+        const h = hSnap.data() || {};
+
+        const name =
+          String(h.ownerName || h.ownerFullname || h.owner || h.proprietaireNom || "").trim();
+
+        const email =
+          normalizeEmail(h.ownerEmail || h.ownerAccountEmail || h.proprietaireEmail || "");
+
+        const phone =
+          String(h.ownerPhone || h.phone || h.ownerTel || h.proprietaireTel || "").toString().trim();
+
+        const a1 =
+          String(h.ownerAddress1 || h.ownerStreet || h.ownerAddress || h.proprietaireAdresse1 || "").trim();
+
+        const a2 =
+          String(h.ownerAddress2 || h.proprietaireAdresse2 || "").trim();
+
+        const zip =
+          String(h.ownerZip || h.ownerPostalCode || h.zipOwner || h.proprietaireZip || "").trim();
+
+        const city =
+          String(h.ownerCity || h.ownerTown || h.cityOwner || h.proprietaireVille || "").trim();
+
+        if(!(a1 || zip || city || name || email || phone)) return;
+
+        homeClientFallback = { name, email, phone, address1:a1, address2:a2, zip, city };
+      }catch(e){
+        console.warn("home fallback failed:", e?.message || e);
+      }
+    }
+
     function clientSnapshot(d){
-      // SALES snapshot priority
+      // SALES snapshot
       const sName = String(d?.clientName || "").trim();
       const sA1   = String(d?.clientAddress1 || d?.clientAddress || "").trim();
       const sA2   = String(d?.clientAddress2 || "").trim();
       const sZip  = String(d?.clientZip || "").trim();
       const sCity = String(d?.clientCity || "").trim();
+      const sEmail = normalizeEmail(d?.clientEmail || "");
+      const sPhone = String(d?.clientPhone || "").trim();
 
-      // EVENT snapshot fallback
+      // EVENT snapshot
       const eName = String(d?.ownerName || "").trim();
       const eA1   = String(d?.ownerAddress1 || "").trim();
       const eA2   = String(d?.ownerAddress2 || "").trim();
       const eZip  = String(d?.ownerZip || "").trim();
       const eCity = String(d?.ownerCity || "").trim();
+      const eEmail = normalizeEmail(d?.ownerEmail || "");
+      const ePhone = String(d?.ownerPhone || "").trim();
 
       return {
         fullname: sName || eName,
         address1: sA1 || eA1,
         address2: sA2 || eA2,
         zip: sZip || eZip,
-        city: sCity || eCity
+        city: sCity || eCity,
+        email: sEmail || eEmail,
+        phone: sPhone || ePhone
       };
     }
 
     function renderClientHeader(ownerFromOwners, d){
       const o = ownerFromOwners || null;
+      const h = homeClientFallback || null;
       const s = clientSnapshot(d);
 
-      const name = (o?.fullname || s.fullname || "—").trim();
-      const a1 = (o?.address1 || s.address1 || "").trim();
-      const a2 = (o?.address2 || s.address2 || "").trim();
-      const zip = (o?.zip || s.zip || "").trim();
-      const city = (o?.city || s.city || "").trim();
+      const name = (o?.fullname || h?.name || s.fullname || "—").trim();
+      const a1 = (o?.address1 || h?.address1 || s.address1 || "").trim();
+      const a2 = (o?.address2 || h?.address2 || s.address2 || "").trim();
+      const zip = (o?.zip || h?.zip || s.zip || "").trim();
+      const city = (o?.city || h?.city || s.city || "").trim();
+
+      const email = (o?.email || h?.email || s.email || "").trim();
+      const phone = (o?.phone || h?.phone || s.phone || "").trim();
 
       cli1.textContent = name || "—";
+
       cli2.textContent = a1 || "";
       cli2.style.display = a1 ? "" : "none";
-      cli3.textContent = [a2, [zip, city].filter(Boolean).join(" ")].filter(Boolean).join(" • ") || "";
+
+      const line3 = [a2, [zip, city].filter(Boolean).join(" ")].filter(Boolean).join(" • ");
+      cli3.textContent = line3 || "";
+      cli3.style.display = line3 ? "" : "none";
+
+      const contact = [email ? email : "", phone ? phone : ""].filter(Boolean).join(" • ");
+      cli4.textContent = contact || "";
+      cli4.style.display = contact ? "" : "none";
     }
 
     function renderLines(d, businessProfile){
@@ -768,17 +833,15 @@
       cond3.innerHTML = `&nbsp;`;
     }
 
-    function renderBank(businessProfile){
+    function renderBank(businessProfile, profileRaw){
       const bank = (businessProfile?.bank || businessProfile?.banking || businessProfile?.bankDetails || {});
       const holder = String(bank.accountHolder || bank.holder || businessProfile?.companyName || "").trim();
       const bankName = String(bank.bankName || bank.name || "").trim();
-      const iban = String(bank.iban || "").trim();
-      const bic = String(bank.bic || bank.swift || "").trim();
 
-      const iban2 = iban || String(businessProfile?.iban || "").trim();
-      const bic2  = bic  || String(businessProfile?.bic  || businessProfile?.swift || "").trim();
+      const iban = String(bank.iban || "").trim() || String(profileRaw?.businessProfile?.bank?.iban || "").trim();
+      const bic  = String(bank.bic || bank.swift || "").trim() || String(profileRaw?.businessProfile?.bank?.bic || "").trim();
 
-      const hasAny = !!(holder || bankName || iban2 || bic2);
+      const hasAny = !!(holder || bankName || iban || bic);
 
       if(!hasAny){
         bankTitle.style.display = "none";
@@ -792,11 +855,11 @@
       const l1 = [holder ? `Titulaire : ${holder}` : "", bankName ? `Banque : ${bankName}` : ""].filter(Boolean).join(" • ");
       bank1.textContent = l1 || "—";
 
-      bank2.textContent = iban2 ? `IBAN : ${iban2}` : "";
-      bank2.style.display = iban2 ? "" : "none";
+      bank2.textContent = iban ? `IBAN : ${iban}` : "";
+      bank2.style.display = iban ? "" : "none";
 
-      bank3.textContent = bic2 ? `BIC : ${bic2}` : "";
-      bank3.style.display = bic2 ? "" : "none";
+      bank3.textContent = bic ? `BIC : ${bic}` : "";
+      bank3.style.display = bic ? "" : "none";
     }
 
     function renderPenalty(d){
@@ -836,60 +899,50 @@
         return;
       }
 
-      // retour vers la page édition facture
       backLink.href = docId
         ? `facture.html?docId=${encodeURIComponent(docId)}`
         : `facture.html?eventId=${encodeURIComponent(eventId)}`;
 
       try{
-        // 1) charger le document
+        // 1) doc
         let snap = null;
-
         if(docId){
           docKind = "SALES";
           snap = await getDoc(doc(db, "salesDocuments", docId));
-          if(!snap.exists()){
-            showError("Facture introuvable (salesDocuments).");
-            return;
-          }
+          if(!snap.exists()) return showError("Facture introuvable (salesDocuments).");
         }else{
           docKind = "EVENT";
           snap = await getDoc(doc(db, "events", eventId));
-          if(!snap.exists()){
-            showError("Facture introuvable (event).");
-            return;
-          }
+          if(!snap.exists()) return showError("Facture introuvable (event).");
         }
-
         docData = { id: snap.id, ...(snap.data()||{}) };
 
         // 2) sécurité conciergerie
         if(String(docData.conciergerieUid||"") && String(docData.conciergerieUid) !== String(user.uid)){
-          showError("Accès refusé (document d’une autre conciergerie).");
-          return;
+          return showError("Accès refusé (document d’une autre conciergerie).");
         }
 
         // 3) numéro obligatoire
         if(!String(docData.invoiceNumber || "").trim()){
-          showError("Numéro de facture manquant. Enregistre la facture avant l’aperçu.");
-          return;
+          return showError("Numéro de facture manquant. Enregistre la facture avant l’aperçu.");
         }
 
-        // 4) Business profile
+        // 4) profile
         const userSnap = await getDoc(doc(db,"users", user.uid));
         const profile = userSnap.exists() ? (userSnap.data()||{}) : {};
         const bp = applyBusinessProfile(profile);
 
-        // 5) Client (owners si possible, sinon snapshot doc)
+        // 5) client
         const ownerFromOwners = await loadOwnerFromDoc(user.uid, docData);
+        await loadHomeClientFallback(docData); // ✅ homes fallback (si pas d’owners)
         renderClientHeader(ownerFromOwners, docData);
 
-        // 6) Rendu
+        // 6) render
         renderDocHeader(docData);
         renderHomeAndPeriod(docData);
         renderLines(docData, bp || {});
         renderPaymentAndConditions(docData, bp || {});
-        renderBank(bp || {});
+        renderBank(bp || {}, profile || {});
         renderPenalty(docData);
 
       }catch(e){
