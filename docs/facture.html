@@ -444,6 +444,9 @@
     let profileData = null; // users/{conciergerieUid}
     let ownerUser = null;   // owners/{docId}
 
+    // ✅ fallback logement -> infos propriétaire (si salesDocuments n’embarque pas l’adresse)
+    let homeOwnerFallback = null; // { name,email,phone,address1,address2,zip,city }
+
     // ===== Helpers =====
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -575,10 +578,7 @@
       });
 
       const padded = String(next).padStart(4,"0");
-      // NOTE: tu génères déjà FA2026-0003 dans devis-liste -> ici on garde "FYYYY-####" car c'était ton choix initial.
-      // Si tu veux homogène: remplace par `FA${year}-${padded}`
       return `FA${year}-${padded}`;
-
     }
 
     function applyLogoFromProfile(profile){
@@ -604,10 +604,58 @@
       }
     }
 
+    // ✅ fallback logement : homes/{homeId} -> owner* (si existant)
+    async function loadHomeOwnerFallback(){
+      homeOwnerFallback = null;
+
+      const d = docData || {};
+      const hid = String(d.homeId || "").trim();
+      if(!hid) return;
+
+      try{
+        const hSnap = await getDoc(doc(db,"homes", hid));
+        if(!hSnap.exists()) return;
+
+        const h = hSnap.data() || {};
+        // tolérant : différentes variantes
+        const name =
+          String(h.ownerName || h.ownerFullname || h.owner || h.proprietaireNom || "").trim();
+
+        const email =
+          normalizeEmail(h.ownerEmail || h.ownerAccountEmail || h.proprietaireEmail || "");
+
+        const phone =
+          String(h.ownerPhone || h.phone || h.ownerTel || h.proprietaireTel || "").toString().trim();
+
+        const a1 =
+          String(h.ownerAddress1 || h.ownerStreet || h.ownerAddress || h.proprietaireAdresse1 || "").trim();
+
+        const a2 =
+          String(h.ownerAddress2 || h.proprietaireAdresse2 || "").trim();
+
+        const zip =
+          String(h.ownerZip || h.ownerPostalCode || h.zipOwner || h.proprietaireZip || "").trim();
+
+        const city =
+          String(h.ownerCity || h.ownerTown || h.cityOwner || h.proprietaireVille || "").trim();
+
+        if(!(a1 || zip || city || name || email || phone)) return;
+
+        homeOwnerFallback = {
+          name, email, phone,
+          address1: a1,
+          address2: a2,
+          zip, city
+        };
+      }catch(e){
+        console.warn("home fallback failed:", e?.message || e);
+      }
+    }
+
     function getOwnerSnapshot(){
       const d = docData || {};
 
-      // EVENT snapshot
+      // EVENT snapshot (si tu l’as déjà stocké dans events)
       const snapName  = (d.ownerName || "").trim();
       const snapEmail = (d.ownerEmail || "").trim();
       const snapPhone = (d.ownerPhone || "").trim();
@@ -621,6 +669,7 @@
       const sName  = (d.clientName || "").trim();
       const sEmail = (d.clientEmail || "").trim();
 
+      // owners/{docId}
       const o = ownerUser || {};
       const oName  = (o.fullname || "").trim();
       const oEmail = (o.email || "").trim();
@@ -631,14 +680,25 @@
       const oZip = (o.zip || "").trim();
       const oCity = (o.city || "").trim();
 
-      const name = oName || sName || snapName || "—";
-      const email = oEmail || sEmail || snapEmail || "";
-      const phone = oPhone || snapPhone || "";
+      // homes/{homeId} fallback
+      const h = homeOwnerFallback || {};
+      const hName = (h.name || "").trim();
+      const hEmail = (h.email || "").trim();
+      const hPhone = (h.phone || "").trim();
+      const hA1 = (h.address1 || "").trim();
+      const hA2 = (h.address2 || "").trim();
+      const hZip = (h.zip || "").trim();
+      const hCity = (h.city || "").trim();
 
-      const address1 = oA1 || snapA1 || "";
-      const address2 = oA2 || snapA2 || "";
-      const zip = oZip || snapZip || "";
-      const city = oCity || snapCity || "";
+      // ordre priorité : owners doc -> home fallback -> sales -> event snapshot
+      const name = oName || hName || sName || snapName || "—";
+      const email = oEmail || hEmail || sEmail || snapEmail || "";
+      const phone = oPhone || hPhone || snapPhone || "";
+
+      const address1 = oA1 || hA1 || snapA1 || "";
+      const address2 = oA2 || hA2 || snapA2 || "";
+      const zip = oZip || hZip || snapZip || "";
+      const city = oCity || hCity || snapCity || "";
 
       return { name, email, phone, address1, address2, zip, city };
     }
@@ -682,6 +742,10 @@
       if(c.address1) lines.push(esc(c.address1));
       if(c.address2) lines.push(esc(c.address2));
       if(c.zip || c.city) lines.push(esc([c.zip, c.city].filter(Boolean).join(" ")));
+
+      // ✅ contact (utile et souvent dispo même quand l’adresse manque)
+      const contact = [c.email ? c.email : "", c.phone ? c.phone : ""].filter(Boolean).join(" • ");
+      if(contact) lines.push(`<span class="mut">${esc(contact)}</span>`);
 
       clientLinesEl.innerHTML = lines.length
         ? lines.join("<br>")
@@ -877,6 +941,7 @@
 
     async function loadOwner(){
       ownerUser = null;
+      homeOwnerFallback = null;
 
       const d = docData || {};
       const ownerEmail = normalizeEmail(d.ownerEmail || d.clientEmail || "");
@@ -886,6 +951,7 @@
         String(d.ownerDocId || "").trim() ||
         String(d.clientOwnerDocId || "").trim();
 
+      // 1) owners by docId
       if(ownerDocId){
         try{
           const snap = await getDoc(doc(db,"owners", ownerDocId));
@@ -902,7 +968,6 @@
                 city: (o.city || "").toString().trim(),
                 phone: (o.phone || "").toString().trim(),
               };
-              return;
             }
           }
         }catch(e){
@@ -910,7 +975,8 @@
         }
       }
 
-      if(ownerEmail){
+      // 2) owners by emailLower
+      if(!ownerUser && ownerEmail){
         try{
           ownerUser = await lookupOwnerByEmailInOwners(ownerEmail);
         }catch(e){
@@ -918,6 +984,9 @@
           ownerUser = null;
         }
       }
+
+      // 3) ✅ fallback logement (si toujours pas d’adresse)
+      await loadHomeOwnerFallback();
     }
 
     const docId = getParam("docId");
@@ -1091,4 +1160,3 @@
   </script>
 </body>
 </html>
-
