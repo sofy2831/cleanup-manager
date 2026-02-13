@@ -1,4 +1,4 @@
-<!-- docs/devis-liste.html (FINAL — DE (events) + DF (salesDocuments) + branding robuste) -->
+<!-- docs/devis-liste.html (FINAL — DE (events) + DF (salesDocuments) + branding robuste + TOTAUX GLOBAUX) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -290,6 +290,28 @@
     .tag.de{ color:var(--violet); }
     .tag.df{ color:#444; }
 
+    /* ✅ Totaux globaux (liste filtrée) */
+    .tot3{
+      margin-top:10px;
+      display:grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap:8px;
+      align-items:stretch;
+    }
+    @media(max-width:720px){
+      .tot3{ grid-template-columns: 1fr; }
+    }
+    .totBox{
+      background:#fff;
+      border:1px solid rgba(122,92,255,0.18);
+      border-radius:14px;
+      padding:10px 12px;
+      box-shadow:0 3px 10px rgba(0,0,0,.06);
+    }
+    .totBox .t{ font-size:11px; color:#666; font-weight:900; }
+    .totBox .v{ margin-top:2px; font-size:13px; color:#111; font-weight:1000; }
+    .totMeta{ margin-top:6px; font-size:12px; color:#666; font-weight:850; }
+
     .bottom-nav{
       position: fixed;
       left: 0;
@@ -395,6 +417,26 @@
         </div>
       </div>
 
+      <!-- ✅ Totaux globaux (1 seule fois, sur la liste filtrée/recherchée) -->
+      <div class="card" id="globalTotalsCard" style="display:none;">
+        <div style="font-weight:1000; font-size:13px;">Totaux (liste filtrée)</div>
+        <div class="tot3">
+          <div class="totBox">
+            <div class="t">Total HT</div>
+            <div class="v" id="gtHT">—</div>
+          </div>
+          <div class="totBox">
+            <div class="t">TVA</div>
+            <div class="v" id="gtTVA">—</div>
+          </div>
+          <div class="totBox">
+            <div class="t">Total TTC</div>
+            <div class="v" id="gtTTC">—</div>
+          </div>
+        </div>
+        <div class="totMeta" id="gtMeta">—</div>
+      </div>
+
       <div id="listBox" style="display:flex; flex-direction:column; gap:12px;"></div>
     </div>
   </div>
@@ -426,8 +468,19 @@
     const searchInput = document.getElementById("searchInput");
     const listBox = document.getElementById("listBox");
 
+    // ✅ global totals UI
+    const globalTotalsCard = document.getElementById("globalTotalsCard");
+    const gtHT = document.getElementById("gtHT");
+    const gtTVA = document.getElementById("gtTVA");
+    const gtTTC = document.getElementById("gtTTC");
+    const gtMeta = document.getElementById("gtMeta");
+
     let all = [];
     let currentUid = null;
+
+    // ✅ TVA config from users/{uid}.businessProfile.vat
+    let vatEnabled = false;
+    let vatRate = 0;
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -492,6 +545,45 @@
       if(d?.totalTTC != null && d.totalTTC !== "") return Number(d.totalTTC);
       if(d?.total != null && d.total !== "") return Number(d.total);
       return computeTotalFromLines(d?.lines);
+    }
+
+    // ✅ global totals computations (HT/TVA/TTC)
+    function itemHT(x){
+      // total HT = somme lignes (qty*unitPrice)
+      const lines = Array.isArray(x?.lines) ? x.lines : [];
+      return computeTotalFromLines(lines);
+    }
+    function itemTVA(x){
+      const ht = itemHT(x);
+      return vatEnabled ? ht * (Number(vatRate)||0) : 0;
+    }
+    function itemTTC(x){
+      const ht = itemHT(x);
+      const tva = vatEnabled ? ht * (Number(vatRate)||0) : 0;
+      return ht + tva;
+    }
+    function sumGlobalTotals(items){
+      let ht = 0, tva = 0, ttc = 0;
+      for(const it of (items||[])){
+        const h = Number(itemHT(it)) || 0;
+        const v = Number(vatEnabled ? (h * (Number(vatRate)||0)) : 0) || 0;
+        ht += h; tva += v; ttc += (h+v);
+      }
+      return { ht, tva, ttc };
+    }
+    function renderGlobalTotals(filtered){
+      if(!filtered.length){
+        globalTotalsCard.style.display = "none";
+        return;
+      }
+      const totals = sumGlobalTotals(filtered);
+      globalTotalsCard.style.display = "block";
+      gtHT.textContent = fmtMoney(totals.ht);
+      gtTVA.textContent = fmtMoney(totals.tva);
+      gtTTC.textContent = fmtMoney(totals.ttc);
+
+      const labelTVA = vatEnabled ? `TVA activée (${Math.round(vatRate*100)}%)` : `TVA non applicable`;
+      gtMeta.textContent = `${filtered.length} devis affiché(s) • ${labelTVA}`;
     }
 
     function badgeForQuoteStatus(s){
@@ -663,6 +755,10 @@
 
     function render(){
       const filtered = getFiltered();
+
+      // ✅ global totals (filtre + search)
+      renderGlobalTotals(filtered);
+
       listBox.innerHTML = "";
 
       if(!filtered.length){
@@ -899,6 +995,11 @@
         const bp = d.businessProfile || {};
         const company = String(bp.companyName || d.companyName || d.fullname || "Conciergerie").trim();
 
+        // ✅ TVA config
+        const vat = bp.vat || {};
+        vatEnabled = !!vat.enabled;
+        vatRate = Number.isFinite(Number(vat.rate)) ? Number(vat.rate) : 0;
+
         // tolérant (selon tes versions)
         const logoUrl = String(
           bp.logoUrl ||
@@ -920,6 +1021,7 @@
         }
       }catch{
         companyLine.textContent = "Conciergerie";
+        vatEnabled = false; vatRate = 0;
         logoImg.style.display = "none";
         logoFallback.style.display = "block";
       }
