@@ -1,4 +1,4 @@
-<!-- docs/factures-liste.html (FINAL FIX — INVOICE list, no "Nouvelle facture" if "Refaire", totals HT/TVA/TTC, clientName fix, status display fix) -->
+<!-- docs/factures-liste.html (FINAL — INVOICE list, no "Nouvelle facture", totals HT/TVA/TTC, clientName fix, status correct, Avoir + Refaire) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -138,7 +138,8 @@
       color:#fff; border-color:transparent;
       box-shadow:0 12px 24px rgba(0,0,0,0.10);
     }
-    .btn:disabled{ opacity:.45; cursor:not-allowed; pointer-events:none; }
+    .btn:disabled,
+    .btn[disabled]{ opacity:.45; cursor:not-allowed; pointer-events:none; }
 
     .badge{
       display:inline-flex; align-items:center; gap:6px;
@@ -198,9 +199,7 @@
       gap:8px;
       align-items:stretch;
     }
-    @media(max-width:720px){
-      .tot3{ grid-template-columns: 1fr; }
-    }
+    @media(max-width:720px){ .tot3{ grid-template-columns: 1fr; } }
     .totBox{
       background:#fff;
       border:1px solid rgba(122,92,255,0.18);
@@ -267,6 +266,7 @@
           <select class="select" id="filterStatus">
             <option value="ALL">Toutes</option>
             <option value="DRAFT">Brouillons</option>
+            <option value="ISSUED">Émises</option>
             <option value="SENT">Envoyées</option>
             <option value="PAID">Payées</option>
             <option value="CANCELLED">Annulées</option>
@@ -279,7 +279,6 @@
           </div>
         </div>
 
-        <!-- ✅ "Nouvelle facture" supprimée car on garde "Refaire" -->
         <div style="margin-top:10px; font-size:12px; color:#666; font-weight:850;">
           Créer une facture se fait via un devis (Passer en facture). “Refaire” sert après un avoir.
         </div>
@@ -372,7 +371,6 @@
       return n || "—";
     }
 
-    // ✅ fix visuel : si N° existe mais status = DRAFT => on affiche ÉMISE
     function getInvoiceStatusDisplay(x){
       const raw = getInvoiceStatusRaw(x);
       const hasNum = !!String(x?.invoiceNumber||"").trim();
@@ -396,7 +394,7 @@
       const raw = getInvoiceStatusRaw(item);
 
       if(f === "ALL") return true;
-      if(f === "MISSING") return !raw; // "Sans statut" = pas de champ
+      if(f === "MISSING") return !raw;
       return disp === f;
     }
 
@@ -404,7 +402,6 @@
       const q = (searchInput.value||"").trim().toLowerCase();
       if(!q) return true;
 
-      // ✅ FIX: chercher clientName/clientEmail, pas ownerName/ownerEmail
       const hay = [
         item.invoiceNumber, item.quoteNumber,
         item.clientName, item.clientEmail,
@@ -427,7 +424,6 @@
       return "—";
     }
 
-    // lien vers avoir : on tolère plusieurs noms tant qu'on n'a pas figé avoir.html
     function getLinkedAvoirId(x){
       const keys = ["avoirId","creditId","creditNoteId","lastCreditId","fromAvoirId","linkedCreditId"];
       for(const k of keys){
@@ -456,7 +452,6 @@
         const created = getCreatedAt(x);
         const invNum = getInvoiceNumber(x);
 
-        // ✅ FIX client
         const client = String(x.clientName || x.ownerName || "—").trim();
         const clientEmail = String(x.clientEmail || x.ownerEmail || "").trim();
 
@@ -469,13 +464,11 @@
         const stDisp = getInvoiceStatusDisplay(x);
         const linkedAvoirId = getLinkedAvoirId(x);
 
-        // URLs
         const openHref = `facture.html?docId=${encodeURIComponent(x.id)}`;
         const previewHref = `facture-apercu.html?docId=${encodeURIComponent(x.id)}`;
 
-        // Buttons logic
-        const allowAvoir = !!String(x.invoiceNumber||"").trim() && String(getInvoiceStatusRaw(x)) !== "CANCELLED";
-        const allowRedo = !!linkedAvoirId; // actif si avoir lié
+        const allowAvoir = !!String(x.invoiceNumber||"").trim() && getInvoiceStatusRaw(x) !== "CANCELLED";
+        const allowRedo = !!linkedAvoirId;
 
         const div = document.createElement("div");
         div.className = "card";
@@ -516,7 +509,6 @@
             </div>
           </div>
 
-          <!-- ✅ Totaux sous les lignes : HT / TVA / TTC -->
           <div class="tot3">
             <div class="totBox">
               <div class="t">Total HT</div>
@@ -546,8 +538,10 @@
 
                 ${allowAvoir ? `<a class="btn" href="avoir.html?fromDocId=${encodeURIComponent(x.id)}">Avoir</a>` : ``}
 
-                <!-- ✅ Refaire : actif seulement si avoir lié -->
-                <a class="btn" ${allowRedo ? `href="facture.html?mode=redo&fromDocId=${encodeURIComponent(x.id)}&fromAvoirId=${encodeURIComponent(linkedAvoirId)}"` : `href="#"`} ${allowRedo ? "" : "disabled"}>Refaire</a>
+                <a class="btn" ${allowRedo
+                  ? `href="facture.html?mode=redo&fromDocId=${encodeURIComponent(x.id)}&fromAvoirId=${encodeURIComponent(linkedAvoirId)}"`
+                  : `href="#" disabled`
+                }>Refaire</a>
               </div>
             </div>
           </div>
@@ -556,13 +550,12 @@
       }
     }
 
-    async function loadCompanyName(uid){
+    async function loadCompanyNameAndVat(uid){
       try{
         const snap = await getDoc(doc(db, "users", uid));
         const data = snap.exists() ? (snap.data()||{}) : {};
         const name = String(data?.businessProfile?.companyName || "").trim();
 
-        // TVA config (pour totaux HT/TVA/TTC)
         const vat = data?.businessProfile?.vat || {};
         vatEnabled = !!vat?.enabled;
         vatRate = Number.isFinite(Number(vat?.rate)) ? Number(vat.rate) : 0;
@@ -596,7 +589,7 @@
       if(!user){ location.href = "login.html?role=conciergerie"; return; }
 
       helloLine.textContent = "Bonjour,";
-      companyLine.textContent = await loadCompanyName(user.uid);
+      companyLine.textContent = await loadCompanyNameAndVat(user.uid);
 
       hideAlert();
       try{
