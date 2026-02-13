@@ -1112,30 +1112,40 @@ async function lookupOwnerByEmailInOwners(conciergerieUid, emailLower){
         };
 
         // Mode SALES (facture existe déjà dans salesDocuments)
-        if(docKind === "SALES"){
-          if(!invoiceNumber){
-            invoiceNumber = await ensureInvoiceNumber(currentUser.uid, year);
-            patch.invoiceNumber = invoiceNumber;
-            patch.invoiceStatus = "SENT";
-            patch.invoiceSentAt = serverTimestamp();
-            patch.invoiceIssuedAt = serverTimestamp();
-            patch.invoiceIssuedDate = todayIso();
-            patch.commercialStatus = "FACTURE_ENVOYEE";
-            patch.commercialUpdatedAt = serverTimestamp();
-          }else{
-            patch.invoiceStatus = String(docData?.invoiceStatus || "SENT").toUpperCase();
-            patch.invoiceIssuedDate = String(docData?.invoiceIssuedDate || todayIso()).trim();
-          }
+        // Mode SALES (facture existe déjà dans salesDocuments)
+if(docKind === "SALES"){
+  if(!invoiceNumber){
+    invoiceNumber = await ensureInvoiceNumber(currentUser.uid, year);
+    patch.invoiceNumber = invoiceNumber;
 
-          await updateDoc(docRef, patch);
+    // ✅ PROPRE : dès création du numéro => ÉMISE
+    patch.invoiceStatus = "ISSUED";
+    patch.invoiceIssuedAt = serverTimestamp();
+    patch.invoiceIssuedDate = todayIso();
 
-          const snap2 = await getDoc(docRef);
-          docData = { id: snap2.id, ...(snap2.data()||{}) };
+    // (optionnel) si tu veux tracer "émise" séparément
+    patch.invoiceIssuedBy = currentUser.uid;
 
-          showAlert("✅ Facture enregistrée (envoyée).", true);
-          renderRecap();
-          return;
-        }
+    // garde tes champs commerciaux si tu veux
+    patch.commercialStatus = "FACTURE_EMISE";
+    patch.commercialUpdatedAt = serverTimestamp();
+  }else{
+    // ✅ si elle avait un numéro mais restait DRAFT, on normalise à ÉMISE au prochain save
+    const cur = String(docData?.invoiceStatus || "").toUpperCase().trim();
+    patch.invoiceStatus = (cur === "DRAFT" || !cur) ? "ISSUED" : cur;
+
+    patch.invoiceIssuedDate = String(docData?.invoiceIssuedDate || todayIso()).trim();
+  }
+
+  await updateDoc(docRef, patch);
+
+  const snap2 = await getDoc(docRef);
+  docData = { id: snap2.id, ...(snap2.data()||{}) };
+
+  showAlert("✅ Facture enregistrée (émise).", true);
+  renderRecap();
+  return;
+}
 
         // Mode EVENT (fallback ancien modèle)
         const qs = String(docData?.quoteStatus || "").toUpperCase().trim();
@@ -1207,6 +1217,7 @@ async function lookupOwnerByEmailInOwners(conciergerieUid, emailLower){
   </script>
 </body>
 </html>
+
 
 
 
