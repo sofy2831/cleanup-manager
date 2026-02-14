@@ -1,4 +1,4 @@
-<!-- docs/reglement.html (FINAL — paiement partiel/global + sous-collection payments + update invoice paidAmount/status + redirect reglement-liste) -->
+<!-- docs/reglement.html (FINAL v2 — "mode de règlement" + date de règlement + "montant réglé" + référence optionnelle) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -297,11 +297,11 @@
             <div class="v" id="totalLine">—</div>
           </div>
           <div class="kv">
-            <div class="t">Déjà payé</div>
+            <div class="t">Déjà réglé</div>
             <div class="v" id="paidLine">—</div>
           </div>
           <div class="kv">
-            <div class="t">Reste à payer</div>
+            <div class="t">Reste à régler</div>
             <div class="v" id="dueLine">—</div>
           </div>
           <div class="kv">
@@ -314,17 +314,28 @@
       <div class="card">
         <div class="row">
           <div>
-            <label for="amountInput">Montant</label>
+            <label for="amountInput">Montant réglé</label>
             <input id="amountInput" type="number" inputmode="decimal" step="0.01" min="0" placeholder="Ex : 50" />
           </div>
           <div>
-            <label for="methodSelect">Méthode</label>
-            <select id="methodSelect">
+            <label for="paidDateInput">Date de règlement</label>
+            <input id="paidDateInput" type="date" />
+          </div>
+        </div>
+
+        <div class="row">
+          <div>
+            <label for="modeSelect">Mode de règlement</label>
+            <select id="modeSelect">
               <option value="TRANSFER">Virement</option>
               <option value="CARD">Carte</option>
               <option value="CASH">Espèces</option>
               <option value="CHEQUE">Chèque</option>
             </select>
+          </div>
+          <div>
+            <label for="refInput">Référence (optionnel)</label>
+            <input id="refInput" type="text" placeholder="Ex : TRX-123 / N° chèque / Réf virement" />
           </div>
         </div>
 
@@ -332,7 +343,7 @@
         <textarea id="noteInput" rows="2" placeholder="Ex : acompte"></textarea>
 
         <div class="btns">
-          <button class="btn primary" id="saveBtn" type="button">Enregistrer le paiement</button>
+          <button class="btn primary" id="saveBtn" type="button">Enregistrer le règlement</button>
           <a class="btn" id="historyBtn" href="#">Historique</a>
         </div>
 
@@ -356,7 +367,7 @@
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
       doc, getDoc, collection, getDocs, addDoc,
-      serverTimestamp, runTransaction
+      serverTimestamp, runTransaction, Timestamp
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const alertBox = document.getElementById("alertBox");
@@ -368,7 +379,9 @@
     const statusLine = document.getElementById("statusLine");
 
     const amountInput = document.getElementById("amountInput");
-    const methodSelect = document.getElementById("methodSelect");
+    const paidDateInput = document.getElementById("paidDateInput");
+    const modeSelect = document.getElementById("modeSelect");
+    const refInput = document.getElementById("refInput");
     const noteInput = document.getElementById("noteInput");
 
     const saveBtn = document.getElementById("saveBtn");
@@ -388,14 +401,6 @@
       alertBox.classList.remove("ok");
       alertBox.textContent = "";
     }
-    function esc(s){
-      return String(s||"")
-        .replaceAll("&","&amp;")
-        .replaceAll("<","&lt;")
-        .replaceAll(">","&gt;")
-        .replaceAll('"',"&quot;")
-        .replaceAll("'","&#039;");
-    }
     function fmtMoney(v){
       const n = Number(v);
       if(!Number.isFinite(n)) return "—";
@@ -404,6 +409,13 @@
     function getParam(name){
       const p = new URLSearchParams(location.search);
       return (p.get(name) || "").trim();
+    }
+    function isoTodayForDateInput(){
+      const d = new Date();
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth()+1).padStart(2,"0");
+      const dd = String(d.getDate()).padStart(2,"0");
+      return `${yyyy}-${mm}-${dd}`; // input[type=date] veut yyyy-mm-dd
     }
 
     function computeHT(lines){
@@ -426,13 +438,11 @@
     }
 
     function computeInvoiceTotalTTC(inv, vatCfg){
-      // priorité: champs déjà calculés
       const candidates = [inv?.totalTTC, inv?.invoiceTTC, inv?.invoiceTotal, inv?.total];
       for(const c of candidates){
         const n = Number(c);
         if(Number.isFinite(n) && n >= 0) return n;
       }
-      // fallback: lignes + TVA
       const ht = computeHT(inv?.lines);
       const tva = vatCfg.enabled ? (ht * vatCfg.rate) : 0;
       return ht + tva;
@@ -470,13 +480,22 @@
       saveBtn.style.opacity = locked ? "0.75" : "1";
     }
 
+    function dateInputToTimestamp(yyyy_mm_dd){
+      const s = String(yyyy_mm_dd||"").trim();
+      if(!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+      const [y,m,d] = s.split("-").map(n=>parseInt(n,10));
+      const dt = new Date(y, (m||1)-1, d||1, 12, 0, 0); // midi = évite décalage DST
+      return Timestamp.fromDate(dt);
+    }
+
     async function render(){
       if(!invoiceData) return;
 
+      // init date à aujourd’hui
+      if(!paidDateInput.value) paidDateInput.value = isoTodayForDateInput();
+
       const vatCfg = await loadVatConfig(currentUser.uid);
       const totalTTC = computeInvoiceTotalTTC(invoiceData, vatCfg);
-
-      // source de vérité = sous-collection payments (plus fiable que paidAmount si pas encore maintenu)
       const paidSum = await sumPayments(invoiceData.id);
 
       const due = Math.max(0, (Number(totalTTC)||0) - (Number(paidSum)||0));
@@ -492,22 +511,22 @@
       dueLine.textContent = fmtMoney(due);
       statusLine.innerHTML = badgeHtml(payStatus);
 
-      // pré-remplir un "reste à payer" par défaut (pratique)
       if(!amountInput.value){
         amountInput.value = due > 0 ? String(Math.round(due*100)/100) : "0";
       }
 
-      // historique
       historyBtn.href = `reglement-liste.html?docId=${encodeURIComponent(invoiceData.id)}`;
 
-      // si déjà payée => on bloque la saisie
       const paidFully = (payStatus === "PAID");
       amountInput.disabled = paidFully;
-      methodSelect.disabled = paidFully;
+      paidDateInput.disabled = paidFully;
+      modeSelect.disabled = paidFully;
+      refInput.disabled = paidFully;
       noteInput.disabled = paidFully;
       saveBtn.disabled = paidFully;
+
       if(paidFully){
-        showAlert("✅ Facture déjà soldée. Paiement désactivé.", true);
+        showAlert("✅ Facture déjà soldée. Règlement désactivé.", true);
       }else{
         hideAlert();
       }
@@ -530,7 +549,13 @@
 
       const raw = Number(amountInput.value);
       if(!Number.isFinite(raw) || raw <= 0){
-        showAlert("⛔ Montant invalide.");
+        showAlert("⛔ Montant réglé invalide.");
+        return;
+      }
+
+      const paidAtTs = dateInputToTimestamp(paidDateInput.value);
+      if(!paidAtTs){
+        showAlert("⛔ Date de règlement invalide.");
         return;
       }
 
@@ -541,26 +566,29 @@
         const alreadyPaid = await sumPayments(invoiceData.id);
         const due = Math.max(0, totalTTC - alreadyPaid);
 
-        const amount = Math.min(raw, due); // on empêche de dépasser le dû (propre)
+        const amount = Math.min(raw, due);
         if(amount <= 0){
-          showAlert("⛔ Rien à payer (facture soldée).");
+          showAlert("⛔ Rien à régler (facture soldée).");
           lockUI(false);
           return;
         }
 
-        const method = String(methodSelect.value || "TRANSFER").toUpperCase();
+        const mode = String(modeSelect.value || "TRANSFER").toUpperCase();
+        const reference = String(refInput.value || "").trim();
         const note = String(noteInput.value || "").trim();
 
-        // 1) créer le paiement dans la sous-collection
+        // 1) sous-collection payments
         const payCol = collection(db, "salesDocuments", invoiceData.id, "payments");
         await addDoc(payCol, {
           amount,
-          method,
+          mode,
+          reference,
           note,
-          paidAt: serverTimestamp()
+          paidAt: paidAtTs,
+          createdAt: serverTimestamp()
         });
 
-        // 2) mettre à jour l’agrégat dans la facture (transaction)
+        // 2) agrégats facture (transaction)
         await runTransaction(db, async (tx)=>{
           const s = await tx.get(invoiceRef);
           if(!s.exists()) throw new Error("Facture introuvable (transaction).");
@@ -569,13 +597,13 @@
           const currentPaid = Number(inv.paidAmount);
           const paidAmount = (Number.isFinite(currentPaid) ? currentPaid : 0) + amount;
 
-          // total recalculé ici aussi pour décider PAID
           const totalNow = computeInvoiceTotalTTC(inv, vatCfg);
           const pStatus = statusFrom(paidAmount, totalNow);
 
           const patch = {
-            paidAmount: paidAmount,
-            paidAt: serverTimestamp(),
+            paidAmount,
+            paidAt: serverTimestamp(),         // dernier paiement (timestamp serveur)
+            lastPaymentAt: serverTimestamp(),  // alias propre
             paymentStatus: pStatus,
             invoiceUpdatedAt: serverTimestamp()
           };
@@ -588,9 +616,8 @@
           tx.update(invoiceRef, patch);
         });
 
-        showAlert("✅ Paiement enregistré.", true);
+        showAlert("✅ Règlement enregistré.", true);
 
-        // 3) redirect vers liste paiements (à créer ensuite)
         setTimeout(()=>{
           location.href = `reglement-liste.html?docId=${encodeURIComponent(invoiceData.id)}`;
         }, 450);
