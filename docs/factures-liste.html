@@ -1,4 +1,4 @@
-<!-- docs/factures-liste.html (GLOBAL TOTALS — totaux HT/TVA/TTC en haut de liste, pas par facture) -->
+<!-- docs/factures-liste.html (FINAL — INVOICE list, actions: Ouvrir/Avoir/Refaire/Règlement, totaux globaux HT/TVA/TTC, VAT from users/{uid}.businessProfile.vat, paiement partiel via paidAmount) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -107,7 +107,7 @@
       border-radius:14px;
       background:#fff;
       border:1px solid rgba(122,92,255,0.18);
-      box-shadow:0 3px 10px rgba(0,0,0,.06);
+      box-shadow:0 3px 10px rgba(0,0,0,0.06);
       min-width:0;
     }
     .s-ico{ font-size:14px; opacity:.75; }
@@ -191,7 +191,7 @@
     .k .t{ font-size:12px; color:#666; font-weight:900; }
     .k .v{ font-size:13px; color:#111; font-weight:900; }
 
-    /* ✅ Totaux globaux (une seule fois) */
+    /* ✅ Totaux globaux (1 bloc sous la facture) */
     .tot3{
       margin-top:10px;
       display:grid;
@@ -211,7 +211,6 @@
     }
     .totBox .t{ font-size:11px; color:#666; font-weight:900; }
     .totBox .v{ margin-top:2px; font-size:13px; color:#111; font-weight:1000; }
-    .totMeta{ margin-top:6px; font-size:12px; color:#666; font-weight:850; }
 
     .bottom-nav{
       position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
@@ -287,26 +286,6 @@
         </div>
       </div>
 
-      <!-- ✅ Totaux globaux (une seule fois) -->
-      <div class="card" id="globalTotalsCard" style="display:none;">
-        <div style="font-weight:1000; font-size:13px;">Totaux (liste filtrée)</div>
-        <div class="tot3">
-          <div class="totBox">
-            <div class="t">Total HT</div>
-            <div class="v" id="gtHT">—</div>
-          </div>
-          <div class="totBox">
-            <div class="t">TVA</div>
-            <div class="v" id="gtTVA">—</div>
-          </div>
-          <div class="totBox">
-            <div class="t">Total TTC</div>
-            <div class="v" id="gtTTC">—</div>
-          </div>
-        </div>
-        <div class="totMeta" id="gtMeta">—</div>
-      </div>
-
       <div id="listBox" style="display:flex; flex-direction:column; gap:12px;"></div>
     </div>
   </div>
@@ -331,12 +310,6 @@
     const filterStatus = document.getElementById("filterStatus");
     const searchInput = document.getElementById("searchInput");
     const listBox = document.getElementById("listBox");
-
-    const globalTotalsCard = document.getElementById("globalTotalsCard");
-    const gtHT = document.getElementById("gtHT");
-    const gtTVA = document.getElementById("gtTVA");
-    const gtTTC = document.getElementById("gtTTC");
-    const gtMeta = document.getElementById("gtMeta");
 
     let all = [];
     let vatEnabled = false;
@@ -365,6 +338,7 @@
       if(!Number.isFinite(n)) return "—";
       return n.toLocaleString("fr-FR",{minimumFractionDigits:2, maximumFractionDigits:2})+" €";
     }
+
     function fmtDateFR(x){
       if(!x) return "—";
       try{
@@ -399,7 +373,7 @@
       return n || "—";
     }
 
-    // Si N° existe mais status = DRAFT => on affiche ÉMISE (display only)
+    // ✅ affichage: si N° existe mais status = DRAFT/VIDE => ÉMISE (c’est juste du display)
     function getInvoiceStatusDisplay(x){
       const raw = getInvoiceStatusRaw(x);
       const hasNum = !!String(x?.invoiceNumber||"").trim();
@@ -423,7 +397,7 @@
       const raw = getInvoiceStatusRaw(item);
 
       if(f === "ALL") return true;
-      if(f === "MISSING") return !raw;
+      if(f === "MISSING") return !raw; // "Sans statut" = pas de champ
       return disp === f;
     }
 
@@ -453,6 +427,7 @@
       return "—";
     }
 
+    // avoir lié : tolérant tant que avoir.html n’est pas figé
     function getLinkedAvoirId(x){
       const keys = ["avoirId","creditId","creditNoteId","lastCreditId","fromAvoirId","linkedCreditId"];
       for(const k of keys){
@@ -462,39 +437,27 @@
       return "";
     }
 
-    function sumTotals(items){
-      let ht = 0, tva = 0, ttc = 0;
-      for(const it of items){
-        const t = computeTotalsFromLines(it.lines);
-        ht += (Number(t.ht)||0);
-        tva += (Number(t.tva)||0);
-        ttc += (Number(t.ttc)||0);
-      }
-      return { ht, tva, ttc };
+    // ===== Paiements partiels =====
+    function getPaidAmount(x){
+      const v = x?.paidAmount ?? x?.invoicePaidAmount ?? x?.paymentsTotal ?? 0;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : 0;
     }
-
-    function renderGlobalTotals(filtered){
-      if(!filtered.length){
-        globalTotalsCard.style.display = "none";
-        return;
-      }
-      const totals = sumTotals(filtered);
-
-      globalTotalsCard.style.display = "block";
-      gtHT.textContent = fmtMoney(totals.ht);
-      gtTVA.textContent = fmtMoney(totals.tva);
-      gtTTC.textContent = fmtMoney(totals.ttc);
-
-      const labelTVA = vatEnabled ? `TVA activée (${Math.round(vatRate*100)}%)` : `TVA non applicable`;
-      gtMeta.textContent = `${filtered.length} facture(s) affichée(s) • ${labelTVA}`;
+    function getInvoiceTotalTTCFromDoc(x){
+      // total TTC fiable = recalcul lines + TVA conciergerie
+      const totals = computeTotalsFromLines(x.lines);
+      return Number(totals.ttc) || 0;
+    }
+    function isFullyPaid(x){
+      const st = String(x?.invoiceStatus || "").toUpperCase().trim();
+      if(st === "PAID") return true; // compat
+      const total = getInvoiceTotalTTCFromDoc(x);
+      const paid = getPaidAmount(x);
+      return total > 0 && paid >= (total - 0.01);
     }
 
     function render(){
       const filtered = getFiltered();
-
-      // ✅ 1 seul total global (liste filtrée)
-      renderGlobalTotals(filtered);
-
       listBox.innerHTML = "";
 
       if(!filtered.length){
@@ -522,13 +485,21 @@
 
         const totals = computeTotalsFromLines(x.lines);
         const stDisp = getInvoiceStatusDisplay(x);
+        const stRaw = getInvoiceStatusRaw(x);
         const linkedAvoirId = getLinkedAvoirId(x);
 
-        const openHref = `facture.html?docId=${encodeURIComponent(x.id)}`;
-        const previewHref = `facture-apercu.html?docId=${encodeURIComponent(x.id)}`;
+        const paidAmt = getPaidAmount(x);
+        const fullyPaid = isFullyPaid(x);
 
-        const allowAvoir = !!String(x.invoiceNumber||"").trim() && String(getInvoiceStatusRaw(x)) !== "CANCELLED";
+        // URLs
+        const openHref = `facture.html?docId=${encodeURIComponent(x.id)}`;
+
+        // Buttons logic
+        const hasNum = !!String(x.invoiceNumber||"").trim();
+
+        const allowAvoir = hasNum && stRaw !== "CANCELLED";
         const allowRedo = !!linkedAvoirId;
+        const allowReglement = hasNum && stRaw !== "CANCELLED" && !fullyPaid;
 
         const div = document.createElement("div");
         div.className = "card";
@@ -569,21 +540,57 @@
             </div>
           </div>
 
+          <!-- ✅ Totaux globaux (1 bloc) : HT / TVA / TTC -->
+          <div class="tot3">
+            <div class="totBox">
+              <div class="t">Total HT</div>
+              <div class="v">${fmtMoney(totals.ht)}</div>
+            </div>
+            <div class="totBox">
+              <div class="t">TVA</div>
+              <div class="v">${vatEnabled ? fmtMoney(totals.tva) : "0,00 €"}</div>
+            </div>
+            <div class="totBox">
+              <div class="t">Total TTC</div>
+              <div class="v">${fmtMoney(totals.ttc)}</div>
+            </div>
+          </div>
+
           <div class="row" style="margin-top:10px;">
             <div class="k">
               <div class="t">Statut</div>
               <div class="v">${badgeForStatus(stDisp)}</div>
+
+              ${
+                hasNum
+                  ? `<div class="t" style="margin-top:6px;">Payé : ${esc(fmtMoney(paidAmt))} / ${esc(fmtMoney(totals.ttc))}</div>`
+                  : ``
+              }
               ${linkedAvoirId ? `<div class="t" style="margin-top:4px;">Avoir lié : ${esc(linkedAvoirId)}</div>` : ``}
             </div>
 
-            <div class="k" style="align-items:flex-end; min-width:360px;">
+            <div class="k" style="align-items:flex-end; min-width:420px;">
               <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;">
                 <a class="btn primary" href="${openHref}">Ouvrir</a>
-                <a class="btn" href="${previewHref}">PDF</a>
 
-                ${allowAvoir ? `<a class="btn" href="avoir.html?fromDocId=${encodeURIComponent(x.id)}">Avoir</a>` : ``}
+                ${allowReglement
+                  ? `<a class="btn" href="reglement.html?docId=${encodeURIComponent(x.id)}">Règlement</a>`
+                  : `<a class="btn" href="#" disabled>Règlement</a>`
+                }
 
-                <a class="btn" ${allowRedo ? `href="facture.html?mode=redo&fromDocId=${encodeURIComponent(x.id)}&fromAvoirId=${encodeURIComponent(linkedAvoirId)}"` : `href="#"`} ${allowRedo ? "" : "disabled"}>Refaire</a>
+                ${allowAvoir
+                  ? `<a class="btn" href="avoir.html?fromDocId=${encodeURIComponent(x.id)}">Avoir</a>`
+                  : `<a class="btn" href="#" disabled>Avoir</a>`
+                }
+
+                <a class="btn"
+                   ${allowRedo
+                     ? `href="facture.html?mode=redo&fromDocId=${encodeURIComponent(x.id)}&fromAvoirId=${encodeURIComponent(linkedAvoirId)}"`
+                     : `href="#"`
+                   }
+                   ${allowRedo ? "" : "disabled"}>
+                  Refaire
+                </a>
               </div>
             </div>
           </div>
@@ -592,7 +599,7 @@
       }
     }
 
-    async function loadCompanyName(uid){
+    async function loadCompanyNameAndVat(uid){
       try{
         const snap = await getDoc(doc(db, "users", uid));
         const data = snap.exists() ? (snap.data()||{}) : {};
@@ -631,7 +638,7 @@
       if(!user){ location.href = "login.html?role=conciergerie"; return; }
 
       helloLine.textContent = "Bonjour,";
-      companyLine.textContent = await loadCompanyName(user.uid);
+      companyLine.textContent = await loadCompanyNameAndVat(user.uid);
 
       hideAlert();
       try{
