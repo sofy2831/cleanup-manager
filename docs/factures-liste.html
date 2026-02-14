@@ -1,4 +1,4 @@
-<!-- docs/factures-liste.html (FIX — totaux globaux 1 seule fois, actions responsive smartphone: wrap + full width under 520px, actions: Ouvrir/Règlement/Avoir/Refaire, paiement partiel via paidAmount) -->
+<!-- docs/factures-liste.html (FINAL — Totaux globaux filtrés HT/TVA/TTC + Ouvrir unique + Règlement/Avoir/Refaire responsive) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -107,7 +107,7 @@
       border-radius:14px;
       background:#fff;
       border:1px solid rgba(122,92,255,0.18);
-      box-shadow:0 3px 10px rgba(0,0,0,0.06);
+      box-shadow:0 3px 10px rgba(0,0,0,.06);
       min-width:0;
     }
     .s-ico{ font-size:14px; opacity:.75; }
@@ -138,7 +138,7 @@
       color:#fff; border-color:transparent;
       box-shadow:0 12px 24px rgba(0,0,0,0.10);
     }
-    .btn:disabled{ opacity:.45; cursor:not-allowed; pointer-events:none; }
+    .btn[aria-disabled="true"]{ opacity:.45; pointer-events:none; }
 
     .badge{
       display:inline-flex; align-items:center; gap:6px;
@@ -186,49 +186,45 @@
       justify-content:space-between;
       align-items:flex-start;
       min-width:0;
+      margin-top:10px;
     }
     .k{ min-width:220px; display:flex; flex-direction:column; gap:3px; min-width:0; }
     .k .t{ font-size:12px; color:#666; font-weight:900; }
     .k .v{ font-size:13px; color:#111; font-weight:900; }
 
-    /* ✅ Totaux globaux : 1 seul bloc (par facture) */
-    .tot3{
-      margin-top:10px;
+    /* Actions bar: responsive (no overflow) */
+    .actionsBar{
+      display:flex;
+      gap:8px;
+      flex-wrap:wrap;
+      justify-content:flex-end;
+      width:100%;
+    }
+    @media(max-width:560px){
+      .actionsBar{ justify-content:stretch; }
+      .actionsBar .btn{ flex:1 1 48%; }
+      .actionsBar .btn.primary{ flex:1 1 100%; }
+    }
+
+    /* Global totals (ONE block) */
+    .globalTotals{
       display:grid;
       grid-template-columns: 1fr 1fr 1fr;
-      gap:8px;
-      align-items:stretch;
+      gap:10px;
     }
     @media(max-width:720px){
-      .tot3{ grid-template-columns: 1fr; }
+      .globalTotals{ grid-template-columns: 1fr; }
     }
-    .totBox{
+    .gtBox{
       background:#fff;
       border:1px solid rgba(122,92,255,0.18);
       border-radius:14px;
       padding:10px 12px;
       box-shadow:0 3px 10px rgba(0,0,0,.06);
     }
-    .totBox .t{ font-size:11px; color:#666; font-weight:900; }
-    .totBox .v{ margin-top:2px; font-size:13px; color:#111; font-weight:1000; }
-
-    /* ✅ Actions responsive smartphone */
-    .actions{
-      display:flex;
-      gap:8px;
-      flex-wrap:wrap;
-      justify-content:flex-end;
-    }
-    @media(max-width:520px){
-      .actions{ justify-content:stretch; }
-      .actions .btn{
-        flex:1 1 calc(50% - 8px);
-        min-width:0;
-      }
-      .actions .btn.primary{
-        flex:1 1 100%;
-      }
-    }
+    .gtBox .t{ font-size:11px; color:#666; font-weight:900; }
+    .gtBox .v{ margin-top:2px; font-size:14px; color:#111; font-weight:1000; }
+    .gtNote{ margin-top:8px; font-size:12px; color:#666; font-weight:850; }
 
     .bottom-nav{
       position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
@@ -289,6 +285,7 @@
             <option value="ISSUED">Émises</option>
             <option value="SENT">Envoyées</option>
             <option value="PAID">Payées</option>
+            <option value="CREDITED">Créditées</option>
             <option value="CANCELLED">Annulées</option>
             <option value="MISSING">Sans statut</option>
           </select>
@@ -300,8 +297,15 @@
         </div>
 
         <div style="margin-top:10px; font-size:12px; color:#666; font-weight:850;">
-          Créer une facture se fait via un devis (Passer en facture). “Refaire” sert après un avoir.
+          Création d’une facture : via “Passer en facture” depuis un devis. Règlement possible partiel ou total.
         </div>
+      </div>
+
+      <!-- ✅ Totaux globaux (sur les factures filtrées) -->
+      <div class="card" id="globalTotalsCard" style="display:none;">
+        <div style="font-weight:1000; margin-bottom:10px;">Totaux (factures affichées)</div>
+        <div class="globalTotals" id="globalTotalsBox"></div>
+        <div class="gtNote" id="globalTotalsNote"></div>
       </div>
 
       <div id="listBox" style="display:flex; flex-direction:column; gap:12px;"></div>
@@ -328,6 +332,10 @@
     const filterStatus = document.getElementById("filterStatus");
     const searchInput = document.getElementById("searchInput");
     const listBox = document.getElementById("listBox");
+
+    const globalTotalsCard = document.getElementById("globalTotalsCard");
+    const globalTotalsBox = document.getElementById("globalTotalsBox");
+    const globalTotalsNote = document.getElementById("globalTotalsNote");
 
     let all = [];
     let vatEnabled = false;
@@ -356,7 +364,6 @@
       if(!Number.isFinite(n)) return "—";
       return n.toLocaleString("fr-FR",{minimumFractionDigits:2, maximumFractionDigits:2})+" €";
     }
-
     function fmtDateFR(x){
       if(!x) return "—";
       try{
@@ -390,6 +397,8 @@
       const n = String(x?.invoiceNumber || "").trim();
       return n || "—";
     }
+
+    // affichage : si N° existe mais status vide/DRAFT => ÉMISE
     function getInvoiceStatusDisplay(x){
       const raw = getInvoiceStatusRaw(x);
       const hasNum = !!String(x?.invoiceNumber||"").trim();
@@ -401,6 +410,7 @@
       const s = String(display||"").toUpperCase().trim();
       if(s === "PAID") return `<span class="badge ok">Payée</span>`;
       if(s === "CANCELLED") return `<span class="badge bad">Annulée</span>`;
+      if(s === "CREDITED") return `<span class="badge bad">Créditée</span>`;
       if(s === "SENT") return `<span class="badge">Envoyée</span>`;
       if(s === "ISSUED") return `<span class="badge">Émise</span>`;
       if(s === "DRAFT") return `<span class="badge">Brouillon</span>`;
@@ -411,7 +421,6 @@
       const f = filterStatus.value;
       const disp = getInvoiceStatusDisplay(item);
       const raw = getInvoiceStatusRaw(item);
-
       if(f === "ALL") return true;
       if(f === "MISSING") return !raw;
       return disp === f;
@@ -452,26 +461,61 @@
       return "";
     }
 
-    // Paiements partiels
     function getPaidAmount(x){
-      const v = x?.paidAmount ?? x?.invoicePaidAmount ?? x?.paymentsTotal ?? 0;
+      const v = x?.paidAmount;
       const n = Number(v);
       return Number.isFinite(n) ? n : 0;
     }
-    function getInvoiceTotalTTCFromDoc(x){
-      const totals = computeTotalsFromLines(x.lines);
-      return Number(totals.ttc) || 0;
-    }
-    function isFullyPaid(x){
-      const st = String(x?.invoiceStatus || "").toUpperCase().trim();
+
+    function isFullyPaid(x, ttc){
+      const st = getInvoiceStatusRaw(x);
       if(st === "PAID") return true;
-      const total = getInvoiceTotalTTCFromDoc(x);
-      const paid = getPaidAmount(x);
-      return total > 0 && paid >= (total - 0.01);
+      if(!!x?.paidAt) return true;
+      return getPaidAmount(x) >= (Number(ttc)||0) && (Number(ttc)||0) > 0;
+    }
+
+    function renderGlobalTotals(filtered){
+      if(!filtered.length){
+        globalTotalsCard.style.display = "none";
+        globalTotalsBox.innerHTML = "";
+        globalTotalsNote.textContent = "";
+        return;
+      }
+
+      let sumHT = 0, sumTVA = 0, sumTTC = 0;
+
+      for(const x of filtered){
+        const t = computeTotalsFromLines(x.lines);
+        sumHT += (Number(t.ht)||0);
+        sumTVA += (Number(t.tva)||0);
+        sumTTC += (Number(t.ttc)||0);
+      }
+
+      globalTotalsCard.style.display = "block";
+      globalTotalsBox.innerHTML = `
+        <div class="gtBox">
+          <div class="t">Total HT</div>
+          <div class="v">${fmtMoney(sumHT)}</div>
+        </div>
+        <div class="gtBox">
+          <div class="t">TVA</div>
+          <div class="v">${fmtMoney(sumTVA)}</div>
+        </div>
+        <div class="gtBox">
+          <div class="t">Total TTC</div>
+          <div class="v">${fmtMoney(sumTTC)}</div>
+        </div>
+      `;
+
+      globalTotalsNote.textContent = vatEnabled
+        ? `TVA activée (${Math.round((Number(vatRate)||0)*100)}%). Totaux calculés sur les factures affichées.`
+        : `TVA non applicable. Totaux calculés sur les factures affichées.`;
     }
 
     function render(){
       const filtered = getFiltered();
+      renderGlobalTotals(filtered);
+
       listBox.innerHTML = "";
 
       if(!filtered.length){
@@ -490,29 +534,31 @@
         const invNum = getInvoiceNumber(x);
 
         const client = String(x.clientName || x.ownerName || "—").trim();
-        const clientEmail = String(x.clientEmail || x.ownerEmail || "").trim();
-
         const home = String(x.homeName || "—").trim();
+
         const period = (x.arrivalDateKey || x.departureDateKey)
           ? `${fmtDateFR(x.arrivalDateKey)} → ${fmtDateFR(x.departureDateKey)}`
           : "—";
 
-        // ✅ 1 seul total global = somme de toutes les lignes (pas par ligne)
-        const totals = computeTotalsFromLines(x.lines);
-
         const stDisp = getInvoiceStatusDisplay(x);
         const stRaw = getInvoiceStatusRaw(x);
+
         const linkedAvoirId = getLinkedAvoirId(x);
 
-        const paidAmt = getPaidAmount(x);
-        const fullyPaid = isFullyPaid(x);
+        const totals = computeTotalsFromLines(x.lines);
+        const ttc = totals.ttc;
+
+        const hasNum = !!String(x.invoiceNumber||"").trim();
+
+        const allowAvoir = hasNum && !["CANCELLED","CREDITED","PAID"].includes(stRaw);
+        const allowRedo = !!linkedAvoirId;
+        const allowReglement = hasNum && !["CANCELLED","CREDITED"].includes(stRaw) && !isFullyPaid(x, ttc);
 
         const openHref = `facture.html?docId=${encodeURIComponent(x.id)}`;
 
-        const hasNum = !!String(x.invoiceNumber||"").trim();
-        const allowAvoir = hasNum && stRaw !== "CANCELLED";
-        const allowRedo = !!linkedAvoirId;
-        const allowReglement = hasNum && stRaw !== "CANCELLED" && !fullyPaid;
+        const regHref = `reglement.html?docId=${encodeURIComponent(x.id)}`;
+        const avoirHref = `avoir.html?fromDocId=${encodeURIComponent(x.id)}`;
+        const redoHref  = `facture.html?mode=redo&fromDocId=${encodeURIComponent(x.id)}&fromAvoirId=${encodeURIComponent(linkedAvoirId)}`;
 
         const div = document.createElement("div");
         div.className = "card";
@@ -534,7 +580,6 @@
             <div class="cell">
               <div class="t">Client</div>
               <div class="v ellipsis" title="${esc(client)}">${esc(client)}</div>
-              ${clientEmail ? `<div class="t" style="margin-top:2px;">${esc(clientEmail)}</div>` : ``}
             </div>
 
             <div class="cell">
@@ -549,61 +594,26 @@
 
             <div class="cell" style="text-align:right;">
               <div class="t">Total TTC</div>
-              <div class="v">${fmtMoney(totals.ttc)}</div>
+              <div class="v">${fmtMoney(ttc)}</div>
             </div>
           </div>
 
-          <!-- ✅ Totaux globaux (1 seule fois) -->
-          <div class="tot3">
-            <div class="totBox">
-              <div class="t">Total HT</div>
-              <div class="v">${fmtMoney(totals.ht)}</div>
-            </div>
-            <div class="totBox">
-              <div class="t">TVA</div>
-              <div class="v">${vatEnabled ? fmtMoney(totals.tva) : "0,00 €"}</div>
-            </div>
-            <div class="totBox">
-              <div class="t">Total TTC</div>
-              <div class="v">${fmtMoney(totals.ttc)}</div>
-            </div>
-          </div>
-
-          <div class="row" style="margin-top:10px;">
+          <div class="row">
             <div class="k">
               <div class="t">Statut</div>
               <div class="v">${badgeForStatus(stDisp)}</div>
-
-              ${
-                hasNum
-                  ? `<div class="t" style="margin-top:6px;">Payé : ${esc(fmtMoney(paidAmt))} / ${esc(fmtMoney(totals.ttc))}</div>`
-                  : ``
-              }
               ${linkedAvoirId ? `<div class="t" style="margin-top:4px;">Avoir lié : ${esc(linkedAvoirId)}</div>` : ``}
             </div>
 
-            <div class="k" style="align-items:flex-end; min-width:420px;">
-              <div class="actions">
+            <div class="k" style="align-items:flex-end; min-width:280px;">
+              <div class="actionsBar">
                 <a class="btn primary" href="${openHref}">Ouvrir</a>
 
-                ${allowReglement
-                  ? `<a class="btn" href="reglement.html?docId=${encodeURIComponent(x.id)}">Règlement</a>`
-                  : `<a class="btn" href="#" disabled>Règlement</a>`
-                }
+                <a class="btn" href="${regHref}" ${allowReglement ? "" : `aria-disabled="true"`}>Règlement</a>
 
-                ${allowAvoir
-                  ? `<a class="btn" href="avoir.html?fromDocId=${encodeURIComponent(x.id)}">Avoir</a>`
-                  : `<a class="btn" href="#" disabled>Avoir</a>`
-                }
+                <a class="btn" href="${avoirHref}" ${allowAvoir ? "" : `aria-disabled="true"`}>Avoir</a>
 
-                <a class="btn"
-                   ${allowRedo
-                     ? `href="facture.html?mode=redo&fromDocId=${encodeURIComponent(x.id)}&fromAvoirId=${encodeURIComponent(linkedAvoirId)}"`
-                     : `href="#"`
-                   }
-                   ${allowRedo ? "" : "disabled"}>
-                  Refaire
-                </a>
+                <a class="btn" href="${allowRedo ? redoHref : "#"}" ${allowRedo ? "" : `aria-disabled="true"`}>Refaire</a>
               </div>
             </div>
           </div>
@@ -612,7 +622,7 @@
       }
     }
 
-    async function loadCompanyNameAndVat(uid){
+    async function loadCompanyName(uid){
       try{
         const snap = await getDoc(doc(db, "users", uid));
         const data = snap.exists() ? (snap.data()||{}) : {};
@@ -651,7 +661,7 @@
       if(!user){ location.href = "login.html?role=conciergerie"; return; }
 
       helloLine.textContent = "Bonjour,";
-      companyLine.textContent = await loadCompanyNameAndVat(user.uid);
+      companyLine.textContent = await loadCompanyName(user.uid);
 
       hideAlert();
       try{
