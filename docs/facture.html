@@ -1,4 +1,4 @@
-<!-- docs/facture.html (FINAL — PATCH: adresse client affichée AVANT save, en hydratant docData en mémoire dès le chargement) -->
+<!-- docs/facture.html (FINAL — PATCH + clientType PRO/PARTICULIER snapshot sans casser le reste) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -473,6 +473,17 @@
     }
     function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
 
+    // ✅ PATCH clientType (PRO/PARTICULIER) — minimal & safe
+    function getClientType(d){
+      const ct = String(d?.clientType || "").toUpperCase().trim();
+      if(ct === "PRO") return "PRO";
+      if(ct === "PARTICULIER") return "PARTICULIER";
+      if(d?.isPro === true) return "PRO";
+      if(String(d?.clientSiret || "").trim()) return "PRO";
+      if(String(d?.clientCompanyName || "").trim()) return "PRO";
+      return "PARTICULIER";
+    }
+
     function computeTotals(lines, tvaEnabled, tvaRate){
       let ht = 0;
       for(const l of (Array.isArray(lines) ? lines : [])){
@@ -811,13 +822,11 @@
         !!String(docData.clientZip || "").trim() ||
         !!String(docData.clientCity || "").trim();
 
-      // si déjà OK, on ne relit rien
       if(hasName && hasEmail && hasAddr) return;
 
       try{
         const resolved = await resolveClientSnapshot(currentUser.uid, docData);
 
-        // on merge seulement les vides pour éviter d’écraser une saisie existante
         docData = {
           ...docData,
           clientOwnerDocId: docData.clientOwnerDocId || resolved.clientOwnerDocId || null,
@@ -1068,7 +1077,6 @@
 
       await loadProfile(currentUser.uid);
 
-      // ✅ PATCH: hydrate client (adresse) AVANT affichage, sans save
       await hydrateClientSnapshotInMemoryIfMissing();
 
       renderRecap();
@@ -1157,6 +1165,11 @@
 
         // ===== SALES =====
         if(docKind === "SALES"){
+          // ✅ PATCH: snapshot clientType (ne touche rien si déjà renseigné)
+          if(!String(docData?.clientType || "").trim()){
+            patch.clientType = getClientType(docData); // "PRO" | "PARTICULIER"
+          }
+
           if(!invoiceNumber){
             invoiceNumber = await ensureInvoiceNumber(currentUser.uid, year);
             patch.invoiceNumber = invoiceNumber;
@@ -1253,4 +1266,4 @@
     });
   </script>
 </body>
-  </html>
+</html>
