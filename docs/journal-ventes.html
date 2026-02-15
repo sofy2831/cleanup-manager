@@ -1,4 +1,4 @@
-<!-- docs/journal-ventes.html (FINAL — Journal des ventes: factures + avoirs, HT/TVA/TTC, reste dû, filtres, export CSV) -->
+<!-- docs/journal-ventes.html (FINAL v2 — ÉTAT comptable: lecture seule, filtres période/mois/année, impression + CSV, query sans index composite) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -75,20 +75,23 @@
       font-size:12px;
       color:#444;
       white-space:pre-wrap;
+      font-weight:900;
     }
     .alert.ok{ border-left-color: var(--ok); }
 
     .toolbar{
       display:grid;
-      grid-template-columns: 180px 180px 1fr 170px;
+      grid-template-columns: 160px 140px 160px 160px 1fr auto auto;
       gap:10px;
       align-items:center;
       min-width:0;
     }
-    @media(max-width:980px){
-      .toolbar{ grid-template-columns: 1fr; }
+    @media(max-width:1080px){
+      .toolbar{ grid-template-columns: 1fr 1fr; }
+      .toolbar .wide{ grid-column: 1 / -1; }
     }
-    .select{
+
+    .select, .dateInput{
       width:100%;
       padding:10px 12px;
       border-radius:14px;
@@ -179,7 +182,7 @@
     table{
       width:100%;
       border-collapse:collapse;
-      min-width:980px;
+      min-width:1040px;
     }
     thead th{
       position:sticky;
@@ -205,7 +208,7 @@
     tbody tr:hover td{ background:rgba(248,244,255,0.55); }
     tbody tr:last-child td{ border-bottom:none; }
     .right{ text-align:right; }
-    .ellipsis{ max-width:240px; overflow:hidden; text-overflow:ellipsis; }
+    .ellipsis{ max-width:260px; overflow:hidden; text-overflow:ellipsis; }
 
     .bottom-nav{
       position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
@@ -236,6 +239,17 @@
       .bottom-nav a{ font-size: 13px; padding: 12px 12px; }
       .page{ padding-bottom: 32px; }
     }
+
+    /* PRINT */
+    @media print{
+      body{ background:#fff !important; }
+      .topbar, .bottom-nav, .toolbar, #alertBox, .subtitle{ display:none !important; }
+      .page{ padding:0 !important; }
+      .wrap{ max-width: 100% !important; margin:0 !important; }
+      .card{ box-shadow:none !important; background:#fff !important; border:none !important; }
+      .tableWrap{ box-shadow:none !important; border:1px solid #ddd !important; }
+      thead th{ position:static !important; background:#f6f6f6 !important; }
+    }
   </style>
 </head>
 
@@ -251,7 +265,7 @@
       <h1>Journal des ventes</h1>
     </div>
 
-    <div class="subtitle">Factures & avoirs • HT/TVA/TTC • Statuts • Exports</div>
+    <div class="subtitle">État comptable (lecture seule)</div>
     <div class="helloLine" id="helloLine">Bonjour,</div>
     <div class="companyLine" id="companyLine">—</div>
 
@@ -260,27 +274,34 @@
 
       <div class="card">
         <div class="toolbar">
-          <select class="select" id="filterKind">
+          <select class="select" id="filterKind" title="Type">
             <option value="ALL">Tout</option>
             <option value="INVOICE">Factures</option>
             <option value="CREDIT_NOTE">Avoirs</option>
           </select>
 
-          <select class="select" id="filterYear">
+          <select class="select" id="filterYear" title="Année">
             <option value="ALL">Toutes années</option>
           </select>
 
-          <div class="searchbar" title="Recherche">
+          <select class="select" id="filterMonth" title="Mois">
+            <option value="ALL">Tous mois</option>
+            <option value="01">Janvier</option><option value="02">Février</option><option value="03">Mars</option>
+            <option value="04">Avril</option><option value="05">Mai</option><option value="06">Juin</option>
+            <option value="07">Juillet</option><option value="08">Août</option><option value="09">Septembre</option>
+            <option value="10">Octobre</option><option value="11">Novembre</option><option value="12">Décembre</option>
+          </select>
+
+          <input class="dateInput" id="dateFrom" type="date" title="Du" />
+          <input class="dateInput" id="dateTo" type="date" title="Au" />
+
+          <div class="searchbar wide" title="Recherche">
             <span class="s-ico">🔎</span>
             <input class="input" id="searchInput" type="search" placeholder="Rechercher (n°, client, logement…)" autocomplete="off" />
           </div>
 
+          <button class="btn" id="printBtn" type="button">Imprimer / PDF</button>
           <button class="btn primary" id="exportBtn" type="button">Exporter CSV</button>
-        </div>
-
-        <div style="margin-top:10px; font-size:12px; color:#666; font-weight:850; line-height:1.35;">
-          Colonnes : <b>Date émission</b>, <b>N°</b>, <b>Type</b>, <b>Client</b>, <b>HT</b>, <b>TVA</b>, <b>TTC</b>, <b>Statut</b>, <b>Reste dû</b>, <b>Relance</b>, <b>Mise en demeure</b>.
-          <br/>Source : <b>salesDocuments</b> (type INVOICE / CREDIT_NOTE). Les montants prioritaires : totalHT/totalTVA/totalTTC (sinon recalcul depuis lignes).
         </div>
       </div>
 
@@ -306,13 +327,15 @@
                 <th class="right">Reste dû</th>
                 <th>Relance</th>
                 <th>Mise en demeure</th>
-                <th>Actions</th>
               </tr>
             </thead>
-            <tbody id="tbody"></tbody>
+            <tbody id="tbody">
+              <tr><td colspan="12" style="color:#666; font-weight:900;">Chargement…</td></tr>
+            </tbody>
           </table>
         </div>
       </div>
+
     </div>
   </div>
 
@@ -327,7 +350,7 @@
   <script type="module">
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-    import { collection, query, where, orderBy, limit, getDocs, doc, getDoc } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import { collection, query, where, limit, getDocs, doc, getDoc } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const helloLine = document.getElementById("helloLine");
     const companyLine = document.getElementById("companyLine");
@@ -335,12 +358,15 @@
 
     const filterKind = document.getElementById("filterKind");
     const filterYear = document.getElementById("filterYear");
+    const filterMonth = document.getElementById("filterMonth");
+    const dateFrom = document.getElementById("dateFrom");
+    const dateTo = document.getElementById("dateTo");
     const searchInput = document.getElementById("searchInput");
     const exportBtn = document.getElementById("exportBtn");
+    const printBtn = document.getElementById("printBtn");
 
     const kpisCard = document.getElementById("kpisCard");
     const kpisBox = document.getElementById("kpisBox");
-
     const tbody = document.getElementById("tbody");
 
     let all = [];
@@ -384,6 +410,20 @@
         return "—";
       }catch{ return "—"; }
     }
+    function toDateObj(x){
+      try{
+        if(!x) return null;
+        if(x?.toDate?.()) return x.toDate();
+        if(typeof x === "number"){
+          const d = new Date(x);
+          return isNaN(d.getTime()) ? null : d;
+        }
+        const s = String(x).trim();
+        if(!s) return null;
+        const d = new Date(s);
+        return isNaN(d.getTime()) ? null : d;
+      }catch{ return null; }
+    }
 
     function computeHT(lines){
       if(!Array.isArray(lines)) return 0;
@@ -396,18 +436,18 @@
       return { ht, tva, ttc };
     }
 
-    function getKind(x){
-      return String(x?.type || "").toUpperCase().trim(); // INVOICE / CREDIT_NOTE
-    }
+    function getKind(x){ return String(x?.type || "").toUpperCase().trim(); } // INVOICE / CREDIT_NOTE
 
-    function getIssuedDate(x){
-      // Facture: invoiceIssuedDate / invoiceIssuedAt ; Avoir: creditIssuedDate / creditIssuedAt ; fallback createdAt
-      return fmtDateFR(
-        x?.invoiceIssuedDate || x?.invoiceIssuedAt ||
-        x?.creditIssuedDate  || x?.creditIssuedAt  ||
-        x?.createdAt
-      );
+    function getIssuedDateObj(x){
+      const d =
+        toDateObj(x?.invoiceIssuedDate || x?.invoiceIssuedAt) ||
+        toDateObj(x?.creditIssuedDate  || x?.creditIssuedAt)  ||
+        toDateObj(x?.createdAt) ||
+        toDateObj(x?.createdAtMs) ||
+        toDateObj(x?.snapAtMs);
+      return d;
     }
+    function getIssuedDate(x){ return fmtDateFR(getIssuedDateObj(x)); }
 
     function getNumber(x){
       const k = getKind(x);
@@ -416,44 +456,32 @@
       }
       return String(x?.invoiceNumber || "—").trim() || "—";
     }
-
-    function getClient(x){
-      return String(x?.clientName || x?.ownerName || "—").trim() || "—";
-    }
-
-    function getHome(x){
-      return String(x?.homeName || "—").trim() || "—";
-    }
+    function getClient(x){ return String(x?.clientName || x?.ownerName || "—").trim() || "—"; }
+    function getHome(x){ return String(x?.homeName || "—").trim() || "—"; }
 
     function getTotals(x){
-      // priorité: stockés
       const ht = Number(x?.totalHT);
       const tva = Number(x?.totalTVA);
       const ttc = Number(x?.totalTTC);
-
       const hasStored = Number.isFinite(ht) || Number.isFinite(tva) || Number.isFinite(ttc);
-
       if(hasStored){
-        const safeHT = Number.isFinite(ht) ? ht : computeTotalsFromLines(x?.lines).ht;
-        const safeTVA = Number.isFinite(tva) ? tva : computeTotalsFromLines(x?.lines).tva;
-        const safeTTC = Number.isFinite(ttc) ? ttc : computeTotalsFromLines(x?.lines).ttc;
-        return { ht: safeHT, tva: safeTVA, ttc: safeTTC };
+        const calc = computeTotalsFromLines(x?.lines);
+        return {
+          ht: Number.isFinite(ht) ? ht : calc.ht,
+          tva: Number.isFinite(tva) ? tva : calc.tva,
+          ttc: Number.isFinite(ttc) ? ttc : calc.ttc,
+        };
       }
-
       return computeTotalsFromLines(x?.lines);
     }
 
     function getInvoiceStatus(x){
-      // invoiceStatus: PAID/SENT/ISSUED/DRAFT/CANCELLED/CREDITED...
       const st = String(x?.invoiceStatus || "").toUpperCase().trim();
       if(st) return st;
-      // si num existe => ISSUED
       if(String(x?.invoiceNumber||"").trim()) return "ISSUED";
       return "MISSING";
     }
-
     function getCreditStatus(x){
-      // avoirStatus: ISSUED/CANCELLED/...
       const st = String(x?.avoirStatus || x?.creditStatus || "").toUpperCase().trim();
       return st || "ISSUED";
     }
@@ -478,51 +506,65 @@
       const n = Number(x?.paidAmount);
       return Number.isFinite(n) ? n : 0;
     }
-
     function getDueAmount(kind, x){
-      if(kind === "CREDIT_NOTE") return 0; // un avoir n'est pas “dû”
+      if(kind === "CREDIT_NOTE") return 0;
       const total = getTotals(x).ttc;
       const paid = getPaidAmount(x);
       return Math.max(0, total - paid);
     }
-
     function getRelanceLevel(x){
       const n = Number(x?.recouvrement?.relanceLevel ?? x?.relanceLevel ?? 0);
       return Number.isFinite(n) ? n : 0;
     }
-
     function getMiseEnDemeureAt(x){
       return x?.recouvrement?.miseEnDemeureAt ?? x?.miseEnDemeureAt ?? null;
     }
-
     function kindLabel(k){
       if(k === "CREDIT_NOTE") return `<span class="badge bad">AVOIR</span>`;
       return `<span class="badge">FACTURE</span>`;
     }
 
-    function yearOfIssued(x){
-      const d = getIssuedDate(x);
-      const m = String(d).match(/(\d{4})$/);
-      if(m) return m[1];
-      // fallback timestamp
-      try{
-        const dt =
-          x?.invoiceIssuedAt?.toDate?.() || x?.creditIssuedAt?.toDate?.() || x?.createdAt?.toDate?.();
-        if(dt) return String(dt.getFullYear());
-      }catch{}
-      return "";
+    function yearOf(x){
+      const d = getIssuedDateObj(x);
+      return d ? String(d.getFullYear()) : "";
+    }
+    function monthOf(x){
+      const d = getIssuedDateObj(x);
+      if(!d) return "";
+      const m = d.getMonth()+1;
+      return String(m).padStart(2,"0");
+    }
+
+    function inDateRange(x){
+      const d = getIssuedDateObj(x);
+      if(!d) return false;
+
+      const from = dateFrom.value ? new Date(dateFrom.value + "T00:00:00") : null;
+      const to = dateTo.value ? new Date(dateTo.value + "T23:59:59") : null;
+
+      if(from && d < from) return false;
+      if(to && d > to) return false;
+      return true;
     }
 
     function matchesFilters(x){
+      // listable: true par défaut (si absent => on considère visible)
+      if(x?.listable === false) return false;
+
       const kind = getKind(x);
+      if(kind !== "INVOICE" && kind !== "CREDIT_NOTE") return false;
+
       const fk = filterKind.value;
       if(fk !== "ALL" && kind !== fk) return false;
 
       const fy = filterYear.value;
-      if(fy !== "ALL"){
-        const y = yearOfIssued(x);
-        if(String(y) !== String(fy)) return false;
-      }
+      if(fy !== "ALL" && yearOf(x) !== String(fy)) return false;
+
+      const fm = filterMonth.value;
+      if(fm !== "ALL" && monthOf(x) !== String(fm)) return false;
+
+      // période du/au (si renseignée)
+      if((dateFrom.value || dateTo.value) && !inDateRange(x)) return false;
 
       const q = (searchInput.value||"").trim().toLowerCase();
       if(q){
@@ -533,8 +575,7 @@
           x?.clientEmail,
           x?.invoiceStatus,
           x?.avoirStatus,
-          x?.quoteNumber,
-          x?.fromInvoiceId
+          x?.quoteNumber
         ].filter(Boolean).join(" ").toLowerCase();
         if(!hay.includes(q)) return false;
       }
@@ -542,22 +583,19 @@
       return true;
     }
 
-    function getFiltered(){
-      return all.filter(matchesFilters);
-    }
+    function getFiltered(){ return all.filter(matchesFilters); }
 
     function renderYearsOptions(){
       const years = new Set();
       for(const x of all){
-        const y = yearOfIssued(x);
+        const y = yearOf(x);
         if(y) years.add(String(y));
       }
       const sorted = Array.from(years).sort((a,b)=> Number(b)-Number(a));
-
       const current = filterYear.value;
+
       filterYear.innerHTML = `<option value="ALL">Toutes années</option>` + sorted.map(y=>`<option value="${esc(y)}">${esc(y)}</option>`).join("");
-      if(sorted.includes(current)) filterYear.value = current;
-      else filterYear.value = "ALL";
+      filterYear.value = sorted.includes(current) ? current : "ALL";
     }
 
     function renderKPIs(rows){
@@ -568,8 +606,7 @@
       }
 
       let countInv=0, countCred=0;
-      let sumHT=0, sumTVA=0, sumTTC=0;
-      let sumDue=0;
+      let sumTTC=0, sumDue=0;
 
       for(const x of rows){
         const kind = getKind(x);
@@ -578,14 +615,9 @@
 
         if(kind === "CREDIT_NOTE"){
           countCred += 1;
-          // avoir => on soustrait (journal ventes)
-          sumHT  -= Number(t.ht)||0;
-          sumTVA -= Number(t.tva)||0;
-          sumTTC -= Number(t.ttc)||0;
+          sumTTC -= Number(t.ttc)||0; // net journal ventes
         }else{
           countInv += 1;
-          sumHT  += Number(t.ht)||0;
-          sumTVA += Number(t.tva)||0;
           sumTTC += Number(t.ttc)||0;
           sumDue += Number(due)||0;
         }
@@ -593,22 +625,10 @@
 
       kpisCard.style.display = "block";
       kpisBox.innerHTML = `
-        <div class="kpi">
-          <div class="t">Factures</div>
-          <div class="v">${esc(String(countInv))}</div>
-        </div>
-        <div class="kpi">
-          <div class="t">Avoirs</div>
-          <div class="v">${esc(String(countCred))}</div>
-        </div>
-        <div class="kpi">
-          <div class="t">Total TTC (net)</div>
-          <div class="v">${fmtMoney(sumTTC)}</div>
-        </div>
-        <div class="kpi">
-          <div class="t">Reste dû (factures)</div>
-          <div class="v">${fmtMoney(sumDue)}</div>
-        </div>
+        <div class="kpi"><div class="t">Factures</div><div class="v">${esc(String(countInv))}</div></div>
+        <div class="kpi"><div class="t">Avoirs</div><div class="v">${esc(String(countCred))}</div></div>
+        <div class="kpi"><div class="t">Total TTC (net)</div><div class="v">${fmtMoney(sumTTC)}</div></div>
+        <div class="kpi"><div class="t">Reste dû (factures)</div><div class="v">${fmtMoney(sumDue)}</div></div>
       `;
     }
 
@@ -618,7 +638,7 @@
 
       tbody.innerHTML = "";
       if(!rows.length){
-        tbody.innerHTML = `<tr><td colspan="13" style="color:#666; font-weight:900;">Aucune ligne</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="12" style="color:#666; font-weight:900;">Aucune ligne</td></tr>`;
         return;
       }
 
@@ -633,21 +653,10 @@
         const due = getDueAmount(kind, x);
 
         const st = badgeStatus(kind, x);
-        const rel = (kind === "INVOICE")
-          ? `<span class="badge">${esc(String(getRelanceLevel(x)))}</span>`
-          : "—";
-
+        const rel = (kind === "INVOICE") ? `<span class="badge">${esc(String(getRelanceLevel(x)))}</span>` : "—";
         const med = (kind === "INVOICE")
           ? (getMiseEnDemeureAt(x) ? `<span class="badge bad">Oui</span>` : `<span class="badge">Non</span>`)
           : "—";
-
-        const action =
-          (kind === "CREDIT_NOTE")
-            ? `<a class="btn" href="avoir.html?docId=${encodeURIComponent(x.id)}">Ouvrir</a>`
-            : `<div style="display:flex; gap:8px; flex-wrap:wrap;">
-                 <a class="btn" href="facture.html?docId=${encodeURIComponent(x.id)}">Ouvrir</a>
-                 <a class="btn" href="reglement.html?docId=${encodeURIComponent(x.id)}">Règlement</a>
-               </div>`;
 
         const tr = document.createElement("tr");
         tr.innerHTML = `
@@ -663,23 +672,18 @@
           <td class="right">${kind === "INVOICE" ? fmtMoney(due) : "—"}</td>
           <td>${rel}</td>
           <td>${med}</td>
-          <td>${action}</td>
         `;
         tbody.appendChild(tr);
       }
     }
 
     function toCSV(rows){
-      const header = [
-        "date_emission","numero","type","client","logement","ht","tva","ttc","statut","reste_du","relance_level","mise_en_demeure"
-      ];
-
+      const header = ["date_emission","numero","type","client","logement","ht","tva","ttc","statut","reste_du","relance_level","mise_en_demeure"];
       const escCSV = (v)=>{
         const s = String(v ?? "");
         if(/[",;\n]/.test(s)) return `"${s.replaceAll('"','""')}"`;
         return s;
       };
-
       const lines = [header.join(";")];
 
       for(const x of rows){
@@ -724,17 +728,17 @@
       setTimeout(()=> URL.revokeObjectURL(url), 600);
     }
 
-    async function loadCompanyName(uid){
+    async function loadCompanyNameAndVat(uid){
       try{
         const snap = await getDoc(doc(db, "users", uid));
         const data = snap.exists() ? (snap.data()||{}) : {};
-        const name = String(data?.businessProfile?.companyName || "").trim();
+        const name = String(data?.businessProfile?.companyName || "").trim() || "Conciergerie";
 
         const vat = data?.businessProfile?.vat || {};
         vatEnabled = !!vat?.enabled;
         vatRate = Number.isFinite(Number(vat?.rate)) ? Number(vat.rate) : 0;
 
-        return name || "Conciergerie";
+        return name;
       }catch{
         vatEnabled = false; vatRate = 0;
         return "Conciergerie";
@@ -742,52 +746,85 @@
     }
 
     async function loadSalesDocuments(uid){
-      // Journal ventes = factures + avoirs
-      // vérité: type == INVOICE / CREDIT_NOTE
+      // Query SIMPLE (évite les index composites): on charge, puis on filtre côté client
       const q1 = query(
         collection(db, "salesDocuments"),
         where("conciergerieUid","==",uid),
-        where("type","in",["INVOICE","CREDIT_NOTE"]),
-        where("listable","==",true),
-        orderBy("createdAt","desc"),
-        limit(800)
+        limit(1200)
       );
 
       const snap = await getDocs(q1);
       all = snap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
+
+      // tri desc par date d’émission (fallback createdAt)
+      all.sort((a,b)=>{
+        const da = getIssuedDateObj(a)?.getTime?.() || 0;
+        const dbb = getIssuedDateObj(b)?.getTime?.() || 0;
+        return dbb - da;
+      });
+
       renderYearsOptions();
       render();
     }
 
+    // interactions
     filterKind.addEventListener("change", render);
     filterYear.addEventListener("change", render);
+    filterMonth.addEventListener("change", ()=>{
+      // si on choisit un mois précis, on vide la période du/au pour éviter les doubles filtres “piège”
+      if(filterMonth.value !== "ALL"){
+        dateFrom.value = "";
+        dateTo.value = "";
+      }
+      render();
+    });
+    dateFrom.addEventListener("change", ()=>{
+      // si période manuelle, on remet mois sur ALL
+      if(dateFrom.value || dateTo.value) filterMonth.value = "ALL";
+      render();
+    });
+    dateTo.addEventListener("change", ()=>{
+      if(dateFrom.value || dateTo.value) filterMonth.value = "ALL";
+      render();
+    });
     searchInput.addEventListener("input", render);
+
+    printBtn.addEventListener("click", ()=> window.print());
 
     exportBtn.addEventListener("click", ()=>{
       const rows = getFiltered();
       const csv = toCSV(rows);
 
       const fy = filterYear.value === "ALL" ? "toutes-annees" : filterYear.value;
+      const fm = filterMonth.value === "ALL" ? "tous-mois" : filterMonth.value;
       const fk = filterKind.value.toLowerCase();
-      const file = `journal-ventes_${fk}_${fy}.csv`;
+
+      const df = dateFrom.value ? dateFrom.value : "";
+      const dt = dateTo.value ? dateTo.value : "";
+
+      const suffix = (df || dt) ? `_${df||"x"}-${dt||"x"}` : `_${fy}_${fm}`;
+      const file = `journal-ventes_${fk}${suffix}.csv`;
 
       downloadCSV(csv, file);
       showAlert("✅ Export CSV généré.", true);
       setTimeout(hideAlert, 1200);
     });
 
+    // auth
     onAuthStateChanged(auth, async (user)=>{
       if(!user){ location.href="login.html?role=conciergerie"; return; }
 
       helloLine.textContent = "Bonjour,";
-      companyLine.textContent = await loadCompanyName(user.uid);
+      companyLine.textContent = await loadCompanyNameAndVat(user.uid);
 
       hideAlert();
       try{
         await loadSalesDocuments(user.uid);
+        if(!all.length) showAlert("Aucune donnée pour l’instant.", true);
       }catch(e){
         console.error(e);
         showAlert("⛔ Erreur chargement journal : " + (e?.message || "inconnue"));
+        tbody.innerHTML = `<tr><td colspan="12" style="color:#666; font-weight:900;">Impossible de charger.</td></tr>`;
       }
     });
   </script>
