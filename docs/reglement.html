@@ -1,4 +1,4 @@
-<!-- docs/reglement.html (FINAL v3 — fields aligned with payments schema: montantRegle/modeReglement/dateReglement/reference/note) -->
+<!-- docs/reglement.html (FINAL v3 — payments schema: montantRegle/modeReglement/dateReglement/reference/note) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -153,8 +153,8 @@
             <input id="amountInput" type="number" inputmode="decimal" step="0.01" min="0" placeholder="Ex : 50" />
           </div>
           <div>
-            <label for="paidDateInput">Date de règlement</label>
-            <input id="paidDateInput" type="date" />
+            <label for="dateInput">Date de règlement</label>
+            <input id="dateInput" type="date" />
           </div>
         </div>
 
@@ -214,7 +214,7 @@
     const statusLine = document.getElementById("statusLine");
 
     const amountInput = document.getElementById("amountInput");
-    const paidDateInput = document.getElementById("paidDateInput");
+    const dateInput = document.getElementById("dateInput");
     const modeSelect = document.getElementById("modeSelect");
     const refInput = document.getElementById("refInput");
     const noteInput = document.getElementById("noteInput");
@@ -283,14 +283,13 @@
       return ht + tva;
     }
 
-    // ✅ somme tolérante : nouveau champ montantRegle, fallback legacy amount
     async function sumPayments(invoiceId){
       const pRef = collection(db, "salesDocuments", invoiceId, "payments");
       const snap = await getDocs(pRef);
       let sum = 0;
       snap.forEach(d=>{
         const data = d.data() || {};
-        const v = (data.montantRegle != null) ? Number(data.montantRegle) : Number(data.amount);
+        const v = Number(data.montantRegle);
         if(Number.isFinite(v)) sum += v;
       });
       return sum;
@@ -321,19 +320,19 @@
       const s = String(yyyy_mm_dd||"").trim();
       if(!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
       const [y,m,d] = s.split("-").map(n=>parseInt(n,10));
-      const dt = new Date(y, (m||1)-1, d||1, 12, 0, 0);
+      const dt = new Date(y, (m||1)-1, d||1, 12, 0, 0); // midi = évite décalage DST
       return Timestamp.fromDate(dt);
     }
 
     async function render(){
       if(!invoiceData) return;
 
-      if(!paidDateInput.value) paidDateInput.value = isoTodayForDateInput();
+      if(!dateInput.value) dateInput.value = isoTodayForDateInput();
 
       const vatCfg = await loadVatConfig(currentUser.uid);
       const totalTTC = computeInvoiceTotalTTC(invoiceData, vatCfg);
 
-      // ✅ on peut utiliser l’agrégat si présent, sinon somme
+      // priorité à l’agrégat facture si présent
       const paidAgg = Number(invoiceData.paidAmount);
       const paidSum = Number.isFinite(paidAgg) ? paidAgg : await sumPayments(invoiceData.id);
 
@@ -358,7 +357,7 @@
 
       const paidFully = (payStatus === "PAID");
       amountInput.disabled = paidFully;
-      paidDateInput.disabled = paidFully;
+      dateInput.disabled = paidFully;
       modeSelect.disabled = paidFully;
       refInput.disabled = paidFully;
       noteInput.disabled = paidFully;
@@ -392,7 +391,7 @@
         return;
       }
 
-      const dateReglementTs = dateInputToTimestamp(paidDateInput.value);
+      const dateReglementTs = dateInputToTimestamp(dateInput.value);
       if(!dateReglementTs){
         showAlert("⛔ Date de règlement invalide.");
         return;
@@ -403,7 +402,6 @@
         const vatCfg = await loadVatConfig(currentUser.uid);
         const totalTTC = computeInvoiceTotalTTC(invoiceData, vatCfg);
 
-        // ✅ on part sur l’agrégat si dispo (plus rapide), sinon somme
         const paidAgg = Number(invoiceData.paidAmount);
         const alreadyPaid = Number.isFinite(paidAgg) ? paidAgg : await sumPayments(invoiceData.id);
 
@@ -419,7 +417,7 @@
         const reference = String(refInput.value || "").trim();
         const note = String(noteInput.value || "").trim();
 
-        // 1) sous-collection payments — ✅ schéma officiel
+        // 1) sous-collection payments (schéma OFFICIEL)
         const payCol = collection(db, "salesDocuments", invoiceData.id, "payments");
         await addDoc(payCol, {
           montantRegle,
@@ -430,7 +428,7 @@
           createdAt: serverTimestamp()
         });
 
-        // 2) agrégats facture (transaction)
+        // 2) agrégats facture
         await runTransaction(db, async (tx)=>{
           const s = await tx.get(invoiceRef);
           if(!s.exists()) throw new Error("Facture introuvable (transaction).");
@@ -444,8 +442,8 @@
 
           const patch = {
             paidAmount,
-            lastPaymentDate: dateReglementTs,   // ✅ date réelle de règlement
-            lastPaymentAt: serverTimestamp(),   // ✅ timestamp serveur (audit)
+            lastPaymentDate: dateReglementTs,   // ✅ date réelle saisie
+            lastPaymentAt: serverTimestamp(),   // ✅ audit serveur
             paymentStatus: pStatus,
             invoiceUpdatedAt: serverTimestamp()
           };
@@ -453,9 +451,6 @@
           if(pStatus === "PAID"){
             patch.invoiceStatus = "PAID";
             patch.invoicePaidAt = serverTimestamp();
-          }else{
-            // optionnel : si tu veux marquer l’état "PARTIAL" côté facture
-            // patch.invoiceStatus = "ISSUED"; // ou "PARTIAL" si tu veux l’ajouter
           }
 
           tx.update(invoiceRef, patch);
@@ -463,7 +458,6 @@
 
         showAlert("✅ Règlement enregistré.", true);
 
-        // refresh local then redirect
         const snap2 = await getDoc(invoiceRef);
         invoiceData = { id: snap2.id, ...(snap2.data()||{}) };
 
