@@ -1,4 +1,4 @@
-<!-- docs/facture.html (FINAL — support docId (salesDocuments) + fallback eventId (events), snapshot client address on save, statut ÉMISE propre) -->
+<!-- docs/facture.html (FINAL — PATCH: adresse client affichée AVANT save, en hydratant docData en mémoire dès le chargement) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -799,6 +799,42 @@
       };
     }
 
+    // ✅ PATCH: hydrate docData en mémoire avant render (sans write Firestore)
+    async function hydrateClientSnapshotInMemoryIfMissing(){
+      if(docKind !== "SALES") return;
+      if(!currentUser?.uid || !docData) return;
+
+      const hasName = !!String(docData.clientName || "").trim();
+      const hasEmail = !!String(docData.clientEmail || "").trim();
+      const hasAddr =
+        !!String(docData.clientAddress1 || "").trim() ||
+        !!String(docData.clientZip || "").trim() ||
+        !!String(docData.clientCity || "").trim();
+
+      // si déjà OK, on ne relit rien
+      if(hasName && hasEmail && hasAddr) return;
+
+      try{
+        const resolved = await resolveClientSnapshot(currentUser.uid, docData);
+
+        // on merge seulement les vides pour éviter d’écraser une saisie existante
+        docData = {
+          ...docData,
+          clientOwnerDocId: docData.clientOwnerDocId || resolved.clientOwnerDocId || null,
+          clientName: String(docData.clientName || "").trim() ? docData.clientName : (resolved.name || ""),
+          clientEmail: String(docData.clientEmail || "").trim() ? docData.clientEmail : (resolved.email || ""),
+          clientPhone: String(docData.clientPhone || "").trim() ? docData.clientPhone : (resolved.phone || ""),
+          clientAddress1: String(docData.clientAddress1 || "").trim() ? docData.clientAddress1 : (resolved.address1 || ""),
+          clientAddress2: String(docData.clientAddress2 || "").trim() ? docData.clientAddress2 : (resolved.address2 || ""),
+          clientZip: String(docData.clientZip || "").trim() ? docData.clientZip : (resolved.zip || ""),
+          clientCity: String(docData.clientCity || "").trim() ? docData.clientCity : (resolved.city || ""),
+          clientCountry: String(docData.clientCountry || "").trim() ? docData.clientCountry : (resolved.country || "FR")
+        };
+      }catch(e){
+        console.warn("hydrateClientSnapshotInMemoryIfMissing failed:", e?.message || e);
+      }
+    }
+
     function renderBusinessHeader(){
       const bp = (profileData?.businessProfile || {});
       const cName = String(bp.companyName || "Conciergerie").trim();
@@ -989,7 +1025,6 @@
       const invNum = String(d.invoiceNumber || "").trim();
       const hasInvoice = !!invNum;
 
-      // ✅ si N° existe mais status vide/DRAFT => on affiche ÉMISE (cohérence UI)
       const rawStatus = String(d.invoiceStatus || "").toUpperCase().trim();
       const statusForUi = (hasInvoice && (!rawStatus || rawStatus === "DRAFT")) ? "ISSUED" : (rawStatus || "");
       statusBadge.textContent = hasInvoice ? invoiceStatusLabel(statusForUi) : "BROUILLON";
@@ -1032,6 +1067,10 @@
       }
 
       await loadProfile(currentUser.uid);
+
+      // ✅ PATCH: hydrate client (adresse) AVANT affichage, sans save
+      await hydrateClientSnapshotInMemoryIfMissing();
+
       renderRecap();
     }
 
@@ -1122,7 +1161,6 @@
             invoiceNumber = await ensureInvoiceNumber(currentUser.uid, year);
             patch.invoiceNumber = invoiceNumber;
 
-            // ✅ PROPRE : dès création du numéro => ÉMISE
             patch.invoiceStatus = "ISSUED";
             patch.invoiceIssuedAt = serverTimestamp();
             patch.invoiceIssuedDate = todayIso();
@@ -1215,4 +1253,4 @@
     });
   </script>
 </body>
-</html>
+  </html>
