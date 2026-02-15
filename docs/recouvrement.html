@@ -1,4 +1,4 @@
-<!-- docs/recouvrement.html (PATCH v2 — total TTC robuste + TVA + tri payments safe + loading + error trap) -->
+<!-- docs/recouvrement.html (FINAL v3 — modale email + relances 7j + MED 8j + clause PRO L441-10 + nextAction + badges R1/R2/R3) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -77,6 +77,7 @@
       font-size:12px;
       color:#444;
       white-space:pre-wrap;
+      font-weight:900;
     }
     .alert.ok{ border-left-color: var(--ok); }
 
@@ -496,13 +497,14 @@
           <div>Facture</div><div id="kvInv">—</div>
           <div>Montant dû</div><div id="kvDue">—</div>
           <div>Échéance</div><div id="kvDueDate">—</div>
+          <div>Type</div><div id="kvType">—</div>
         </div>
 
         <div style="margin-top:12px;" class="textBlock" id="textBlock">—</div>
 
         <div class="copyRow">
-          <button class="btn" id="copyEmailBtn" type="button">Copier email</button>
-          <button class="btn primary" id="copyTextBtn" type="button">Copier le texte</button>
+          <a class="btn" id="openEmailBtn" href="#" target="_blank" rel="noopener">✉️ Ouvrir email</a>
+          <button class="btn primary" id="copyTextBtn" type="button">📋 Copier le texte</button>
           <button class="btn danger" id="markSentBtn" type="button" style="display:none;">Marquer comme envoyée</button>
         </div>
       </div>
@@ -521,7 +523,7 @@
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
-      collection, query, where, limit, getDocs, doc, getDoc, updateDoc, serverTimestamp, orderBy
+      collection, query, where, limit, getDocs, doc, getDoc, updateDoc, serverTimestamp, orderBy, Timestamp
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const helloLine = document.getElementById("helloLine");
@@ -558,14 +560,19 @@
     const kvInv = document.getElementById("kvInv");
     const kvDue = document.getElementById("kvDue");
     const kvDueDate = document.getElementById("kvDueDate");
+    const kvType = document.getElementById("kvType");
 
-    const copyEmailBtn = document.getElementById("copyEmailBtn");
+    const openEmailBtn = document.getElementById("openEmailBtn");
     const copyTextBtn = document.getElementById("copyTextBtn");
     const markSentBtn = document.getElementById("markSentBtn");
 
     let all = [];
     let currentUid = "";
     let vatCfg = { enabled:false, rate:0 };
+
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const RELANCE_GAP_DAYS = 7;
+    const MED_DELAY_DAYS = 8;
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -614,7 +621,7 @@
       try{ showAlert("⛔ Promise rejetée : " + (e?.reason?.message || e?.reason || "inconnue")); }catch{}
     });
 
-    // ---- Totaux robustes (comme reglement/journal) ----
+    // ---- Totaux robustes ----
     function computeHT(lines){
       if(!Array.isArray(lines)) return 0;
       return lines.reduce((s,l)=> s + (Number(l?.qty)||0) * (Number(l?.unitPrice)||0), 0);
@@ -779,6 +786,8 @@
       markSentBtn.removeAttribute("data-docid");
       markSentBtn.removeAttribute("data-kind");
       markSentBtn.removeAttribute("data-level");
+      openEmailBtn.href = "#";
+      openEmailBtn.setAttribute("aria-disabled","true");
     }
 
     closePaymentsBtn.addEventListener("click", closePaymentsModal);
@@ -797,7 +806,6 @@
     async function loadPaymentsForInvoice(docId){
       const payCol = collection(db, "salesDocuments", docId, "payments");
 
-      // Tri “propre” si possible : dateReglement desc, sinon fallback
       try{
         const qPay = query(payCol, orderBy("dateReglement","desc"), limit(200));
         const snap = await getDocs(qPay);
@@ -883,6 +891,11 @@
       });
     }
 
+    function tsPlusDays(days){
+      const ms = Date.now() + (Number(days)||0) * DAY_MS;
+      return Timestamp.fromMillis(ms);
+    }
+
     async function markRelanceSent(docId, level){
       const ref = doc(db, "salesDocuments", docId);
       const n = Number(level||0);
@@ -892,9 +905,23 @@
         "recouvrement.relanceLevel": n,
         "recouvrement.updatedAt": now,
       };
+
+      // dates
       if(n === 1) patch["recouvrement.relance1At"] = now;
       if(n === 2) patch["recouvrement.relance2At"] = now;
       if(n === 3) patch["recouvrement.relance3At"] = now;
+
+      // next action (client-side timestamp for the target)
+      if(n === 1){
+        patch["recouvrement.nextAction"] = "RELANCE_2";
+        patch["recouvrement.nextActionAt"] = tsPlusDays(RELANCE_GAP_DAYS);
+      }else if(n === 2){
+        patch["recouvrement.nextAction"] = "RELANCE_3";
+        patch["recouvrement.nextActionAt"] = tsPlusDays(RELANCE_GAP_DAYS);
+      }else if(n === 3){
+        patch["recouvrement.nextAction"] = "MED";
+        patch["recouvrement.nextActionAt"] = tsPlusDays(RELANCE_GAP_DAYS);
+      }
 
       await updateDoc(ref, patch);
     }
@@ -903,6 +930,8 @@
       const ref = doc(db, "salesDocuments", docId);
       await updateDoc(ref, {
         "recouvrement.miseEnDemeureAt": serverTimestamp(),
+        "recouvrement.nextAction": "INJONCTION",
+        "recouvrement.nextActionAt": tsPlusDays(MED_DELAY_DAYS),
         "recouvrement.updatedAt": serverTimestamp()
       });
     }
@@ -917,6 +946,42 @@
       return "—";
     }
 
+    function sentBadges(ts){
+      const a1 = fmtDateFR(ts.relance1At);
+      const a2 = fmtDateFR(ts.relance2At);
+      const a3 = fmtDateFR(ts.relance3At);
+
+      const parts = [];
+      if(a1 !== "—") parts.push(`<span class="badge ok">R1 envoyée • ${esc(a1)}</span>`);
+      if(a2 !== "—") parts.push(`<span class="badge ok">R2 envoyée • ${esc(a2)}</span>`);
+      if(a3 !== "—") parts.push(`<span class="badge ok">R3 envoyée • ${esc(a3)}</span>`);
+      return parts.length ? parts.join(" ") : `<span class="badge">Aucune relance envoyée</span>`;
+    }
+
+    // ---- Détection PRO vs PARTICULIER (robuste + heuristique) ----
+    function isProClient(inv){
+      const ct = String(inv?.clientType || inv?.customerType || inv?.buyerType || "").toUpperCase().trim();
+      if(ct === "PRO" || ct === "B2B") return true;
+      if(ct === "PARTICULIER" || ct === "B2C") return false;
+
+      const flag = inv?.isPro ?? inv?.clientIsPro ?? inv?.professional ?? null;
+      if(flag === true) return true;
+      if(flag === false) return false;
+
+      const siret = String(inv?.clientSiret || inv?.siret || inv?.buyerSiret || "").replace(/\s+/g,"").trim();
+      if(siret && siret.length >= 9) return true;
+
+      const company = String(inv?.clientCompanyName || inv?.companyName || "").trim();
+      if(company) return true;
+
+      return false; // défaut : particulier (plus prudent juridiquement)
+    }
+
+    function proClauseL44110(){
+      // formulation courte et standard
+      return `\nConformément à l’article L441-10 du Code de commerce, des pénalités de retard sont exigibles à compter du lendemain de la date d’échéance, ainsi qu’une indemnité forfaitaire de 40 € pour frais de recouvrement.\n`;
+    }
+
     function buildRelanceText(level, inv){
       const l = Number(level||1);
       const client = String(inv.clientName || "Madame, Monsieur").trim() || "Madame, Monsieur";
@@ -928,6 +993,7 @@
 
       const introHome = home ? ` concernant le logement « ${home} »` : "";
       const echeancePart = (dueDate !== "—") ? ` (échéance : ${dueDate})` : "";
+      const isPro = isProClient(inv);
 
       if(l === 1){
         return `Objet : Relance de paiement – Facture ${invNum}
@@ -937,31 +1003,40 @@ ${client},
 Sauf erreur de notre part, la facture ${invNum} émise le ${issued}${introHome} présente à ce jour un solde restant dû de ${due}${echeancePart}.
 
 Nous vous remercions de procéder au règlement dans les plus brefs délais, ou de nous indiquer votre date de paiement.
+Si vous avez déjà effectué le paiement, nous vous prions de ne pas tenir compte de ce courrier.
 
 Cordialement,
 `;
       }
+
       if(l === 2){
         return `Objet : 2ème relance – Facture ${invNum}
 
 ${client},
 
-Malgré notre précédente relance, nous constatons que la facture ${invNum} émise le ${issued}${introHome} n’est toujours pas réglée. Le solde restant dû est de ${due}${echeancePart}.
+Malgré notre première relance, nous constatons que la facture ${invNum} émise le ${issued}${introHome} n’est toujours pas réglée. Le solde restant dû est de ${due}${echeancePart}.
 
-Merci de régulariser sous 48 heures, ou de nous communiquer immédiatement un échéancier ferme.
+Merci de régulariser sous ${RELANCE_GAP_DAYS} jours à compter de la réception de ce message.
+À défaut, nous serons contraints d’envisager des démarches de recouvrement, ce que nous préférerions éviter.
+
+Nous restons bien entendu à votre disposition pour toute précision ou pour convenir d’un éventuel échéancier.
 
 Cordialement,
+${isPro ? proClauseL44110().trimEnd() : ""}
 `;
       }
+
       return `Objet : 3ème relance avant mise en demeure – Facture ${invNum}
 
 ${client},
 
 À ce jour, la facture ${invNum} émise le ${issued}${introHome} demeure impayée. Le solde restant dû est de ${due}${echeancePart}.
 
-Sans régularisation sous 48 heures, nous engagerons une mise en demeure, puis les démarches de recouvrement.
+Nous vous remercions de bien vouloir procéder au règlement sous ${RELANCE_GAP_DAYS} jours à compter de la réception de ce message.
+À défaut, nous engagerons une mise en demeure, puis une procédure de recouvrement, ce qui pourrait entraîner des frais supplémentaires à votre charge.
 
 Cordialement,
+${isPro ? proClauseL44110().trimEnd() : ""}
 `;
     }
 
@@ -972,6 +1047,7 @@ Cordialement,
       const issued = getIssuedDate(inv);
       const dueDate = getDueDate(inv);
       const home = String(inv.homeName || "").trim();
+      const isPro = isProClient(inv);
 
       const introHome = home ? ` concernant le logement « ${home} »` : "";
       const echeancePart = (dueDate !== "—") ? ` (échéance : ${dueDate})` : "";
@@ -982,10 +1058,18 @@ ${client},
 
 Par la présente, nous vous mettons en demeure de régler la somme de ${due} au titre de la facture ${invNum} émise le ${issued}${introHome}${echeancePart}.
 
-À défaut de paiement intégral sous 8 jours à compter de la réception de ce message, nous nous réserverons le droit d’engager toute procédure de recouvrement (amiable et/ou judiciaire), ainsi que l’application des pénalités prévues.
+À défaut de paiement intégral sous ${MED_DELAY_DAYS} jours à compter de la réception de ce message, nous nous réserverons le droit d’engager toute procédure de recouvrement (amiable et/ou judiciaire).
 
 Cordialement,
+${isPro ? proClauseL44110().trimEnd() : ""}
 `;
+    }
+
+    function makeMailto(email, subject, body){
+      const to = encodeURIComponent(email || "");
+      const subj = encodeURIComponent(subject || "");
+      const txt = encodeURIComponent(body || "");
+      return `mailto:${to}?subject=${subj}&body=${txt}`;
     }
 
     async function copyToClipboard(text){
@@ -1009,12 +1093,8 @@ Cordialement,
 
     let currentTextEmail = "";
     let currentTextBody = "";
+    let currentTextSubject = "";
 
-    copyEmailBtn.addEventListener("click", async ()=>{
-      if(!currentTextEmail) return;
-      const ok = await copyToClipboard(currentTextEmail);
-      showAlert(ok ? "✅ Email copié." : "⛔ Impossible de copier.", ok);
-    });
     copyTextBtn.addEventListener("click", async ()=>{
       if(!currentTextBody) return;
       const ok = await copyToClipboard(currentTextBody);
@@ -1051,6 +1131,9 @@ Cordialement,
       const due = fmtMoney(getDueAmount(invoice));
       const dueDate = getDueDate(invoice);
 
+      const pro = isProClient(invoice);
+      const typeLabel = pro ? "PRO" : "PARTICULIER";
+
       modalTitleText.textContent = (kind === "MED") ? `Mise en demeure — ${invNum}` : `Relance ${level} — ${invNum}`;
       modalSubtitleText.textContent = `${client} • Facture ${invNum}`;
 
@@ -1059,11 +1142,24 @@ Cordialement,
       kvInv.textContent = invNum;
       kvDue.textContent = due;
       kvDueDate.textContent = dueDate;
+      kvType.textContent = typeLabel;
 
       currentTextEmail = email || "";
       currentTextBody = (kind === "MED") ? buildMiseEnDemeureText(invoice) : buildRelanceText(level, invoice);
+      currentTextSubject = (kind === "MED")
+        ? `Mise en demeure de payer – Facture ${invNum}`
+        : `Relance ${level} – Facture ${invNum}`;
 
       textBlock.textContent = currentTextBody;
+
+      // mailto
+      if(email){
+        openEmailBtn.href = makeMailto(email, currentTextSubject, currentTextBody);
+        openEmailBtn.removeAttribute("aria-disabled");
+      }else{
+        openEmailBtn.href = "#";
+        openEmailBtn.setAttribute("aria-disabled","true");
+      }
 
       markSentBtn.style.display = isActionable(invoice) ? "" : "none";
       markSentBtn.setAttribute("data-docid", invoice.id);
@@ -1149,8 +1245,16 @@ Cordialement,
           <div class="row">
             <div class="k">
               <div class="t">Relance</div>
-              <div class="v">${badgeRelance(level)} <span style="margin-left:8px; color:#666; font-size:12px; font-weight:900;">Dernière : ${esc(lastRelanceDate)}</span></div>
-              <div class="t" style="margin-top:6px;">Mise en demeure</div>
+              <div class="v">
+                ${badgeRelance(level)}
+                <span style="margin-left:8px; color:#666; font-size:12px; font-weight:900;">Dernière : ${esc(lastRelanceDate)}</span>
+              </div>
+
+              <div style="margin-top:8px; display:flex; flex-wrap:wrap; gap:6px;">
+                ${sentBadges(ts)}
+              </div>
+
+              <div class="t" style="margin-top:10px;">Mise en demeure</div>
               <div class="v" style="font-size:12.5px; color:#111; font-weight:900;">
                 ${medDate !== "—" ? `<span class="badge bad">Envoyée</span> <span style="margin-left:8px; color:#666;">${esc(medDate)}</span>` : `<span class="badge">Non</span>`}
               </div>
@@ -1224,7 +1328,6 @@ Cordialement,
     }
 
     async function loadInvoices(uid){
-      // NO COMPOSITE INDEX: 1 where + limit
       const qAll = query(
         collection(db, "salesDocuments"),
         where("conciergerieUid", "==", uid),
