@@ -1178,19 +1178,42 @@ Cordialement,
     }
 
     async function loadInvoices(uid){
-      // 1 seule vérité : type == INVOICE
-      const qInv = query(
-        collection(db, "salesDocuments"),
-        where("conciergerieUid", "==", uid),
-        where("type", "==", "INVOICE"),
-        where("listable", "==", true),
-        orderBy("createdAt","desc"),
-        limit(500)
-      );
-      const snap = await getDocs(qInv);
-      all = snap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
-      render();
-    }
+  // ✅ 1 seule requête (large) puis filtre JS
+  const qAll = query(
+    collection(db, "salesDocuments"),
+    where("conciergerieUid", "==", uid),
+    where("listable", "==", true),
+    orderBy("createdAt", "desc"),
+    limit(400)
+  );
+
+  const snap = await getDocs(qAll);
+  const allDocs = snap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
+
+  // ✅ Filtre "Factures" : nouvelle norme + legacy
+  const filtered = allDocs.filter(x => {
+    const type = String(x?.type || "").toUpperCase().trim();
+    const docType = String(x?.docType || "").toUpperCase().trim();
+    return (
+      type === "INVOICE" ||
+      docType === "INVOICE_EVENT" ||
+      docType === "INVOICE"
+    );
+  });
+
+  // (optionnel) dédoublonnage au cas où
+  const seen = new Set();
+  const unique = [];
+  for(const x of filtered){
+    if(seen.has(x.id)) continue;
+    seen.add(x.id);
+    unique.push(x);
+  }
+
+  all = unique;
+  render();
+}
+
 
     async function refreshOne(docId){
       try{
