@@ -1,4 +1,4 @@
-<!-- docs/recouvrement.html (FINAL v3 — modale email + relances 7j + MED 8j + clause PRO L441-10 + nextAction + badges R1/R2/R3) -->
+<!-- docs/recouvrement.html (FINAL v3.1 — FIX buildRelanceText + 2 boutons modale (Ouvrir email + Marquer comme envoyé) + signature Service Comptabilité) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -504,7 +504,7 @@
 
         <div class="copyRow">
           <a class="btn" id="openEmailBtn" href="#" target="_blank" rel="noopener">✉️ Ouvrir email</a>
-           <button class="btn danger" id="markSentBtn" type="button" style="display:none;">Marquer comme envoyée</button>
+          <button class="btn danger" id="markSentBtn" type="button" style="display:none;">Marquer comme envoyé</button>
         </div>
       </div>
     </div>
@@ -904,12 +904,10 @@
         "recouvrement.updatedAt": now,
       };
 
-      // dates
       if(n === 1) patch["recouvrement.relance1At"] = now;
       if(n === 2) patch["recouvrement.relance2At"] = now;
       if(n === 3) patch["recouvrement.relance3At"] = now;
 
-      // next action (client-side timestamp for the target)
       if(n === 1){
         patch["recouvrement.nextAction"] = "RELANCE_2";
         patch["recouvrement.nextActionAt"] = tsPlusDays(RELANCE_GAP_DAYS);
@@ -972,11 +970,10 @@
       const company = String(inv?.clientCompanyName || inv?.companyName || "").trim();
       if(company) return true;
 
-      return false; // défaut : particulier (plus prudent juridiquement)
+      return false;
     }
 
     function proClauseL44110(){
-      // formulation courte et standard
       return `\nConformément à l’article L441-10 du Code de commerce, des pénalités de retard sont exigibles à compter du lendemain de la date d’échéance, ainsi qu’une indemnité forfaitaire de 40 € pour frais de recouvrement.\n`;
     }
 
@@ -991,7 +988,7 @@
 
       const introHome = home ? ` concernant le logement « ${home} »` : "";
       const echeancePart = (dueDate !== "—") ? ` (échéance : ${dueDate})` : "";
-      const isPro = isProClient(inv);
+      const pro = isProClient(inv);
 
       if(l === 1){
         return `Objet : Relance de paiement – Facture ${invNum}
@@ -1004,8 +1001,8 @@ Nous vous remercions de procéder au règlement dans les plus brefs délais, ou 
 Si vous avez déjà effectué le paiement, nous vous prions de ne pas tenir compte de ce courrier.
 
 Cordialement,
-Service Comptabilité.
-
+Service Comptabilité
+${pro ? proClauseL44110().trimEnd() : ""}`.trim();
       }
 
       if(l === 2){
@@ -1021,9 +1018,8 @@ Merci de régulariser sous ${RELANCE_GAP_DAYS} jours à compter de la réception
 Nous restons bien entendu à votre disposition pour toute précision ou pour convenir d’un éventuel échéancier.
 
 Cordialement,
-Service Comptabilité.
-${isPro ? proClauseL44110().trimEnd() : ""}
-`;
+Service Comptabilité
+${pro ? proClauseL44110().trimEnd() : ""}`.trim();
       }
 
       return `Objet : 3ème relance avant mise en demeure – Facture ${invNum}
@@ -1036,9 +1032,8 @@ Nous vous remercions de bien vouloir procéder au règlement sous ${RELANCE_GAP_
 À défaut, nous engagerons une mise en demeure, puis une procédure de recouvrement, ce qui pourrait entraîner des frais supplémentaires à votre charge.
 
 Cordialement,
-Service Comptabilité.
-${isPro ? proClauseL44110().trimEnd() : ""}
-`;
+Service Comptabilité
+${pro ? proClauseL44110().trimEnd() : ""}`.trim();
     }
 
     function buildMiseEnDemeureText(inv){
@@ -1048,7 +1043,7 @@ ${isPro ? proClauseL44110().trimEnd() : ""}
       const issued = getIssuedDate(inv);
       const dueDate = getDueDate(inv);
       const home = String(inv.homeName || "").trim();
-      const isPro = isProClient(inv);
+      const pro = isProClient(inv);
 
       const introHome = home ? ` concernant le logement « ${home} »` : "";
       const echeancePart = (dueDate !== "—") ? ` (échéance : ${dueDate})` : "";
@@ -1062,9 +1057,8 @@ Par la présente, nous vous mettons en demeure de régler la somme de ${due} au 
 À défaut de paiement intégral sous ${MED_DELAY_DAYS} jours à compter de la réception de ce message, nous nous réserverons le droit d’engager toute procédure de recouvrement (amiable et/ou judiciaire).
 
 Cordialement,
-Service Comptabilité.
-${isPro ? proClauseL44110().trimEnd() : ""}
-`;
+Service Comptabilité
+${pro ? proClauseL44110().trimEnd() : ""}`.trim();
     }
 
     function makeMailto(email, subject, body){
@@ -1074,30 +1068,9 @@ ${isPro ? proClauseL44110().trimEnd() : ""}
       return `mailto:${to}?subject=${subj}&body=${txt}`;
     }
 
-    async function copyToClipboard(text){
-      try{
-        await navigator.clipboard.writeText(String(text||""));
-        return true;
-      }catch{
-        try{
-          const ta = document.createElement("textarea");
-          ta.value = String(text||"");
-          ta.style.position="fixed";
-          ta.style.left="-9999px";
-          document.body.appendChild(ta);
-          ta.select();
-          document.execCommand("copy");
-          document.body.removeChild(ta);
-          return true;
-        }catch{ return false; }
-      }
-    }
-
     let currentTextEmail = "";
     let currentTextBody = "";
     let currentTextSubject = "";
-
-    
 
     markSentBtn.addEventListener("click", async ()=>{
       const docId = markSentBtn.getAttribute("data-docid");
@@ -1150,7 +1123,6 @@ ${isPro ? proClauseL44110().trimEnd() : ""}
 
       textBlock.textContent = currentTextBody;
 
-      // mailto
       if(email){
         openEmailBtn.href = makeMailto(email, currentTextSubject, currentTextBody);
         openEmailBtn.removeAttribute("aria-disabled");
@@ -1399,7 +1371,7 @@ ${isPro ? proClauseL44110().trimEnd() : ""}
         hideAlert();
 
         if(action === "saveNote"){
-          const ta = listBox.querySelector(`textarea[data-note-id="${docId.replaceAll('"','\\"')}"]`);
+          const ta = listBox.querySelector(`textarea[data-note-id="${docId}"]`);
           const note = ta ? ta.value : "";
           await saveRecNote(docId, note);
           showAlert("✅ Note recouvrement enregistrée.", true);
