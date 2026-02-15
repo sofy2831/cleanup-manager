@@ -1,5 +1,4 @@
-<!-- docs/facture-apercu.html (FINAL — support docId (salesDocuments) + fallback eventId (events)
-     FIX: adresse client robuste (owners -> homes -> snapshot), bank ok, conditions sans échéance, impression 2 colonnes) -->
+<!-- docs/facture-apercu.html (FINAL — PATCH: adresse client robuste + FIX lignes prestations + CSS) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -268,7 +267,6 @@
       }
       .paper{ padding-bottom: 12mm !important; }
     }
-       }
   </style>
 </head>
 
@@ -440,9 +438,6 @@
     let docKind = ""; // "SALES" | "EVENT"
     let docData = null;
 
-    // ✅ fallback client via homes/{homeId}
-    let homeClientFallback = null; // {name,email,phone,address1,address2,zip,city}
-
     function showError(msg){
       alertBox.style.display = "block";
       alertBox.textContent = "⛔ " + msg;
@@ -535,6 +530,42 @@
       const [dd,mm,yy] = x.split("/").map(n=>parseInt(n,10));
       const d = new Date(yy, (mm||1)-1, dd||1);
       return isNaN(d.getTime()) ? null : d;
+    }
+
+    // ✅ adresse robuste (comme dans facture.html)
+    function extractAddr(obj){
+      const o = obj || {};
+      const a = (o.address && typeof o.address === "object") ? o.address : null;
+      const ba = (o.billingAddress && typeof o.billingAddress === "object") ? o.billingAddress : null;
+
+      const street =
+        String(o.address1 || o.street || o.addr1 || o.line1 || "").trim() ||
+        (typeof o.address === "string" ? String(o.address).trim() : "") ||
+        String(a?.street || a?.line1 || a?.address1 || a?.addr1 || "").trim() ||
+        String(ba?.street || ba?.line1 || ba?.address1 || "").trim();
+
+      const address2 =
+        String(o.address2 || o.addr2 || o.line2 || "").trim() ||
+        String(a?.address2 || a?.line2 || a?.addr2 || "").trim() ||
+        String(ba?.address2 || ba?.line2 || "").trim();
+
+      const zip =
+        String(o.zip || o.postalCode || o.cp || "").trim() ||
+        String(a?.zip || a?.postalCode || a?.cp || "").trim() ||
+        String(ba?.zip || ba?.postalCode || "").trim();
+
+      const city =
+        String(o.city || o.town || o.locality || "").trim() ||
+        String(a?.city || a?.town || a?.locality || "").trim() ||
+        String(ba?.city || ba?.town || "").trim();
+
+      const country =
+        String(o.country || "").trim() ||
+        String(a?.country || "").trim() ||
+        String(ba?.country || "").trim() ||
+        "FR";
+
+      return { street, address2, zip, city, country };
     }
 
     function applyBusinessProfile(profile){
@@ -630,15 +661,18 @@
 
       const doc0 = snap.docs[0];
       const o = doc0.data() || {};
+      const addr = extractAddr(o);
+
       return {
         docId: doc0.id,
         email: normalizeEmail(o.email || emailLower),
-        fullname: (o.fullname || o.displayName || "").trim(),
-        address1: (o.address1 || o.address || "").toString().trim(),
-        address2: (o.address2 || "").toString().trim(),
-        zip: (o.zip || "").toString().trim(),
-        city: (o.city || "").toString().trim(),
-        phone: (o.phone || "").toString().trim(),
+        fullname: (o.fullname || o.displayName || o.name || "").trim(),
+        address1: addr.street,
+        address2: addr.address2,
+        zip: addr.zip,
+        city: addr.city,
+        country: addr.country,
+        phone: String(o.phone || o.tel || o.mobile || "").trim(),
       };
     }
 
@@ -654,15 +688,17 @@
           if(snap.exists()){
             const o = snap.data() || {};
             if(String(o.conciergerieUid||"") === String(conciergerieUid)){
+              const addr = extractAddr(o);
               return {
                 docId: snap.id,
                 email: normalizeEmail(o.email || ""),
-                fullname: (o.fullname || o.displayName || "").trim(),
-                address1: (o.address1 || o.address || "").toString().trim(),
-                address2: (o.address2 || "").toString().trim(),
-                zip: (o.zip || "").toString().trim(),
-                city: (o.city || "").toString().trim(),
-                phone: (o.phone || "").toString().trim(),
+                fullname: (o.fullname || o.displayName || o.name || "").trim(),
+                address1: addr.street,
+                address2: addr.address2,
+                zip: addr.zip,
+                city: addr.city,
+                country: addr.country,
+                phone: String(o.phone || o.tel || o.mobile || "").trim(),
               };
             }
           }
@@ -678,77 +714,80 @@
     }
 
     async function loadHomeClientFallback(d){
-      homeClientFallback = null;
-      const hid = String(d?.homeId || "").trim();
-      if(!hid) return;
+      const hid = String(d?.homeId || d?.homeDocId || "").trim();
+      if(!hid) return null;
 
       try{
         const hSnap = await getDoc(doc(db,"homes", hid));
-        if(!hSnap.exists()) return;
+        if(!hSnap.exists()) return null;
         const h = hSnap.data() || {};
 
-        const name =
-          String(h.ownerName || h.ownerFullname || h.owner || h.proprietaireNom || "").trim();
+        const name = String(
+          h.ownerName || h.ownerFullname || h.ownerDisplayName || h.owner || ""
+        ).trim();
 
-        const email =
-          normalizeEmail(h.ownerEmail || h.ownerAccountEmail || h.proprietaireEmail || "");
+        const email = normalizeEmail(
+          h.ownerEmail || h.ownerAccountEmail || h.email || ""
+        );
 
-        const phone =
-          String(h.ownerPhone || h.phone || h.ownerTel || h.proprietaireTel || "").toString().trim();
+        const phone = String(
+          h.ownerPhone || h.ownerTel || h.phone || ""
+        ).trim();
 
-        const a1 =
-          String(h.ownerAddress1 || h.ownerStreet || h.ownerAddress || h.proprietaireAdresse1 || "").trim();
+        const addr = extractAddr(h.owner || h);
 
-        const a2 =
-          String(h.ownerAddress2 || h.proprietaireAdresse2 || "").trim();
+        if(!(name || email || phone || addr.street || addr.zip || addr.city)) return null;
 
-        const zip =
-          String(h.ownerZip || h.ownerPostalCode || h.zipOwner || h.proprietaireZip || "").trim();
-
-        const city =
-          String(h.ownerCity || h.ownerTown || h.cityOwner || h.proprietaireVille || "").trim();
-
-        if(!(a1 || zip || city || name || email || phone)) return;
-
-        homeClientFallback = { name, email, phone, address1:a1, address2:a2, zip, city };
+        return {
+          name, email, phone,
+          address1: addr.street,
+          address2: addr.address2,
+          zip: addr.zip,
+          city: addr.city,
+          country: addr.country
+        };
       }catch(e){
         console.warn("home fallback failed:", e?.message || e);
+        return null;
       }
     }
 
     function clientSnapshot(d){
       // SALES snapshot
       const sName = String(d?.clientName || "").trim();
-      const sA1   = String(d?.clientAddress1 || d?.clientAddress || "").trim();
-      const sA2   = String(d?.clientAddress2 || "").trim();
-      const sZip  = String(d?.clientZip || "").trim();
-      const sCity = String(d?.clientCity || "").trim();
       const sEmail = normalizeEmail(d?.clientEmail || "");
       const sPhone = String(d?.clientPhone || "").trim();
+      const sA1 = String(d?.clientAddress1 || d?.clientAddress || "").trim();
+      const sA2 = String(d?.clientAddress2 || "").trim();
+      const sZip = String(d?.clientZip || "").trim();
+      const sCity = String(d?.clientCity || "").trim();
+      const sCountry = String(d?.clientCountry || "FR").trim();
 
       // EVENT snapshot
       const eName = String(d?.ownerName || "").trim();
-      const eA1   = String(d?.ownerAddress1 || "").trim();
-      const eA2   = String(d?.ownerAddress2 || "").trim();
-      const eZip  = String(d?.ownerZip || "").trim();
-      const eCity = String(d?.ownerCity || "").trim();
       const eEmail = normalizeEmail(d?.ownerEmail || "");
       const ePhone = String(d?.ownerPhone || "").trim();
+      const eA1 = String(d?.ownerAddress1 || "").trim();
+      const eA2 = String(d?.ownerAddress2 || "").trim();
+      const eZip = String(d?.ownerZip || "").trim();
+      const eCity = String(d?.ownerCity || "").trim();
+      const eCountry = String(d?.ownerCountry || "FR").trim();
 
       return {
         fullname: sName || eName,
+        email: sEmail || eEmail,
+        phone: sPhone || ePhone,
         address1: sA1 || eA1,
         address2: sA2 || eA2,
         zip: sZip || eZip,
         city: sCity || eCity,
-        email: sEmail || eEmail,
-        phone: sPhone || ePhone
+        country: sCountry || eCountry
       };
     }
 
-    function renderClientHeader(ownerFromOwners, d){
+    function renderClientHeader(ownerFromOwners, homeFallback, d){
       const o = ownerFromOwners || null;
-      const h = homeClientFallback || null;
+      const h = homeFallback || null;
       const s = clientSnapshot(d);
 
       const name = (o?.fullname || h?.name || s.fullname || "—").trim();
@@ -769,7 +808,7 @@
       cli3.textContent = line3 || "";
       cli3.style.display = line3 ? "" : "none";
 
-      const contact = [email ? email : "", phone ? phone : ""].filter(Boolean).join(" • ");
+      const contact = [email, phone].filter(Boolean).join(" • ");
       cli4.textContent = contact || "";
       cli4.style.display = contact ? "" : "none";
     }
@@ -788,23 +827,18 @@
       }else{
         for(const l of arr){
           const qty = Number(l?.qty)||0;
-          const up = Number(l?.unitPrice)||0;
+          const up = Number(l?.unitPrice)||0;            // PU HT
           const ht = qty * up;
           const tva = vatEnabled ? (ht * vatRate) : 0;
-          const totalHT = ht;
-
+          const total = ht + tva;                        // Total TTC par ligne
           const label = String(l?.label || "Prestation").trim();
 
           const tr = document.createElement("tr");
           tr.innerHTML = `
-            const totalHT = ht;
-
-<tr>
-<td>${label}</td>
-<td class="right">${qty}</td>
-<td class="right">${money(up)}</td>
-<td class="right">${money(totalHT)}</td>
-
+            <td>${esc(label)}</td>
+            <td class="right">${esc(qty)}</td>
+            <td class="right">${esc(money(up))}</td>
+            <td class="right">${esc(money(total))}</td>
           `;
           linesBody.appendChild(tr);
         }
@@ -832,8 +866,8 @@
         ? Number(businessProfile.conditions.cancellationPercent)
         : 30;
 
-      // ✅ pas d’échéance en Conditions
-      cond1.innerHTML = `<b>Référence devis</b> : ${esc(d?.quoteNumber || "—")}`;
+      // ✅ pas d’échéance en Conditions (déjà en haut à droite)
+      cond1.innerHTML = `<b>Référence devis</b> : ${esc(String(d?.quoteNumber || "—"))}`;
       cond2.innerHTML = `<b>Annulation</b> : ${esc(String(cancelPct))} % du montant en cas d’annulation moins de 48 h avant l’intervention.`;
       cond3.innerHTML = `&nbsp;`;
     }
@@ -937,10 +971,10 @@
         const profile = userSnap.exists() ? (userSnap.data()||{}) : {};
         const bp = applyBusinessProfile(profile);
 
-        // 5) client
+        // 5) client (owners -> homes -> snapshot)
         const ownerFromOwners = await loadOwnerFromDoc(user.uid, docData);
-        await loadHomeClientFallback(docData); // ✅ homes fallback (si pas d’owners)
-        renderClientHeader(ownerFromOwners, docData);
+        const homeFallback = await loadHomeClientFallback(docData);
+        renderClientHeader(ownerFromOwners, homeFallback, docData);
 
         // 6) render
         renderDocHeader(docData);
@@ -958,5 +992,3 @@
   </script>
 </body>
 </html>
-
-
