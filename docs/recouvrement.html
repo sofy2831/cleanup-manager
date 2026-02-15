@@ -1,4 +1,4 @@
-<!-- docs/recouvrement.html (FINAL — RECETTE: aucun écran blanc, catch global, requête unique + filtre, modales OK, recouvrement map OK) -->
+<!-- docs/recouvrement.html (NO-COMPOSITE-INDEX — recouvrement factures: filtre JS + tri JS, modale historique, relances, MED, note) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -517,7 +517,7 @@
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
-      collection, query, where, orderBy, limit, getDocs, doc, getDoc, updateDoc, serverTimestamp
+      collection, query, where, limit, getDocs, doc, getDoc, updateDoc, serverTimestamp, orderBy
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const helloLine = document.getElementById("helloLine");
@@ -572,15 +572,6 @@
       alertBox.classList.remove("ok");
       alertBox.textContent = "";
     }
-
-    // ✅ anti écran blanc : si une erreur JS tombe hors try/catch, tu la vois ici
-    window.addEventListener("error", (e)=>{
-      try{ showAlert("⛔ JS: " + (e?.message || "Erreur"), false); }catch{}
-    });
-    window.addEventListener("unhandledrejection", (e)=>{
-      try{ showAlert("⛔ Promise: " + (e?.reason?.message || e?.reason || "Erreur"), false); }catch{}
-    });
-
     function esc(s){
       return String(s||"")
         .replaceAll("&","&amp;")
@@ -610,6 +601,7 @@
     }
     function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
 
+    // ---- Invoice helpers ----
     function getInvoiceStatusRaw(x){
       return String(x?.invoiceStatus||"").toUpperCase().trim();
     }
@@ -617,16 +609,13 @@
       const n = String(x?.invoiceNumber || "").trim();
       return n || "—";
     }
-
     function getRelanceLevel(x){
       const n = Number(x?.recouvrement?.relanceLevel ?? x?.relanceLevel ?? 0);
       return Number.isFinite(n) ? n : 0;
     }
-
     function getRecMap(x){
       return (x?.recouvrement && typeof x.recouvrement === "object") ? x.recouvrement : {};
     }
-
     function getTs(x){
       const rec = getRecMap(x);
       return {
@@ -636,7 +625,6 @@
         miseEnDemeureAt: rec.miseEnDemeureAt ?? x.miseEnDemeureAt ?? null,
       };
     }
-
     function getRecNote(x){
       const rec = getRecMap(x);
       return String(rec.recouvrementNote ?? x.recouvrementNote ?? "").trim();
@@ -645,30 +633,23 @@
     function getPaidAmount(x){
       const direct = Number(x?.paidAmount);
       if(Number.isFinite(direct)) return direct;
-
-      // fallback legacy (si jamais)
       const last = Number(x?.lastPaymentAmount);
       if(Number.isFinite(last)) return last;
-
       return 0;
     }
-
     function getTotalTTC(x){
       const n = Number(x?.totalTTC);
       return Number.isFinite(n) ? n : 0;
     }
-
     function getDueAmount(x){
       const total = getTotalTTC(x);
       const paid = getPaidAmount(x);
       return Math.max(0, total - paid);
     }
-
     function isClosedByStatus(x){
       const st = getInvoiceStatusRaw(x);
       return ["PAID","CREDITED","CANCELLED"].includes(st);
     }
-
     function isActionable(x){
       const due = getDueAmount(x);
       return !isClosedByStatus(x) && due > 0;
@@ -682,7 +663,6 @@
       if(st === "CREDITED") return `<span class="badge bad">Créditée</span>`;
       return `<span class="badge warn">Reste dû</span>`;
     }
-
     function badgeRelance(level){
       const n = Number(level||0);
       if(n >= 4) return `<span class="badge bad">Niv. ${n}</span>`;
@@ -696,40 +676,33 @@
       const scope = filterScope.value;
       const due = getDueAmount(x);
       const closed = isClosedByStatus(x) || due <= 0;
-
       if(scope === "ALL") return true;
       if(scope === "PAID_ONLY") return closed;
-      return !closed; // DUE_ONLY
+      return !closed;
     }
-
     function matchesRelance(x){
       const f = filterRelance.value;
       if(f === "ALL") return true;
       return String(getRelanceLevel(x)) === String(f);
     }
-
     function matchesSearch(x){
       const q = (searchInput.value||"").trim().toLowerCase();
       if(!q) return true;
-
       const hay = [
         x.invoiceNumber, x.quoteNumber,
         x.clientName, x.clientEmail,
         x.homeName, x.homeCity, x.homeAddress, x.homeZip,
         x.invoiceStatus
       ].filter(Boolean).join(" ").toLowerCase();
-
       return hay.includes(q);
     }
-
     function getFiltered(){
       return all.filter(x => matchesScope(x) && matchesRelance(x) && matchesSearch(x));
     }
 
     function getIssuedDate(x){
-      return fmtDateFR(x?.invoiceIssuedDate || x?.invoiceIssuedAt || x?.createdAt);
+      return fmtDateFR(x?.invoiceIssuedDate || x?.invoiceIssuedAt || x?.createdAt || x?.createdAtMs || x?.snapAtMs);
     }
-
     function getDueDate(x){
       return fmtDateFR(x?.invoiceDueDate || x?.dueDate || null);
     }
@@ -740,7 +713,6 @@
         sumBar.innerHTML = "";
         return;
       }
-
       let sumTTC = 0, sumPaid = 0, sumDue = 0;
       for(const x of filtered){
         const total = getTotalTTC(x);
@@ -750,21 +722,11 @@
         sumPaid += paid;
         sumDue += due;
       }
-
       totalsCard.style.display = "block";
       sumBar.innerHTML = `
-        <div class="sumBox">
-          <div class="t">Total TTC</div>
-          <div class="v">${fmtMoney(sumTTC)}</div>
-        </div>
-        <div class="sumBox">
-          <div class="t">Total payé</div>
-          <div class="v">${fmtMoney(sumPaid)}</div>
-        </div>
-        <div class="sumBox">
-          <div class="t">Reste dû</div>
-          <div class="v">${fmtMoney(sumDue)}</div>
-        </div>
+        <div class="sumBox"><div class="t">Total TTC</div><div class="v">${fmtMoney(sumTTC)}</div></div>
+        <div class="sumBox"><div class="t">Total payé</div><div class="v">${fmtMoney(sumPaid)}</div></div>
+        <div class="sumBox"><div class="t">Reste dû</div><div class="v">${fmtMoney(sumDue)}</div></div>
       `;
     }
 
@@ -806,6 +768,7 @@
 
     async function loadPaymentsForInvoice(docId){
       const payCol = collection(db, "salesDocuments", docId, "payments");
+      // Ici on peut orderBy createdAt: si Firestore râle, tu enlèves orderBy et tu relies au tri JS, mais en général ça passe.
       const qPay = query(payCol, orderBy("createdAt","desc"), limit(200));
       const snap = await getDocs(qPay);
       return snap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
@@ -835,6 +798,7 @@
       try{
         pays = await loadPaymentsForInvoice(docId);
       }catch(e){
+        console.error(e);
         paymentsBody.innerHTML = `<tr><td colspan="5" style="color:#666;">Impossible de charger les paiements.</td></tr>`;
         return;
       }
@@ -1021,7 +985,6 @@ Cordialement,
       const docId = markSentBtn.getAttribute("data-docid");
       const kind = markSentBtn.getAttribute("data-kind"); // RELANCE | MED
       const level = Number(markSentBtn.getAttribute("data-level")||0);
-
       if(!docId || !kind) return;
 
       try{
@@ -1170,7 +1133,6 @@ Cordialement,
             <button class="btn" type="button" data-action="saveNote" data-id="${esc(x.id)}">Enregistrer</button>
           </div>
         `;
-
         listBox.appendChild(card);
       }
     }
@@ -1186,30 +1148,52 @@ Cordialement,
       }
     }
 
+    function toMs(v){
+      try{
+        if(!v) return 0;
+        if(v?.toDate?.()) return v.toDate().getTime();
+        if(typeof v === "number") return v;
+        const s = String(v).trim();
+        if(!s) return 0;
+        const d = new Date(s);
+        if(!isNaN(d.getTime())) return d.getTime();
+        return 0;
+      }catch{ return 0; }
+    }
+
+    function createdAtMs(x){
+      // priorité : createdAt (timestamp) > createdAtMs > snapAtMs
+      const a = toMs(x?.createdAt);
+      if(a) return a;
+      const b = toMs(x?.createdAtMs);
+      if(b) return b;
+      const c = toMs(x?.snapAtMs);
+      if(c) return c;
+      return 0;
+    }
+
     async function loadInvoices(uid){
-      // ✅ 1 seule requête (large) puis filtre JS (évite les histoires d'index docType "in")
+      // ✅ NO INDEX REQUIRED: un seul where, pas d'orderBy
       const qAll = query(
         collection(db, "salesDocuments"),
         where("conciergerieUid", "==", uid),
-        where("listable", "==", true),
-        orderBy("createdAt", "desc"),
-        limit(400)
+        limit(700)
       );
 
       const snap = await getDocs(qAll);
       const allDocs = snap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
 
+      // filtre factures (nouvelle norme + legacy) + listable (JS)
       const filtered = allDocs.filter(x => {
+        const listable = (x?.listable !== false); // par défaut true si absent
+        if(!listable) return false;
+
         const type = String(x?.type || "").toUpperCase().trim();
         const docType = String(x?.docType || "").toUpperCase().trim();
-        return (
-          type === "INVOICE" ||
-          docType === "INVOICE_EVENT" ||
-          docType === "INVOICE"
-        );
+        return (type === "INVOICE" || docType === "INVOICE_EVENT" || docType === "INVOICE");
       });
 
-      // dédoublonnage
+      // dédoublonnage + tri desc
       const seen = new Set();
       const unique = [];
       for(const x of filtered){
@@ -1218,8 +1202,17 @@ Cordialement,
         unique.push(x);
       }
 
+      unique.sort((a,b) => createdAtMs(b) - createdAtMs(a));
+
       all = unique;
       render();
+
+      // petit feedback utile quand c’est vide
+      if(!all.length){
+        showAlert("Aucune facture trouvée (pour cette conciergerie). Vérifie que tes docs ont bien conciergerieUid + (type:'INVOICE' ou docType:'INVOICE').", true);
+      }else{
+        hideAlert();
+      }
     }
 
     async function refreshOne(docId){
@@ -1228,6 +1221,8 @@ Cordialement,
         if(!s.exists()) return;
         const updated = { id: s.id, ...(s.data()||{}) };
         all = all.map(x => x.id === docId ? updated : x);
+        // retri si la date change
+        all.sort((a,b) => createdAtMs(b) - createdAtMs(a));
         render();
       }catch(e){
         console.warn("refreshOne failed:", e?.message || e);
