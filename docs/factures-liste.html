@@ -1,4 +1,4 @@
-<!-- docs/factures-liste.html (FINAL — Totaux globaux filtrés HT/TVA/TTC + Ouvrir unique + Règlement/Avoir/Refaire responsive) -->
+<!-- docs/factures-liste.html (FINAL — query type:"INVOICE" + fallback legacy docType + Totaux globaux filtrés HT/TVA/TTC + Ouvrir unique + Règlement/Avoir/Refaire responsive) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -192,7 +192,6 @@
     .k .t{ font-size:12px; color:#666; font-weight:900; }
     .k .v{ font-size:13px; color:#111; font-weight:900; }
 
-    /* Actions bar: responsive (no overflow) */
     .actionsBar{
       display:flex;
       gap:8px;
@@ -206,7 +205,6 @@
       .actionsBar .btn.primary{ flex:1 1 100%; }
     }
 
-    /* Global totals (ONE block) */
     .globalTotals{
       display:grid;
       grid-template-columns: 1fr 1fr 1fr;
@@ -301,7 +299,6 @@
         </div>
       </div>
 
-      <!-- ✅ Totaux globaux (sur les factures filtrées) -->
       <div class="card" id="globalTotalsCard" style="display:none;">
         <div style="font-weight:1000; margin-bottom:10px;">Totaux (factures affichées)</div>
         <div class="globalTotals" id="globalTotalsBox"></div>
@@ -323,7 +320,9 @@
   <script type="module">
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-    import { collection, query, where, orderBy, limit, getDocs, doc, getDoc } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import {
+      collection, query, where, orderBy, limit, getDocs, doc, getDoc
+    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const helloLine = document.getElementById("helloLine");
     const companyLine = document.getElementById("companyLine");
@@ -398,7 +397,6 @@
       return n || "—";
     }
 
-    // affichage : si N° existe mais status vide/DRAFT => ÉMISE
     function getInvoiceStatusDisplay(x){
       const raw = getInvoiceStatusRaw(x);
       const hasNum = !!String(x?.invoiceNumber||"").trim();
@@ -462,16 +460,13 @@
     }
 
     function getPaidAmount(x){
-      const v = x?.paidAmount;
-      const n = Number(v);
+      const n = Number(x?.paidAmount);
       return Number.isFinite(n) ? n : 0;
     }
 
     function isFullyPaid(x, ttc){
       const st = getInvoiceStatusRaw(x);
       if(st === "PAID") return true;
-      if(!!x?.paidAt) return true;
-      // ✅ cohérence avec ton modèle : invoicePaidAt / lastPaymentAt
       if(!!x?.invoicePaidAt) return true;
       return getPaidAmount(x) >= (Number(ttc)||0) && (Number(ttc)||0) > 0;
     }
@@ -487,11 +482,19 @@
       let sumHT = 0, sumTVA = 0, sumTTC = 0;
 
       for(const x of filtered){
-        // ✅ si tu ajoutes plus tard totalHT/TVA/TTC, on les utilisera.
-        const t = computeTotalsFromLines(x.lines);
-        sumHT += (Number(t.ht)||0);
-        sumTVA += (Number(t.tva)||0);
-        sumTTC += (Number(t.ttc)||0);
+        // si totaux stockés, on les prend (plus fiable pour journal/export)
+        const ht  = Number(x.totalHT);
+        const tva = Number(x.totalTVA);
+        const ttc = Number(x.totalTTC);
+
+        if(Number.isFinite(ht) && Number.isFinite(tva) && Number.isFinite(ttc)){
+          sumHT += ht; sumTVA += tva; sumTTC += ttc;
+        }else{
+          const t = computeTotalsFromLines(x.lines);
+          sumHT += (Number(t.ht)||0);
+          sumTVA += (Number(t.tva)||0);
+          sumTTC += (Number(t.ttc)||0);
+        }
       }
 
       globalTotalsCard.style.display = "block";
@@ -548,7 +551,8 @@
 
         const linkedAvoirId = getLinkedAvoirId(x);
 
-        const totals = computeTotalsFromLines(x.lines);
+        const ttcStored = Number(x.totalTTC);
+        const totals = Number.isFinite(ttcStored) ? { ttc: ttcStored } : computeTotalsFromLines(x.lines);
         const ttc = totals.ttc;
 
         const hasNum = !!String(x.invoiceNumber||"").trim();
@@ -558,7 +562,6 @@
         const allowReglement = hasNum && !["CANCELLED","CREDITED"].includes(stRaw) && !isFullyPaid(x, ttc);
 
         const openHref = `facture.html?docId=${encodeURIComponent(x.id)}`;
-
         const regHref = `reglement.html?docId=${encodeURIComponent(x.id)}`;
         const avoirHref = `avoir.html?fromDocId=${encodeURIComponent(x.id)}`;
         const redoHref  = `facture.html?mode=redo&fromDocId=${encodeURIComponent(x.id)}&fromAvoirId=${encodeURIComponent(linkedAvoirId)}`;
@@ -642,9 +645,16 @@
       }
     }
 
+    function uniqMergeById(arr){
+      const m = new Map();
+      for(const x of arr){
+        if(x?.id) m.set(x.id, x);
+      }
+      return Array.from(m.values());
+    }
+
     async function loadInvoices(uid){
-      // ✅ STANDARD : type="INVOICE"
-      // Important : ajoute bien type:"INVOICE" dans tes docs existants, sinon ils ne remonteront pas ici.
+      // 1) vérité : type == INVOICE
       const qInv = query(
         collection(db, "salesDocuments"),
         where("conciergerieUid", "==", uid),
@@ -655,7 +665,28 @@
       );
 
       const snap = await getDocs(qInv);
-      all = snap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
+      const main = snap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
+
+      // 2) fallback legacy : docType IN ["INVOICE_EVENT","INVOICE"] (si tu as encore des vieux docs)
+      // ⚠️ nécessite un index si Firestore te le demande
+      let legacy = [];
+      try{
+        const qLegacy = query(
+          collection(db, "salesDocuments"),
+          where("conciergerieUid", "==", uid),
+          where("docType", "in", ["INVOICE_EVENT","INVOICE"]),
+          where("listable", "==", true),
+          orderBy("createdAt", "desc"),
+          limit(400)
+        );
+        const snapL = await getDocs(qLegacy);
+        legacy = snapL.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
+      }catch(e){
+        // si pas d’index ou pas de champ docType : on ignore sans casser
+        legacy = [];
+      }
+
+      all = uniqMergeById([...main, ...legacy]);
       render();
     }
 
