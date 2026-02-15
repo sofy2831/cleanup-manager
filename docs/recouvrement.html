@@ -1,4 +1,4 @@
-<!-- docs/recouvrement.html (FINAL — recouvrement factures: vue utilisateur, modale historique, relances en texte, mise en demeure en texte, note) -->
+<!-- docs/recouvrement.html (FINAL — RECETTE: aucun écran blanc, catch global, requête unique + filtre, modales OK, recouvrement map OK) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -572,6 +572,15 @@
       alertBox.classList.remove("ok");
       alertBox.textContent = "";
     }
+
+    // ✅ anti écran blanc : si une erreur JS tombe hors try/catch, tu la vois ici
+    window.addEventListener("error", (e)=>{
+      try{ showAlert("⛔ JS: " + (e?.message || "Erreur"), false); }catch{}
+    });
+    window.addEventListener("unhandledrejection", (e)=>{
+      try{ showAlert("⛔ Promise: " + (e?.reason?.message || e?.reason || "Erreur"), false); }catch{}
+    });
+
     function esc(s){
       return String(s||"")
         .replaceAll("&","&amp;")
@@ -634,21 +643,20 @@
     }
 
     function getPaidAmount(x){
-  const direct = Number(x?.paidAmount);
-  if(Number.isFinite(direct)) return direct;
+      const direct = Number(x?.paidAmount);
+      if(Number.isFinite(direct)) return direct;
 
-  // fallback legacy si jamais
-  const last = Number(x?.lastPaymentAmount);
-  if(Number.isFinite(last)) return last;
+      // fallback legacy (si jamais)
+      const last = Number(x?.lastPaymentAmount);
+      if(Number.isFinite(last)) return last;
 
-  return 0;
-}
+      return 0;
+    }
 
-function getTotalTTC(x){
-  const n = Number(x?.totalTTC);
-  return Number.isFinite(n) ? n : 0;
-}
-
+    function getTotalTTC(x){
+      const n = Number(x?.totalTTC);
+      return Number.isFinite(n) ? n : 0;
+    }
 
     function getDueAmount(x){
       const total = getTotalTTC(x);
@@ -723,8 +731,6 @@ function getTotalTTC(x){
     }
 
     function getDueDate(x){
-      // optionnel: si tu as un champ échéance, sinon —
-      // fallback: si tu stockes invoiceDueDate un jour, ce sera pris.
       return fmtDateFR(x?.invoiceDueDate || x?.dueDate || null);
     }
 
@@ -943,7 +949,6 @@ Merci de régulariser sous 48 heures, ou de nous communiquer immédiatement un �
 Cordialement,
 `;
       }
-      // level 3
       return `Objet : 3ème relance avant mise en demeure – Facture ${invNum}
 
 ${client},
@@ -984,7 +989,6 @@ Cordialement,
         await navigator.clipboard.writeText(String(text||""));
         return true;
       }catch{
-        // fallback
         try{
           const ta = document.createElement("textarea");
           ta.value = String(text||"");
@@ -1058,9 +1062,7 @@ Cordialement,
 
       textBlock.textContent = currentTextBody;
 
-      // action : marquer comme envoyée (manuel)
       markSentBtn.style.display = isActionable(invoice) ? "" : "none";
-      markSentBtn.textContent = (kind === "MED") ? "Marquer comme envoyée" : "Marquer comme envoyée";
       markSentBtn.setAttribute("data-docid", invoice.id);
       markSentBtn.setAttribute("data-kind", (kind === "MED") ? "MED" : "RELANCE");
       markSentBtn.setAttribute("data-level", String(level||0));
@@ -1185,42 +1187,40 @@ Cordialement,
     }
 
     async function loadInvoices(uid){
-  // ✅ 1 seule requête (large) puis filtre JS
-  const qAll = query(
-    collection(db, "salesDocuments"),
-    where("conciergerieUid", "==", uid),
-    where("listable", "==", true),
-    orderBy("createdAt", "desc"),
-    limit(400)
-  );
+      // ✅ 1 seule requête (large) puis filtre JS (évite les histoires d'index docType "in")
+      const qAll = query(
+        collection(db, "salesDocuments"),
+        where("conciergerieUid", "==", uid),
+        where("listable", "==", true),
+        orderBy("createdAt", "desc"),
+        limit(400)
+      );
 
-  const snap = await getDocs(qAll);
-  const allDocs = snap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
+      const snap = await getDocs(qAll);
+      const allDocs = snap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
 
-  // ✅ Filtre "Factures" : nouvelle norme + legacy
-  const filtered = allDocs.filter(x => {
-    const type = String(x?.type || "").toUpperCase().trim();
-    const docType = String(x?.docType || "").toUpperCase().trim();
-    return (
-      type === "INVOICE" ||
-      docType === "INVOICE_EVENT" ||
-      docType === "INVOICE"
-    );
-  });
+      const filtered = allDocs.filter(x => {
+        const type = String(x?.type || "").toUpperCase().trim();
+        const docType = String(x?.docType || "").toUpperCase().trim();
+        return (
+          type === "INVOICE" ||
+          docType === "INVOICE_EVENT" ||
+          docType === "INVOICE"
+        );
+      });
 
-  // (optionnel) dédoublonnage au cas où
-  const seen = new Set();
-  const unique = [];
-  for(const x of filtered){
-    if(seen.has(x.id)) continue;
-    seen.add(x.id);
-    unique.push(x);
-  }
+      // dédoublonnage
+      const seen = new Set();
+      const unique = [];
+      for(const x of filtered){
+        if(seen.has(x.id)) continue;
+        seen.add(x.id);
+        unique.push(x);
+      }
 
-  all = unique;
-  render();
-}
-
+      all = unique;
+      render();
+    }
 
     async function refreshOne(docId){
       try{
@@ -1266,7 +1266,6 @@ Cordialement,
         }
 
         if(action === "viewRelance"){
-          // relance “proposée” = niveau suivant (min 1, max 3)
           const current = getRelanceLevel(invoice);
           const next = Math.min(3, Math.max(1, Number(current)+1));
           await showTextModal("RELANCE", invoice, next);
