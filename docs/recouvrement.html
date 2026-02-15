@@ -1,4 +1,4 @@
-<!-- docs/recouvrement.html (FINAL — recouvrement factures: relances + mise en demeure + note + modale historique paiements) -->
+<!-- docs/recouvrement.html (FINAL — recouvrement factures: vue utilisateur, modale historique, relances en texte, mise en demeure en texte, note) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -91,7 +91,7 @@
       .toolbar{ grid-template-columns: 1fr; }
     }
 
-    .select, .input2{
+    .select{
       width:100%;
       padding:10px 12px;
       border-radius:14px;
@@ -249,7 +249,7 @@
     }
     .modal{
       width:100%;
-      max-width:820px;
+      max-width:860px;
       background:#fff;
       border-radius:18px;
       border:1px solid rgba(0,0,0,0.08);
@@ -318,6 +318,35 @@
     }
     .sumBox .t{ font-size:11px; color:#666; font-weight:900; }
     .sumBox .v{ margin-top:2px; font-size:14px; color:#111; font-weight:1000; }
+
+    .textBlock{
+      white-space:pre-wrap;
+      background:rgba(248,244,255,.55);
+      border:1px solid rgba(122,92,255,0.18);
+      border-radius:14px;
+      padding:12px;
+      font-size:12.5px;
+      font-weight:800;
+      line-height:1.45;
+      color:#111;
+    }
+    .kv{
+      display:grid;
+      grid-template-columns: 120px 1fr;
+      gap:8px 10px;
+      margin-top:10px;
+      font-size:12px;
+      font-weight:900;
+      color:#333;
+    }
+    .kv div:nth-child(odd){ color:#666; font-weight:900; }
+    .copyRow{
+      margin-top:12px;
+      display:flex;
+      gap:8px;
+      flex-wrap:wrap;
+      justify-content:flex-end;
+    }
 
     .bottom-nav{
       position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
@@ -394,8 +423,7 @@
         </div>
 
         <div style="margin-top:10px;" class="mini">
-          Logique : recouvrement visible sur toutes les factures, mais actions relance/mise en demeure <b>désactivées</b> si facture soldée (PAID, CREDITED, CANCELLED ou reste dû = 0).
-          Historique des règlements : modale (sans quitter la page).
+          Suivi des factures et relances. Les actions sont <b>désactivées</b> si la facture est soldée (PAID/CREDITED/CANCELLED ou reste dû = 0).
         </div>
       </div>
 
@@ -409,14 +437,14 @@
   </div>
 
   <!-- Modal historique paiements -->
-  <div class="modalMask" id="modalMask" role="dialog" aria-modal="true" aria-hidden="true">
+  <div class="modalMask" id="modalMaskPayments" role="dialog" aria-modal="true" aria-hidden="true">
     <div class="modal">
       <div class="modalHead">
-        <div class="title" id="modalTitle">Historique règlements</div>
-        <button class="btn" id="closeModalBtn" type="button">Fermer</button>
+        <div class="title" id="modalTitlePayments">Historique règlements</div>
+        <button class="btn" id="closePaymentsBtn" type="button">Fermer</button>
       </div>
       <div class="modalBody">
-        <div class="mini" id="modalSubtitle" style="margin-bottom:10px;">—</div>
+        <div class="mini" id="modalSubtitlePayments" style="margin-bottom:10px;">—</div>
         <table aria-label="Paiements">
           <thead>
             <tr>
@@ -444,10 +472,34 @@
             <div class="v" id="mDue">—</div>
           </div>
         </div>
+      </div>
+    </div>
+  </div>
 
-        <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;">
-          <a class="btn primary" id="openReglementBtn" href="#">Ajouter un règlement</a>
-          <a class="btn" id="openFactureBtn" href="#">Ouvrir la facture</a>
+  <!-- Modal texte relance / mise en demeure -->
+  <div class="modalMask" id="modalMaskText" role="dialog" aria-modal="true" aria-hidden="true">
+    <div class="modal">
+      <div class="modalHead">
+        <div class="title" id="modalTitleText">Relance</div>
+        <button class="btn" id="closeTextBtn" type="button">Fermer</button>
+      </div>
+      <div class="modalBody">
+        <div class="mini" id="modalSubtitleText" style="margin-bottom:10px;">—</div>
+
+        <div class="kv" id="kvBox">
+          <div>Client</div><div id="kvClient">—</div>
+          <div>Email</div><div id="kvEmail">—</div>
+          <div>Facture</div><div id="kvInv">—</div>
+          <div>Montant dû</div><div id="kvDue">—</div>
+          <div>Échéance</div><div id="kvDueDate">—</div>
+        </div>
+
+        <div style="margin-top:12px;" class="textBlock" id="textBlock">—</div>
+
+        <div class="copyRow">
+          <button class="btn" id="copyEmailBtn" type="button">Copier email</button>
+          <button class="btn primary" id="copyTextBtn" type="button">Copier le texte</button>
+          <button class="btn danger" id="markSentBtn" type="button" style="display:none;">Marquer comme envoyée</button>
         </div>
       </div>
     </div>
@@ -480,22 +532,35 @@
     const sumBar = document.getElementById("sumBar");
     const listBox = document.getElementById("listBox");
 
-    // modal
-    const modalMask = document.getElementById("modalMask");
-    const closeModalBtn = document.getElementById("closeModalBtn");
-    const modalTitle = document.getElementById("modalTitle");
-    const modalSubtitle = document.getElementById("modalSubtitle");
+    // payments modal
+    const modalMaskPayments = document.getElementById("modalMaskPayments");
+    const closePaymentsBtn = document.getElementById("closePaymentsBtn");
+    const modalTitlePayments = document.getElementById("modalTitlePayments");
+    const modalSubtitlePayments = document.getElementById("modalSubtitlePayments");
     const paymentsBody = document.getElementById("paymentsBody");
     const mTotalTtc = document.getElementById("mTotalTtc");
     const mPaid = document.getElementById("mPaid");
     const mDue = document.getElementById("mDue");
-    const openReglementBtn = document.getElementById("openReglementBtn");
-    const openFactureBtn = document.getElementById("openFactureBtn");
+
+    // text modal
+    const modalMaskText = document.getElementById("modalMaskText");
+    const closeTextBtn = document.getElementById("closeTextBtn");
+    const modalTitleText = document.getElementById("modalTitleText");
+    const modalSubtitleText = document.getElementById("modalSubtitleText");
+    const textBlock = document.getElementById("textBlock");
+
+    const kvClient = document.getElementById("kvClient");
+    const kvEmail = document.getElementById("kvEmail");
+    const kvInv = document.getElementById("kvInv");
+    const kvDue = document.getElementById("kvDue");
+    const kvDueDate = document.getElementById("kvDueDate");
+
+    const copyEmailBtn = document.getElementById("copyEmailBtn");
+    const copyTextBtn = document.getElementById("copyTextBtn");
+    const markSentBtn = document.getElementById("markSentBtn");
 
     let all = [];
     let currentUid = "";
-    let vatEnabled = false;
-    let vatRate = 0;
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -534,17 +599,7 @@
         return "—";
       }catch{ return "—"; }
     }
-
-    function computeHT(lines){
-      if(!Array.isArray(lines)) return 0;
-      return lines.reduce((s,l)=> s + (Number(l?.qty)||0) * (Number(l?.unitPrice)||0), 0);
-    }
-    function computeTotalsFromLines(lines){
-      const ht = computeHT(lines);
-      const tva = vatEnabled ? (ht * (Number(vatRate)||0)) : 0;
-      const ttc = ht + tva;
-      return { ht, tva, ttc };
-    }
+    function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
 
     function getInvoiceStatusRaw(x){
       return String(x?.invoiceStatus||"").toUpperCase().trim();
@@ -564,7 +619,6 @@
     }
 
     function getTs(x){
-      // timestamp fields can be nested in recouvrement map
       const rec = getRecMap(x);
       return {
         relance1At: rec.relance1At ?? x.relance1At ?? null,
@@ -586,9 +640,7 @@
 
     function getTotalTTC(x){
       const n = Number(x?.totalTTC);
-      if(Number.isFinite(n)) return n;
-      const t = computeTotalsFromLines(x?.lines);
-      return Number(t.ttc)||0;
+      return Number.isFinite(n) ? n : 0;
     }
 
     function getDueAmount(x){
@@ -603,7 +655,6 @@
     }
 
     function isActionable(x){
-      // soldée => action désactivée
       const due = getDueAmount(x);
       return !isClosedByStatus(x) && due > 0;
     }
@@ -633,8 +684,7 @@
 
       if(scope === "ALL") return true;
       if(scope === "PAID_ONLY") return closed;
-      // DUE_ONLY
-      return !closed;
+      return !closed; // DUE_ONLY
     }
 
     function matchesRelance(x){
@@ -663,6 +713,12 @@
 
     function getIssuedDate(x){
       return fmtDateFR(x?.invoiceIssuedDate || x?.invoiceIssuedAt || x?.createdAt);
+    }
+
+    function getDueDate(x){
+      // optionnel: si tu as un champ échéance, sinon —
+      // fallback: si tu stockes invoiceDueDate un jour, ce sera pris.
+      return fmtDateFR(x?.invoiceDueDate || x?.dueDate || null);
     }
 
     function renderTotals(filtered){
@@ -699,22 +755,40 @@
       `;
     }
 
-    function openModal(){
-      modalMask.style.display = "flex";
-      modalMask.setAttribute("aria-hidden","false");
+    function openPaymentsModal(){
+      modalMaskPayments.style.display = "flex";
+      modalMaskPayments.setAttribute("aria-hidden","false");
     }
-    function closeModal(){
-      modalMask.style.display = "none";
-      modalMask.setAttribute("aria-hidden","true");
+    function closePaymentsModal(){
+      modalMaskPayments.style.display = "none";
+      modalMaskPayments.setAttribute("aria-hidden","true");
       paymentsBody.innerHTML = "";
     }
+    function openTextModal(){
+      modalMaskText.style.display = "flex";
+      modalMaskText.setAttribute("aria-hidden","false");
+    }
+    function closeTextModal(){
+      modalMaskText.style.display = "none";
+      modalMaskText.setAttribute("aria-hidden","true");
+      textBlock.textContent = "—";
+      markSentBtn.style.display = "none";
+      markSentBtn.removeAttribute("data-docid");
+      markSentBtn.removeAttribute("data-kind");
+      markSentBtn.removeAttribute("data-level");
+    }
 
-    closeModalBtn.addEventListener("click", closeModal);
-    modalMask.addEventListener("click", (e)=>{
-      if(e.target === modalMask) closeModal();
-    });
+    closePaymentsBtn.addEventListener("click", closePaymentsModal);
+    modalMaskPayments.addEventListener("click", (e)=>{ if(e.target === modalMaskPayments) closePaymentsModal(); });
+
+    closeTextBtn.addEventListener("click", closeTextModal);
+    modalMaskText.addEventListener("click", (e)=>{ if(e.target === modalMaskText) closeTextModal(); });
+
     window.addEventListener("keydown", (e)=>{
-      if(e.key === "Escape") closeModal();
+      if(e.key === "Escape"){
+        closePaymentsModal();
+        closeTextModal();
+      }
     });
 
     async function loadPaymentsForInvoice(docId){
@@ -738,14 +812,11 @@
       const invNum = getInvoiceNumber(invoice);
       const client = String(invoice.clientName || "—").trim();
 
-      modalTitle.textContent = `Historique règlements — ${invNum}`;
-      modalSubtitle.textContent = `${client} • Facture ${invNum}`;
-
-      openReglementBtn.href = `reglement.html?docId=${encodeURIComponent(docId)}`;
-      openFactureBtn.href = `facture.html?docId=${encodeURIComponent(docId)}`;
+      modalTitlePayments.textContent = `Historique règlements — ${invNum}`;
+      modalSubtitlePayments.textContent = `${client} • Facture ${invNum}`;
 
       paymentsBody.innerHTML = `<tr><td colspan="5" style="color:#666;">Chargement…</td></tr>`;
-      openModal();
+      openPaymentsModal();
 
       let pays = [];
       try{
@@ -789,14 +860,13 @@
 
     async function saveRecNote(docId, note){
       const ref = doc(db, "salesDocuments", docId);
-      // On stocke dans recouvrement.recouvrementNote (map)
       await updateDoc(ref, {
         "recouvrement.recouvrementNote": String(note||"").trim(),
         "recouvrement.updatedAt": serverTimestamp()
       });
     }
 
-    async function setRelance(docId, level){
+    async function markRelanceSent(docId, level){
       const ref = doc(db, "salesDocuments", docId);
       const n = Number(level||0);
       const now = serverTimestamp();
@@ -805,8 +875,6 @@
         "recouvrement.relanceLevel": n,
         "recouvrement.updatedAt": now,
       };
-
-      // timestamps “dernier clic” par niveau
       if(n === 1) patch["recouvrement.relance1At"] = now;
       if(n === 2) patch["recouvrement.relance2At"] = now;
       if(n === 3) patch["recouvrement.relance3At"] = now;
@@ -814,12 +882,183 @@
       await updateDoc(ref, patch);
     }
 
-    async function setMiseEnDemeure(docId){
+    async function markMiseEnDemeureSent(docId){
       const ref = doc(db, "salesDocuments", docId);
       await updateDoc(ref, {
         "recouvrement.miseEnDemeureAt": serverTimestamp(),
         "recouvrement.updatedAt": serverTimestamp()
       });
+    }
+
+    function lastRelanceDateFromTs(ts){
+      const a3 = fmtDateFR(ts.relance3At);
+      const a2 = fmtDateFR(ts.relance2At);
+      const a1 = fmtDateFR(ts.relance1At);
+      if(a3 !== "—") return a3;
+      if(a2 !== "—") return a2;
+      if(a1 !== "—") return a1;
+      return "—";
+    }
+
+    function buildRelanceText(level, inv){
+      const l = Number(level||1);
+      const client = String(inv.clientName || "Madame, Monsieur").trim() || "Madame, Monsieur";
+      const invNum = getInvoiceNumber(inv);
+      const due = fmtMoney(getDueAmount(inv));
+      const issued = getIssuedDate(inv);
+      const dueDate = getDueDate(inv);
+      const home = String(inv.homeName || "").trim();
+
+      const introHome = home ? ` concernant le logement « ${home} »` : "";
+      const echeancePart = (dueDate !== "—") ? ` (échéance : ${dueDate})` : "";
+
+      if(l === 1){
+        return `Objet : Relance de paiement – Facture ${invNum}
+
+${client},
+
+Sauf erreur de notre part, la facture ${invNum} émise le ${issued}${introHome} présente à ce jour un solde restant dû de ${due}${echeancePart}.
+
+Nous vous remercions de procéder au règlement dans les plus brefs délais, ou de nous indiquer votre date de paiement.
+
+Cordialement,
+`;
+      }
+      if(l === 2){
+        return `Objet : 2ème relance – Facture ${invNum}
+
+${client},
+
+Malgré notre précédente relance, nous constatons que la facture ${invNum} émise le ${issued}${introHome} n’est toujours pas réglée. Le solde restant dû est de ${due}${echeancePart}.
+
+Merci de régulariser sous 48 heures, ou de nous communiquer immédiatement un échéancier ferme.
+
+Cordialement,
+`;
+      }
+      // level 3
+      return `Objet : 3ème relance avant mise en demeure – Facture ${invNum}
+
+${client},
+
+À ce jour, la facture ${invNum} émise le ${issued}${introHome} demeure impayée. Le solde restant dû est de ${due}${echeancePart}.
+
+Sans régularisation sous 48 heures, nous engagerons une mise en demeure, puis les démarches de recouvrement.
+
+Cordialement,
+`;
+    }
+
+    function buildMiseEnDemeureText(inv){
+      const client = String(inv.clientName || "Madame, Monsieur").trim() || "Madame, Monsieur";
+      const invNum = getInvoiceNumber(inv);
+      const due = fmtMoney(getDueAmount(inv));
+      const issued = getIssuedDate(inv);
+      const dueDate = getDueDate(inv);
+      const home = String(inv.homeName || "").trim();
+
+      const introHome = home ? ` concernant le logement « ${home} »` : "";
+      const echeancePart = (dueDate !== "—") ? ` (échéance : ${dueDate})` : "";
+
+      return `Objet : Mise en demeure de payer – Facture ${invNum}
+
+${client},
+
+Par la présente, nous vous mettons en demeure de régler la somme de ${due} au titre de la facture ${invNum} émise le ${issued}${introHome}${echeancePart}.
+
+À défaut de paiement intégral sous 8 jours à compter de la réception de ce message, nous nous réserverons le droit d’engager toute procédure de recouvrement (amiable et/ou judiciaire), ainsi que l’application des pénalités prévues.
+
+Cordialement,
+`;
+    }
+
+    async function copyToClipboard(text){
+      try{
+        await navigator.clipboard.writeText(String(text||""));
+        return true;
+      }catch{
+        // fallback
+        try{
+          const ta = document.createElement("textarea");
+          ta.value = String(text||"");
+          ta.style.position="fixed";
+          ta.style.left="-9999px";
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand("copy");
+          document.body.removeChild(ta);
+          return true;
+        }catch{ return false; }
+      }
+    }
+
+    let currentTextEmail = "";
+    let currentTextBody = "";
+
+    copyEmailBtn.addEventListener("click", async ()=>{
+      if(!currentTextEmail) return;
+      const ok = await copyToClipboard(currentTextEmail);
+      showAlert(ok ? "✅ Email copié." : "⛔ Impossible de copier.", ok);
+    });
+    copyTextBtn.addEventListener("click", async ()=>{
+      if(!currentTextBody) return;
+      const ok = await copyToClipboard(currentTextBody);
+      showAlert(ok ? "✅ Texte copié." : "⛔ Impossible de copier.", ok);
+    });
+
+    markSentBtn.addEventListener("click", async ()=>{
+      const docId = markSentBtn.getAttribute("data-docid");
+      const kind = markSentBtn.getAttribute("data-kind"); // RELANCE | MED
+      const level = Number(markSentBtn.getAttribute("data-level")||0);
+
+      if(!docId || !kind) return;
+
+      try{
+        hideAlert();
+        if(kind === "RELANCE"){
+          await markRelanceSent(docId, level);
+          showAlert("✅ Relance marquée comme envoyée.", true);
+        }else if(kind === "MED"){
+          await markMiseEnDemeureSent(docId);
+          showAlert("✅ Mise en demeure marquée comme envoyée.", true);
+        }
+        await refreshOne(docId);
+        closeTextModal();
+      }catch(e){
+        console.error(e);
+        showAlert("⛔ " + (e?.message || "Erreur mise à jour."));
+      }
+    });
+
+    async function showTextModal(kind, invoice, level=1){
+      const invNum = getInvoiceNumber(invoice);
+      const client = String(invoice.clientName || "—").trim();
+      const email = normalizeEmail(invoice.clientEmail || invoice.ownerEmail || "");
+      const due = fmtMoney(getDueAmount(invoice));
+      const dueDate = getDueDate(invoice);
+
+      modalTitleText.textContent = (kind === "MED") ? `Mise en demeure — ${invNum}` : `Relance ${level} — ${invNum}`;
+      modalSubtitleText.textContent = `${client} • Facture ${invNum}`;
+
+      kvClient.textContent = client || "—";
+      kvEmail.textContent = email || "—";
+      kvInv.textContent = invNum;
+      kvDue.textContent = due;
+      kvDueDate.textContent = dueDate;
+
+      currentTextEmail = email || "";
+      currentTextBody = (kind === "MED") ? buildMiseEnDemeureText(invoice) : buildRelanceText(level, invoice);
+
+      textBlock.textContent = currentTextBody;
+
+      // action : marquer comme envoyée (manuel)
+      markSentBtn.style.display = isActionable(invoice) ? "" : "none";
+      markSentBtn.textContent = (kind === "MED") ? "Marquer comme envoyée" : "Marquer comme envoyée";
+      markSentBtn.setAttribute("data-docid", invoice.id);
+      markSentBtn.setAttribute("data-kind", (kind === "MED") ? "MED" : "RELANCE");
+      markSentBtn.setAttribute("data-level", String(level||0));
+
+      openTextModal();
     }
 
     function render(){
@@ -852,16 +1091,8 @@
         const ts = getTs(x);
         const actionable = isActionable(x);
 
-        const lastRelanceDate =
-          (ts.relance3At && fmtDateFR(ts.relance3At) !== "—") ? fmtDateFR(ts.relance3At) :
-          (ts.relance2At && fmtDateFR(ts.relance2At) !== "—") ? fmtDateFR(ts.relance2At) :
-          (ts.relance1At && fmtDateFR(ts.relance1At) !== "—") ? fmtDateFR(ts.relance1At) :
-          "—";
-
+        const lastRelanceDate = lastRelanceDateFromTs(ts);
         const medDate = fmtDateFR(ts.miseEnDemeureAt);
-
-        const openFactureHref = `facture.html?docId=${encodeURIComponent(x.id)}`;
-        const openReglementHref = `reglement.html?docId=${encodeURIComponent(x.id)}`;
 
         const note = getRecNote(x);
 
@@ -912,18 +1143,15 @@
 
             <div class="k" style="min-width:340px; align-items:flex-end;">
               <div class="actionsBar">
-                <a class="btn primary" href="${openFactureHref}">Ouvrir</a>
-                <button class="btn" type="button" data-action="payments" data-id="${esc(x.id)}">Historique règlements</button>
+                <button class="btn" type="button" data-action="payments" data-id="${esc(x.id)}">Historique</button>
 
-                <a class="btn" href="${openReglementHref}" ${actionable ? "" : `aria-disabled="true"`}>Ajouter règlement</a>
+                <button class="btn primary" type="button" data-action="viewRelance" data-id="${esc(x.id)}" ${actionable ? "" : `aria-disabled="true"`}>
+                  Voir relance
+                </button>
 
-                <button class="btn" type="button" data-action="rel1" data-id="${esc(x.id)}" ${actionable ? "" : `aria-disabled="true"`}>Relance 1</button>
-                <button class="btn" type="button" data-action="rel2" data-id="${esc(x.id)}" ${actionable ? "" : `aria-disabled="true"`}>Relance 2</button>
-                <button class="btn" type="button" data-action="rel3" data-id="${esc(x.id)}" ${actionable ? "" : `aria-disabled="true"`}>Relance 3</button>
-
-                <button class="btn danger" type="button" data-action="med" data-id="${esc(x.id)}" ${actionable ? "" : `aria-disabled="true"`}>Mise en demeure</button>
-
-                <a class="btn" href="mise-en-demeure.html?docId=${encodeURIComponent(x.id)}" ${actionable ? "" : `aria-disabled="true"`}>PDF mise en demeure</a>
+                <button class="btn danger" type="button" data-action="viewMed" data-id="${esc(x.id)}" ${actionable ? "" : `aria-disabled="true"`}>
+                  Voir mise en demeure
+                </button>
               </div>
             </div>
           </div>
@@ -931,10 +1159,6 @@
           <div class="noteBox">
             <textarea class="textarea" data-note-id="${esc(x.id)}" placeholder="Note recouvrement (appel, SMS, mail, promesse de paiement…)">${esc(note)}</textarea>
             <button class="btn" type="button" data-action="saveNote" data-id="${esc(x.id)}">Enregistrer</button>
-          </div>
-
-          <div class="mini" style="margin-top:8px;">
-            Total TTC : <b>${fmtMoney(total)}</b> • Payé : <b>${fmtMoney(paid)}</b> • Reste dû : <b>${fmtMoney(due)}</b>
           </div>
         `;
 
@@ -947,28 +1171,14 @@
         const snap = await getDoc(doc(db, "users", uid));
         const data = snap.exists() ? (snap.data()||{}) : {};
         const name = String(data?.businessProfile?.companyName || "").trim();
-
-        const vat = data?.businessProfile?.vat || {};
-        vatEnabled = !!vat?.enabled;
-        vatRate = Number.isFinite(Number(vat?.rate)) ? Number(vat.rate) : 0;
-
         return name || "Conciergerie";
       }catch{
-        vatEnabled = false; vatRate = 0;
         return "Conciergerie";
       }
     }
 
-    function uniqMergeById(arr){
-      const m = new Map();
-      for(const x of arr){
-        if(x?.id) m.set(x.id, x);
-      }
-      return Array.from(m.values());
-    }
-
     async function loadInvoices(uid){
-      // vérité: type == INVOICE
+      // 1 seule vérité : type == INVOICE
       const qInv = query(
         collection(db, "salesDocuments"),
         where("conciergerieUid", "==", uid),
@@ -978,24 +1188,7 @@
         limit(500)
       );
       const snap = await getDocs(qInv);
-      const main = snap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
-
-      // fallback legacy docType (si tu as encore du INVOICE_EVENT)
-      let legacy = [];
-      try{
-        const qLegacy = query(
-          collection(db, "salesDocuments"),
-          where("conciergerieUid", "==", uid),
-          where("docType", "in", ["INVOICE_EVENT","INVOICE"]),
-          where("listable", "==", true),
-          orderBy("createdAt","desc"),
-          limit(500)
-        );
-        const snapL = await getDocs(qLegacy);
-        legacy = snapL.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
-      }catch{ legacy = []; }
-
-      all = uniqMergeById([...main, ...legacy]);
+      all = snap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
       render();
     }
 
@@ -1042,15 +1235,16 @@
           return;
         }
 
-        if(action === "rel1"){ await setRelance(docId, 1); showAlert("✅ Relance 1 enregistrée.", true); await refreshOne(docId); return; }
-        if(action === "rel2"){ await setRelance(docId, 2); showAlert("✅ Relance 2 enregistrée.", true); await refreshOne(docId); return; }
-        if(action === "rel3"){ await setRelance(docId, 3); showAlert("✅ Relance 3 enregistrée.", true); await refreshOne(docId); return; }
+        if(action === "viewRelance"){
+          // relance “proposée” = niveau suivant (min 1, max 3)
+          const current = getRelanceLevel(invoice);
+          const next = Math.min(3, Math.max(1, Number(current)+1));
+          await showTextModal("RELANCE", invoice, next);
+          return;
+        }
 
-        if(action === "med"){
-          // enregistre seulement (le PDF est dans mise-en-demeure.html)
-          await setMiseEnDemeure(docId);
-          showAlert("✅ Mise en demeure enregistrée (timestamp).", true);
-          await refreshOne(docId);
+        if(action === "viewMed"){
+          await showTextModal("MED", invoice, 0);
           return;
         }
       }catch(err){
