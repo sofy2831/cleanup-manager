@@ -1,4 +1,4 @@
-<!-- docs/recouvrement.html (FINAL v3.2 — + 2 boutons scope colorés "Fin de journée" (TODAY) / "En retard" (LATE), support ?scope=TODO|TODAY|LATE) -->
+<!-- docs/recouvrement.html (FINAL v3.3 — FIX page vide: scope temps désactivé par défaut + boutons TODAY/LATE colorés + support URL ?scope=TODAY|LATE) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -173,7 +173,7 @@
     }
     .btn[aria-disabled="true"]{ opacity:.45; pointer-events:none; }
 
-    /* ✅ Scope bar (boutons TODAY / LATE) */
+    /* ✅ Scope bar */
     .scopeBar{
       display:flex;
       gap:8px;
@@ -424,11 +424,10 @@
       <div class="alert" id="alertBox"></div>
 
       <div class="card">
-        <!-- ✅ Boutons scope -->
         <div class="scopeBar" aria-label="Filtres de priorité">
           <button class="btn warn" id="btnScopeToday" type="button">≤ fin de journée —</button>
           <button class="btn danger" id="btnScopeLate" type="button">En retard —</button>
-          <span class="badge" id="scopeHint" style="margin-left:auto;">Filtre : —</span>
+          <span class="badge" id="scopeHint" style="margin-left:auto;">Filtre : Aucun</span>
         </div>
 
         <div class="toolbar">
@@ -454,11 +453,11 @@
         </div>
 
         <div class="scopeHelp" id="scopeHelp">
-          Les scopes utilisent <b>recouvrement.nextActionAt</b> (to-do auto). Sans date planifiée → non inclus dans ces scopes.
+          Les boutons “≤ fin de journée” / “En retard” filtrent via <b>recouvrement.nextActionAt</b>. Sans date planifiée → la facture reste visible si aucun filtre temps n’est actif.
         </div>
 
         <div style="margin-top:10px;" class="mini">
-          Suivi des factures et relances. Les actions sont <b>désactivées</b> si la facture est soldée (PAID/CREDITED/CANCELLED ou reste dû = 0).
+          Les actions sont <b>désactivées</b> si la facture est soldée (PAID/CREDITED/CANCELLED ou reste dû = 0).
         </div>
       </div>
 
@@ -574,7 +573,6 @@
     const sumBar = document.getElementById("sumBar");
     const listBox = document.getElementById("listBox");
 
-    // ✅ scope buttons
     const btnScopeToday = document.getElementById("btnScopeToday");
     const btnScopeLate = document.getElementById("btnScopeLate");
     const scopeHint = document.getElementById("scopeHint");
@@ -614,10 +612,10 @@
     const RELANCE_GAP_DAYS = 7;
     const MED_DELAY_DAYS = 8;
 
-    // ✅ time scope: TODAY | LATE | TODO (TODO = TODAY+LATE)
-    let timeScope = "TODO";
-    const urlScope0 = (new URLSearchParams(location.search).get("scope") || "").toUpperCase().trim();
-    if(["TODAY","LATE","TODO"].includes(urlScope0)) timeScope = urlScope0;
+    // ✅ time scope: NONE (défaut) | TODAY | LATE
+    let timeScope = "NONE";
+    const urlScope = (new URLSearchParams(location.search).get("scope") || "").toUpperCase().trim();
+    if(["TODAY","LATE"].includes(urlScope)) timeScope = urlScope;
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -658,15 +656,9 @@
     }
     function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
 
-    // --- Crash trap: si ton script plante, tu le vois ---
-    window.addEventListener("error", (e)=>{
-      try{ showAlert("⛔ Erreur JS : " + (e?.message || "inconnue")); }catch{}
-    });
-    window.addEventListener("unhandledrejection", (e)=>{
-      try{ showAlert("⛔ Promise rejetée : " + (e?.reason?.message || e?.reason || "inconnue")); }catch{}
-    });
+    window.addEventListener("error", (e)=>{ try{ showAlert("⛔ Erreur JS : " + (e?.message || "inconnue")); }catch{} });
+    window.addEventListener("unhandledrejection", (e)=>{ try{ showAlert("⛔ Promise rejetée : " + (e?.reason?.message || e?.reason || "inconnue")); }catch{} });
 
-    // ---- Totaux robustes ----
     function computeHT(lines){
       if(!Array.isArray(lines)) return 0;
       return lines.reduce((s,l)=> s + (Number(l?.qty)||0) * (Number(l?.unitPrice)||0), 0);
@@ -682,21 +674,13 @@
       return ht + tva;
     }
 
-    // ---- Invoice helpers ----
-    function getInvoiceStatusRaw(x){
-      return String(x?.invoiceStatus||"").toUpperCase().trim();
-    }
-    function getInvoiceNumber(x){
-      const n = String(x?.invoiceNumber || "").trim();
-      return n || "—";
-    }
+    function getInvoiceStatusRaw(x){ return String(x?.invoiceStatus||"").toUpperCase().trim(); }
+    function getInvoiceNumber(x){ return String(x?.invoiceNumber || "").trim() || "—"; }
     function getRelanceLevel(x){
       const n = Number(x?.recouvrement?.relanceLevel ?? x?.relanceLevel ?? 0);
       return Number.isFinite(n) ? n : 0;
     }
-    function getRecMap(x){
-      return (x?.recouvrement && typeof x.recouvrement === "object") ? x.recouvrement : {};
-    }
+    function getRecMap(x){ return (x?.recouvrement && typeof x.recouvrement === "object") ? x.recouvrement : {}; }
     function getTs(x){
       const rec = getRecMap(x);
       return {
@@ -710,12 +694,7 @@
       const rec = getRecMap(x);
       return String(rec.recouvrementNote ?? x.recouvrementNote ?? "").trim();
     }
-
-    function getPaidAmount(x){
-      const direct = Number(x?.paidAmount);
-      if(Number.isFinite(direct)) return direct;
-      return 0;
-    }
+    function getPaidAmount(x){ return Number.isFinite(Number(x?.paidAmount)) ? Number(x.paidAmount) : 0; }
     function getTotalTTC(x){
       const n = Number(x?.totalTTC);
       if(Number.isFinite(n) && n > 0) return n;
@@ -735,7 +714,6 @@
       return !isClosedByStatus(x) && due > 0.000001;
     }
 
-    // ✅ nextActionAt (to-do auto)
     function toMillis(v){
       try{
         if(!v) return 0;
@@ -757,18 +735,18 @@
       return d.getTime();
     }
     function matchesTimeScope(x){
-      // timeScope = TODO | TODAY | LATE
-      const ms = getNextActionAtMs(x);
-      if(!ms) return false; // pas planifié => pas un "to-do"
+      if(timeScope === "NONE") return true; // ✅ comme avant => pas de page vide
       if(!isActionable(x)) return false;
+
+      const ms = getNextActionAtMs(x);
+      if(!ms) return false; // ✅ pour TODAY/LATE, on exige une date planifiée
 
       const now = Date.now();
       const eod = endOfDayMs();
 
       if(timeScope === "LATE") return ms <= now;
-      if(timeScope === "TODAY") return (ms > now && ms <= eod);
-      // TODO = tout ce qui est à faire avant fin de journée (inclut retard)
-      return ms <= eod;
+      // TODAY
+      return (ms > now && ms <= eod);
     }
 
     function badgePaidState(x){
@@ -814,7 +792,6 @@
     }
 
     function getFiltered(){
-      // ✅ on applique les scopes "fin de journée / en retard" en plus
       return all.filter(x => matchesTimeScope(x) && matchesScope(x) && matchesRelance(x) && matchesSearch(x));
     }
 
@@ -836,9 +813,7 @@
         const total = getTotalTTC(x);
         const paid = getPaidAmount(x);
         const due = Math.max(0, total - paid);
-        sumTTC += total;
-        sumPaid += paid;
-        sumDue += due;
+        sumTTC += total; sumPaid += paid; sumDue += due;
       }
       totalsCard.style.display = "block";
       sumBar.innerHTML = `
@@ -848,72 +823,54 @@
       `;
     }
 
-    function openPaymentsModal(){
-      modalMaskPayments.style.display = "flex";
-      modalMaskPayments.setAttribute("aria-hidden","false");
-    }
-    function closePaymentsModal(){
-      modalMaskPayments.style.display = "none";
-      modalMaskPayments.setAttribute("aria-hidden","true");
-      paymentsBody.innerHTML = "";
-    }
-    function openTextModal(){
-      modalMaskText.style.display = "flex";
-      modalMaskText.setAttribute("aria-hidden","false");
-    }
+    function openPaymentsModal(){ modalMaskPayments.style.display="flex"; modalMaskPayments.setAttribute("aria-hidden","false"); }
+    function closePaymentsModal(){ modalMaskPayments.style.display="none"; modalMaskPayments.setAttribute("aria-hidden","true"); paymentsBody.innerHTML=""; }
+    function openTextModal(){ modalMaskText.style.display="flex"; modalMaskText.setAttribute("aria-hidden","false"); }
     function closeTextModal(){
-      modalMaskText.style.display = "none";
+      modalMaskText.style.display="none";
       modalMaskText.setAttribute("aria-hidden","true");
-      textBlock.textContent = "—";
-      markSentBtn.style.display = "none";
+      textBlock.textContent="—";
+      markSentBtn.style.display="none";
       markSentBtn.removeAttribute("data-docid");
       markSentBtn.removeAttribute("data-kind");
       markSentBtn.removeAttribute("data-level");
-      openEmailBtn.href = "#";
+      openEmailBtn.href="#";
       openEmailBtn.setAttribute("aria-disabled","true");
     }
 
     closePaymentsBtn.addEventListener("click", closePaymentsModal);
-    modalMaskPayments.addEventListener("click", (e)=>{ if(e.target === modalMaskPayments) closePaymentsModal(); });
+    modalMaskPayments.addEventListener("click",(e)=>{ if(e.target===modalMaskPayments) closePaymentsModal(); });
 
     closeTextBtn.addEventListener("click", closeTextModal);
-    modalMaskText.addEventListener("click", (e)=>{ if(e.target === modalMaskText) closeTextModal(); });
+    modalMaskText.addEventListener("click",(e)=>{ if(e.target===modalMaskText) closeTextModal(); });
 
-    window.addEventListener("keydown", (e)=>{
-      if(e.key === "Escape"){
-        closePaymentsModal();
-        closeTextModal();
-      }
-    });
+    window.addEventListener("keydown",(e)=>{ if(e.key==="Escape"){ closePaymentsModal(); closeTextModal(); } });
 
     async function loadPaymentsForInvoice(docId){
       const payCol = collection(db, "salesDocuments", docId, "payments");
-
       try{
         const qPay = query(payCol, orderBy("dateReglement","desc"), limit(200));
         const snap = await getDocs(qPay);
-        return snap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
-      }catch(e){
+        return snap.docs.map(d => ({ id:d.id, ...(d.data()||{}) }));
+      }catch{
         const snap = await getDocs(payCol);
-        const arr = snap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
+        const arr = snap.docs.map(d => ({ id:d.id, ...(d.data()||{}) }));
         arr.sort((a,b)=>{
           const ta = a?.dateReglement?.toMillis?.() ? a.dateReglement.toMillis() : (a?.createdAt?.toMillis?.() ? a.createdAt.toMillis() : 0);
           const tb = b?.dateReglement?.toMillis?.() ? b.dateReglement.toMillis() : (b?.createdAt?.toMillis?.() ? b.createdAt.toMillis() : 0);
-          return tb - ta;
+          return tb-ta;
         });
         return arr.slice(0,200);
       }
     }
-
     function modeLabel(m){
       const x = String(m||"").toUpperCase();
-      if(x === "TRANSFER" || x === "VIREMENT") return "Virement";
-      if(x === "CASH" || x === "ESPECES") return "Espèces";
-      if(x === "CHEQUE" || x === "CHECK") return "Chèque";
-      if(x === "CARD" || x === "CB") return "Carte";
-      return m || "—";
+      if(x==="TRANSFER"||x==="VIREMENT") return "Virement";
+      if(x==="CASH"||x==="ESPECES") return "Espèces";
+      if(x==="CHEQUE"||x==="CHECK") return "Chèque";
+      if(x==="CARD"||x==="CB") return "Carte";
+      return m||"—";
     }
-
     async function showPaymentsModal(invoice){
       const docId = invoice.id;
       const invNum = getInvoiceNumber(invoice);
@@ -921,18 +878,12 @@
 
       modalTitlePayments.textContent = `Historique règlements — ${invNum}`;
       modalSubtitlePayments.textContent = `${client} • Facture ${invNum}`;
-
       paymentsBody.innerHTML = `<tr><td colspan="5" style="color:#666;">Chargement…</td></tr>`;
       openPaymentsModal();
 
       let pays = [];
-      try{
-        pays = await loadPaymentsForInvoice(docId);
-      }catch(e){
-        console.error(e);
-        paymentsBody.innerHTML = `<tr><td colspan="5" style="color:#666;">Impossible de charger les paiements.</td></tr>`;
-        return;
-      }
+      try{ pays = await loadPaymentsForInvoice(docId); }
+      catch{ paymentsBody.innerHTML = `<tr><td colspan="5" style="color:#666;">Impossible de charger les paiements.</td></tr>`; return; }
 
       paymentsBody.innerHTML = "";
       if(!pays.length){
@@ -959,26 +910,21 @@
 
       const total = getTotalTTC(invoice);
       const paid = getPaidAmount(invoice);
-      const due = Math.max(0, total - paid);
-
+      const due = Math.max(0, total-paid);
       mTotalTtc.textContent = fmtMoney(total);
       mPaid.textContent = fmtMoney(paid);
       mDue.textContent = fmtMoney(due);
     }
 
     async function saveRecNote(docId, note){
-      const ref = doc(db, "salesDocuments", docId);
-      await updateDoc(ref, {
+      await updateDoc(doc(db,"salesDocuments",docId), {
         "recouvrement.recouvrementNote": String(note||"").trim(),
         "recouvrement.updatedAt": serverTimestamp()
       });
     }
-
     function tsPlusDays(days){
-      const ms = Date.now() + (Number(days)||0) * DAY_MS;
-      return Timestamp.fromMillis(ms);
+      return Timestamp.fromMillis(Date.now() + (Number(days)||0) * DAY_MS);
     }
-
     async function markRelanceSent(docId, level){
       const ref = doc(db, "salesDocuments", docId);
       const n = Number(level||0);
@@ -988,28 +934,18 @@
         "recouvrement.relanceLevel": n,
         "recouvrement.updatedAt": now,
       };
+      if(n===1) patch["recouvrement.relance1At"]=now;
+      if(n===2) patch["recouvrement.relance2At"]=now;
+      if(n===3) patch["recouvrement.relance3At"]=now;
 
-      if(n === 1) patch["recouvrement.relance1At"] = now;
-      if(n === 2) patch["recouvrement.relance2At"] = now;
-      if(n === 3) patch["recouvrement.relance3At"] = now;
-
-      if(n === 1){
-        patch["recouvrement.nextAction"] = "RELANCE_2";
-        patch["recouvrement.nextActionAt"] = tsPlusDays(RELANCE_GAP_DAYS);
-      }else if(n === 2){
-        patch["recouvrement.nextAction"] = "RELANCE_3";
-        patch["recouvrement.nextActionAt"] = tsPlusDays(RELANCE_GAP_DAYS);
-      }else if(n === 3){
-        patch["recouvrement.nextAction"] = "MED";
-        patch["recouvrement.nextActionAt"] = tsPlusDays(RELANCE_GAP_DAYS);
-      }
+      if(n===1){ patch["recouvrement.nextAction"]="RELANCE_2"; patch["recouvrement.nextActionAt"]=tsPlusDays(RELANCE_GAP_DAYS); }
+      else if(n===2){ patch["recouvrement.nextAction"]="RELANCE_3"; patch["recouvrement.nextActionAt"]=tsPlusDays(RELANCE_GAP_DAYS); }
+      else if(n===3){ patch["recouvrement.nextAction"]="MED"; patch["recouvrement.nextActionAt"]=tsPlusDays(RELANCE_GAP_DAYS); }
 
       await updateDoc(ref, patch);
     }
-
     async function markMiseEnDemeureSent(docId){
-      const ref = doc(db, "salesDocuments", docId);
-      await updateDoc(ref, {
+      await updateDoc(doc(db,"salesDocuments",docId), {
         "recouvrement.miseEnDemeureAt": serverTimestamp(),
         "recouvrement.nextAction": "INJONCTION",
         "recouvrement.nextActionAt": tsPlusDays(MED_DELAY_DAYS),
@@ -1018,46 +954,38 @@
     }
 
     function lastRelanceDateFromTs(ts){
-      const a3 = fmtDateFR(ts.relance3At);
-      const a2 = fmtDateFR(ts.relance2At);
-      const a1 = fmtDateFR(ts.relance1At);
-      if(a3 !== "—") return a3;
-      if(a2 !== "—") return a2;
-      if(a1 !== "—") return a1;
+      const a3 = fmtDateFR(ts.relance3At), a2 = fmtDateFR(ts.relance2At), a1 = fmtDateFR(ts.relance1At);
+      if(a3!=="—") return a3;
+      if(a2!=="—") return a2;
+      if(a1!=="—") return a1;
       return "—";
     }
-
     function sentBadges(ts){
-      const a1 = fmtDateFR(ts.relance1At);
-      const a2 = fmtDateFR(ts.relance2At);
-      const a3 = fmtDateFR(ts.relance3At);
-
-      const parts = [];
-      if(a1 !== "—") parts.push(`<span class="badge ok">R1 envoyée • ${esc(a1)}</span>`);
-      if(a2 !== "—") parts.push(`<span class="badge ok">R2 envoyée • ${esc(a2)}</span>`);
-      if(a3 !== "—") parts.push(`<span class="badge ok">R3 envoyée • ${esc(a3)}</span>`);
+      const a1=fmtDateFR(ts.relance1At), a2=fmtDateFR(ts.relance2At), a3=fmtDateFR(ts.relance3At);
+      const parts=[];
+      if(a1!=="—") parts.push(`<span class="badge ok">R1 envoyée • ${esc(a1)}</span>`);
+      if(a2!=="—") parts.push(`<span class="badge ok">R2 envoyée • ${esc(a2)}</span>`);
+      if(a3!=="—") parts.push(`<span class="badge ok">R3 envoyée • ${esc(a3)}</span>`);
       return parts.length ? parts.join(" ") : `<span class="badge">Aucune relance envoyée</span>`;
     }
 
-    // ---- Détection PRO vs PARTICULIER (robuste + heuristique) ----
     function isProClient(inv){
       const ct = String(inv?.clientType || inv?.customerType || inv?.buyerType || "").toUpperCase().trim();
-      if(ct === "PRO" || ct === "B2B") return true;
-      if(ct === "PARTICULIER" || ct === "B2C") return false;
+      if(ct==="PRO"||ct==="B2B") return true;
+      if(ct==="PARTICULIER"||ct==="B2C") return false;
 
       const flag = inv?.isPro ?? inv?.clientIsPro ?? inv?.professional ?? null;
-      if(flag === true) return true;
-      if(flag === false) return false;
+      if(flag===true) return true;
+      if(flag===false) return false;
 
       const siret = String(inv?.clientSiret || inv?.siret || inv?.buyerSiret || "").replace(/\s+/g,"").trim();
-      if(siret && siret.length >= 9) return true;
+      if(siret && siret.length>=9) return true;
 
       const company = String(inv?.clientCompanyName || inv?.companyName || "").trim();
       if(company) return true;
 
       return false;
     }
-
     function proClauseL44110(){
       return `\nConformément à l’article L441-10 du Code de commerce, des pénalités de retard sont exigibles à compter du lendemain de la date d’échéance, ainsi qu’une indemnité forfaitaire de 40 € pour frais de recouvrement.\n`;
     }
@@ -1147,10 +1075,7 @@ ${pro ? proClauseL44110().trimEnd() : ""}`.trim();
     }
 
     function makeMailto(email, subject, body){
-      const to = encodeURIComponent(email || "");
-      const subj = encodeURIComponent(subject || "");
-      const txt = encodeURIComponent(body || "");
-      return `mailto:${to}?subject=${subj}&body=${txt}`;
+      return `mailto:${encodeURIComponent(email||"")}?subject=${encodeURIComponent(subject||"")}&body=${encodeURIComponent(body||"")}`;
     }
 
     markSentBtn.addEventListener("click", async ()=>{
@@ -1161,13 +1086,8 @@ ${pro ? proClauseL44110().trimEnd() : ""}`.trim();
 
       try{
         hideAlert();
-        if(kind === "RELANCE"){
-          await markRelanceSent(docId, level);
-          showAlert("✅ Relance marquée comme envoyée.", true);
-        }else if(kind === "MED"){
-          await markMiseEnDemeureSent(docId);
-          showAlert("✅ Mise en demeure marquée comme envoyée.", true);
-        }
+        if(kind === "RELANCE"){ await markRelanceSent(docId, level); showAlert("✅ Relance marquée comme envoyée.", true); }
+        else if(kind === "MED"){ await markMiseEnDemeureSent(docId); showAlert("✅ Mise en demeure marquée comme envoyée.", true); }
         await refreshOne(docId);
         closeTextModal();
       }catch(e){
@@ -1197,9 +1117,7 @@ ${pro ? proClauseL44110().trimEnd() : ""}`.trim();
       kvType.textContent = typeLabel;
 
       const body = (kind === "MED") ? buildMiseEnDemeureText(invoice) : buildRelanceText(level, invoice);
-      const subject = (kind === "MED")
-        ? `Mise en demeure de payer – Facture ${invNum}`
-        : `Relance ${level} – Facture ${invNum}`;
+      const subject = (kind === "MED") ? `Mise en demeure de payer – Facture ${invNum}` : `Relance ${level} – Facture ${invNum}`;
 
       textBlock.textContent = body;
 
@@ -1220,7 +1138,6 @@ ${pro ? proClauseL44110().trimEnd() : ""}`.trim();
     }
 
     function renderScopeButtons(){
-      // counts calculés sur ALL (sans search/relance) mais seulement "to-do auto"
       const now = Date.now();
       const eod = endOfDayMs();
 
@@ -1232,46 +1149,39 @@ ${pro ? proClauseL44110().trimEnd() : ""}`.trim();
         if(ms <= now) late++;
         else if(ms <= eod) today++;
       }
-
       btnScopeLate.textContent = `En retard ${late ? "• "+late : "• 0"}`;
       btnScopeToday.textContent = `≤ fin de journée ${today ? "• "+today : "• 0"}`;
 
-      // active state
       btnScopeLate.classList.toggle("active", timeScope === "LATE");
       btnScopeToday.classList.toggle("active", timeScope === "TODAY");
 
-      // hint
-      if(timeScope === "LATE"){
-        scopeHint.textContent = "Filtre : En retard";
-        scopeHint.className = "badge bad";
-      }else if(timeScope === "TODAY"){
-        scopeHint.textContent = "Filtre : Fin de journée";
-        scopeHint.className = "badge warn";
-      }else{
-        // TODO = mélange (utile si tu arrives depuis dashboard ?scope=TODO)
-        scopeHint.textContent = "Filtre : To-do (aujourd’hui + retard)";
-        scopeHint.className = "badge";
-      }
+      if(timeScope === "LATE"){ scopeHint.textContent="Filtre : En retard"; scopeHint.className="badge bad"; }
+      else if(timeScope === "TODAY"){ scopeHint.textContent="Filtre : Fin de journée"; scopeHint.className="badge warn"; }
+      else { scopeHint.textContent="Filtre : Aucun"; scopeHint.className="badge"; }
     }
 
     function setTimeScope(newScope){
       const s = String(newScope||"").toUpperCase().trim();
-      if(!["TODAY","LATE","TODO"].includes(s)) return;
-
+      if(!["TODAY","LATE","NONE"].includes(s)) return;
       timeScope = s;
 
-      // ✅ garde l’URL propre (sans reload)
+      // URL propre
       const u = new URL(location.href);
-      u.searchParams.set("scope", s);
+      if(s === "NONE") u.searchParams.delete("scope");
+      else u.searchParams.set("scope", s);
       history.replaceState({}, "", u.toString());
 
       renderScopeButtons();
       render();
     }
 
-    // boutons
-    btnScopeLate.addEventListener("click", ()=> setTimeScope("LATE"));
-    btnScopeToday.addEventListener("click", ()=> setTimeScope("TODAY"));
+    btnScopeLate.addEventListener("click", ()=>{
+      // toggle
+      setTimeScope(timeScope === "LATE" ? "NONE" : "LATE");
+    });
+    btnScopeToday.addEventListener("click", ()=>{
+      setTimeScope(timeScope === "TODAY" ? "NONE" : "TODAY");
+    });
 
     function render(){
       const filtered = getFiltered();
@@ -1285,7 +1195,7 @@ ${pro ? proClauseL44110().trimEnd() : ""}`.trim();
             <div style="margin-top:6px; font-size:12px; color:#666; font-weight:800;">
               Ajuste les filtres ou la recherche.
               <div style="margin-top:6px; color:#666;">
-                Astuce : ces scopes affichent uniquement les factures avec <b>recouvrement.nextActionAt</b>.
+                Note : si tu as activé “≤ fin de journée / En retard”, seules les factures avec <b>recouvrement.nextActionAt</b> s’affichent.
               </div>
             </div>
           </div>`;
@@ -1308,7 +1218,6 @@ ${pro ? proClauseL44110().trimEnd() : ""}`.trim();
 
         const lastRelanceDate = lastRelanceDateFromTs(ts);
         const medDate = fmtDateFR(ts.miseEnDemeureAt);
-
         const note = getRecNote(x);
 
         const card = document.createElement("div");
@@ -1400,7 +1309,6 @@ ${pro ? proClauseL44110().trimEnd() : ""}`.trim();
           enabled: !!vat.enabled,
           rate: Number.isFinite(Number(vat.rate)) ? Number(vat.rate) : 0
         };
-
         return name;
       }catch{
         vatCfg = { enabled:false, rate:0 };
@@ -1416,19 +1324,11 @@ ${pro ? proClauseL44110().trimEnd() : ""}`.trim();
         const s = String(v).trim();
         if(!s) return 0;
         const d = new Date(s);
-        if(!isNaN(d.getTime())) return d.getTime();
-        return 0;
+        return !isNaN(d.getTime()) ? d.getTime() : 0;
       }catch{ return 0; }
     }
-
     function createdAtMs(x){
-      const a = toMs(x?.createdAt);
-      if(a) return a;
-      const b = toMs(x?.createdAtMs);
-      if(b) return b;
-      const c = toMs(x?.snapAtMs);
-      if(c) return c;
-      return 0;
+      return toMs(x?.createdAt) || toMs(x?.createdAtMs) || toMs(x?.snapAtMs) || 0;
     }
 
     async function loadInvoices(uid){
@@ -1439,12 +1339,10 @@ ${pro ? proClauseL44110().trimEnd() : ""}`.trim();
       );
 
       const snap = await getDocs(qAll);
-      const allDocs = snap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
+      const allDocs = snap.docs.map(d => ({ id:d.id, ...(d.data()||{}) }));
 
       const filtered = allDocs.filter(x => {
-        const listable = (x?.listable !== false);
-        if(!listable) return false;
-
+        if(x?.listable === false) return false;
         const type = String(x?.type || "").toUpperCase().trim();
         const docType = String(x?.docType || "").toUpperCase().trim();
         return (type === "INVOICE" || docType === "INVOICE_EVENT" || docType === "INVOICE");
@@ -1457,30 +1355,23 @@ ${pro ? proClauseL44110().trimEnd() : ""}`.trim();
         seen.add(x.id);
         unique.push(x);
       }
-
-      unique.sort((a,b) => createdAtMs(b) - createdAtMs(a));
+      unique.sort((a,b)=> createdAtMs(b)-createdAtMs(a));
 
       all = unique;
-
-      // ✅ initial scope: si on arrive avec ?scope=TODO => on reste TODO, sinon TODAY/LATE
       renderScopeButtons();
-
       render();
 
-      if(!all.length){
-        showAlert("Aucune facture trouvée. Vérifie : conciergerieUid + type:'INVOICE' (ou docType:'INVOICE').", true);
-      }else{
-        hideAlert();
-      }
+      if(!all.length) showAlert("Aucune facture trouvée. Vérifie : conciergerieUid + type:'INVOICE' (ou docType:'INVOICE').", true);
+      else hideAlert();
     }
 
     async function refreshOne(docId){
       try{
         const s = await getDoc(doc(db,"salesDocuments", docId));
         if(!s.exists()) return;
-        const updated = { id: s.id, ...(s.data()||{}) };
-        all = all.map(x => x.id === docId ? updated : x);
-        all.sort((a,b) => createdAtMs(b) - createdAtMs(a));
+        const updated = { id:s.id, ...(s.data()||{}) };
+        all = all.map(x => x.id===docId ? updated : x);
+        all.sort((a,b)=> createdAtMs(b)-createdAtMs(a));
         renderScopeButtons();
         render();
       }catch(e){
@@ -1499,11 +1390,7 @@ ${pro ? proClauseL44110().trimEnd() : ""}`.trim();
       const invoice = all.find(x => x.id === docId);
       if(!invoice) return;
 
-      if(action === "payments"){
-        await showPaymentsModal(invoice);
-        return;
-      }
-
+      if(action === "payments"){ await showPaymentsModal(invoice); return; }
       if(btn.getAttribute("aria-disabled") === "true") return;
 
       try{
@@ -1546,20 +1433,9 @@ ${pro ? proClauseL44110().trimEnd() : ""}`.trim();
       helloLine.textContent = "Bonjour,";
       companyLine.textContent = await loadCompanyNameAndVat(user.uid);
 
-      // ✅ si on arrive depuis dashboard scope=TODO : on garde TODO
-      // sinon, si pas de scope en URL, on force TODAY par défaut (plus utile que "vide")
-      const hasScopeParam = new URLSearchParams(location.search).has("scope");
-      if(!hasScopeParam){
-        timeScope = "TODAY";
-        const u = new URL(location.href);
-        u.searchParams.set("scope","TODAY");
-        history.replaceState({}, "", u.toString());
-      }
-
       hideAlert();
-      try{
-        await loadInvoices(user.uid);
-      }catch(e){
+      try{ await loadInvoices(user.uid); }
+      catch(e){
         console.error(e);
         showAlert("⛔ Erreur chargement recouvrement : " + (e?.message || "inconnue"));
       }
