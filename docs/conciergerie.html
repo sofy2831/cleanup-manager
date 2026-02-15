@@ -1,4 +1,4 @@
-<!-- docs/conciergerie.html (COMPLET + BADGES + nom conciergerie depuis users/{uid}.businessProfile.companyName) -->
+<!-- docs/conciergerie.html (COMPLET + BADGES + bloc Recouvrement + scope TODAY/LATE) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -21,6 +21,7 @@
       --border: rgba(122,92,255,0.18);
       --bad:#b3261e;
       --ok:#1b8f4d;
+      --warn:#b06b00;
     }
 
     body{
@@ -152,6 +153,8 @@
       border-radius:999px;
       white-space:nowrap;
     }
+    .mini-badge.bad{ color:var(--bad); border-color: rgba(179,38,30,0.25); }
+    .mini-badge.warn{ color:var(--warn); border-color: rgba(176,107,0,0.25); }
     .dot{
       width:8px;height:8px;border-radius:50%;
       background: var(--ok);
@@ -231,6 +234,13 @@
       background:linear-gradient(90deg,var(--violet-main),var(--violet-dark));
       color:#fff;
       box-shadow:0 12px 24px rgba(0,0,0,0.10);
+      white-space:nowrap;
+    }
+    .cta.secondary{
+      background:#fff;
+      color:var(--violet-main);
+      border:1px solid var(--border);
+      box-shadow:0 8px 18px rgba(0,0,0,0.06);
     }
 
     /* Légal */
@@ -300,6 +310,14 @@
       box-shadow:0 8px 18px rgba(0,0,0,0.06);
       white-space:nowrap;
     }
+
+    /* Recouvrement: sous-actions compactes */
+    .subActions{
+      display:flex;
+      gap:8px;
+      flex-wrap:wrap;
+    }
+    .subActions a{ flex: 1 1 auto; }
 
     /* Bottom nav */
     .bottom-nav{
@@ -372,7 +390,6 @@
     <div class="subtitle">Tableau de bord conciergerie</div>
 
     <div class="helloLine" id="helloLine">Bonjour,</div>
-    <!-- ✅ ici on met la raison sociale -->
     <div class="emailLine" id="companyLine">—</div>
 
     <!-- ✅ BADGES -->
@@ -417,11 +434,12 @@
         </div>
       </div>
 
+      <!-- ✅ On remplace "Règlements" par "Recouvrement" + mini compteur -->
       <div class="stat">
-        <div class="label">Règlements<br>(à traiter)</div>
+        <div class="label">Recouvrement<br>(à faire)</div>
         <div class="value">
-          <span id="statReglements">—</span>
-          <span class="mini-badge">suivi</span>
+          <span id="statRecouvrement">—</span>
+          <span class="mini-badge warn" id="statRecouvrementHint">relances</span>
         </div>
       </div>
     </section>
@@ -445,6 +463,25 @@
         <h2>Comptabilité</h2>
         <p>Devis • Factures • Règlements • Export CSV.</p>
         <a class="cta" href="compta.html">Comptabilité</a>
+      </div>
+
+      <!-- ✅ NOUVEAU: bloc recouvrement "to-do" directement sur dashboard -->
+      <div class="card">
+        <h2>
+          Recouvrement
+          <span class="mini-badge warn" id="recBadge">—</span>
+        </h2>
+        <p>Relances à envoyer aujourd’hui, et dossiers en retard (nextAction dépassée).</p>
+
+        <div class="subActions">
+          <a class="cta" id="btnRecToday" href="recouvrement.html?scope=TODAY">À faire aujourd’hui</a>
+          <a class="cta secondary" id="btnRecLate" href="recouvrement.html?scope=LATE">En retard</a>
+        </div>
+
+        <div style="font-size:12px;color:#666;font-weight:800;line-height:1.35;">
+          <span id="recLine1">—</span><br>
+          <span id="recLine2">—</span>
+        </div>
       </div>
 
       <div class="card">
@@ -521,7 +558,13 @@
     const statLogements = document.getElementById("statLogements");
     const statHomesNoAccount = document.getElementById("statHomesNoAccount");
     const statAgents = document.getElementById("statAgents");
-    const statReglements = document.getElementById("statReglements");
+
+    // ✅ Recouvrement widgets
+    const statRecouvrement = document.getElementById("statRecouvrement");
+    const statRecouvrementHint = document.getElementById("statRecouvrementHint");
+    const recBadge = document.getElementById("recBadge");
+    const recLine1 = document.getElementById("recLine1");
+    const recLine2 = document.getElementById("recLine2");
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -614,7 +657,98 @@
       setStat(statLogements, homes.size);
       setStat(statHomesNoAccount, homesNoOwner);
       setStat(statAgents, agents.size);
-      setStat(statReglements, 0);
+    }
+
+    // ✅ Recouvrement: compter les factures à faire aujourd’hui / en retard
+    function toMillis(v){
+      try{
+        if(!v) return 0;
+        if(v?.toDate?.()) return v.toDate().getTime();
+        if(typeof v === "number") return v;
+        const s = String(v).trim();
+        if(!s) return 0;
+        const d = new Date(s);
+        return isNaN(d.getTime()) ? 0 : d.getTime();
+      }catch{ return 0; }
+    }
+    function isClosedByStatus(x){
+      const st = String(x?.invoiceStatus||"").toUpperCase().trim();
+      return ["PAID","CREDITED","CANCELLED"].includes(st);
+    }
+    function getDueAmount(x){
+      const total = Number(x?.totalTTC);
+      const paid = Number(x?.paidAmount);
+      const t = Number.isFinite(total) ? total : 0;
+      const p = Number.isFinite(paid) ? paid : 0;
+      return Math.max(0, t - p);
+    }
+    function isActionable(x){
+      const due = getDueAmount(x);
+      return !isClosedByStatus(x) && due > 0.000001;
+    }
+    function getNextActionAtMs(x){
+      const rec = (x?.recouvrement && typeof x.recouvrement === "object") ? x.recouvrement : {};
+      return toMillis(rec.nextActionAt);
+    }
+
+    async function loadRecouvrementTodo(user){
+      const uid = user.uid;
+
+      // On limite à 300 (suffisant pour un dashboard). On filtrera côté client.
+      const qInv = query(
+        collection(db, "salesDocuments"),
+        where("conciergerieUid", "==", uid),
+        limit(300)
+      );
+
+      const snap = await getDocs(qInv);
+      const docs = snap.docs.map(d => ({ id:d.id, ...(d.data()||{}) }));
+
+      // garder seulement factures
+      const invoices = docs.filter(x=>{
+        const listable = (x?.listable !== false);
+        if(!listable) return false;
+
+        const type = String(x?.type || "").toUpperCase().trim();
+        const docType = String(x?.docType || "").toUpperCase().trim();
+        const isInvoice = (type === "INVOICE" || docType === "INVOICE_EVENT" || docType === "INVOICE");
+        return isInvoice;
+      });
+
+      const now = Date.now();
+      // TODAY = nextActionAt <= fin de journée
+      const endOfDay = new Date();
+      endOfDay.setHours(23,59,59,999);
+      const eod = endOfDay.getTime();
+
+      let today = 0;
+      let late = 0;
+
+      for(const inv of invoices){
+        if(!isActionable(inv)) continue;
+
+        const ms = getNextActionAtMs(inv);
+        if(!ms) continue; // pas planifié => pas un "to-do" automatique
+        if(ms <= now) late++;
+        else if(ms <= eod) today++;
+      }
+
+      const total = today + late;
+      setStat(statRecouvrement, total);
+      recBadge.textContent = total + " à faire";
+
+      // petite explication lisible
+      recLine1.textContent = `Aujourd’hui : ${today} • En retard : ${late}`;
+      recLine2.textContent = total ? "Ouvre Recouvrement pour traiter et marquer “envoyée”." : "Rien à faire (pour le moment).";
+
+      // hint mini badge
+      if(late > 0){
+        statRecouvrementHint.textContent = "retard";
+        statRecouvrementHint.classList.add("bad");
+      }else{
+        statRecouvrementHint.textContent = "relances";
+        statRecouvrementHint.classList.remove("bad");
+      }
     }
 
     logoutBtn.addEventListener("click", async ()=>{
@@ -647,7 +781,16 @@
         setStat(statLogements, NaN);
         setStat(statHomesNoAccount, NaN);
         setStat(statAgents, NaN);
-        setStat(statReglements, NaN);
+      }
+
+      try{
+        await loadRecouvrementTodo(user);
+      }catch(e){
+        // ne bloque pas le dashboard
+        setStat(statRecouvrement, NaN);
+        recBadge.textContent = "—";
+        recLine1.textContent = "Impossible de charger le recouvrement.";
+        recLine2.textContent = "";
       }
     });
   </script>
