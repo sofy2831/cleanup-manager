@@ -1,4 +1,4 @@
-<!-- docs/conciergerie.html (COMPLET + BADGES + bloc Recouvrement + scope TODAY/LATE) -->
+<!-- docs/conciergerie.html (FINAL — 1 seul bouton dashboard -> recouvrement.html?scope=TODO, recouvrement gère TODAY/LATE) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -311,14 +311,6 @@
       white-space:nowrap;
     }
 
-    /* Recouvrement: sous-actions compactes */
-    .subActions{
-      display:flex;
-      gap:8px;
-      flex-wrap:wrap;
-    }
-    .subActions a{ flex: 1 1 auto; }
-
     /* Bottom nav */
     .bottom-nav{
       position: fixed;
@@ -434,7 +426,7 @@
         </div>
       </div>
 
-      <!-- ✅ On remplace "Règlements" par "Recouvrement" + mini compteur -->
+      <!-- ✅ Recouvrement (badge) -->
       <div class="stat">
         <div class="label">Recouvrement<br>(à faire)</div>
         <div class="value">
@@ -465,18 +457,15 @@
         <a class="cta" href="compta.html">Comptabilité</a>
       </div>
 
-      <!-- ✅ NOUVEAU: bloc recouvrement "to-do" directement sur dashboard -->
+      <!-- ✅ Recouvrement: 1 SEUL bouton -->
       <div class="card">
         <h2>
           Recouvrement
           <span class="mini-badge warn" id="recBadge">—</span>
         </h2>
-        <p>Relances à envoyer aujourd’hui, et dossiers en retard (nextAction dépassée).</p>
+        <p>Relances à envoyer aujourd’hui et dossiers en retard (nextAction dépassée).</p>
 
-        <div class="subActions">
-          <a class="cta" id="btnRecToday" href="recouvrement.html?scope=TODAY">À faire aujourd’hui</a>
-          <a class="cta secondary" id="btnRecLate" href="recouvrement.html?scope=LATE">En retard</a>
-        </div>
+        <a class="cta" id="btnRecTodo" href="recouvrement.html?scope=TODO">Ouvrir recouvrement</a>
 
         <div style="font-size:12px;color:#666;font-weight:800;line-height:1.35;">
           <span id="recLine1">—</span><br>
@@ -659,7 +648,7 @@
       setStat(statAgents, agents.size);
     }
 
-    // ✅ Recouvrement: compter les factures à faire aujourd’hui / en retard
+    // ✅ Recouvrement: compter les factures à faire (TODAY + LATE)
     function toMillis(v){
       try{
         if(!v) return 0;
@@ -694,7 +683,7 @@
     async function loadRecouvrementTodo(user){
       const uid = user.uid;
 
-      // On limite à 300 (suffisant pour un dashboard). On filtrera côté client.
+      // Dashboard = rapide : on limite et on filtre côté client
       const qInv = query(
         collection(db, "salesDocuments"),
         where("conciergerieUid", "==", uid),
@@ -711,12 +700,10 @@
 
         const type = String(x?.type || "").toUpperCase().trim();
         const docType = String(x?.docType || "").toUpperCase().trim();
-        const isInvoice = (type === "INVOICE" || docType === "INVOICE_EVENT" || docType === "INVOICE");
-        return isInvoice;
+        return (type === "INVOICE" || docType === "INVOICE_EVENT" || docType === "INVOICE");
       });
 
       const now = Date.now();
-      // TODAY = nextActionAt <= fin de journée
       const endOfDay = new Date();
       endOfDay.setHours(23,59,59,999);
       const eod = endOfDay.getTime();
@@ -728,20 +715,18 @@
         if(!isActionable(inv)) continue;
 
         const ms = getNextActionAtMs(inv);
-        if(!ms) continue; // pas planifié => pas un "to-do" automatique
+        if(!ms) continue; // pas planifié => pas un "to-do" auto
         if(ms <= now) late++;
         else if(ms <= eod) today++;
       }
 
       const total = today + late;
       setStat(statRecouvrement, total);
-      recBadge.textContent = total + " à faire";
 
-      // petite explication lisible
+      recBadge.textContent = total === 0 ? "0" : String(total);
       recLine1.textContent = `Aujourd’hui : ${today} • En retard : ${late}`;
       recLine2.textContent = total ? "Ouvre Recouvrement pour traiter et marquer “envoyée”." : "Rien à faire (pour le moment).";
 
-      // hint mini badge
       if(late > 0){
         statRecouvrementHint.textContent = "retard";
         statRecouvrementHint.classList.add("bad");
@@ -786,7 +771,6 @@
       try{
         await loadRecouvrementTodo(user);
       }catch(e){
-        // ne bloque pas le dashboard
         setStat(statRecouvrement, NaN);
         recBadge.textContent = "—";
         recLine1.textContent = "Impossible de charger le recouvrement.";
