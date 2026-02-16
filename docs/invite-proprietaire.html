@@ -502,40 +502,38 @@
       }
     }
 
-    // ✅ FIX LINKING: ownerUid = ownerDocId
-    async function autoLinkHomesForOwner(conciergerieUid, emailLower, tokenValue, ownerDocId){
-      const qH = query(
-        collection(db, "homes"),
-        where("conciergerieUid", "==", String(conciergerieUid)),
-        where("pendingOwnerEmail", "==", String(emailLower)),
-        where("pendingInviteToken", "==", String(tokenValue))
-      );
+    // ✅ homes: ownerUid = auth.uid, ownerDocId = owners/{docId}
+async function autoLinkHomesForOwner(conciergerieUid, emailLower, tokenValue, ownerDocId, ownerUid){
+  const qH = query(
+    collection(db, "homes"),
+    where("conciergerieUid", "==", String(conciergerieUid)),
+    where("pendingOwnerEmail", "==", String(emailLower)),
+    where("pendingInviteToken", "==", String(tokenValue))
+  );
 
-      const snap = await getDocs(qH);
-      if(snap.empty) return 0;
+  const snap = await getDocs(qH);
+  if(snap.empty) return 0;
 
-      const batch = writeBatch(db);
-      let count = 0;
+  const batch = writeBatch(db);
+  let count = 0;
 
-      snap.docs.forEach(d=>{
-        batch.update(d.ref, {
-          conciergerieUid: String(conciergerieUid),
+  snap.docs.forEach(d=>{
+    batch.update(d.ref, {
+      // ✅ règles homes finalize link
+      ownerUid: String(ownerUid),       // = request.auth.uid
+      ownerDocId: String(ownerDocId),   // = owners docId
 
-          // ✅ source de vérité côté homes = owners/{ownerDocId}
-          ownerUid: String(ownerDocId),   // compat
-          ownerDocId: String(ownerDocId),
+      ownerLinkStatus: "LINKED",
+      pendingOwnerEmail: "",
+      pendingInviteToken: "",
+      updatedAt: serverTimestamp()
+    });
+    count++;
+  });
 
-          ownerLinkStatus: "LINKED",
-          pendingOwnerEmail: "",
-          pendingInviteToken: "",
-          updatedAt: serverTimestamp()
-        });
-        count++;
-      });
-
-      await batch.commit();
-      return count;
-    }
+  await batch.commit();
+  return count;
+}
 
     // ---------- MODE OWNER ----------
     let invite = null;
@@ -984,3 +982,4 @@
   </script>
 </body>
 </html>
+
