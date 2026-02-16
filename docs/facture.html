@@ -1,4 +1,4 @@
-<!-- docs/facture.html (FINAL — PATCH + clientType PRO/PARTICULIER snapshot sans casser le reste) -->
+<!-- docs/facture.html (FINAL — Paiement editable + aperçu brouillon + save fige N°) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -175,6 +175,7 @@
       display:block; font-size:12px; font-weight:1000; color:#333;
       margin:10px 0 4px; text-align:left;
     }
+
     textarea{
       width:100%; padding:10px 12px; border-radius:12px;
       border:1px solid #D3C7FF; font-size:14px; outline:none;
@@ -185,6 +186,24 @@
       border-color:var(--violet-main);
       box-shadow:0 0 0 2px rgba(122,92,255,.15);
     }
+
+    /* selects */
+    .select{
+      width:100%;
+      padding:10px 12px;
+      border-radius:12px;
+      border:1px solid #D3C7FF;
+      background:#fff;
+      font-size:14px;
+      font-weight:900;
+      color:#111;
+      outline:none;
+    }
+    .select:focus{
+      border-color:var(--violet-main);
+      box-shadow:0 0 0 2px rgba(122,92,255,.15);
+    }
+    .select:disabled{ opacity:.75; cursor:not-allowed; }
 
     .actions{
       display:flex; gap:8px; flex-wrap:wrap; margin-top:12px;
@@ -349,9 +368,30 @@
 
         <div class="card-title" style="font-size:14px; margin-bottom:6px;">
           <span>Paiement</span>
-          <span class="small">reprend le devis</span>
+          <span class="small">modifiable avant émission</span>
         </div>
-        <div class="kv" id="paymentKv"></div>
+
+        <!-- ✅ NEW: 2 selects (mode + délai) -->
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+          <div>
+            <label for="payModeSel">Mode</label>
+            <select id="payModeSel" class="select">
+              <option value="VIREMENT">Virement</option>
+              <option value="CHEQUE">Chèque</option>
+              <option value="ESPECES">Espèces</option>
+            </select>
+          </div>
+          <div>
+            <label for="payTermSel">Délai</label>
+            <select id="payTermSel" class="select">
+              <option value="RECEPTION">À réception</option>
+              <option value="8J">8 jours</option>
+              <option value="15J">15 jours</option>
+              <option value="30J">30 jours</option>
+              <option value="45J">45 jours</option>
+            </select>
+          </div>
+        </div>
 
         <div class="divider"></div>
 
@@ -406,7 +446,6 @@
     const recapKv = document.getElementById("recapKv");
     const statusBadge = document.getElementById("statusBadge");
     const docBannerInner = document.getElementById("docBannerInner");
-    const paymentKv = document.getElementById("paymentKv");
     const conditionsKv = document.getElementById("conditionsKv");
     const bankKv = document.getElementById("bankKv");
     const penaltyKv = document.getElementById("penaltyKv");
@@ -432,6 +471,10 @@
 
     const saveBtn = document.getElementById("saveBtn");
     const previewBtn = document.getElementById("previewBtn");
+
+    // ✅ new selects
+    const payModeSel = document.getElementById("payModeSel");
+    const payTermSel = document.getElementById("payTermSel");
 
     // ===== State =====
     let currentUser = null;
@@ -964,22 +1007,28 @@
       totalsBox.innerHTML = html.join("");
     }
 
-    function renderPaymentInfo(){
+    // ✅ NEW: payment selects state
+    function renderPaymentControls(){
       const d = docData || {};
+      const hasInvoice = !!String(d.invoiceNumber || "").trim();
+
       const mode = String(d?.invoicePaymentMode || d?.quotePaymentMode || "VIREMENT").toUpperCase();
       const term = String(d?.invoicePaymentTerm || d?.quotePaymentTerm || "RECEPTION").toUpperCase();
 
-      const lines = [];
-      lines.push(`<div class="line"><b>Mode</b> : ${esc(modeLabel(mode))}</div>`);
-      lines.push(`<div class="line"><b>Délai</b> : ${esc(dueLabel(term))}</div>`);
-      paymentKv.innerHTML = lines.join("");
+      payModeSel.value = ["VIREMENT","CHEQUE","ESPECES"].includes(mode) ? mode : "VIREMENT";
+      payTermSel.value = ["RECEPTION","8J","15J","30J","45J"].includes(term) ? term : "RECEPTION";
+
+      // fige après émission (numéro)
+      payModeSel.disabled = hasInvoice;
+      payTermSel.disabled = hasInvoice;
     }
 
     function renderConditions(){
       const d = docData || {};
       const bp = (profileData?.businessProfile || {});
 
-      const term = String(d?.invoicePaymentTerm || d?.quotePaymentTerm || "RECEPTION").toUpperCase();
+      // ✅ IMPORTANT : prend la valeur des selects si dispo (même en brouillon)
+      const term = String(payTermSel?.value || d?.invoicePaymentTerm || d?.quotePaymentTerm || "RECEPTION").toUpperCase();
       const issued = String(d?.invoiceIssuedDate || todayIso()).trim();
       const dueDate = addDaysLabel(issued, termToDays(term));
 
@@ -1045,13 +1094,14 @@
       renderBusinessHeader();
       renderClientHeader();
       renderLinesAndTotals();
-      renderPaymentInfo();
+      renderPaymentControls();
       renderConditions();
       renderBank();
       renderPenalty();
 
       saveBtn.disabled = !docRef;
-      previewBtn.disabled = !(docRef && hasInvoice);
+      // ✅ aperçu autorisé même sans numéro
+      previewBtn.disabled = !docRef;
     }
 
     async function loadProfile(uid){
@@ -1076,9 +1126,7 @@
       }
 
       await loadProfile(currentUser.uid);
-
       await hydrateClientSnapshotInMemoryIfMissing();
-
       renderRecap();
     }
 
@@ -1105,18 +1153,34 @@
     }
 
     function lockUI(locked){
-      const d = docData || {};
       saveBtn.disabled = !!locked || !docRef;
-      previewBtn.disabled = !!locked || !docRef || !String(d.invoiceNumber||"").trim();
+      previewBtn.disabled = !!locked || !docRef; // ✅ brouillon OK
       saveBtn.style.opacity = locked ? "0.75" : "1";
+      payModeSel.disabled = payModeSel.disabled || locked; // respecte le "figé si numéro"
+      payTermSel.disabled = payTermSel.disabled || locked;
     }
+
+    // ✅ update conditions live when user changes term (even before save)
+    payTermSel.addEventListener("change", ()=> {
+      try{ renderConditions(); }catch(e){}
+    });
 
     previewBtn.addEventListener("click", ()=>{
       if(!docRef || !docData) return;
+
+      // ✅ stocke un draft pour l’aperçu si pas de numéro
+      const draft = {
+        ...docData,
+        invoicePaymentMode: String(payModeSel.value || "VIREMENT").toUpperCase(),
+        invoicePaymentTerm: String(payTermSel.value || "RECEPTION").toUpperCase(),
+        invoiceIssuedDate: String(docData.invoiceIssuedDate || todayIso()).trim()
+      };
+      sessionStorage.setItem("invoiceDraftPreview", JSON.stringify(draft));
+
       if(docKind === "SALES"){
-        location.href = `facture-apercu.html?docId=${encodeURIComponent(docData.id)}`;
+        location.href = `facture-apercu.html?docId=${encodeURIComponent(docData.id)}&draft=1`;
       }else{
-        location.href = `facture-apercu.html?eventId=${encodeURIComponent(eventId)}`;
+        location.href = `facture-apercu.html?eventId=${encodeURIComponent(eventId)}&draft=1`;
       }
     });
 
@@ -1160,12 +1224,17 @@
         const patch = {
           invoiceNotes: (invoiceNotesEl.value || "").trim(),
           invoiceUpdatedAt: serverTimestamp(),
+
+          // ✅ SAVE paiement depuis selects
+          invoicePaymentMode: String(payModeSel.value || "VIREMENT").toUpperCase(),
+          invoicePaymentTerm: String(payTermSel.value || "RECEPTION").toUpperCase(),
+
           ...clientPatch
         };
 
         // ===== SALES =====
         if(docKind === "SALES"){
-          // ✅ PATCH: snapshot clientType (ne touche rien si déjà renseigné)
+          // snapshot clientType (ne touche rien si déjà renseigné)
           if(!String(docData?.clientType || "").trim()){
             patch.clientType = getClientType(docData); // "PRO" | "PARTICULIER"
           }
@@ -1213,9 +1282,6 @@
           patch.invoiceIssuedAt = serverTimestamp();
           patch.invoiceIssuedDate = todayIso();
 
-          patch.invoicePaymentMode = String(docData?.quotePaymentMode || "VIREMENT").toUpperCase();
-          patch.invoicePaymentTerm = String(docData?.quotePaymentTerm || "RECEPTION").toUpperCase();
-
           patch.invoicePenaltyMode = String(docData?.quotePenaltyMode || "B2C").toUpperCase();
           patch.invoicePenaltyText = String(docData?.quotePenaltyText || getPenaltyTemplate(patch.invoicePenaltyMode)).trim();
 
@@ -1224,9 +1290,6 @@
         }else{
           const inv = String(docData?.invoiceStatus || "").toUpperCase().trim();
           patch.invoiceStatus = inv || "SENT";
-
-          patch.invoicePaymentMode = String(docData?.invoicePaymentMode || docData?.quotePaymentMode || "VIREMENT").toUpperCase();
-          patch.invoicePaymentTerm = String(docData?.invoicePaymentTerm || docData?.quotePaymentTerm || "RECEPTION").toUpperCase();
 
           patch.invoicePenaltyMode = String(docData?.invoicePenaltyMode || docData?.quotePenaltyMode || "B2C").toUpperCase();
           patch.invoicePenaltyText = String(docData?.invoicePenaltyText || docData?.quotePenaltyText || getPenaltyTemplate(patch.invoicePenaltyMode)).trim();
