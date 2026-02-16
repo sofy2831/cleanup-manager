@@ -1,4 +1,4 @@
-<!-- docs/factures-liste.html (FINAL — query type:"INVOICE" + fallback legacy docType + Totaux globaux filtrés HT/TVA/TTC + Ouvrir unique + Règlement/Avoir/Refaire responsive) -->
+<!-- docs/factures-liste.html (FINAL — inclut INVOICE salesDocuments + factures issues des events) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -295,7 +295,7 @@
         </div>
 
         <div style="margin-top:10px; font-size:12px; color:#666; font-weight:850;">
-          Création d’une facture : via “Passer en facture” depuis un devis. Règlement possible partiel ou total.
+          Création d’une facture : via un devis ou directement depuis le planning. Règlement possible partiel ou total.
         </div>
       </div>
 
@@ -431,8 +431,10 @@
       const hay = [
         item.invoiceNumber, item.quoteNumber,
         item.clientName, item.clientEmail,
+        item.ownerName, item.ownerEmail,
         item.homeName, item.homeCity, item.homeAddress, item.homeZip,
-        item.invoiceStatus, item.commercialStatus
+        item.invoiceStatus, item.commercialStatus,
+        item.__kind
       ].filter(Boolean).join(" ").toLowerCase();
 
       return hay.includes(q);
@@ -482,7 +484,6 @@
       let sumHT = 0, sumTVA = 0, sumTTC = 0;
 
       for(const x of filtered){
-        // si totaux stockés, on les prend (plus fiable pour journal/export)
         const ht  = Number(x.totalHT);
         const tva = Number(x.totalTVA);
         const ttc = Number(x.totalTTC);
@@ -557,11 +558,17 @@
 
         const hasNum = !!String(x.invoiceNumber||"").trim();
 
-        const allowAvoir = hasNum && !["CANCELLED","CREDITED","PAID"].includes(stRaw);
-        const allowRedo = !!linkedAvoirId;
-        const allowReglement = hasNum && !["CANCELLED","CREDITED"].includes(stRaw) && !isFullyPaid(x, ttc);
+        const isEvent = (x.__kind === "EVENT");
 
-        const openHref = `facture.html?docId=${encodeURIComponent(x.id)}`;
+        // actions sur EVENT désactivées (pages reglement/avoir attendent salesDocuments)
+        const allowAvoir = !isEvent && hasNum && !["CANCELLED","CREDITED","PAID"].includes(stRaw);
+        const allowRedo = !isEvent && !!linkedAvoirId;
+        const allowReglement = !isEvent && hasNum && !["CANCELLED","CREDITED"].includes(stRaw) && !isFullyPaid(x, ttc);
+
+        const openHref = isEvent
+          ? `facture.html?eventId=${encodeURIComponent(x.id)}`
+          : `facture.html?docId=${encodeURIComponent(x.id)}`;
+
         const regHref = `reglement.html?docId=${encodeURIComponent(x.id)}`;
         const avoirHref = `avoir.html?fromDocId=${encodeURIComponent(x.id)}`;
         const redoHref  = `facture.html?mode=redo&fromDocId=${encodeURIComponent(x.id)}&fromAvoirId=${encodeURIComponent(linkedAvoirId)}`;
@@ -607,7 +614,7 @@
           <div class="row">
             <div class="k">
               <div class="t">Statut</div>
-              <div class="v">${badgeForStatus(stDisp)}</div>
+              <div class="v">${badgeForStatus(stDisp)} ${isEvent ? `<span class="badge" title="Facture issue d'un événement">Event</span>` : ``}</div>
               ${linkedAvoirId ? `<div class="t" style="margin-top:4px;">Avoir lié : ${esc(linkedAvoirId)}</div>` : ``}
             </div>
 
@@ -653,8 +660,19 @@
       return Array.from(m.values());
     }
 
+    function createdAtMsForSort(x){
+      try{
+        if(x?.createdAt?.toDate?.()) return x.createdAt.toDate().getTime();
+        if(typeof x?.createdAtMs === "number") return x.createdAtMs;
+        if(typeof x?.snapAtMs === "number") return x.snapAtMs;
+        const d = new Date(String(x?.createdAt||""));
+        if(!isNaN(d.getTime())) return d.getTime();
+      }catch{}
+      return 0;
+    }
+
     async function loadInvoices(uid){
-      // 1) vérité : type == INVOICE
+      // 1) salesDocuments : type == INVOICE (inchangé)
       const qInv = query(
         collection(db, "salesDocuments"),
         where("conciergerieUid", "==", uid),
@@ -665,10 +683,9 @@
       );
 
       const snap = await getDocs(qInv);
-      const main = snap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
+      const main = snap.docs.map(d => ({ __kind:"SALES", id: d.id, ...(d.data()||{}) }));
 
-      // 2) fallback legacy : docType IN ["INVOICE_EVENT","INVOICE"] (si tu as encore des vieux docs)
-      // ⚠️ nécessite un index si Firestore te le demande
+      // 2) fallback legacy : docType IN [...]
       let legacy = [];
       try{
         const qLegacy = query(
@@ -680,13 +697,37 @@
           limit(400)
         );
         const snapL = await getDocs(qLegacy);
-        legacy = snapL.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
+        legacy = snapL.docs.map(d => ({ __kind:"SALES", id: d.id, ...(d.data()||{}) }));
       }catch(e){
-        // si pas d’index ou pas de champ docType : on ignore sans casser
         legacy = [];
       }
 
-      all = uniqMergeById([...main, ...legacy]);
+      // 3) events : factures créées directement depuis planning (eventId)
+      //    ⚠️ pas de orderBy pour éviter un index; on trie côté client.
+      let eventInvoices = [];
+      try{
+        const qEv = query(
+          collection(db, "events"),
+          where("conciergerieUid", "==", uid),
+          limit(600)
+        );
+        const snapE = await getDocs(qEv);
+
+        eventInvoices = snapE.docs
+          .map(d => ({ __kind:"EVENT", id:d.id, ...(d.data()||{}) }))
+          .filter(x => !!String(x?.invoiceNumber||"").trim()); // uniquement les events facturés
+
+        eventInvoices.sort((a,b)=> createdAtMsForSort(b) - createdAtMsForSort(a));
+        eventInvoices = eventInvoices.slice(0,400);
+      }catch(e){
+        // si rules/index/problème : on n’empêche pas l’affichage des salesDocuments
+        eventInvoices = [];
+      }
+
+      all = uniqMergeById([...main, ...legacy, ...eventInvoices]);
+      // tri final
+      all.sort((a,b)=> createdAtMsForSort(b) - createdAtMsForSort(a));
+
       render();
     }
 
