@@ -1,4 +1,4 @@
-<!-- docs/logements.html (COMPLET + FLOW CLEAN) — Invite propriétaire depuis la LISTE + pas de lookup owners -->
+<!-- docs/logements.html (COMPLET + PATCH HYDRATE OWNER SNAPSHOT) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -648,10 +648,6 @@
     return out;
   }
 
-  function getParam(name){
-    return new URLSearchParams(location.search).get(name) || "";
-  }
-
   // ===== Abonnement guard =====
   const FREE_EMAILS = new Set([
     "mathilde.debout31@gmail.com",
@@ -679,6 +675,63 @@
   let editingHomeId = null;
 
   function isArchived(h){ return h?.status === "archived"; }
+
+  // ===== PATCH : hydrate owner snapshot in homes =====
+  const hydratedHomeIds = new Set();
+
+  async function hydrateOwnerSnapshotForHome(home){
+    try{
+      if(!home?.id) return;
+
+      const ownerDocId = String(home.ownerUid || home.ownerDocId || "").trim();
+      if(!ownerDocId) return;
+
+      if(hydratedHomeIds.has(home.id)) return;
+
+      const alreadyHasOwnerSnapshot =
+        !!String(home.ownerAddress1 || home.ownerStreet || "").trim() ||
+        !!String(home.ownerZip || "").trim() ||
+        !!String(home.ownerCity || "").trim() ||
+        !!String(home.ownerAccountName || home.ownerFullname || "").trim();
+
+      if(alreadyHasOwnerSnapshot){
+        hydratedHomeIds.add(home.id);
+        return;
+      }
+
+      hydratedHomeIds.add(home.id);
+
+      const os = await getDoc(doc(db, "owners", ownerDocId));
+      if(!os.exists()) return;
+
+      const o = os.data() || {};
+      const addr = (o.address && typeof o.address === "object") ? o.address : {};
+
+      const payload = {
+        ownerAccountName: String(o.fullname || o.displayName || "").trim(),
+        ownerAccountEmail: String(o.email || "").trim(),
+        ownerEmail: String(o.email || "").trim(),
+        ownerFullname: String(o.fullname || "").trim(),
+        ownerPhone: String(o.phone || "").trim(),
+
+        ownerAddress1: String(addr.street || o.address1 || "").trim(),
+        ownerAddress2: String(addr.address2 || o.address2 || "").trim(),
+        ownerZip: String(addr.zip || o.zip || "").trim(),
+        ownerCity: String(addr.city || o.city || "").trim(),
+        ownerCountry: String(addr.country || o.country || "FR").trim(),
+
+        updatedAt: serverTimestamp()
+      };
+
+      await updateDoc(doc(db, "homes", home.id), payload);
+
+      // update cache local + UI immédiate
+      Object.assign(home, payload);
+      render();
+    }catch(e){
+      console.warn("hydrateOwnerSnapshotForHome:", e?.message || e);
+    }
+  }
 
   async function loadHomes(){
     hideAlert();
@@ -772,6 +825,7 @@
       bookingHomeInfo.innerHTML = "";
       return;
     }
+
     const name = (h.name || "—").trim();
     const addr = (h.homeAddress || h.address || "—").trim();
     const zip  = (h.homeZip || h.zip || "—").toString().trim();
@@ -804,7 +858,14 @@
     arrivalTimeInput.value = "16:00";
     departureTimeInput.value = "10:00";
     metaInput.value = "";
+
     fillBookingHomeSelect(homeId);
+
+    // PATCH : hydrate snapshot quand on ouvre la réservation
+    const h0 = allHomes.find(x => x.id === (bookingHomeSelect.value || homeId || ""));
+    if(h0 && String(h0.ownerUid || "").trim()){
+      hydrateOwnerSnapshotForHome(h0);
+    }
 
     const h = allHomes.find(x => x.id === (bookingHomeSelect.value || homeId || ""));
     if(h && !String(h.ownerUid || "").trim()){
@@ -829,6 +890,11 @@
       showBookingAlert("⛔ Propriétaire non lié : réservation bloquée.", false);
     }else{
       hideBookingAlert();
+    }
+
+    // PATCH : hydrate aussi au changement
+    if(h && String(h.ownerUid || "").trim()){
+      hydrateOwnerSnapshotForHome(h);
     }
   });
 
@@ -867,7 +933,12 @@
         h.ownerAccountEmail, h.ownerEmail,
         h.pendingOwnerEmail,
         h.ownerUid,
-        h.ownerLinkStatus
+        h.ownerLinkStatus,
+
+        // snapshot owner
+        h.ownerAccountName,
+        h.ownerAddress1, h.ownerAddress2,
+        h.ownerZip, h.ownerCity
       ].map(norm).join(" ");
       return hay.includes(q);
     });
@@ -886,6 +957,11 @@
     }
 
     filtered.forEach(h=>{
+      // PATCH : hydrate snapshot owner une fois dès qu’un compte est lié
+      if(String(h.ownerUid || "").trim()){
+        hydrateOwnerSnapshotForHome(h); // fire-and-forget
+      }
+
       const item = document.createElement("div");
       item.className = "item";
 
@@ -897,7 +973,13 @@
 
       const ownerUid = (h.ownerUid || "").toString().trim();
       const pendingEmail = (h.pendingOwnerEmail || "").toString().trim();
-      const ownerEmail = (h.ownerAccountEmail || h.ownerEmail || pendingEmail || "").toString().trim();
+
+      // email affiché (priorité : email du compte owner snapshot, sinon home.ownerAccountEmail, sinon pending)
+      const ownerEmail = (
+        (h.ownerAccountEmail || h.ownerEmail || "").toString().trim()
+        || pendingEmail
+        || ""
+      );
 
       const statusChip = isArchived(h) ? `<span class="chip">Archivé</span>` : "";
 
@@ -1125,7 +1207,6 @@
         homeOwner: ownerName,
         type,
 
-        // IMPORTANT: pas de lookup ici. ownerUid restera "" tant que le propriétaire n'a pas accepté.
         ownerAccountEmail: ownerAccountEmail || "",
         ownerEmail: ownerAccountEmail || "",
 
@@ -1142,8 +1223,8 @@
           conciergerieUid: user.uid,
           status: "active",
           ownerUid: "",              // = owners.docId (sera rempli par invite-proprietaire)
-          ownerLinkStatus: "NONE",   // facultatif, mais utile visuel
-          pendingOwnerEmail: "",     // rempli quand on génère une invite avec homeId
+          ownerLinkStatus: "NONE",
+          pendingOwnerEmail: "",
           createdAt: serverTimestamp(),
           ...payload
         });
@@ -1216,6 +1297,13 @@
 
         ownerEmail: String(h?.ownerEmail || h?.ownerAccountEmail || ""),
         ownerFullname: String(h?.ownerFullname || h?.ownerAccountName || ""),
+
+        // snapshot adresse owner (si déjà hydraté)
+        ownerAddress1: String(h?.ownerAddress1 || ""),
+        ownerAddress2: String(h?.ownerAddress2 || ""),
+        ownerZip: String(h?.ownerZip || ""),
+        ownerCity: String(h?.ownerCity || ""),
+        ownerCountry: String(h?.ownerCountry || "FR"),
 
         arrivalDateKey: String(aDate),
         departureDateKey: String(dDate),
