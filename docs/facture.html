@@ -1,4 +1,4 @@
-<!-- docs/facture.html (FINAL — Paiement editable + aperçu brouillon + save fige N° + hydrate EVENT client) -->
+<!-- docs/facture.html (FINAL — FIX: plus de blocage ACCEPTED + persistance paiement mode/délai) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -187,7 +187,6 @@
       box-shadow:0 0 0 2px rgba(122,92,255,.15);
     }
 
-    /* selects */
     .select{
       width:100%;
       padding:10px 12px;
@@ -371,7 +370,6 @@
           <span class="small">modifiable avant émission</span>
         </div>
 
-        <!-- 2 selects (mode + délai) -->
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
           <div>
             <label for="payModeSel">Mode</label>
@@ -479,7 +477,6 @@
     // ===== State =====
     let currentUser = null;
 
-    // support docId(salesDocuments) + fallback eventId(events)
     let docRef = null;
     let docData = null;
     let docKind = ""; // "SALES" | "EVENT"
@@ -515,6 +512,28 @@
       return (p.get(name) || "").trim();
     }
     function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
+
+    // ---------- PERSIST UI (mode/délai) ----------
+    function uiKey(){
+      const id = String(docData?.id || getParam("docId") || getParam("eventId") || "").trim();
+      return id ? ("invoice_ui_" + id) : "invoice_ui_tmp";
+    }
+    function saveUiState(){
+      try{
+        const key = uiKey();
+        sessionStorage.setItem(key, JSON.stringify({
+          payMode: String(payModeSel.value||"").toUpperCase(),
+          payTerm: String(payTermSel.value||"").toUpperCase()
+        }));
+      }catch(_){}
+    }
+    function loadUiState(){
+      try{
+        const raw = sessionStorage.getItem(uiKey());
+        if(!raw) return null;
+        return JSON.parse(raw);
+      }catch(_){ return null; }
+    }
 
     // clientType (PRO/PARTICULIER) — minimal & safe
     function getClientType(d){
@@ -846,7 +865,6 @@
       };
     }
 
-    // hydrate docData en mémoire avant render (sans write Firestore) — SALES
     async function hydrateClientSnapshotInMemoryIfMissing(){
       if(docKind !== "SALES") return;
       if(!currentUser?.uid || !docData) return;
@@ -880,7 +898,6 @@
       }
     }
 
-    // hydrate docData en mémoire avant render (sans write Firestore) — EVENT
     async function hydrateEventClientInMemoryIfMissing(){
       if(docKind !== "EVENT") return;
       if(!currentUser?.uid || !docData) return;
@@ -1034,18 +1051,18 @@
       totalsBox.innerHTML = html.join("");
     }
 
-    // payment selects state
     function renderPaymentControls(){
       const d = docData || {};
       const hasInvoice = !!String(d.invoiceNumber || "").trim();
 
-      const mode = String(d?.invoicePaymentMode || d?.quotePaymentMode || "VIREMENT").toUpperCase();
-      const term = String(d?.invoicePaymentTerm || d?.quotePaymentTerm || "RECEPTION").toUpperCase();
+      // priorité : UI state sessionStorage > invoice* > quote* > default
+      const ui = loadUiState();
+      const mode = String(ui?.payMode || d?.invoicePaymentMode || d?.quotePaymentMode || "VIREMENT").toUpperCase();
+      const term = String(ui?.payTerm || d?.invoicePaymentTerm || d?.quotePaymentTerm || "RECEPTION").toUpperCase();
 
       payModeSel.value = ["VIREMENT","CHEQUE","ESPECES"].includes(mode) ? mode : "VIREMENT";
       payTermSel.value = ["RECEPTION","8J","15J","30J","45J"].includes(term) ? term : "RECEPTION";
 
-      // fige après émission (numéro)
       payModeSel.disabled = hasInvoice;
       payTermSel.disabled = hasInvoice;
     }
@@ -1054,7 +1071,6 @@
       const d = docData || {};
       const bp = (profileData?.businessProfile || {});
 
-      // prend la valeur des selects si dispo (même en brouillon)
       const term = String(payTermSel?.value || d?.invoicePaymentTerm || d?.quotePaymentTerm || "RECEPTION").toUpperCase();
       const issued = String(d?.invoiceIssuedDate || todayIso()).trim();
       const dueDate = addDaysLabel(issued, termToDays(term));
@@ -1127,7 +1143,6 @@
       renderPenalty();
 
       saveBtn.disabled = !docRef;
-      // aperçu autorisé même sans numéro
       previewBtn.disabled = !docRef;
     }
 
@@ -1182,27 +1197,28 @@
 
     function lockUI(locked){
       saveBtn.disabled = !!locked || !docRef;
-      previewBtn.disabled = !!locked || !docRef; // brouillon OK
+      previewBtn.disabled = !!locked || !docRef;
       saveBtn.style.opacity = locked ? "0.75" : "1";
-      // respecte le "figé si numéro"
       payModeSel.disabled = payModeSel.disabled || locked;
       payTermSel.disabled = payTermSel.disabled || locked;
     }
 
-    // update conditions live when user changes term
+    // live update + persist UI
     payTermSel.addEventListener("change", ()=>{
+      saveUiState();
       try{ renderConditions(); }catch(e){}
     });
-
-    // (optionnel) si tu veux recalculer conditions aussi quand mode change
     payModeSel.addEventListener("change", ()=>{
+      saveUiState();
       try{ renderConditions(); }catch(e){}
     });
 
     previewBtn.addEventListener("click", ()=>{
       if(!docRef || !docData) return;
 
-      // stocke un draft pour l’aperçu si pas de numéro
+      // persist avant nav (pour retour)
+      saveUiState();
+
       const draft = {
         ...docData,
         invoicePaymentMode: String(payModeSel.value || "VIREMENT").toUpperCase(),
@@ -1227,7 +1243,6 @@
         const year = new Date().getFullYear();
         let invoiceNumber = String(docData?.invoiceNumber || "").trim();
 
-        // snapshot client fields in SALES on save
         let clientPatch = {};
         if(docKind === "SALES"){
           const missingAddr =
@@ -1259,12 +1274,14 @@
           invoiceNotes: (invoiceNotesEl.value || "").trim(),
           invoiceUpdatedAt: serverTimestamp(),
 
-          // SAVE paiement depuis selects
           invoicePaymentMode: String(payModeSel.value || "VIREMENT").toUpperCase(),
           invoicePaymentTerm: String(payTermSel.value || "RECEPTION").toUpperCase(),
 
           ...clientPatch
         };
+
+        // persist UI (au cas où)
+        saveUiState();
 
         // ===== SALES =====
         if(docKind === "SALES"){
@@ -1300,9 +1317,11 @@
         }
 
         // ===== EVENT =====
+        // FIX #1 : on NE BLOQUE PLUS si quoteStatus != ACCEPTED
+        // (tu peux garder l'info pour un warning si tu veux, mais pas de throw)
         const qs = String(docData?.quoteStatus || "").toUpperCase().trim();
-        if(qs !== "ACCEPTED"){
-          throw new Error("Impossible : le devis doit être ACCEPTÉ avant facturation.");
+        if(qs && qs !== "ACCEPTED"){
+          console.warn("Quote non ACCEPTED, facturation autorisée quand même:", qs);
         }
 
         if(!invoiceNumber){
@@ -1356,6 +1375,17 @@
 
       try{
         await loadDoc();
+        // applique UI state après load (retour d'aperçu)
+        const ui = loadUiState();
+        if(ui){
+          if(ui.payMode && ["VIREMENT","CHEQUE","ESPECES"].includes(String(ui.payMode).toUpperCase())){
+            payModeSel.value = String(ui.payMode).toUpperCase();
+          }
+          if(ui.payTerm && ["RECEPTION","8J","15J","30J","45J"].includes(String(ui.payTerm).toUpperCase())){
+            payTermSel.value = String(ui.payTerm).toUpperCase();
+          }
+          try{ renderConditions(); }catch(e){}
+        }
       }catch(e){
         showAlert("⛔ " + (e.message || "Erreur chargement facture"), false);
       }
