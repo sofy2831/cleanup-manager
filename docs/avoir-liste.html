@@ -1,4 +1,4 @@
-<!-- docs/avoir-liste.html (FINAL — Liste Avoirs: query type:"CREDIT_NOTE", Ouvrir, affiche facture source + total) -->
+<!-- docs/avoir-liste.html (FINAL — liste des avoirs type:"CREDIT", calquée sur factures-liste) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -138,6 +138,7 @@
       color:#fff; border-color:transparent;
       box-shadow:0 12px 24px rgba(0,0,0,0.10);
     }
+    .btn[aria-disabled="true"]{ opacity:.45; pointer-events:none; }
 
     .badge{
       display:inline-flex; align-items:center; gap:6px;
@@ -148,18 +149,18 @@
       color:#333;
       white-space:nowrap;
     }
-    .badge.bad{ border-color: rgba(179,38,30,0.30); color: var(--bad); }
     .badge.ok{ border-color: rgba(27,143,77,0.35); color: var(--ok); }
+    .badge.bad{ border-color: rgba(179,38,30,0.30); color: var(--bad); }
 
     .line6{
       display:grid;
-      grid-template-columns: 120px 170px 1.2fr 1.2fr 1fr 130px;
+      grid-template-columns: 110px 160px 1.2fr 1.2fr 1.1fr 130px;
       gap:10px;
       align-items:center;
       min-width:0;
     }
     @media(max-width:900px){
-      .line6{ grid-template-columns: 120px 170px 1fr 1fr; grid-auto-rows:auto; }
+      .line6{ grid-template-columns: 110px 160px 1fr 1fr; grid-auto-rows:auto; }
     }
     @media(max-width:560px){
       .line6{ grid-template-columns: 1fr 1fr; }
@@ -200,7 +201,8 @@
     }
     @media(max-width:560px){
       .actionsBar{ justify-content:stretch; }
-      .actionsBar .btn{ flex:1 1 100%; }
+      .actionsBar .btn{ flex:1 1 48%; }
+      .actionsBar .btn.primary{ flex:1 1 100%; }
     }
 
     .bottom-nav{
@@ -247,7 +249,7 @@
       <h1>Avoirs</h1>
     </div>
 
-    <div class="subtitle">Historique des avoirs (crédits)</div>
+    <div class="subtitle">Suivi des avoirs</div>
     <div class="helloLine" id="helloLine">Bonjour,</div>
     <div class="companyLine" id="companyLine">—</div>
 
@@ -259,19 +261,17 @@
           <select class="select" id="filterStatus">
             <option value="ALL">Tous</option>
             <option value="ISSUED">Émis</option>
-            <option value="DRAFT">Brouillons</option>
-            <option value="CANCELLED">Annulés</option>
             <option value="MISSING">Sans statut</option>
           </select>
 
           <div class="searchbar" title="Recherche">
             <span class="s-ico">🔎</span>
-            <input class="input" id="searchInput" type="search" placeholder="Rechercher (n° avoir, facture source, client, logement…)" autocomplete="off" />
+            <input class="input" id="searchInput" type="search" placeholder="Rechercher (n° avoir, facture, client, logement…)" autocomplete="off" />
           </div>
         </div>
 
         <div style="margin-top:10px; font-size:12px; color:#666; font-weight:850;">
-          Un avoir est créé depuis une facture émise (bouton “Avoir”).
+          Un avoir est créé depuis une facture (bouton “Avoir” dans la liste des factures).
         </div>
       </div>
 
@@ -342,55 +342,52 @@
       }catch{ return "—"; }
     }
 
-    function getCreditNumber(x){
-      const n = String(x?.creditNumber || x?.avoirNumber || "").trim();
-      return n || "—";
+    function getStatusRaw(x){
+      return String(x?.creditStatus||"").toUpperCase().trim();
     }
-    function getCreditStatusRaw(x){
-      return String(x?.avoirStatus || x?.creditStatus || "").toUpperCase().trim();
-    }
-    function getCreditStatusDisplay(x){
-      const raw = getCreditStatusRaw(x);
-      const hasNum = !!String(x?.creditNumber||x?.avoirNumber||"").trim();
-      if(hasNum && (raw === "" || raw === "DRAFT")) return "ISSUED";
+    function getStatusDisplay(x){
+      const raw = getStatusRaw(x);
       return raw || "MISSING";
     }
     function badgeForStatus(display){
       const s = String(display||"").toUpperCase().trim();
-      if(s === "CANCELLED") return `<span class="badge bad">Annulé</span>`;
       if(s === "ISSUED") return `<span class="badge ok">Émis</span>`;
-      if(s === "DRAFT") return `<span class="badge">Brouillon</span>`;
       return `<span class="badge bad">Sans statut</span>`;
     }
 
     function matchesFilter(item){
       const f = filterStatus.value;
-      const disp = getCreditStatusDisplay(item);
-      const raw = getCreditStatusRaw(item);
+      const disp = getStatusDisplay(item);
+      const raw = getStatusRaw(item);
       if(f === "ALL") return true;
       if(f === "MISSING") return !raw;
       return disp === f;
     }
+
     function matchesSearch(item){
       const q = (searchInput.value||"").trim().toLowerCase();
       if(!q) return true;
 
       const hay = [
-        item.creditNumber, item.avoirNumber,
-        item.fromInvoiceNumber, item.fromInvoiceId,
+        item.creditNumber, item.fromInvoiceNumber, item.quoteNumber,
         item.clientName, item.clientEmail,
-        item.homeName, item.homeCity,
-        item.creditReason, item.creditMode
+        item.homeName, item.homeCity, item.homeAddress, item.homeZip,
+        item.creditReason
       ].filter(Boolean).join(" ").toLowerCase();
 
       return hay.includes(q);
     }
+
     function getFiltered(){
       return all.filter(e => matchesFilter(e) && matchesSearch(e));
     }
 
-    function getIssuedAt(x){
-      return fmtDateFR(x?.creditIssuedDate || x?.creditIssuedAt || x?.createdAt || x?.createdAtMs || x?.snapAtMs);
+    function getCreatedAt(x){
+      if(x?.createdAt?.toDate?.()) return x.createdAt.toDate().toLocaleDateString("fr-FR");
+      if(x?.createdAt) return fmtDateFR(x.createdAt);
+      if(x?.createdAtMs) return fmtDateFR(new Date(Number(x.createdAtMs)));
+      if(x?.snapAtMs) return fmtDateFR(new Date(Number(x.snapAtMs)));
+      return "—";
     }
 
     function render(){
@@ -409,41 +406,42 @@
       }
 
       for(const x of filtered){
-        const issued = getIssuedAt(x);
-        const num = getCreditNumber(x);
+        const created = getCreatedAt(x);
+        const creditNum = String(x.creditNumber || "—").trim();
+        const invRef = String(x.fromInvoiceNumber || "—").trim();
 
         const client = String(x.clientName || x.ownerName || "—").trim();
         const home = String(x.homeName || "—").trim();
 
-        const srcInv = String(x.fromInvoiceNumber || "—").trim();
+        const period = (x.arrivalDateKey || x.departureDateKey)
+          ? `${fmtDateFR(x.arrivalDateKey)} → ${fmtDateFR(x.departureDateKey)}`
+          : "—";
+
+        const stDisp = getStatusDisplay(x);
 
         const ttc = Number(x.totalTTC);
-        const ttcDisp = Number.isFinite(ttc) ? fmtMoney(ttc) : "—";
-
-        const stDisp = getCreditStatusDisplay(x);
+        const total = Number.isFinite(ttc) ? ttc : 0;
 
         const openHref = `avoir.html?docId=${encodeURIComponent(x.id)}`;
+        const previewHref = `avoir-apercu.html?docId=${encodeURIComponent(x.id)}`;
+        const factureHref = x.fromDocId ? `facture.html?docId=${encodeURIComponent(x.fromDocId)}` : "#";
 
         const div = document.createElement("div");
         div.className = "card";
         div.innerHTML = `
           <div class="line6">
             <div class="cell">
-              <div class="t">Émis</div>
-              <div class="v">${esc(issued)}</div>
+              <div class="t">Créé</div>
+              <div class="v">${esc(created)}</div>
             </div>
 
             <div class="cell">
               <div class="t">N°</div>
               <div class="v">
                 <span class="tag">AV</span>
-                <span style="margin-left:6px;">${esc(num)}</span>
+                <span style="margin-left:6px;">${esc(creditNum)}</span>
               </div>
-            </div>
-
-            <div class="cell">
-              <div class="t">Facture source</div>
-              <div class="v ellipsis" title="${esc(srcInv)}">${esc(srcInv)}</div>
+              <div class="t" style="margin-top:4px;">Facture : ${esc(invRef)}</div>
             </div>
 
             <div class="cell">
@@ -456,9 +454,14 @@
               <div class="v ellipsis" title="${esc(home)}">${esc(home)}</div>
             </div>
 
+            <div class="cell">
+              <div class="t">Période</div>
+              <div class="v ellipsis" title="${esc(period)}">${esc(period)}</div>
+            </div>
+
             <div class="cell" style="text-align:right;">
               <div class="t">Total TTC</div>
-              <div class="v">${ttcDisp}</div>
+              <div class="v">${fmtMoney(total)}</div>
             </div>
           </div>
 
@@ -466,11 +469,14 @@
             <div class="k">
               <div class="t">Statut</div>
               <div class="v">${badgeForStatus(stDisp)}</div>
+              <div class="t" style="margin-top:4px;">Motif : ${esc(String(x.creditReason || "—"))}</div>
             </div>
 
-            <div class="k" style="align-items:flex-end; min-width:220px;">
+            <div class="k" style="align-items:flex-end; min-width:280px;">
               <div class="actionsBar">
                 <a class="btn primary" href="${openHref}">Ouvrir</a>
+                <a class="btn" href="${previewHref}">Aperçu</a>
+                <a class="btn" href="${factureHref}" ${x.fromDocId ? "" : `aria-disabled="true"`}>Facture</a>
               </div>
             </div>
           </div>
@@ -491,16 +497,15 @@
     }
 
     async function loadCredits(uid){
-      const qCredits = query(
+      const qC = query(
         collection(db, "salesDocuments"),
         where("conciergerieUid", "==", uid),
-        where("type", "==", "CREDIT_NOTE"),
+        where("type", "==", "CREDIT"),
         where("listable", "==", true),
         orderBy("createdAt", "desc"),
-        limit(500)
+        limit(400)
       );
-
-      const snap = await getDocs(qCredits);
+      const snap = await getDocs(qC);
       all = snap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
       render();
     }
