@@ -1,4 +1,4 @@
-<!-- docs/clients.html (COMPLET + CORRIGÉ) -->
+<!-- docs/clients.html (FINAL — SYNC owners -> clients + homes snapshot, + liste + édition) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -101,6 +101,7 @@
       font-size:14px;
       outline:none;
       background:#fff;
+      font-weight:800;
     }
     input[type="search"]:focus{
       border-color:var(--violet);
@@ -157,31 +158,6 @@
     }
     .mini:disabled{ opacity:.55; cursor:not-allowed; }
 
-    .pickBar{
-      margin-top:10px;
-      background:#fff;
-      border:1px solid rgba(122,92,255,0.20);
-      box-shadow:0 3px 10px rgba(0,0,0,.06);
-      border-radius:14px;
-      padding:10px 12px;
-      display:none;
-      align-items:center;
-      justify-content:space-between;
-      gap:10px;
-      font-weight:900;
-      color:#222;
-    }
-    .pickBar .left{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
-    .pickBar .hint{ font-size:12px; color:#555; font-weight:900; }
-    .pickBar .right{ display:flex; gap:8px; flex-wrap:wrap; }
-    .pickBar .chip{
-      display:inline-flex; align-items:center; gap:6px;
-      padding:3px 9px; border-radius:999px;
-      background:rgba(122,92,255,0.10);
-      color:#5b45c8; font-size:11px;
-      font-weight:1000;
-    }
-
     details.acc{
       margin-top:8px;
       background:#fff;
@@ -230,12 +206,13 @@
       padding:16px 14px 18px;
     }
     .modal h2{ margin:0 0 6px; font-size:16px; font-weight:900; color:#111; }
-    .modal p{ margin:0 0 10px; font-size:12px; color:#666; line-height:1.25; }
+    .modal p{ margin:0 0 10px; font-size:12px; color:#666; line-height:1.25; font-weight:800; }
 
     label{ display:block; font-size:12px; font-weight:900; color:#333; margin:8px 0 4px; text-align:left; }
     input, select{
       width:100%; box-sizing:border-box; padding:9px 10px;
       border-radius:10px; border:1px solid #D3C7FF; font-size:13px; outline:none; background:#fff;
+      font-weight:800;
     }
     .modal-actions{
       display:flex;
@@ -315,17 +292,6 @@
 
       <div class="alert" id="alertBox"></div>
 
-      <div class="pickBar" id="pickBar">
-        <div class="left">
-          <span class="chip">✅ Mode sélection</span>
-          <span>Choisis un propriétaire pour le devis</span>
-          <span class="hint" id="pickHint">—</span>
-        </div>
-        <div class="right">
-          <a class="pill" id="pickCancelBtn" href="planning.html">Annuler</a>
-        </div>
-      </div>
-
       <section class="card">
         <div class="cardTitle">
           <span>Liste propriétaires</span>
@@ -340,7 +306,8 @@
         </div>
 
         <div class="tiny" style="margin-top:8px;">
-          Source : <b>homes</b>. Fiche stable : <b>clients</b>. (Un “client” = homes groupé par ownerUid ou ownerName)
+          Source vérité : <b>owners</b>. Fiche stable de facturation : <b>clients</b>.
+          Cette page synchronise automatiquement <b>owners → clients</b> (et les snapshots sur <b>homes</b>).
         </div>
 
         <div class="list" id="clientsList"></div>
@@ -351,13 +318,13 @@
   <div class="modal-backdrop" id="clientModalBackdrop" aria-hidden="true">
     <div class="modal" role="dialog" aria-modal="true">
       <h2 id="clientModalTitle">Modifier client</h2>
-      <p id="clientModalHint">Met à jour la fiche <b>clients</b> + synchronise email/tel sur les logements liés.</p>
+      <p id="clientModalHint">Met à jour la fiche <b>clients</b> (et hydrate les logements liés).</p>
 
       <div class="m-alert" id="clientModalAlert"></div>
 
       <form id="clientForm" autocomplete="off">
-        <label for="cName">Nom (libellé)</label>
-        <input id="cName" type="text" placeholder="Ex. Jean Jeudi" required />
+        <label for="cName">Nom (facturation)</label>
+        <input id="cName" type="text" placeholder="Ex. Jean Dupont" required />
 
         <label for="cEmail">Email</label>
         <input id="cEmail" type="email" placeholder="ex: proprio@email.com" />
@@ -380,7 +347,7 @@
         </div>
 
         <div style="margin-top:10px; padding:10px; background:#fff; border-radius:14px; border:1px solid rgba(122,92,255,0.18); box-shadow:0 3px 10px rgba(0,0,0,.06);">
-          <div style="font-weight:1000; font-size:12px; color:#333;">Lien compte propriétaire (si email correspond)</div>
+          <div style="font-weight:1000; font-size:12px; color:#333;">Lien</div>
           <div class="tiny" id="linkInfo" style="margin-top:6px;">—</div>
         </div>
 
@@ -417,13 +384,6 @@
     const countLine = document.getElementById("countLine");
     const clientsList = document.getElementById("clientsList");
     const searchInput = document.getElementById("searchInput");
-    const inviteBtn = document.getElementById("inviteBtn");
-    const backPlanningBtn = document.getElementById("backPlanningBtn");
-
-    // Pick mode UI
-    const pickBar = document.getElementById("pickBar");
-    const pickHint = document.getElementById("pickHint");
-    const pickCancelBtn = document.getElementById("pickCancelBtn");
 
     // Modal UI
     const clientModalBackdrop = document.getElementById("clientModalBackdrop");
@@ -441,14 +401,6 @@
     const cAddr1 = document.getElementById("cAddr1");
     const cZip = document.getElementById("cZip");
     const cCity = document.getElementById("cCity");
-
-    function getParam(name){
-      const p = new URLSearchParams(location.search);
-      return (p.get(name) || "").trim();
-    }
-
-    const pickEventId = getParam("pickOwnerForEventId");
-    const isPickMode = !!pickEventId;
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -476,7 +428,7 @@
         .replaceAll("&","&amp;")
         .replaceAll("<","&lt;")
         .replaceAll(">","&gt;")
-        .replaceAll('"',"quot;")
+        .replaceAll('"',"&quot;")
         .replaceAll("'","&#039;");
     }
     function norm(s){ return (s||"").toString().toLowerCase().trim(); }
@@ -487,25 +439,6 @@
       return z.slice(0,5);
     }
     function validateZip(zip){ return !zip || /^\d{5}$/.test(zip); }
-
-    function normKey(s){
-      return String(s||"")
-        .trim().toLowerCase()
-        .replace(/\s+/g," ")
-        .replace(/[’']/g,"'");
-    }
-
-    function buildClientKeyFromHome(h){
-      const ownerUid = String(h.ownerUid || "").trim();
-      if(ownerUid) return ownerUid;
-      const label = normKey(h.ownerName || h.homeOwner || "");
-      return "label:" + label;
-    }
-
-    function safeDocIdFromClientKey(clientKey){
-      const b64 = btoa(unescape(encodeURIComponent(clientKey)));
-      return "c_" + b64.replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
-    }
 
     logoutBtn.addEventListener("click", async ()=>{
       await signOut(auth);
@@ -526,23 +459,21 @@
     }
 
     let currentUser = null;
-    let allHomes = [];
-    let owners = [];
-    let clientsByKey = new Map();
+
+    // Data in memory
+    let allOwners = [];   // [{id, ...data}]
+    let allHomes = [];    // [{id, ...data}]
+    let clientsByKey = new Map(); // key=ownerDocId, value={id,...data}
 
     // Modal state
-    let editingClientKey = "";
-    let editingClientLabelKey = "";
-    let editingClientDocId = "";
+    let editingOwnerDocId = "";
+    let editingOwner = null;
     let editingHomes = [];
-    let resolvedOwnerUid = "";
-    let resolvedOwnerName = "";
-    let resolvedOwnerEmail = "";
 
     async function loadClientsCollection(){
       clientsByKey = new Map();
       try{
-        const qc = query(collection(db,"clients"), where("conciergerieUid","==", currentUser.uid), limit(1500));
+        const qc = query(collection(db,"clients"), where("conciergerieUid","==", currentUser.uid), limit(2000));
         const snap = await getDocs(qc);
         for(const d of snap.docs){
           const data = d.data() || {};
@@ -554,191 +485,224 @@
       }
     }
 
-    function buildOwnersFromHomes(homes){
-      const map = new Map();
-
-      for(const h of homes){
-        const ownerName = (h.ownerName || h.homeOwner || "").trim();
-        const ownerEmail = normalizeEmail(h.ownerAccountEmail || h.ownerEmail || "");
-        if(!ownerName && !ownerEmail && !h.ownerUid) continue;
-
-        const clientKey = buildClientKeyFromHome(h);
-        const key = clientKey;
-
-        if(!map.has(key)){
-          map.set(key, {
-            clientKey,
-            ownerName,
-            ownerEmail,
-            homes: [],
-            cities: new Set(),
-          });
-        }
-        const o = map.get(key);
-        o.homes.push(h);
-
-        if(!o.ownerName && ownerName) o.ownerName = ownerName;
-        if(!o.ownerEmail && ownerEmail) o.ownerEmail = ownerEmail;
-        if(h.city) o.cities.add(h.city);
-
-        const c = clientsByKey.get(clientKey);
-        if(c){
-          if(c.displayName) o.ownerName = c.displayName;
-          if(c.email) o.ownerEmail = normalizeEmail(c.email);
-        }
-      }
-
-      const arr = Array.from(map.values());
-      arr.sort((a,b)=>{
-        const da = b.homes.length - a.homes.length;
-        if(da !== 0) return da;
-        return (a.ownerEmail || a.ownerName || "").localeCompare(b.ownerEmail || b.ownerName || "");
+    async function loadOwners(){
+      allOwners = [];
+      const qo = query(collection(db,"owners"), where("conciergerieUid","==", currentUser.uid), limit(2000));
+      const snap = await getDocs(qo);
+      allOwners = snap.docs.map(d => ({ id:d.id, ...(d.data()||{}) }));
+      // tri: actifs d'abord
+      allOwners.sort((a,b)=>{
+        const sa = String(a.status||"");
+        const sb = String(b.status||"");
+        if(sa === sb) return (String(a.fullname||"")).localeCompare(String(b.fullname||""));
+        if(sa === "ACTIVE") return -1;
+        if(sb === "ACTIVE") return 1;
+        return sa.localeCompare(sb);
       });
-      return arr;
     }
 
-    function setupPickModeUI(){
-      if(!isPickMode) return;
-
-      pickBar.style.display = "flex";
-      pickHint.textContent = `• eventId: ${pickEventId}`;
-
-      pickCancelBtn.href = `devis.html?eventId=${encodeURIComponent(pickEventId)}`;
-
-      inviteBtn.style.display = "none";
-      backPlanningBtn.href = `devis.html?eventId=${encodeURIComponent(pickEventId)}`;
+    async function loadHomes(){
+      allHomes = [];
+      const qh = query(collection(db,"homes"), where("conciergerieUid","==", currentUser.uid), limit(2000));
+      const snap = await getDocs(qh);
+      allHomes = snap.docs.map(d => ({ id:d.id, ...(d.data()||{}) }));
     }
 
-    // ✅ Résolution OWNER : docId owners (si on l'a), sinon uid, sinon email
-    async function resolveOwnersDocId({ ownerUidCandidate, ownerEmailCandidate }){
-      const cand = String(ownerUidCandidate || "").trim();
-      const email = normalizeEmail(ownerEmailCandidate || "");
-
-      // 1) cand = docId owners ?
-      if(cand){
-        try{
-          const s = await getDoc(doc(db, "owners", cand));
-          if(s.exists()){
-            const d = s.data() || {};
-            if(String(d.conciergerieUid||"") === String(currentUser.uid)) return { ownerDocId: cand, owner: d };
-          }
-        }catch(e){
-          console.warn("resolveOwnersDocId getDoc failed:", e?.message || e);
-        }
-      }
-
-      // 2) cand = uid field dans owners ?
-      if(cand){
-        try{
-          const q1 = query(
-            collection(db,"owners"),
-            where("uid","==", cand),
-            where("conciergerieUid","==", currentUser.uid),
-            limit(1)
-          );
-          const s1 = await getDocs(q1);
-          if(!s1.empty){
-            const doc1 = s1.docs[0];
-            return { ownerDocId: doc1.id, owner: (doc1.data()||{}) };
-          }
-        }catch(e){
-          console.warn("resolveOwnersDocId where uid failed:", e?.message || e);
-        }
-      }
-
-      // 3) email match
-      if(email){
-        try{
-          const q2 = query(
-            collection(db,"owners"),
-            where("email","==", email),
-            where("conciergerieUid","==", currentUser.uid),
-            limit(1)
-          );
-          const s2 = await getDocs(q2);
-          if(!s2.empty){
-            const doc2 = s2.docs[0];
-            return { ownerDocId: doc2.id, owner: (doc2.data()||{}) };
-          }
-        }catch(e){
-          console.warn("resolveOwnersDocId where email failed:", e?.message || e);
-        }
-      }
-
-      return { ownerDocId: "", owner: null };
+    function ownerAddress(owner){
+      // owners schema possible: address map OR flat fields
+      const addr = (owner?.address && typeof owner.address === "object") ? owner.address : {};
+      const address1 = String(addr.street || owner.address1 || owner.addressLine1 || "").trim();
+      const address2 = String(addr.address2 || owner.address2 || "").trim();
+      const zip = String(addr.zip || owner.zip || "").trim();
+      const city = String(addr.city || owner.city || "").trim();
+      const country = String(addr.country || owner.country || "FR").trim();
+      return { address1, address2, zip, city, country };
     }
 
-    // ✅ PICK MODE : écrit ownerUid = docId owners + snapshot complet adresse (pour affichage immédiat)
-    async function pickThisOwner(ownerObj){
-      if(!isPickMode) return;
-      if(!pickEventId) return;
-
-      const c = clientsByKey.get(ownerObj.clientKey) || {};
-
-      const ownerName = (c.displayName || ownerObj.ownerName || "").trim();
-      const ownerEmail = normalizeEmail(c.email || ownerObj.ownerEmail || "");
-      const ownerPhone = (c.phone || ownerObj.homes?.[0]?.ownerPhone || "").trim();
-
-      // candidate = uid (si on l'a) sinon rien (les docId owners ne sont PAS garantis ici)
-      const ownerUidCandidate =
-        String(c.ownerUid || "").trim() ||
-        (ownerObj.clientKey && !ownerObj.clientKey.startsWith("label:") ? ownerObj.clientKey : "");
-
-      if(!confirm(`Lier ce propriétaire au devis ?\n${ownerName || ownerEmail || "Propriétaire"}`)) return;
-
-      const { ownerDocId, owner } = await resolveOwnersDocId({
-        ownerUidCandidate,
-        ownerEmailCandidate: ownerEmail
-      });
-
-      const addr1 = (owner?.address1 || "").toString().trim();
-      const addr2 = (owner?.address2 || "").toString().trim();
-      const zip  = (owner?.zip || "").toString().trim();
-      const city = (owner?.city || "").toString().trim();
-      const country = (owner?.country || "FR").toString().trim();
-      const fullName = (owner?.fullname || ownerName || "").toString().trim();
-      const emailResolved = normalizeEmail(owner?.email || ownerEmail || "");
-      const phoneResolved = (owner?.phone || ownerPhone || "").toString().trim();
-
+    // =========================
+    // SYNC owners -> clients + homes snapshot
+    // =========================
+    async function syncOwnersToClientsAndHomes(){
+      // Objectif :
+      // - chaque owner (docId) => clients doc { clientKey: ownerDocId, ...billing }
+      // - chaque home lié (home.ownerUid == ownerDocId) => snapshot owner* rempli si vide
       try{
-        await updateDoc(doc(db,"events", pickEventId), {
-          // ✅ docId owners (source de vérité côté devis)
-          ownerUid: ownerDocId || "",
+        const BATCH_LIMIT = 450;
+        let pending = [];
+        let commits = 0;
 
-          // ✅ affichage
-          ownerName: fullName || ownerName || "",
-          ownerEmail: emailResolved || ownerEmail || "",
-          ownerPhone: phoneResolved || ownerPhone || "",
+        function pushOp(fn){
+          pending.push(fn);
+          if(pending.length >= BATCH_LIMIT) return flush();
+        }
 
-          // ✅ snapshot facturation (affichage même si devis.html ne relit pas owners)
-          ownerAddress1: addr1 || "",
-          ownerAddress2: addr2 || "",
-          ownerZip: zip || "",
-          ownerCity: city || "",
-          ownerCountry: country || "FR",
+        async function flush(){
+          if(!pending.length) return;
+          const batch = writeBatch(db);
+          for(const fn of pending) fn(batch);
+          pending = [];
+          await batch.commit();
+          commits++;
+        }
 
-          updatedAt: serverTimestamp()
-        });
+        const homesByOwnerDocId = new Map();
+        for(const h of allHomes){
+          const ownerDocId = String(h.ownerUid || "").trim();
+          if(!ownerDocId) continue;
+          if(!homesByOwnerDocId.has(ownerDocId)) homesByOwnerDocId.set(ownerDocId, []);
+          homesByOwnerDocId.get(ownerDocId).push(h);
+        }
 
-        location.href = `devis.html?eventId=${encodeURIComponent(pickEventId)}`;
-      }catch(e){
-        console.error(e);
-        showAlert("Erreur liaison devis : " + (e?.message || "inconnue"));
+        for(const o of allOwners){
+          const ownerDocId = o.id;
+          if(!ownerDocId) continue;
+
+          const fullName = String(o.fullname || o.displayName || "").trim();
+          const email = normalizeEmail(o.email || "");
+          const phone = String(o.phone || "").trim();
+          const { address1, address2, zip, city, country } = ownerAddress(o);
+
+          // 1) Upsert clients doc
+          const clientDocId = "c_owner_" + ownerDocId; // stable, simple, sans base64
+          const exists = clientsByKey.get(ownerDocId);
+
+          // on ne veut pas écraser une saisie conciergerie si elle a enrichi clients.
+          // Donc merge et on ne met que si vide côté clients (sauf updatedAt).
+          pushOp((batch)=>{
+            const ref = doc(db,"clients", clientDocId);
+            batch.set(ref, {
+              conciergerieUid: currentUser.uid,
+              clientKey: ownerDocId,
+              ownerUid: String(o.uid || "").trim(), // uid auth (si présent)
+              displayName: fullName || (exists?.displayName || ""),
+              email: email || (exists?.email || ""),
+              phone: phone || (exists?.phone || ""),
+              address1: address1 || (exists?.address1 || ""),
+              address2: address2 || (exists?.address2 || ""),
+              zip: zip || (exists?.zip || ""),
+              city: city || (exists?.city || ""),
+              country: country || (exists?.country || "FR"),
+              status: String(o.status || ""),
+              updatedAt: serverTimestamp(),
+              createdAt: exists?.createdAt || serverTimestamp()
+            }, { merge:true });
+          });
+
+          // 2) Hydrate homes snapshot (si vide)
+          const homes = homesByOwnerDocId.get(ownerDocId) || [];
+          for(const h of homes){
+            const hasSnapshot =
+              !!String(h.ownerAccountName || h.ownerFullname || "").trim() ||
+              !!String(h.ownerAddress1 || "").trim() ||
+              !!String(h.ownerZip || "").trim() ||
+              !!String(h.ownerCity || "").trim() ||
+              !!normalizeEmail(h.ownerAccountEmail || h.ownerEmail || "");
+
+            if(hasSnapshot) continue;
+
+            pushOp((batch)=>{
+              batch.update(doc(db,"homes", h.id), {
+                ownerAccountName: fullName || "",
+                ownerFullname: fullName || "",
+                ownerAccountEmail: email || "",
+                ownerEmail: email || "",
+                ownerPhone: phone || "",
+                ownerAddress1: address1 || "",
+                ownerAddress2: address2 || "",
+                ownerZip: zip || "",
+                ownerCity: city || "",
+                ownerCountry: country || "FR",
+                updatedAt: serverTimestamp()
+              });
+            });
+          }
+        }
+
+        await flush();
+        return { commits };
+
+      }catch(err){
+        console.warn("syncOwnersToClientsAndHomes:", err?.message || err);
+        return { commits: 0, error: err };
       }
+    }
+
+    // =========================
+    // UI list model (owners + clients + homes count)
+    // =========================
+    function buildOwnerCards(){
+      const byOwnerDocId = new Map();
+      for(const o of allOwners){
+        byOwnerDocId.set(o.id, { owner:o, homes:[] });
+      }
+      for(const h of allHomes){
+        const ownerDocId = String(h.ownerUid || "").trim();
+        if(!ownerDocId) continue;
+        if(!byOwnerDocId.has(ownerDocId)) continue;
+        byOwnerDocId.get(ownerDocId).homes.push(h);
+      }
+
+      const cards = [];
+      for(const [ownerDocId, obj] of byOwnerDocId.entries()){
+        const o = obj.owner;
+        const homes = obj.homes;
+
+        const c = clientsByKey.get(ownerDocId) || {};
+
+        // display: priorité clients (car facturation), sinon owners
+        const displayName = String(c.displayName || o.fullname || o.displayName || "Propriétaire").trim();
+        const email = normalizeEmail(c.email || o.email || "");
+        const phone = String(c.phone || o.phone || "").trim();
+
+        const addr = [
+          (c.address1 || "").trim(),
+          (c.zip || "").toString().trim(),
+          (c.city || "").trim()
+        ].filter(Boolean).join(" ");
+
+        const cities = new Set();
+        for(const h of homes){
+          const city = String(h.homeCity || h.city || "").trim();
+          if(city) cities.add(city);
+        }
+        const citiesArr = Array.from(cities);
+        const citiesLabel = citiesArr.length ? (citiesArr.slice(0,3).join(", ") + (citiesArr.length>3 ? "…" : "")) : "—";
+
+        cards.push({
+          ownerDocId,
+          status: String(o.status || ""),
+          displayName,
+          email,
+          phone,
+          addr,
+          homes
+        });
+      }
+
+      // tri: actif d'abord + nb logements desc
+      cards.sort((a,b)=>{
+        if(a.status !== b.status){
+          if(a.status === "ACTIVE") return -1;
+          if(b.status === "ACTIVE") return 1;
+        }
+        const dh = (b.homes.length - a.homes.length);
+        if(dh !== 0) return dh;
+        return (a.displayName || "").localeCompare(b.displayName || "");
+      });
+
+      return cards;
     }
 
     function render(){
       const q = norm(searchInput.value || "");
+      const cards = buildOwnerCards();
 
-      const visible = owners.filter(o=>{
-        if(!q) return true;
-        const c = clientsByKey.get(o.clientKey) || {};
+      const visible = !q ? cards : cards.filter(x=>{
         const hay = [
-          o.ownerName, o.ownerEmail,
-          c.phone, c.address1, c.zip, c.city,
-          ...o.homes.map(h=>h.name),
-          ...o.homes.map(h=>h.city),
-          ...o.homes.map(h=>(h.homeAddress || h.address || "")),
+          x.displayName, x.email, x.phone, x.addr, x.status,
+          ...x.homes.map(h=>h.name),
+          ...x.homes.map(h=>h.homeCity || h.city),
+          ...x.homes.map(h=>h.homeAddress || h.address || "")
         ].map(norm).join(" ");
         return hay.includes(q);
       });
@@ -746,29 +710,21 @@
       countLine.textContent = `${visible.length} client(s) • ${allHomes.length} logement(s)`;
 
       clientsList.innerHTML = "";
-
       if(!visible.length){
         clientsList.innerHTML = `
           <div class="item">
             <div class="iMain">
-              <div class="iTitle">${owners.length ? "Aucun résultat" : "Aucun client"}</div>
-              <div class="iSub">${owners.length ? "Change la recherche." : "Ajoute des logements."}</div>
+              <div class="iTitle">${cards.length ? "Aucun résultat" : "Aucun client"}</div>
+              <div class="iSub">${cards.length ? "Change la recherche." : "Crée un logement puis invite le propriétaire."}</div>
             </div>
           </div>
         `;
         return;
       }
 
-      for(const o of visible){
-        const cities = Array.from(o.cities).filter(Boolean);
-        const citiesLabel = cities.length ? cities.slice(0,3).join(", ") + (cities.length>3 ? "…" : "") : "—";
-        const ownerLabel = o.ownerName ? o.ownerName : "Propriétaire";
-        const emailLabel = o.ownerEmail ? o.ownerEmail : "Email manquant";
-
-        const c = clientsByKey.get(o.clientKey) || {};
-        const hasEmail = !!normalizeEmail(c.email || o.ownerEmail);
-
-        const inviteUrl = `invite-proprietaire.html?email=${encodeURIComponent(normalizeEmail(c.email || o.ownerEmail || ""))}&name=${encodeURIComponent(c.displayName || o.ownerName || "")}`;
+      for(const x of visible){
+        const hasEmail = !!normalizeEmail(x.email);
+        const inviteUrl = `invite-proprietaire.html?email=${encodeURIComponent(normalizeEmail(x.email))}&name=${encodeURIComponent(x.displayName)}`;
 
         const div = document.createElement("div");
         div.className = "item";
@@ -776,43 +732,52 @@
           <div class="iMain">
             <div class="iTop">
               <span class="badge ok">👤 CLIENT</span>
-              <span class="badge">${o.homes.length} logement(s)</span>
-              <span class="badge">🏙️ ${esc(citiesLabel)}</span>
+              <span class="badge">${x.homes.length} logement(s)</span>
+              <span class="badge">🏙️ ${esc(
+                (()=>{
+                  const cities = new Set();
+                  for(const h of x.homes){
+                    const c = String(h.homeCity||h.city||"").trim();
+                    if(c) cities.add(c);
+                  }
+                  const arr = Array.from(cities);
+                  return arr.length ? (arr.slice(0,3).join(", ") + (arr.length>3 ? "…" : "")) : "—";
+                })()
+              )}</span>
+              ${x.status ? `<span class="badge blue">${esc(x.status)}</span>` : ``}
               ${hasEmail ? "" : `<span class="badge bad">EMAIL MANQUANT</span>`}
-              ${isPickMode ? `<span class="badge blue">MODE SÉLECTION</span>` : ``}
             </div>
 
-            <div class="iTitle">${esc(c.displayName || ownerLabel)}</div>
-            <div class="iSub">${esc(normalizeEmail(c.email || emailLabel))}</div>
+            <div class="iTitle">${esc(x.displayName)}</div>
+            <div class="iSub">${esc(x.email || "Email manquant")}</div>
 
             <div class="iSub" style="margin-top:6px;">
-              ${c.phone ? `📞 ${esc(c.phone)}` : ""}
-              ${(c.address1 || c.zip || c.city) ? ` • 🧾 ${esc([c.address1, c.zip, c.city].filter(Boolean).join(" "))}` : ""}
+              ${x.phone ? `📞 ${esc(x.phone)}` : ""}
+              ${x.addr ? ` • 🧾 ${esc(x.addr)}` : ""}
             </div>
 
             <details class="acc">
               <summary>
                 <span>🏠 Voir logements</span>
-                <span class="badge">${o.homes.length}</span>
+                <span class="badge">${x.homes.length}</span>
               </summary>
               <div class="accBody"></div>
             </details>
           </div>
 
           <div class="iActions">
-            ${isPickMode ? `<button class="mini" type="button" data-pick="1">✅ Sélectionner</button>` : ``}
-            <button class="mini ghost" type="button" data-edit-client="1">✏️ Modifier</button>
-            <a class="mini" href="${inviteUrl}" ${isPickMode ? `style="display:none;"` : ""}>✉️ Inviter</a>
-            <a class="mini ghost" href="logements.html" ${isPickMode ? `style="display:none;"` : ""}>🏘️ Logements</a>
+            <button class="mini ghost" type="button" data-edit="1">✏️ Modifier</button>
+            <a class="mini" href="${inviteUrl}">✉️ Inviter</a>
+            <a class="mini ghost" href="logements.html">🏘️ Logements</a>
           </div>
         `;
 
         clientsList.appendChild(div);
 
         const body = div.querySelector(".accBody");
-        const homesSorted = o.homes.slice().sort((a,b)=> String(a.name||"").localeCompare(String(b.name||"")));
+        const homesSorted = x.homes.slice().sort((a,b)=> String(a.name||"").localeCompare(String(b.name||"")));
         body.innerHTML = homesSorted.map(h=>{
-          const label = `${h.name || "Logement"}${h.city ? " — " + h.city : ""}`;
+          const label = `${h.name || "Logement"}${(h.homeCity||h.city) ? " — " + (h.homeCity||h.city) : ""}`;
           const addr = (h.homeAddress || h.address || "").trim();
           const type = (h.type || h.homeType || "").trim();
           const planUrl = `planning.html?homeId=${encodeURIComponent(h.id)}`;
@@ -829,72 +794,56 @@
           `;
         }).join("");
 
-        const pickBtn = div.querySelector('button[data-pick="1"]');
-        if(pickBtn){
-          pickBtn.addEventListener("click", ()=> pickThisOwner(o));
-        }
-
-        div.querySelector('button[data-edit-client="1"]').addEventListener("click", ()=>{
-          openClientModal(o);
+        div.querySelector('button[data-edit="1"]').addEventListener("click", ()=>{
+          openClientModal(x.ownerDocId);
         });
       }
     }
 
-    async function loadHomes(){
-      hideAlert();
-      allHomes = [];
-      owners = [];
-
-      try{
-        const qH = query(collection(db,"homes"), where("conciergerieUid","==", currentUser.uid), limit(1200));
-        const snap = await getDocs(qH);
-        allHomes = snap.docs.map(d=>({ id:d.id, ...(d.data()||{}) }));
-
-        await loadClientsCollection();
-        owners = buildOwnersFromHomes(allHomes);
-        render();
-
-      }catch(err){
-        console.error(err);
-        showAlert("Erreur chargement clients : " + (err?.message || "inconnue"));
-        render();
-      }
-    }
-
-    function openClientModal(ownerObj){
+    function openClientModal(ownerDocId){
       hideMAlert();
 
-      editingClientKey = ownerObj.clientKey;
-      editingClientLabelKey = editingClientKey.startsWith("label:") ? editingClientKey : ("label:" + normKey(ownerObj.ownerName || ""));
-      editingClientDocId = safeDocIdFromClientKey(editingClientKey);
+      editingOwnerDocId = String(ownerDocId||"").trim();
+      editingOwner = allOwners.find(o=>o.id===editingOwnerDocId) || null;
+      editingHomes = allHomes.filter(h=>String(h.ownerUid||"").trim()===editingOwnerDocId);
 
-      const c = clientsByKey.get(editingClientKey) || {};
+      const c = clientsByKey.get(editingOwnerDocId) || {};
+      const o = editingOwner || {};
 
-      const defaultName = (c.displayName || ownerObj.ownerName || "").trim();
-      const defaultEmail = normalizeEmail(c.email || ownerObj.ownerEmail || "");
-      const defaultPhone = (c.phone || ownerObj.homes?.[0]?.ownerPhone || "").trim();
+      const fullName = String(c.displayName || o.fullname || o.displayName || "").trim();
+      const email = normalizeEmail(c.email || o.email || "");
+      const phone = String(c.phone || o.phone || "").trim();
 
-      cName.value = defaultName || "";
-      cEmail.value = defaultEmail || "";
-      cPhone.value = defaultPhone || "";
+      const addr = [
+        (c.address1 || "").trim(),
+        (c.zip || "").toString().trim(),
+        (c.city || "").trim()
+      ];
 
-      cAddr1.value = (c.address1 || "").trim();
-      cZip.value = (c.zip || "").toString().trim();
-      cCity.value = (c.city || "").trim();
+      // owners address fallback
+      const oa = (()=>{
+        const addrMap = (o?.address && typeof o.address === "object") ? o.address : {};
+        return {
+          address1: String(addrMap.street || o.address1 || o.addressLine1 || "").trim(),
+          address2: String(addrMap.address2 || o.address2 || "").trim(),
+          zip: String(addrMap.zip || o.zip || "").trim(),
+          city: String(addrMap.city || o.city || "").trim()
+        };
+      })();
 
-      editingHomes = (ownerObj.homes || []).slice();
-
-      resolvedOwnerUid = "";
-      resolvedOwnerName = "";
-      resolvedOwnerEmail = "";
-      linkInfo.textContent = "—";
+      cName.value = fullName || "";
+      cEmail.value = email || "";
+      cPhone.value = phone || "";
+      cAddr1.value = String(c.address1 || oa.address1 || "").trim();
+      cZip.value = String(c.zip || oa.zip || "").trim();
+      cCity.value = String(c.city || oa.city || "").trim();
 
       clientModalTitle.textContent = "Modifier client";
-      clientModalHint.innerHTML = `Fiche <b>clients</b> + sync <b>${editingHomes.length}</b> logement(s) (email/tel/lien compte).`;
+      clientModalHint.innerHTML = `Fiche <b>clients</b> (ownerDocId=${esc(editingOwnerDocId)}) • hydrate <b>${editingHomes.length}</b> logement(s)`;
+      linkInfo.textContent = `ownerDocId: ${editingOwnerDocId}` + (o?.uid ? ` • ownerUid(auth): ${o.uid}` : "");
 
       clientModalBackdrop.style.display = "flex";
       clientModalBackdrop.setAttribute("aria-hidden","false");
-
       setTimeout(()=> cName.focus(), 0);
     }
 
@@ -903,153 +852,16 @@
       clientModalBackdrop.setAttribute("aria-hidden","true");
       clientForm.reset();
       hideMAlert();
-      editingClientKey = "";
-      editingClientLabelKey = "";
-      editingClientDocId = "";
+      editingOwnerDocId = "";
+      editingOwner = null;
       editingHomes = [];
-      resolvedOwnerUid = "";
-      resolvedOwnerName = "";
-      resolvedOwnerEmail = "";
       linkInfo.textContent = "—";
     }
 
     clientCancelBtn.addEventListener("click", closeClientModal);
     clientModalBackdrop.addEventListener("click", (e)=>{ if(e.target === clientModalBackdrop) closeClientModal(); });
 
-    // ===== Lookup owner account by email (users) =====
-    async function lookupOwnerUserByEmail(emailLower){
-      const e = normalizeEmail(emailLower);
-      if(!e) return null;
-
-      // NOTE: si tu n'as pas emailLower dans users, ce bloc retournera vide -> fallback sur where("email","==",e)
-      try{
-        const q1 = query(
-          collection(db, "users"),
-          where("emailLower", "==", e),
-          limit(5)
-        );
-        const s1 = await getDocs(q1);
-        if(!s1.empty){
-          const found = s1.docs
-            .map(d => ({ id: d.id, ...(d.data()||{}) }))
-            .find(u =>
-              String(u.role || "").toLowerCase() === "proprietaire"
-              && String(u.conciergerieUid || "") === currentUser.uid
-            );
-
-          if(found){
-            return {
-              uid: found.id,
-              email: normalizeEmail(found.email || e),
-              fullname: (found.fullname || found.displayName || "").trim()
-            };
-          }
-          return null;
-        }
-      }catch(err){
-        console.warn("lookup emailLower failed:", err);
-      }
-
-      const q2 = query(
-        collection(db, "users"),
-        where("email", "==", e),
-        limit(5)
-      );
-      const s2 = await getDocs(q2);
-      if(s2.empty) return null;
-
-      const found2 = s2.docs
-        .map(d => ({ id: d.id, ...(d.data()||{}) }))
-        .find(u =>
-          String(u.role || "").toLowerCase() === "proprietaire"
-          && String(u.conciergerieUid || "") === currentUser.uid
-        );
-
-      if(!found2) return null;
-
-      return {
-        uid: found2.id,
-        email: normalizeEmail(found2.email || e),
-        fullname: (found2.fullname || found2.displayName || "").trim()
-      };
-    }
-
-    async function maybeResolveOwnerAccount(emailLower){
-      const e = normalizeEmail(emailLower);
-
-      if(!e){
-        resolvedOwnerUid = "";
-        resolvedOwnerName = "";
-        resolvedOwnerEmail = "";
-        linkInfo.textContent = "—";
-        return;
-      }
-
-      linkInfo.textContent = "Recherche du compte propriétaire…";
-
-      try{
-        const found = await lookupOwnerUserByEmail(e);
-
-        if(!found){
-          resolvedOwnerUid = "";
-          resolvedOwnerName = "";
-          resolvedOwnerEmail = e;
-          linkInfo.textContent = "Aucun compte propriétaire trouvé (ou pas rattaché à ta conciergerie).";
-          return;
-        }
-
-        resolvedOwnerUid = found.uid;
-        resolvedOwnerName = found.fullname || "";
-        resolvedOwnerEmail = found.email || e;
-
-        linkInfo.textContent =
-          `✅ Compte lié : ${resolvedOwnerEmail} • UID: ${resolvedOwnerUid}` +
-          (resolvedOwnerName ? ` • ${resolvedOwnerName}` : "");
-
-      }catch(err){
-        console.warn(err);
-        resolvedOwnerUid = "";
-        resolvedOwnerName = "";
-        resolvedOwnerEmail = e;
-        linkInfo.textContent = "Erreur lookup (règles ou index). Vérifie console + lien d’index Firestore si proposé.";
-      }
-    }
-
-    cEmail.addEventListener("blur", async ()=>{ await maybeResolveOwnerAccount(cEmail.value); });
-    cEmail.addEventListener("change", async ()=>{ await maybeResolveOwnerAccount(cEmail.value); });
-
-    async function bulkUpdateHomesByKeys({ oldClientKeys, newClientKey, patchHomes }){
-      const keysSet = new Set((oldClientKeys||[]).filter(Boolean));
-
-      const targets = allHomes.filter(h=>{
-        const k = buildClientKeyFromHome(h);
-        return keysSet.has(k);
-      });
-
-      if(!targets.length) return { updated: 0 };
-
-      let updated = 0;
-      for(let i=0; i<targets.length; i+=450){
-        const chunk = targets.slice(i, i+450);
-        const batch = writeBatch(db);
-        for(const h of chunk){
-          batch.update(doc(db,"homes", h.id), {
-            ...patchHomes,
-            clientKey: newClientKey,
-            updatedAt: serverTimestamp()
-          });
-          updated++;
-        }
-        await batch.commit();
-      }
-      return { updated };
-    }
-
-    clientForm.addEventListener("submit", async (e)=>{
-      e.preventDefault();
-      hideMAlert();
-      hideAlert();
-
+    async function saveClientEdits(){
       const displayName = (cName.value || "").trim();
       const email = normalizeEmail(cEmail.value || "");
       const phone = cleanPhone(cPhone.value || "");
@@ -1057,6 +869,7 @@
       const zip = cleanZip(cZip.value || "");
       const city = (cCity.value || "").trim();
 
+      if(!editingOwnerDocId) return showMAlert("ownerDocId manquant.");
       if(!displayName) return showMAlert("Nom obligatoire.");
       if(zip && !validateZip(zip)) return showMAlert("Code postal invalide (5 chiffres).");
 
@@ -1064,77 +877,89 @@
       clientSaveBtn.style.opacity = "0.75";
 
       try{
-        await maybeResolveOwnerAccount(email);
+        const clientDocId = "c_owner_" + editingOwnerDocId;
 
-        const oldKeys = [editingClientKey];
-        if(editingClientLabelKey && editingClientLabelKey !== editingClientKey) oldKeys.push(editingClientLabelKey);
-
-        let newClientKey = editingClientKey;
-        if(resolvedOwnerUid){
-          newClientKey = resolvedOwnerUid;
-          oldKeys.push(resolvedOwnerUid);
-        }else{
-          newClientKey = "label:" + normKey(displayName);
-          oldKeys.push(newClientKey);
-        }
-
-        const clientDocId = safeDocIdFromClientKey(newClientKey);
-
+        // 1) Upsert clients
         await setDoc(doc(db,"clients", clientDocId), {
           conciergerieUid: currentUser.uid,
-          clientKey: newClientKey,
-
+          clientKey: editingOwnerDocId,
           displayName,
           email: email || "",
           phone: phone || "",
-
           address1: address1 || "",
           zip: zip || "",
           city: city || "",
-
-          ownerUid: resolvedOwnerUid || "",
-          ownerAccountName: resolvedOwnerName || "",
-
-          updatedAt: serverTimestamp(),
-          createdAt: clientsByKey.get(newClientKey)?.createdAt || serverTimestamp()
+          updatedAt: serverTimestamp()
         }, { merge:true });
 
+        // 2) Hydrate homes snapshot (sans toucher ownerUid / lien)
         const patchHomes = {
-          ownerName: displayName,
-          homeOwner: displayName,
-          ownerPhone: phone || "",
-
+          ownerAccountName: displayName,
+          ownerFullname: displayName,
           ownerAccountEmail: email || "",
           ownerEmail: email || "",
-
-          ownerUid: resolvedOwnerUid || "",
-          ownerAccountName: resolvedOwnerName || "",
-          ownerFullname: resolvedOwnerName || ""
+          ownerPhone: phone || "",
+          ownerAddress1: address1 || "",
+          ownerZip: zip || "",
+          ownerCity: city || "",
+          updatedAt: serverTimestamp()
         };
 
-        const res = await bulkUpdateHomesByKeys({
-          oldClientKeys: oldKeys,
-          newClientKey,
-          patchHomes
-        });
+        // batch homes updates
+        const chunk = editingHomes.slice(0);
+        for(let i=0; i<chunk.length; i+=450){
+          const b = writeBatch(db);
+          for(const h of chunk.slice(i, i+450)){
+            b.update(doc(db,"homes", h.id), patchHomes);
+          }
+          await b.commit();
+        }
 
-        showMAlert(`✅ Client enregistré.\n• homes synchronisés: ${res.updated}`, true);
+        showMAlert("✅ Client enregistré + logements hydratés.", true);
 
+        // reload minimal
+        await loadClientsCollection();
         await loadHomes();
+        render();
         closeClientModal();
         showAlert("✅ Client mis à jour.", true);
 
       }catch(err){
         console.error(err);
-        showMAlert("Erreur enregistrement client : " + (err?.message || "inconnue"));
+        showMAlert("Erreur enregistrement : " + (err?.message || "inconnue"));
       }finally{
         clientSaveBtn.disabled = false;
         clientSaveBtn.style.opacity = "1";
       }
+    }
+
+    clientForm.addEventListener("submit", async (e)=>{
+      e.preventDefault();
+      hideMAlert();
+      await saveClientEdits();
     });
 
     searchInput.addEventListener("input", render);
-    refreshBtn.addEventListener("click", ()=> loadHomes());
+
+    async function reloadAll(){
+      hideAlert();
+
+      await loadClientsCollection();
+      await loadOwners();
+      await loadHomes();
+
+      // SYNC automatique (c’est ça qui fait “profil proprio -> client” sans toucher profil-proprietaire.html)
+      const syncRes = await syncOwnersToClientsAndHomes();
+      if(syncRes?.error){
+        showAlert("⚠️ Sync partielle : " + (syncRes.error?.message || "erreur") + "\nLa liste s’affiche quand même.", false);
+      }
+
+      // reload clients après sync (pour voir direct)
+      await loadClientsCollection();
+      render();
+    }
+
+    refreshBtn.addEventListener("click", reloadAll);
 
     onAuthStateChanged(auth, async (user)=>{
       if(!user){
@@ -1148,9 +973,7 @@
       }
       currentUser = user;
       emailLine.textContent = user.email || user.uid;
-
-      setupPickModeUI();
-      await loadHomes();
+      await reloadAll();
     });
   </script>
 </body>
