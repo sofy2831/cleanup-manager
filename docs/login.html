@@ -1,4 +1,4 @@
-<!-- docs/login.html (FINAL — flux propre owner / conciergerie) -->
+<!-- docs/login.html (PATCHED — reset mdp + messages erreur + flux owner/conciergerie) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -45,7 +45,9 @@
       border-radius:14px; background:#fff;
       border-left:5px solid var(--bad);
       font-size:12px; font-weight:900;
+      white-space:pre-wrap;
     }
+    .msg.ok{ border-left-color: var(--ok); }
 
     form{ margin-top:12px; display:flex; flex-direction:column; gap:10px; }
     label{ font-size:12px; font-weight:900; }
@@ -53,6 +55,11 @@
       padding:11px 12px; border-radius:14px;
       border:1px solid rgba(0,0,0,0.12);
       font-weight:800;
+      outline:none;
+    }
+    input:focus{
+      border-color: var(--violet);
+      box-shadow:0 0 0 2px rgba(122,92,255,.15);
     }
     .btn{
       margin-top:6px;
@@ -88,14 +95,14 @@
 
     <div class="msg" id="msgBox"></div>
 
-    <form id="loginForm">
+    <form id="loginForm" autocomplete="on">
       <label>Email</label>
-      <input id="email" type="email" required>
+      <input id="email" type="email" required autocomplete="email">
 
       <label>Mot de passe</label>
-      <input id="password" type="password" required>
+      <input id="password" type="password" required autocomplete="current-password">
 
-      <button class="btn" id="submitBtn">Se connecter</button>
+      <button class="btn" id="submitBtn" type="submit">Se connecter</button>
 
       <div class="rowLinks">
         <a class="link" href="#" id="resetLink">Mot de passe oublié</a>
@@ -107,50 +114,95 @@
 
 <script type="module">
 import { auth, db } from "./firebase-init.js";
-import { signInWithEmailAndPassword, sendPasswordResetEmail } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+import {
+  signInWithEmailAndPassword,
+  sendPasswordResetEmail
+} from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
 import { doc, getDoc } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
 const form = document.getElementById("loginForm");
 const msgBox = document.getElementById("msgBox");
 const submitBtn = document.getElementById("submitBtn");
-const titleH1 = document.getElementById("titleH1");
 const subtitleP = document.getElementById("subtitleP");
+const resetLink = document.getElementById("resetLink");
+
+const emailEl = document.getElementById("email");
+const passEl  = document.getElementById("password");
 
 const params = new URLSearchParams(location.search);
 const role = (params.get("role") || "conciergerie").toLowerCase();
-const token = params.get("token");
+const token = (params.get("token") || "").trim();
 
 subtitleP.textContent =
   role === "proprietaire"
     ? (token ? "Connexion pour finaliser l’invitation." : "Accès à ton espace propriétaire.")
     : "Accès à ton espace conciergerie.";
 
-function showMsg(t){
+function showMsg(t, ok=false){
   msgBox.style.display="block";
+  msgBox.classList.toggle("ok", !!ok);
   msgBox.textContent=t;
 }
 
-form.addEventListener("submit", async e=>{
+function humanAuthError(err){
+  const code = (err && err.code) ? String(err.code) : "";
+  switch(code){
+    case "auth/invalid-email": return "Email invalide.";
+    case "auth/user-disabled": return "Compte désactivé.";
+    case "auth/user-not-found": return "Compte introuvable (cet email n’existe pas dans Firebase Auth).";
+    case "auth/wrong-password": return "Mot de passe incorrect.";
+    case "auth/invalid-credential": return "Identifiants invalides (email ou mot de passe).";
+    case "auth/too-many-requests": return "Trop d’essais. Attends un peu et réessaie.";
+    default: return "Erreur connexion : " + (err?.message || "inconnue");
+  }
+}
+
+resetLink.addEventListener("click", async (e)=>{
   e.preventDefault();
-  submitBtn.disabled=true;
   msgBox.style.display="none";
 
-  try{
-    const email = document.getElementById("email").value.trim().toLowerCase();
-    const pass  = document.getElementById("password").value;
+  const email = (emailEl.value || "").trim().toLowerCase();
+  if(!email){
+    showMsg("Entre ton email, puis clique à nouveau sur “Mot de passe oublié”.");
+    emailEl.focus();
+    return;
+  }
 
-    const cred = await signInWithEmailAndPassword(auth,email,pass);
+  resetLink.style.pointerEvents = "none";
+  resetLink.style.opacity = "0.6";
+
+  try{
+    await sendPasswordResetEmail(auth, email);
+    showMsg("✅ Email de réinitialisation envoyé.\nRegarde ta boîte + spams.", true);
+  }catch(err){
+    showMsg(humanAuthError(err));
+  }finally{
+    resetLink.style.pointerEvents = "auto";
+    resetLink.style.opacity = "1";
+  }
+});
+
+form.addEventListener("submit", async (e)=>{
+  e.preventDefault();
+  submitBtn.disabled = true;
+  msgBox.style.display = "none";
+
+  try{
+    const email = (emailEl.value || "").trim().toLowerCase();
+    const pass  = (passEl.value || "");
+
+    const cred = await signInWithEmailAndPassword(auth, email, pass);
     const user = cred.user;
 
-    // 🔑 PROPRIÉTAIRE
+    // PROPRIÉTAIRE
     if(role === "proprietaire"){
       if(token){
         location.replace("invite-proprietaire.html?token="+encodeURIComponent(token));
         return;
       }
 
-      const us = await getDoc(doc(db,"users",user.uid));
-      const u  = us.exists() ? us.data() : {};
+      const us = await getDoc(doc(db,"users", user.uid));
+      const u  = us.exists() ? (us.data() || {}) : {};
 
       if(!u.ownerDocId){
         location.replace("profil-proprietaire.html?self=1");
@@ -160,12 +212,12 @@ form.addEventListener("submit", async e=>{
       return;
     }
 
-    // 🔑 CONCIERGERIE
+    // CONCIERGERIE
     location.replace("conciergerie.html");
 
   }catch(err){
-    showMsg("Erreur connexion.");
-    submitBtn.disabled=false;
+    showMsg(humanAuthError(err));
+    submitBtn.disabled = false;
   }
 });
 </script>
