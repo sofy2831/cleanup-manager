@@ -1,4 +1,4 @@
-<!-- docs/profil-proprietaire.html (COMPLET + FIX permissions/undefined + owners whitelist) -->
+<!-- docs/profil-proprietaire.html (COMPLET + FIX — self mode robuste, owners.address + compat champs plats, pas d’undefined, whitelist safe) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -192,7 +192,7 @@
       <section class="card">
         <div class="rowTop">
           <div class="title">
-            <h2 id="cardTitle">Nouveau propriétaire</h2>
+            <h2 id="cardTitle">Mon profil</h2>
             <div class="tiny" id="ownerIdLine">—</div>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
@@ -322,6 +322,8 @@
   let selfOwnerDocId = "";       // users/{uid}.ownerDocId
   let selfConciergerieUid = "";  // users/{uid}.conciergerieUid
 
+  function safeStr(v){ return (v === undefined || v === null) ? "" : String(v); }
+
   function showAlert(msg, ok=false){
     alertBox.style.display = "block";
     alertBox.classList.toggle("ok", !!ok);
@@ -355,36 +357,55 @@
     notes.value = "";
   }
 
-  function serialize(){
+  // Payload unique (form)
+  function serializeForm(){
+    const fullname = (displayName.value || "").trim();
+    const emailStr = (email.value || "").trim();
+    const phoneStr = (phone.value || "").trim();
+
+    const street = (address1.value || "").trim();
+    const addr2  = (address2.value || "").trim();
+    const z      = (zip.value || "").trim();
+    const c      = (city.value || "").trim();
+    const ct     = (country.value || "FR").trim();
+
     return {
-      displayName: (displayName.value || "").trim(),
-      // email: owner en self -> on le garde readOnly, mais on ne l’écrit PAS dans owners
-      email: (email.value || "").trim(),
-      phone: (phone.value || "").trim(),
-      address1: (address1.value || "").trim(),
-      address2: (address2.value || "").trim(),
-      zip: (zip.value || "").trim(),
-      city: (city.value || "").trim(),
-      country: (country.value || "FR").trim(),
+      fullname,
+      email: emailStr,
+      phone: phoneStr,
+      address: { street, address2: addr2, zip: z, city: c, country: ct },
+
+      // compat champs plats (si d’autres pages les utilisent déjà)
+      address1: street,
+      address2: addr2,
+      zip: z,
+      city: c,
+      country: ct,
+
       siret: (siret.value || "").trim(),
       vat: (vat.value || "").trim(),
       notes: (notes.value || "").trim(),
-      updatedAt: serverTimestamp()
     };
   }
 
-  function apply(data){
-    displayName.value = data.displayName || data.fullname || "";
-    email.value = data.email || email.value || "";
-    phone.value = data.phone || "";
-    address1.value = data.address1 || "";
-    address2.value = data.address2 || "";
-    zip.value = data.zip || "";
-    city.value = data.city || "";
-    country.value = data.country || "FR";
-    siret.value = data.siret || "";
-    vat.value = data.vat || "";
-    notes.value = data.notes || "";
+  function applyData(data){
+    // support: owners.address + champs plats + anciennes clés
+    const addr = (data.address && typeof data.address === "object") ? data.address : {};
+
+    displayName.value = safeStr(data.displayName || data.fullname || "");
+    email.value = safeStr(data.email || email.value || "");
+
+    phone.value = safeStr(data.phone || "");
+
+    address1.value = safeStr(addr.street || data.address1 || "");
+    address2.value = safeStr(addr.address2 || data.address2 || "");
+    zip.value      = safeStr(addr.zip || data.zip || "");
+    city.value     = safeStr(addr.city || data.city || "");
+    country.value  = safeStr(addr.country || data.country || "FR");
+
+    siret.value = safeStr(data.siret || "");
+    vat.value   = safeStr(data.vat || "");
+    notes.value = safeStr(data.notes || "");
   }
 
   function buildOwnerDashUrl(){
@@ -404,7 +425,7 @@
 
     if(conciergerieNav) conciergerieNav.style.display = "none";
 
-    // email toujours celui du compte
+    // email = celui du compte
     email.readOnly = true;
     email.value = currentUser?.email || "";
   }
@@ -416,7 +437,7 @@
     if(isSelfMode()){
       await setupSelfUi();
 
-      // 1) Charger users/{uid} (source de vérité compte)
+      // 1) users/{uid} = source de vérité compte
       let u = null;
       try{
         const snapU = await getDoc(doc(db, "users", currentUser.uid));
@@ -424,27 +445,27 @@
       }catch(_){}
 
       if(u){
-        selfOwnerDocId = String(u.ownerDocId || "").trim();
-        selfConciergerieUid = String(u.conciergerieUid || "").trim();
-        apply(u);
+        selfOwnerDocId = safeStr(u.ownerDocId).trim();
+        selfConciergerieUid = safeStr(u.conciergerieUid).trim();
+        applyData(u);
       }else{
         clearForm();
         email.value = currentUser?.email || "";
         email.readOnly = true;
       }
 
-      // 2) Charger owners/{ownerDocId} si dispo (peut échouer si invitation pas finalisée)
+      // 2) owners/{ownerDocId} si dispo
       if(selfOwnerDocId){
         try{
           const osnap = await getDoc(doc(db,"owners", selfOwnerDocId));
           if(osnap.exists()){
-            apply(osnap.data() || {});
+            applyData(osnap.data() || {});
+            ownerIdLine.textContent = "Owner ID : " + selfOwnerDocId;
           }else{
             showAlert("⚠️ owners/" + selfOwnerDocId + " introuvable. Demande à la conciergerie de régénérer/valider l’invitation.", false);
           }
         }catch(err){
-          // permissions = invitation pas finalisée (owners.uid != auth.uid)
-          showAlert("⚠️ Accès owners refusé. L’invitation n’est pas finalisée (owners.uid ≠ ton uid). Reconnecte-toi via le lien d’invitation.", false);
+          showAlert("⚠️ Accès owners refusé. Reconnecte-toi via le lien d’invitation.", false);
           console.warn(err);
         }
       }else{
@@ -453,7 +474,7 @@
       return;
     }
 
-    // ===== MODE CONCIERGERIE (gestion owners/{ownerId}) =====
+    // ===== MODE CONCIERGERIE (édition owners/{ownerId}) =====
     ownerId = getParam("ownerId");
     const returnTo = getParam("returnTo");
     backBtn.href = returnTo ? `${returnTo}.html` : "clients.html";
@@ -481,14 +502,14 @@
         return;
       }
       const data = snap.data() || {};
-      if(data.conciergerieUid !== currentUser.uid){
+      if(String(data.conciergerieUid||"") !== String(currentUser.uid||"")){
         showAlert("Accès refusé : ce propriétaire n’appartient pas à ce compte.");
         clearForm();
         deleteBtn.disabled = true;
         copyBtn.disabled = true;
         return;
       }
-      apply(data);
+      applyData(data);
     }catch(err){
       console.error(err);
       showAlert("Erreur chargement propriétaire : " + (err?.message || "inconnue"));
@@ -498,8 +519,8 @@
   async function saveOwner(){
     hideAlert();
 
-    const payload = serialize();
-    if(!payload.displayName){
+    const p = serializeForm();
+    if(!p.fullname){
       showAlert("Nom / Société obligatoire.");
       return;
     }
@@ -511,43 +532,66 @@
       if(isSelfMode()){
         const uid = currentUser.uid;
 
-        // ✅ users/{uid} (compte) — pas de undefined
-        const baseUser = {
+        // users/{uid} (compte) : on stocke à plat + address (utile pour partout)
+        const userPayload = {
           uid,
           role: "proprietaire",
-          email: currentUser.email || payload.email || "",
-          fullname: payload.displayName,
+          email: currentUser.email || p.email || "",
+          fullname: p.fullname,
 
-          phone: payload.phone || "",
-          address1: payload.address1 || "",
-          address2: payload.address2 || "",
-          zip: payload.zip || "",
-          city: payload.city || "",
-          country: payload.country || "FR",
-          siret: payload.siret || "",
-          vat: payload.vat || "",
-          notes: payload.notes || "",
+          phone: p.phone || "",
 
+          // champs plats compat
+          address1: p.address.street || "",
+          address2: p.address.address2 || "",
+          zip: p.address.zip || "",
+          city: p.address.city || "",
+          country: p.address.country || "FR",
+
+          // structuré
+          address: {
+            street: p.address.street || "",
+            address2: p.address.address2 || "",
+            zip: p.address.zip || "",
+            city: p.address.city || "",
+            country: p.address.country || "FR"
+          },
+
+          siret: p.siret || "",
+          vat: p.vat || "",
+          notes: p.notes || "",
           updatedAt: serverTimestamp()
         };
-        if(selfConciergerieUid) baseUser.conciergerieUid = selfConciergerieUid;
-        if(selfOwnerDocId) baseUser.ownerDocId = selfOwnerDocId;
+        if(selfConciergerieUid) userPayload.conciergerieUid = selfConciergerieUid;
+        if(selfOwnerDocId) userPayload.ownerDocId = selfOwnerDocId;
 
-        await setDoc(doc(db, "users", uid), baseUser, { merge:true });
+        await setDoc(doc(db, "users", uid), userPayload, { merge:true });
 
-        // ✅ owners/{ownerDocId} : WHITELIST champs autorisés (ne pas réécrire email/uid/status/conciergerieUid)
+        // owners/{ownerDocId} : WHITELIST (ne pas toucher à email/uid/status/conciergerieUid)
         if(selfOwnerDocId){
           await setDoc(doc(db, "owners", selfOwnerDocId), {
-            fullname: payload.displayName,
-            phone: payload.phone || "",
-            address1: payload.address1 || "",
-            address2: payload.address2 || "",
-            zip: payload.zip || "",
-            city: payload.city || "",
-            country: payload.country || "FR",
-            siret: payload.siret || "",
-            vat: payload.vat || "",
-            notes: payload.notes || "",
+            fullname: p.fullname,
+            phone: p.phone || "",
+
+            // compat
+            address1: p.address.street || "",
+            address2: p.address.address2 || "",
+            zip: p.address.zip || "",
+            city: p.address.city || "",
+            country: p.address.country || "FR",
+
+            // struct
+            address: {
+              street: p.address.street || "",
+              address2: p.address.address2 || "",
+              zip: p.address.zip || "",
+              city: p.address.city || "",
+              country: p.address.country || "FR"
+            },
+
+            siret: p.siret || "",
+            vat: p.vat || "",
+            notes: p.notes || "",
             updatedAt: serverTimestamp()
           }, { merge:true });
         }
@@ -564,18 +608,29 @@
 
       // ===== MODE CONCIERGERIE (création/édition owners/{id}) =====
       const conciergeriePayload = {
-        // mapping : ta collection owners utilise fullname, pas displayName
-        fullname: payload.displayName,
-        email: payload.email,
-        phone: payload.phone,
-        address1: payload.address1,
-        address2: payload.address2,
-        zip: payload.zip,
-        city: payload.city,
-        country: payload.country || "FR",
-        siret: payload.siret,
-        vat: payload.vat,
-        notes: payload.notes,
+        fullname: p.fullname,
+        email: p.email || "",
+        emailLower: (p.email || "").trim().toLowerCase(),
+        phone: p.phone || "",
+
+        // compat + struct
+        address1: p.address.street || "",
+        address2: p.address.address2 || "",
+        zip: p.address.zip || "",
+        city: p.address.city || "",
+        country: p.address.country || "FR",
+        address: {
+          street: p.address.street || "",
+          address2: p.address.address2 || "",
+          zip: p.address.zip || "",
+          city: p.address.city || "",
+          country: p.address.country || "FR"
+        },
+
+        siret: p.siret || "",
+        vat: p.vat || "",
+        notes: p.notes || "",
+
         updatedAt: serverTimestamp(),
         conciergerieUid: currentUser.uid
       };
@@ -587,7 +642,8 @@
         await setDoc(ref, {
           ownerDocId: ownerId,
           uid: "",             // Auth UID inconnu tant que le proprio n'a pas accepté
-          status: "INVITED",   // ✅ état initial
+          status: "INVITED",
+          isActive: true,
           ...conciergeriePayload,
           createdAt: serverTimestamp()
         });
@@ -597,8 +653,7 @@
         return;
       }
 
-      const ref = doc(db, "owners", ownerId);
-      await updateDoc(ref, conciergeriePayload);
+      await updateDoc(doc(db, "owners", ownerId), conciergeriePayload);
       showAlert("✅ Enregistré.", true);
 
     }catch(err){
@@ -627,6 +682,7 @@
     }
   }
 
+  // Buttons
   newBtn.addEventListener("click", ()=> location.href = "profil-proprietaire.html");
 
   copyBtn.addEventListener("click", async ()=>{
@@ -648,6 +704,7 @@
     location.href = "index.html";
   });
 
+  // Init
   onAuthStateChanged(auth, async (user)=>{
     if(!user){
       const role = isSelfMode() ? "proprietaire" : "conciergerie";
