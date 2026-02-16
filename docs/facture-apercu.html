@@ -1,4 +1,4 @@
-<!-- docs/facture-apercu.html (FINAL — PATCH: adresse client robuste + FIX lignes prestations + CSS) -->
+<!-- docs/facture-apercu.html (FINAL — PATCH: support draft=1 via sessionStorage + titre BROUILLON) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -243,7 +243,6 @@
 
       .docTitle{ margin-top:6px !important; }
 
-      /* ✅ FORCER 2 COLONNES EN IMPRESSION */
       .grid2{ grid-template-columns: 1fr 1fr !important; gap:6px !important; }
 
       .summary{ gap:6px !important; }
@@ -437,6 +436,7 @@
     // state
     let docKind = ""; // "SALES" | "EVENT"
     let docData = null;
+    let isDraftPreview = false;
 
     function showError(msg){
       alertBox.style.display = "block";
@@ -532,7 +532,6 @@
       return isNaN(d.getTime()) ? null : d;
     }
 
-    // ✅ adresse robuste (comme dans facture.html)
     function extractAddr(obj){
       const o = obj || {};
       const a = (o.address && typeof o.address === "object") ? o.address : null;
@@ -625,7 +624,14 @@
     }
 
     function renderDocHeader(d){
-      docTitleEl.textContent = `FACTURE N° ${d?.invoiceNumber || "—"}`;
+      const invNum = String(d?.invoiceNumber || "").trim();
+      if(invNum){
+        docTitleEl.textContent = `FACTURE N° ${invNum}`;
+      }else{
+        // ✅ demandé : FACTURE N° — (BROUILLON)
+        docTitleEl.textContent = `FACTURE N° — (BROUILLON)`;
+      }
+
       const { issuedLabel, due } = computeInvoiceDates(d);
 
       metaRightEl.innerHTML = `
@@ -753,7 +759,6 @@
     }
 
     function clientSnapshot(d){
-      // SALES snapshot
       const sName = String(d?.clientName || "").trim();
       const sEmail = normalizeEmail(d?.clientEmail || "");
       const sPhone = String(d?.clientPhone || "").trim();
@@ -763,7 +768,6 @@
       const sCity = String(d?.clientCity || "").trim();
       const sCountry = String(d?.clientCountry || "FR").trim();
 
-      // EVENT snapshot
       const eName = String(d?.ownerName || "").trim();
       const eEmail = normalizeEmail(d?.ownerEmail || "");
       const ePhone = String(d?.ownerPhone || "").trim();
@@ -827,10 +831,10 @@
       }else{
         for(const l of arr){
           const qty = Number(l?.qty)||0;
-          const up = Number(l?.unitPrice)||0;            // PU HT
+          const up = Number(l?.unitPrice)||0;
           const ht = qty * up;
           const tva = vatEnabled ? (ht * vatRate) : 0;
-          const total = ht + tva;                        // Total TTC par ligne
+          const total = ht + tva;
           const label = String(l?.label || "Prestation").trim();
 
           const tr = document.createElement("tr");
@@ -866,7 +870,6 @@
         ? Number(businessProfile.conditions.cancellationPercent)
         : 30;
 
-      // ✅ pas d’échéance en Conditions (déjà en haut à droite)
       cond1.innerHTML = `<b>Référence devis</b> : ${esc(String(d?.quoteNumber || "—"))}`;
       cond2.innerHTML = `<b>Annulation</b> : ${esc(String(cancelPct))} % du montant en cas d’annulation moins de 48 h avant l’intervention.`;
       cond3.innerHTML = `&nbsp;`;
@@ -923,6 +926,19 @@
 
     printBtn.addEventListener("click", ()=> window.print());
 
+    function loadDraftFromSession(expectedId){
+      try{
+        const raw = sessionStorage.getItem("invoiceDraftPreview");
+        if(!raw) return null;
+        const draft = JSON.parse(raw);
+        if(!draft || typeof draft !== "object") return null;
+        if(expectedId && String(draft.id || "") !== String(expectedId)) return null;
+        return draft;
+      }catch(e){
+        return null;
+      }
+    }
+
     onAuthStateChanged(auth, async (user)=>{
       if(!user){
         location.href = "login.html?role=conciergerie";
@@ -931,6 +947,7 @@
 
       const docId = getParam("docId");
       const eventId = getParam("eventId");
+      isDraftPreview = (getParam("draft") === "1");
 
       if(!docId && !eventId){
         backLink.href = "factures-liste.html";
@@ -943,7 +960,7 @@
         : `facture.html?eventId=${encodeURIComponent(eventId)}`;
 
       try{
-        // 1) doc
+        // 1) doc source
         let snap = null;
         if(docId){
           docKind = "SALES";
@@ -961,9 +978,14 @@
           return showError("Accès refusé (document d’une autre conciergerie).");
         }
 
-        // 3) numéro obligatoire
-        if(!String(docData.invoiceNumber || "").trim()){
-          return showError("Numéro de facture manquant. Enregistre la facture avant l’aperçu.");
+        // ✅ 3) draft merge (pour aperçu avant save)
+        if(isDraftPreview){
+          const expectedId = docId ? docId : eventId;
+          const draft = loadDraftFromSession(expectedId);
+          if(draft){
+            // merge draft over firestore (sans casser lignes/home/etc)
+            docData = { ...docData, ...draft, id: docData.id };
+          }
         }
 
         // 4) profile
