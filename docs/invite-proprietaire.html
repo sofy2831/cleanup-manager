@@ -1,4 +1,4 @@
-<!-- docs/invite-proprietaire.html (COMPLET + FIX LINKING — ownerUid = ownerDocId) -->
+<!-- docs/invite-proprietaire.html (COMPLET + FIX DATA — ownerUid = ownerDocId + emailLower/isActive/address + prefill email/name) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -455,6 +455,8 @@
     const token = getParam("token");                 // mode owner
     const homeIdParam  = getParam("homeId");         // mode conciergerie: associer l'invite à un home
     const fromParam    = getParam("from");           // retour
+    const prefillEmail = normalizeEmail(getParam("email")); // ✅ préremplissage depuis logements
+    const prefillName  = (getParam("name") || "").trim();   // ✅
 
     // conserver token si "j'ai déjà un accès"
     alreadyLink.href = token
@@ -500,8 +502,8 @@
       }
     }
 
-    // ✅ FIX LINKING: ownerUid = ownerDocId (et pas auth uid)
-    async function autoLinkHomesForOwner(conciergerieUid, emailLower, tokenValue, uid, ownerDocId){
+    // ✅ FIX LINKING: ownerUid = ownerDocId
+    async function autoLinkHomesForOwner(conciergerieUid, emailLower, tokenValue, ownerDocId){
       const qH = query(
         collection(db, "homes"),
         where("conciergerieUid", "==", String(conciergerieUid)),
@@ -517,10 +519,10 @@
 
       snap.docs.forEach(d=>{
         batch.update(d.ref, {
-          conciergerieUid: String(conciergerieUid), // ok rules
+          conciergerieUid: String(conciergerieUid),
 
-          // ✅ source de vérité client côté homes = owners/{ownerDocId}
-          ownerUid: String(ownerDocId),
+          // ✅ source de vérité côté homes = owners/{ownerDocId}
+          ownerUid: String(ownerDocId),   // compat
           ownerDocId: String(ownerDocId),
 
           ownerLinkStatus: "LINKED",
@@ -648,13 +650,16 @@
           updatedAt: serverTimestamp()
         }, { merge:true });
 
-        // owners/{ownerDocId}
+        // owners/{ownerDocId} ✅ emailLower/isActive/address
         await setDoc(doc(db, "owners", ownerDocId), {
           ownerDocId,
           conciergerieUid,
           email: userEmail,
+          emailLower: userEmail,
           uid: user.uid,
           status: "ACTIVE",
+          isActive: true,
+          address: { street:"", address2:"", zip:"", city:"", country:"FR" },
           acceptedAt: serverTimestamp(),
           updatedAt: serverTimestamp()
         }, { merge:true });
@@ -668,7 +673,7 @@
         });
 
         // homes auto-link
-        const linkedCount = await autoLinkHomesForOwner(conciergerieUid, userEmail, token, user.uid, ownerDocId);
+        const linkedCount = await autoLinkHomesForOwner(conciergerieUid, userEmail, token, ownerDocId);
 
         showAlert(alertOwner, `✅ Compte lié. Logements liés : ${linkedCount}. Redirection profil…`, true);
         setTimeout(()=> location.href = profileRedirectUrl(), 650);
@@ -735,15 +740,18 @@
           updatedAt: serverTimestamp()
         }, { merge: true });
 
-        // owners
+        // owners ✅ emailLower/isActive/address
         await setDoc(doc(db, "owners", ownerDocId), {
           ownerDocId,
           conciergerieUid,
           email,
+          emailLower: email,
           fullname,
           phone: phone || "",
           uid,
           status: "ACTIVE",
+          isActive: true,
+          address: { street:"", address2:"", zip:"", city:"", country:"FR" },
           acceptedAt: serverTimestamp(),
           updatedAt: serverTimestamp()
         }, { merge: true });
@@ -757,7 +765,7 @@
         });
 
         // homes link
-        const linkedCount = await autoLinkHomesForOwner(conciergerieUid, email, token, uid, ownerDocId);
+        const linkedCount = await autoLinkHomesForOwner(conciergerieUid, email, token, ownerDocId);
 
         showAlert(alertOwner, `✅ Accès créé. Logements liés : ${linkedCount}. Redirection profil…`, true);
         setTimeout(()=> location.href = profileRedirectUrl(), 650);
@@ -828,6 +836,10 @@
       badgeLine.textContent = "Connexion conciergerie requise";
       hideAlert(alertConciergerie);
 
+      // ✅ préfill depuis URL (logements)
+      if(prefillEmail && !genEmail.value) genEmail.value = prefillEmail;
+      if(prefillName && !genName.value) genName.value = prefillName;
+
       let wired = false;
 
       onAuthStateChanged(auth, async (user)=>{
@@ -877,32 +889,31 @@
           try{
             const t = randToken(24);
 
-            // owners INVITED
+            // owners INVITED ✅ emailLower/isActive/address
             const ownerRef = doc(collection(db, "owners"));
             const ownerDocId = ownerRef.id;
 
             await setDoc(ownerRef, {
-  ownerDocId,
-  conciergerieUid: user.uid,
+              ownerDocId,
+              conciergerieUid: user.uid,
 
-  email,
-  emailLower: email,          // ✅ ajouté
-  fullname: name || "",
-  phone: "",
+              email,
+              emailLower: email,
+              fullname: name || "",
+              phone: "",
 
-  status: "INVITED",
-  isActive: true,             // ✅ ajouté
+              status: "INVITED",
+              isActive: true,
 
-  uid: "",
-  inviteToken: t,
-  invitedBy: user.email || user.uid,
+              uid: "",
+              inviteToken: t,
+              invitedBy: user.email || user.uid,
 
-  // ✅ format adresse compatible avec ton extractAddr()
-  address: { street:"", address2:"", zip:"", city:"", country:"FR" },
+              address: { street:"", address2:"", zip:"", city:"", country:"FR" },
 
-  createdAt: serverTimestamp(),
-  updatedAt: serverTimestamp()
-}, { merge: true });
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp()
+            }, { merge: true });
 
             // invite
             await setDoc(doc(db, "invites", t), {
@@ -973,4 +984,3 @@
   </script>
 </body>
 </html>
-
