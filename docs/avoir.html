@@ -1,4 +1,4 @@
-<!-- docs/avoir.html (FINAL — Avoir: création depuis facture (fromDocId) + ouverture (docId), numéro AV, lie à facture -> invoiceStatus=CREDITED + avoirId) -->
+<!-- docs/avoir.html (FINAL — création/lecture d’un AVOIR depuis une facture, salesDocuments type:"CREDIT") -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -257,7 +257,7 @@
 <body>
   <div class="page">
     <div class="topbar">
-      <a class="pill-link" id="backLink" href="factures-liste.html">← Retour</a>
+      <a class="pill-link" id="backBtn" href="factures-liste.html">← Retour</a>
       <span></span>
     </div>
 
@@ -269,7 +269,7 @@
       <h1 id="appTitle">—</h1>
     </div>
 
-    <div class="subtitle">Avoir (annulation / crédit)</div>
+    <div class="subtitle">Avoir</div>
     <div class="badge" id="statusBadge">—</div>
 
     <div class="docBanner">
@@ -301,8 +301,8 @@
     <div class="layout">
       <div class="card">
         <div class="card-title">
-          <span>Référence</span>
-          <span class="small">facture source + logement</span>
+          <span>Récapitulatif</span>
+          <span class="small">facture source</span>
         </div>
 
         <div class="alert" id="alertBox"></div>
@@ -312,7 +312,7 @@
 
         <div class="card-title" style="font-size:14px; margin-bottom:6px;">
           <span>Lignes</span>
-          <span class="small">copiées de la facture</span>
+          <span class="small">copie facture</span>
         </div>
 
         <div class="linesCards" id="linesCards"></div>
@@ -339,29 +339,32 @@
       <div class="card">
         <div class="card-title">
           <span>Gestion avoir</span>
-          <span class="small">raison + émission</span>
+          <span class="small">2 actions</span>
         </div>
 
-        <label for="creditReason">Motif (interne)</label>
-        <textarea id="creditReason" rows="3" placeholder="Ex : annulation séjour / erreur facture / remise commerciale…"></textarea>
-
-        <label for="creditMode">Type d’avoir</label>
-        <select id="creditMode">
-          <option value="FULL">Total (annule la facture)</option>
-          <option value="PARTIAL">Partiel (crédit partiel)</option>
+        <label for="reasonSelect">Motif</label>
+        <select id="reasonSelect">
+          <option value="ANNULATION">Annulation</option>
+          <option value="ERREUR_FACTURATION">Erreur de facturation</option>
+          <option value="GESTE_COMMERCIAL">Geste commercial</option>
+          <option value="PRESTATION_NON_FAITE">Prestation non faite</option>
+          <option value="AUTRE">Autre</option>
         </select>
+
+        <label for="creditNotes">Notes internes</label>
+        <textarea id="creditNotes" rows="4" placeholder="Interne (non affichée au client)"></textarea>
 
         <div class="divider"></div>
 
-        <div class="card-title" style="font-size:14px; margin-bottom:6px;">
-          <span>Infos</span>
-          <span class="small">TVA / totaux</span>
-        </div>
         <div class="kv" id="infoKv"></div>
 
         <div class="actions">
-          <button class="btn primary" type="button" id="saveBtn">Émettre l’avoir (créer numéro)</button>
+          <button class="btn primary" type="button" id="saveBtn">Enregistrer (créer numéro)</button>
           <button class="btn" type="button" id="previewBtn">Aperçu / Imprimer</button>
+        </div>
+
+        <div style="margin-top:10px; font-size:12px; color:#666; font-weight:850;">
+          Un avoir annule la facture source dans CleanUp (statut “Créditée”) et permet “Refaire” une nouvelle facture.
         </div>
       </div>
     </div>
@@ -369,21 +372,21 @@
 
   <nav class="bottom-nav" aria-label="Navigation">
     <a href="planning.html">Planning</a>
-    <a href="prestations.html">Production</a>
-    <a href="logements.html">Logements</a>
     <a href="import-ical.html">iCal</a>
     <a href="messagerie.html">Messages</a>
+    <a href="catalogue.html">Catalogue</a>
+    <a href="logements.html">Logements</a>
   </nav>
 
   <script type="module">
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
-      doc, getDoc, setDoc, updateDoc, serverTimestamp, runTransaction
+      doc, getDoc, updateDoc, addDoc, serverTimestamp, runTransaction,
+      collection
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     // ===== UI =====
-    const backLink = document.getElementById("backLink");
     const alertBox = document.getElementById("alertBox");
     const recapKv = document.getElementById("recapKv");
     const statusBadge = document.getElementById("statusBadge");
@@ -407,24 +410,27 @@
     const linesCards = document.getElementById("linesCards");
     const totalsBox = document.getElementById("totalsBox");
 
-    const creditReasonEl = document.getElementById("creditReason");
-    const creditModeEl = document.getElementById("creditMode");
+    const reasonSelect = document.getElementById("reasonSelect");
+    const creditNotesEl = document.getElementById("creditNotes");
 
     const saveBtn = document.getElementById("saveBtn");
     const previewBtn = document.getElementById("previewBtn");
+    const backBtn = document.getElementById("backBtn");
 
     // ===== State =====
     let currentUser = null;
-    let profileData = null;
 
-    // avoir doc (salesDocuments) OR create from invoice
+    // doc d’avoir (salesDocuments) si ouvert directement
     let creditRef = null;
     let creditData = null;
 
-    let sourceInvoiceRef = null;
-    let sourceInvoiceData = null;
+    // facture source
+    let fromRef = null;
+    let fromData = null;
 
-    // ===== Helpers =====
+    // profile conciergerie
+    let profileData = null;
+
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
       alertBox.classList.toggle("ok", !!ok);
@@ -459,12 +465,14 @@
       const dd = String(d.getDate()).padStart(2,"0");
       return `${dd}/${mm}/${yyyy}`;
     }
-    function computeHT(lines){
-      if(!Array.isArray(lines)) return 0;
-      return lines.reduce((s,l)=> s + (Number(l?.qty)||0) * (Number(l?.unitPrice)||0), 0);
-    }
-    function computeTotalsFromLines(lines, tvaEnabled, tvaRate){
-      const ht = computeHT(lines);
+
+    function computeTotals(lines, tvaEnabled, tvaRate){
+      let ht = 0;
+      for(const l of (Array.isArray(lines) ? lines : [])){
+        const qty = Number(l?.qty)||0;
+        const up  = Number(l?.unitPrice)||0;
+        ht += qty * up;
+      }
       const tva = tvaEnabled ? (ht * (Number(tvaRate)||0)) : 0;
       const ttc = ht + tva;
       return { ht, tva, ttc };
@@ -547,7 +555,7 @@
       clientLinesEl.innerHTML = lines.length ? lines.join("<br>") : `<span class="mut">Adresse manquante</span>`;
     }
 
-    function renderLinesAndTotals(lines, storedTotals){
+    function renderLinesAndTotals(d){
       const bp = (profileData?.businessProfile || {});
       const tvaEnabled = !!bp.vat?.enabled;
       const tvaRate = Number.isFinite(Number(bp.vat?.rate)) ? Number(bp.vat.rate) : 0;
@@ -556,7 +564,9 @@
       linesTbody.innerHTML = "";
       linesCards.innerHTML = "";
 
-      for(const l of (Array.isArray(lines) ? lines : [])){
+      const lines = Array.isArray(d?.lines) ? d.lines : [];
+
+      for(const l of lines){
         const label = l?.label || "Ligne";
         const qty = Number(l?.qty)||0;
         const unit = l?.unit || "unité";
@@ -591,38 +601,52 @@
         linesCards.appendChild(card);
       }
 
-      // Totaux : priorité à ce qui est stocké sur la facture source (plus cohérent)
-      const hasStored =
-        Number.isFinite(Number(storedTotals?.ht)) ||
-        Number.isFinite(Number(storedTotals?.tva)) ||
-        Number.isFinite(Number(storedTotals?.ttc));
-
-      const calc = computeTotalsFromLines(lines, tvaEnabled, tvaRate);
-      const tot = {
-        ht:  Number.isFinite(Number(storedTotals?.ht))  ? Number(storedTotals.ht)  : calc.ht,
-        tva: Number.isFinite(Number(storedTotals?.tva)) ? Number(storedTotals.tva) : calc.tva,
-        ttc: Number.isFinite(Number(storedTotals?.ttc)) ? Number(storedTotals.ttc) : calc.ttc,
-      };
+      const totals = computeTotals(lines, tvaEnabled, tvaRate);
 
       const html = [];
       if(tvaEnabled){
-        html.push(`<div class="r"><span>Total HT</span><span>${esc(fmtMoney(tot.ht))}</span></div>`);
-        html.push(`<div class="r"><span>TVA (${Math.round(tvaRate*100)}%)</span><span>${esc(fmtMoney(tot.tva))}</span></div>`);
-        html.push(`<div class="r"><span>Total TTC</span><span>${esc(fmtMoney(tot.ttc))}</span></div>`);
+        html.push(`<div class="r"><span>Total HT</span><span>${esc(fmtMoney(totals.ht))}</span></div>`);
+        html.push(`<div class="r"><span>TVA (${Math.round(tvaRate*100)}%)</span><span>${esc(fmtMoney(totals.tva))}</span></div>`);
+        html.push(`<div class="r"><span>Total TTC</span><span>${esc(fmtMoney(totals.ttc))}</span></div>`);
       }else{
-        html.push(`<div class="r"><span>Total TTC</span><span>${esc(fmtMoney(tot.ttc))}</span></div>`);
+        html.push(`<div class="r"><span>Total TTC</span><span>${esc(fmtMoney(totals.ttc))}</span></div>`);
         const ex = String(bp?.tvaExemptionText || "TVA non applicable (art. 293B CGI)").trim();
         if(ex) html.push(`<div class="mutedLine">${esc(ex)}</div>`);
       }
       totalsBox.innerHTML = html.join("");
-
-      return { tvaEnabled, tvaRate, totals: tot };
     }
 
-    function lockUI(locked){
-      saveBtn.disabled = !!locked;
-      previewBtn.disabled = !!locked || !creditRef || !String(creditData?.creditNumber||"").trim();
-      saveBtn.style.opacity = locked ? "0.75" : "1";
+    function renderRecap(){
+      const d = (creditData || fromData || {}) || {};
+      const source = fromData || d;
+
+      const invNum = String(source?.invoiceNumber || source?.fromInvoiceNumber || "").trim();
+      const home = String(source?.homeName || "—").trim();
+      const client = String(source?.clientName || source?.ownerName || "—").trim();
+
+      const creditNum = String(creditData?.creditNumber || "").trim();
+      const hasCredit = !!creditNum;
+
+      statusBadge.textContent = hasCredit ? "ÉMIS" : "BROUILLON";
+      docBannerInner.textContent = `AVOIR N° ${creditNum || "—"}`;
+
+      const recap = [];
+      recap.push(`<div class="line"><b>Facture source</b> : ${esc(invNum || "—")}</div>`);
+      recap.push(`<div class="line"><b>Client</b> : ${esc(client)}</div>`);
+      recap.push(`<div class="line"><b>Logement</b> : ${esc(home)}</div>`);
+      recapKv.innerHTML = recap.join("");
+
+      const info = [];
+      info.push(`<div class="line"><b>Date</b> : ${esc(String(creditData?.creditIssuedDate || todayIso()))}</div>`);
+      info.push(`<div class="line"><b>Motif</b> : ${esc(String(creditData?.creditReason || reasonSelect.value || "ANNULATION"))}</div>`);
+      infoKv.innerHTML = info.join("");
+
+      renderBusinessHeader();
+      renderClientHeader(source);
+      renderLinesAndTotals(source);
+
+      saveBtn.disabled = !fromRef || !!creditData?.creditNumber; // pas de ré-émission
+      previewBtn.disabled = !creditRef || !String(creditData?.creditNumber||"").trim();
     }
 
     async function loadProfile(uid){
@@ -650,257 +674,193 @@
       return `AV${year}-${padded}`;
     }
 
-    function creditStatusLabel(s){
-      const x = String(s||"").toUpperCase().trim();
-      if(!x) return "—";
-      if(x === "DRAFT") return "BROUILLON";
-      if(x === "ISSUED") return "ÉMIS";
-      if(x === "CANCELLED") return "ANNULÉ";
-      return x;
+    function lockUI(locked){
+      saveBtn.disabled = !!locked || !fromRef || !!creditData?.creditNumber;
+      previewBtn.disabled = !!locked || !creditRef || !String(creditData?.creditNumber||"").trim();
+      saveBtn.style.opacity = locked ? "0.75" : "1";
     }
 
-    function getBackHref(){
-      const docId = getParam("docId");
-      const fromDocId = getParam("fromDocId");
-      // si on vient de factures-liste -> retour factures
-      if(fromDocId && !docId) return "factures-liste.html";
-      // sinon logique : liste avoirs
-      return "avoir-liste.html";
+    // ===== Load modes =====
+    // A) création : avoir.html?fromDocId=INVOICE_DOC_ID
+    // B) lecture : avoir.html?docId=CREDIT_DOC_ID
+    const fromDocId = getParam("fromDocId");
+    const docId = getParam("docId");
+
+    async function loadFromInvoice(invoiceId){
+      fromRef = doc(db, "salesDocuments", invoiceId);
+      const snap = await getDoc(fromRef);
+      if(!snap.exists()) throw new Error("Facture source introuvable.");
+      fromData = { id: snap.id, ...(snap.data()||{}) };
+
+      if(String(fromData.conciergerieUid||"") !== String(currentUser.uid)){
+        throw new Error("Accès refusé (facture d’une autre conciergerie).");
+      }
+      if(String(fromData.type||"").toUpperCase() !== "INVOICE"){
+        // tolère legacy docType, mais on sécurise un minimum
+        const dt = String(fromData.docType||"").toUpperCase();
+        if(!dt.includes("INVOICE")) throw new Error("Le document source n’est pas une facture.");
+      }
+
+      // si déjà créditée -> on autorise lecture via docId, sinon on bloque la création
+      const already = String(fromData.invoiceStatus||"").toUpperCase().trim() === "CREDITED";
+      const linked = String(fromData.avoirId || fromData.creditId || fromData.lastCreditId || "").trim();
+      if(already && linked && !docId){
+        showAlert("⚠️ Cette facture est déjà créditée. Ouvre l’avoir lié depuis la liste.", false);
+      }
+
+      await loadProfile(currentUser.uid);
+      renderRecap();
     }
 
-    function render(){
-      if(!profileData) return;
-
-      backLink.href = getBackHref();
-
-      renderBusinessHeader();
-
-      // base pour l’affichage client/lignes : si avoir existant -> creditData, sinon facture source
-      const dClient = creditData || sourceInvoiceData || {};
-      renderClientHeader(dClient);
-
-      const mode = String(creditModeEl.value||"FULL").toUpperCase();
-      const reason = (creditReasonEl.value||"").trim();
-
-      // référence facture source
-      const invNum = String(sourceInvoiceData?.invoiceNumber || creditData?.fromInvoiceNumber || "").trim();
-      const home = String(sourceInvoiceData?.homeName || creditData?.homeName || "—").trim();
-      const created = sourceInvoiceData?.invoiceIssuedDate || sourceInvoiceData?.createdAt || sourceInvoiceData?.createdAtMs || null;
-
-      recapKv.innerHTML = `
-        <div class="line"><b>Facture source</b> : ${esc(invNum || "—")}</div>
-        <div class="line"><b>Logement</b> : ${esc(home || "—")}</div>
-      `;
-
-      const creditNum = String(creditData?.creditNumber || "").trim();
-      docBannerInner.textContent = `AVOIR N° ${creditNum || "—"}`;
-
-      const stRaw = String(creditData?.avoirStatus || creditData?.creditStatus || "").toUpperCase().trim();
-      const stUi = creditNum && (!stRaw || stRaw === "DRAFT") ? "ISSUED" : (stRaw || (creditNum ? "ISSUED" : "DRAFT"));
-      statusBadge.textContent = creditStatusLabel(stUi);
-
-      // lignes/totaux
-      const lines = Array.isArray(sourceInvoiceData?.lines) ? sourceInvoiceData.lines : (Array.isArray(creditData?.lines) ? creditData.lines : []);
-      const storedTotals = {
-        ht:  sourceInvoiceData?.totalHT ?? creditData?.totalHT,
-        tva: sourceInvoiceData?.totalTVA ?? creditData?.totalTVA,
-        ttc: sourceInvoiceData?.totalTTC ?? creditData?.totalTTC
-      };
-      const { totals } = renderLinesAndTotals(lines, storedTotals);
-
-      infoKv.innerHTML = `
-        <div class="line"><b>Type</b> : ${esc(mode === "FULL" ? "Total" : "Partiel")}</div>
-        <div class="line"><b>Montant crédité</b> : ${esc(fmtMoney(totals.ttc))}</div>
-        <div class="line"><b>Motif</b> : ${esc(reason || "—")}</div>
-      `;
-
-      // boutons
-      saveBtn.disabled = !sourceInvoiceRef && !creditRef;
-      previewBtn.disabled = !(creditRef && String(creditData?.creditNumber||"").trim());
-    }
-
-    async function loadExistingCredit(docId){
-      creditRef = doc(db, "salesDocuments", docId);
+    async function loadCredit(creditId){
+      creditRef = doc(db, "salesDocuments", creditId);
       const snap = await getDoc(creditRef);
       if(!snap.exists()) throw new Error("Avoir introuvable.");
-      creditData = { id:snap.id, ...(snap.data()||{}) };
+      creditData = { id: snap.id, ...(snap.data()||{}) };
 
       if(String(creditData.conciergerieUid||"") !== String(currentUser.uid)){
         throw new Error("Accès refusé (avoir d’une autre conciergerie).");
       }
+      if(String(creditData.type||"").toUpperCase() !== "CREDIT"){
+        throw new Error("Ce document n’est pas un avoir.");
+      }
 
-      // essayer de charger facture source (facultatif)
-      const fromId = String(creditData.fromInvoiceId || creditData.fromDocId || "").trim();
-      if(fromId){
+      await loadProfile(currentUser.uid);
+
+      // source si possible
+      const fid = String(creditData.fromDocId || "").trim();
+      if(fid){
         try{
-          sourceInvoiceRef = doc(db, "salesDocuments", fromId);
-          const s2 = await getDoc(sourceInvoiceRef);
-          if(s2.exists()) sourceInvoiceData = { id:s2.id, ...(s2.data()||{}) };
-        }catch{}
+          await loadFromInvoice(fid);
+        }catch{
+          // on rend quand même l’avoir lisible
+          fromRef = null;
+          fromData = creditData; // fallback
+        }
+      }else{
+        fromRef = null;
+        fromData = creditData;
       }
+
+      // hydrate champs UI
+      if(String(creditData.creditReason||"").trim()) reasonSelect.value = creditData.creditReason;
+      if(creditNotesEl.value === "" && creditData.creditNotes) creditNotesEl.value = creditData.creditNotes;
+
+      renderRecap();
     }
 
-    async function loadSourceInvoice(fromDocId){
-      sourceInvoiceRef = doc(db, "salesDocuments", fromDocId);
-      const snap = await getDoc(sourceInvoiceRef);
-      if(!snap.exists()) throw new Error("Facture source introuvable.");
-      sourceInvoiceData = { id:snap.id, ...(snap.data()||{}) };
-
-      if(String(sourceInvoiceData.conciergerieUid||"") !== String(currentUser.uid)){
-        throw new Error("Accès refusé (facture d’une autre conciergerie).");
-      }
-
-      const type = String(sourceInvoiceData.type || sourceInvoiceData.docType || "").toUpperCase().trim();
-      if(type !== "INVOICE" && !String(sourceInvoiceData.invoiceNumber||"").trim()){
-        // on tolère mais on prévient
-        console.warn("Source not invoice-like:", type);
-      }
-
-      // préremplir UI
-      creditReasonEl.value = String(sourceInvoiceData?.creditReason || "").trim();
-      creditModeEl.value = "FULL";
-    }
-
-    // navigation preview
+    // ===== Buttons =====
     previewBtn.addEventListener("click", ()=>{
       if(!creditRef || !creditData) return;
       location.href = `avoir-apercu.html?docId=${encodeURIComponent(creditData.id)}`;
     });
 
-    // save (emit credit note)
     saveBtn.addEventListener("click", async ()=>{
       hideAlert();
-      if(!currentUser?.uid) return;
+      if(!fromRef || !fromData) return showAlert("Facture source non chargée.");
+
+      const st = String(fromData.invoiceStatus||"").toUpperCase().trim();
+      if(["CANCELLED","CREDITED"].includes(st)){
+        return showAlert("Impossible : facture déjà annulée/créditée.");
+      }
 
       lockUI(true);
       try{
-        // si on ouvre un avoir existant déjà numéroté -> on ne renumérote pas
-        const alreadyNumbered = !!String(creditData?.creditNumber||"").trim();
-        if(alreadyNumbered){
-          // on autorise juste update reason/mode (sans toucher facture)
-          await updateDoc(creditRef, {
-            creditReason: (creditReasonEl.value||"").trim(),
-            creditMode: String(creditModeEl.value||"FULL").toUpperCase(),
-            creditUpdatedAt: serverTimestamp()
-          });
-          const s = await getDoc(creditRef);
-          creditData = { id:s.id, ...(s.data()||{}) };
-          showAlert("✅ Avoir mis à jour.", true);
-          render();
-          return;
-        }
-
-        if(!sourceInvoiceRef || !sourceInvoiceData){
-          throw new Error("Facture source non chargée (fromDocId manquant).");
-        }
-
-        const invNum = String(sourceInvoiceData.invoiceNumber || "").trim();
-        if(!invNum) throw new Error("La facture source doit être ÉMISE (invoiceNumber manquant).");
-
-        const invStatus = String(sourceInvoiceData.invoiceStatus||"").toUpperCase().trim();
-        if(["CANCELLED"].includes(invStatus)) throw new Error("Impossible : facture annulée.");
-        // on tolère PAID (avoir post-paiement) mais c’est un cas à part; ici on laisse.
-        // on bloque si déjà CREDITED + avoirId existant
-        const existingAvoirId = String(sourceInvoiceData.avoirId || sourceInvoiceData.creditId || sourceInvoiceData.creditNoteId || "").trim();
-        if(existingAvoirId){
-          throw new Error("Cette facture a déjà un avoir lié (avoirId existant).");
-        }
-
-        const bp = (profileData?.businessProfile || {});
-        const tvaEnabled = !!bp.vat?.enabled;
-        const tvaRate = Number.isFinite(Number(bp.vat?.rate)) ? Number(bp.vat.rate) : 0;
-
         const year = new Date().getFullYear();
         const creditNumber = await ensureCreditNumber(currentUser.uid, year);
 
-        // totaux : priorité stockés facture
-        const lines = Array.isArray(sourceInvoiceData.lines) ? sourceInvoiceData.lines : [];
-        const calc = computeTotalsFromLines(lines, tvaEnabled, tvaRate);
-        const totalHT  = Number.isFinite(Number(sourceInvoiceData.totalHT))  ? Number(sourceInvoiceData.totalHT)  : calc.ht;
-        const totalTVA = Number.isFinite(Number(sourceInvoiceData.totalTVA)) ? Number(sourceInvoiceData.totalTVA) : calc.tva;
-        const totalTTC = Number.isFinite(Number(sourceInvoiceData.totalTTC)) ? Number(sourceInvoiceData.totalTTC) : calc.ttc;
+        const bp = (profileData?.businessProfile || {});
+        const vatEnabled = !!bp.vat?.enabled;
+        const vatRate = Number.isFinite(Number(bp.vat?.rate)) ? Number(bp.vat.rate) : 0;
 
-        // créer doc avoir
-        const creditId = `credit_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-        creditRef = doc(db, "salesDocuments", creditId);
+        const lines = Array.isArray(fromData.lines) ? fromData.lines : [];
+        const totals = computeTotals(lines, vatEnabled, vatRate);
 
-        const creditPayload = {
-          conciergerieUid: currentUser.uid,
-          type: "CREDIT_NOTE",
-          docType: "CREDIT_NOTE",
+        // 1) créer doc avoir
+        const payload = {
+          // identité
+          type: "CREDIT",
           listable: true,
+          conciergerieUid: currentUser.uid,
 
+          // numéro + dates
           creditNumber,
-          avoirNumber: creditNumber,
-
-          avoirStatus: "ISSUED",
           creditStatus: "ISSUED",
-
           creditIssuedAt: serverTimestamp(),
           creditIssuedDate: todayIso(),
+          creditIssuedBy: currentUser.uid,
 
-          creditReason: (creditReasonEl.value||"").trim(),
-          creditMode: String(creditModeEl.value||"FULL").toUpperCase(),
+          // liaison
+          fromDocId: fromData.id,
+          fromInvoiceNumber: String(fromData.invoiceNumber || "").trim(),
 
-          // lien facture source
-          fromInvoiceId: sourceInvoiceData.id,
-          fromInvoiceNumber: invNum,
+          // contenu (copie facture)
+          lines: lines,
+          totalHT: Number(totals.ht)||0,
+          totalTVA: Number(totals.tva)||0,
+          totalTTC: Number(totals.ttc)||0,
 
-          // snapshot client/logement pour affichage + exports
-          clientName: sourceInvoiceData.clientName || sourceInvoiceData.ownerName || "",
-          clientEmail: sourceInvoiceData.clientEmail || sourceInvoiceData.ownerEmail || "",
-          clientPhone: sourceInvoiceData.clientPhone || sourceInvoiceData.ownerPhone || "",
-          clientAddress1: sourceInvoiceData.clientAddress1 || sourceInvoiceData.ownerAddress1 || "",
-          clientAddress2: sourceInvoiceData.clientAddress2 || sourceInvoiceData.ownerAddress2 || "",
-          clientZip: sourceInvoiceData.clientZip || sourceInvoiceData.ownerZip || "",
-          clientCity: sourceInvoiceData.clientCity || sourceInvoiceData.ownerCity || "",
-          clientCountry: sourceInvoiceData.clientCountry || sourceInvoiceData.ownerCountry || "FR",
-          clientType: sourceInvoiceData.clientType || (sourceInvoiceData.isPro ? "PRO" : "PARTICULIER") || "PARTICULIER",
+          // snapshots utiles (copie brute, comme facture)
+          quoteNumber: String(fromData.quoteNumber || "").trim() || null,
+          homeId: fromData.homeId || null,
+          homeName: fromData.homeName || null,
+          homeAddress: fromData.homeAddress || null,
+          homeZip: fromData.homeZip || null,
+          homeCity: fromData.homeCity || null,
+          arrivalDateKey: fromData.arrivalDateKey || null,
+          departureDateKey: fromData.departureDateKey || null,
 
-          homeId: sourceInvoiceData.homeId || "",
-          homeName: sourceInvoiceData.homeName || "",
-          homeAddress: sourceInvoiceData.homeAddress || "",
-          homeZip: sourceInvoiceData.homeZip || "",
-          homeCity: sourceInvoiceData.homeCity || "",
+          clientOwnerDocId: fromData.clientOwnerDocId || null,
+          clientType: fromData.clientType || null,
+          clientName: fromData.clientName || null,
+          clientEmail: fromData.clientEmail || null,
+          clientPhone: fromData.clientPhone || null,
+          clientAddress1: fromData.clientAddress1 || null,
+          clientAddress2: fromData.clientAddress2 || null,
+          clientZip: fromData.clientZip || null,
+          clientCity: fromData.clientCity || null,
+          clientCountry: fromData.clientCountry || "FR",
 
-          arrivalDateKey: sourceInvoiceData.arrivalDateKey || "",
-          departureDateKey: sourceInvoiceData.departureDateKey || "",
+          // paramètres (si besoin d’afficher au PDF)
+          invoicePaymentMode: fromData.invoicePaymentMode || fromData.quotePaymentMode || "VIREMENT",
+          invoicePaymentTerm: fromData.invoicePaymentTerm || fromData.quotePaymentTerm || "RECEPTION",
+          invoicePenaltyMode: fromData.invoicePenaltyMode || fromData.quotePenaltyMode || "B2C",
+          invoicePenaltyText: fromData.invoicePenaltyText || fromData.quotePenaltyText || "",
 
-          quoteNumber: sourceInvoiceData.quoteNumber || "",
-
-          lines,
-
-          totalHT,
-          totalTVA,
-          totalTTC,
+          // meta
+          creditReason: String(reasonSelect.value || "ANNULATION").trim(),
+          creditNotes: (creditNotesEl.value || "").trim(),
 
           createdAt: serverTimestamp(),
-          createdAtMs: Date.now(),
-          updatedAt: serverTimestamp(),
+          createdAtMs: Date.now()
         };
 
-        await setDoc(creditRef, creditPayload);
+        const added = await addDoc(collection(db, "salesDocuments"), payload);
 
-        // patch facture source : marquer créditée + lier avoir
-        await updateDoc(sourceInvoiceRef, {
+        // 2) patch facture source : avoirId + status
+        const invPatch = {
           invoiceStatus: "CREDITED",
           creditedAt: serverTimestamp(),
-          avoirId: creditId,
-          creditId: creditId,
-          creditNumber: creditNumber,
+          creditedBy: currentUser.uid,
+          avoirId: added.id,
+          lastCreditId: added.id,
+
           commercialStatus: "FACTURE_CREDITEE",
           commercialUpdatedAt: serverTimestamp(),
-        });
+          invoiceUpdatedAt: serverTimestamp()
+        };
+        await updateDoc(fromRef, invPatch);
 
-        // reload avoir
-        const s = await getDoc(creditRef);
-        creditData = { id:s.id, ...(s.data()||{}) };
+        // 3) reload credit
+        creditRef = doc(db, "salesDocuments", added.id);
+        const snapC = await getDoc(creditRef);
+        creditData = { id: snapC.id, ...(snapC.data()||{}) };
 
-        showAlert("✅ Avoir émis + facture marquée CRÉDITÉE.", true);
-        render();
-      }catch(e){
-        console.error(e);
-        showAlert("Erreur : " + (e?.message || "inconnue"));
+        showAlert("✅ Avoir enregistré (émis).", true);
+        renderRecap();
+      }catch(err){
+        console.error(err);
+        showAlert("Erreur : " + (err?.message || "inconnue"));
       }finally{
         lockUI(false);
       }
@@ -911,25 +871,19 @@
       currentUser = user;
 
       try{
-        await loadProfile(user.uid);
-
-        // back
-        backLink.href = getBackHref();
-
-        const docId = getParam("docId");
-        const fromDocId = getParam("fromDocId");
-
         if(docId){
-          await loadExistingCredit(docId);
-        }else if(fromDocId){
-          await loadSourceInvoice(fromDocId);
-        }else{
-          throw new Error("docId ou fromDocId manquant. Ex: avoir.html?fromDocId=FACTURE_ID");
+          await loadCredit(docId);
+          backBtn.href = "avoir-liste.html";
+          return;
         }
-
-        render();
+        if(fromDocId){
+          await loadFromInvoice(fromDocId);
+          backBtn.href = "factures-liste.html";
+          return;
+        }
+        throw new Error("Paramètre manquant. Ex: avoir.html?fromDocId=... ou avoir.html?docId=...");
       }catch(e){
-        showAlert("⛔ " + (e?.message || "Erreur chargement avoir"));
+        showAlert("⛔ " + (e?.message || "Erreur chargement avoir"), false);
       }
     });
   </script>
