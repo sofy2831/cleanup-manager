@@ -1,4 +1,4 @@
-<!-- docs/facture.html (FINAL — Paiement editable + aperçu brouillon + save fige N°) -->
+<!-- docs/facture.html (FINAL — Paiement editable + aperçu brouillon + save fige N° + hydrate EVENT client) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -371,7 +371,7 @@
           <span class="small">modifiable avant émission</span>
         </div>
 
-        <!-- ✅ NEW: 2 selects (mode + délai) -->
+        <!-- 2 selects (mode + délai) -->
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
           <div>
             <label for="payModeSel">Mode</label>
@@ -472,7 +472,7 @@
     const saveBtn = document.getElementById("saveBtn");
     const previewBtn = document.getElementById("previewBtn");
 
-    // ✅ new selects
+    // payment selects
     const payModeSel = document.getElementById("payModeSel");
     const payTermSel = document.getElementById("payTermSel");
 
@@ -516,7 +516,7 @@
     }
     function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
 
-    // ✅ PATCH clientType (PRO/PARTICULIER) — minimal & safe
+    // clientType (PRO/PARTICULIER) — minimal & safe
     function getClientType(d){
       const ct = String(d?.clientType || "").toUpperCase().trim();
       if(ct === "PRO") return "PRO";
@@ -558,13 +558,6 @@
       if(t === "30J") return "30 jours";
       if(t === "45J") return "45 jours";
       return term || "—";
-    }
-    function modeLabel(mode){
-      const m = String(mode||"").toUpperCase();
-      if(m === "VIREMENT") return "Virement";
-      if(m === "ESPECES") return "Espèces";
-      if(m === "CHEQUE") return "Chèque";
-      return mode || "—";
     }
     function termToDays(term){
       const t = String(term||"").toUpperCase();
@@ -853,7 +846,7 @@
       };
     }
 
-    // ✅ PATCH: hydrate docData en mémoire avant render (sans write Firestore)
+    // hydrate docData en mémoire avant render (sans write Firestore) — SALES
     async function hydrateClientSnapshotInMemoryIfMissing(){
       if(docKind !== "SALES") return;
       if(!currentUser?.uid || !docData) return;
@@ -884,6 +877,40 @@
         };
       }catch(e){
         console.warn("hydrateClientSnapshotInMemoryIfMissing failed:", e?.message || e);
+      }
+    }
+
+    // hydrate docData en mémoire avant render (sans write Firestore) — EVENT
+    async function hydrateEventClientInMemoryIfMissing(){
+      if(docKind !== "EVENT") return;
+      if(!currentUser?.uid || !docData) return;
+
+      const hasName = !!String(docData.ownerName || "").trim();
+      const hasEmail = !!String(docData.ownerEmail || "").trim();
+      const hasAddr =
+        !!String(docData.ownerAddress1 || "").trim() ||
+        !!String(docData.ownerZip || "").trim() ||
+        !!String(docData.ownerCity || "").trim();
+
+      if(hasName && hasEmail && hasAddr) return;
+
+      try{
+        const resolved = await resolveClientSnapshot(currentUser.uid, docData);
+
+        docData = {
+          ...docData,
+          ownerDocId: docData.ownerDocId || resolved.clientOwnerDocId || null,
+          ownerName: String(docData.ownerName || "").trim() ? docData.ownerName : (resolved.name || ""),
+          ownerEmail: String(docData.ownerEmail || "").trim() ? docData.ownerEmail : (resolved.email || ""),
+          ownerPhone: String(docData.ownerPhone || "").trim() ? docData.ownerPhone : (resolved.phone || ""),
+          ownerAddress1: String(docData.ownerAddress1 || "").trim() ? docData.ownerAddress1 : (resolved.address1 || ""),
+          ownerAddress2: String(docData.ownerAddress2 || "").trim() ? docData.ownerAddress2 : (resolved.address2 || ""),
+          ownerZip: String(docData.ownerZip || "").trim() ? docData.ownerZip : (resolved.zip || ""),
+          ownerCity: String(docData.ownerCity || "").trim() ? docData.ownerCity : (resolved.city || ""),
+          ownerCountry: String(docData.ownerCountry || "").trim() ? docData.ownerCountry : (resolved.country || "FR"),
+        };
+      }catch(e){
+        console.warn("hydrateEventClientInMemoryIfMissing failed:", e?.message || e);
       }
     }
 
@@ -1007,7 +1034,7 @@
       totalsBox.innerHTML = html.join("");
     }
 
-    // ✅ NEW: payment selects state
+    // payment selects state
     function renderPaymentControls(){
       const d = docData || {};
       const hasInvoice = !!String(d.invoiceNumber || "").trim();
@@ -1027,7 +1054,7 @@
       const d = docData || {};
       const bp = (profileData?.businessProfile || {});
 
-      // ✅ IMPORTANT : prend la valeur des selects si dispo (même en brouillon)
+      // prend la valeur des selects si dispo (même en brouillon)
       const term = String(payTermSel?.value || d?.invoicePaymentTerm || d?.quotePaymentTerm || "RECEPTION").toUpperCase();
       const issued = String(d?.invoiceIssuedDate || todayIso()).trim();
       const dueDate = addDaysLabel(issued, termToDays(term));
@@ -1100,7 +1127,7 @@
       renderPenalty();
 
       saveBtn.disabled = !docRef;
-      // ✅ aperçu autorisé même sans numéro
+      // aperçu autorisé même sans numéro
       previewBtn.disabled = !docRef;
     }
 
@@ -1126,33 +1153,26 @@
       }
 
       await loadProfile(currentUser.uid);
+      await hydrateClientSnapshotInMemoryIfMissing();
+      renderRecap();
+    }
 
-// ✅ Hydrate client en mémoire pour EVENT (comme l’aperçu), sans écrire Firestore
-try{
-  const resolved = await resolveClientSnapshot(currentUser.uid, docData);
+    async function loadInvoiceFromEvent(id){
+      docKind = "EVENT";
+      docRef = doc(db, "events", id);
 
-  docData = {
-    ...docData,
+      const snap = await getDoc(docRef);
+      if(!snap.exists()) throw new Error("Event introuvable.");
+      docData = { id: snap.id, ...(snap.data()||{}) };
 
-    // On remplit les champs que renderClientHeader() utilise
-    clientOwnerDocId: docData.clientOwnerDocId || resolved.clientOwnerDocId || null,
+      if(docData.conciergerieUid && currentUser?.uid && docData.conciergerieUid !== currentUser.uid){
+        throw new Error("Accès refusé (event d’une autre conciergerie).");
+      }
 
-    clientName: String(docData.clientName || "").trim() ? docData.clientName : (resolved.name || ""),
-    clientEmail: String(docData.clientEmail || "").trim() ? docData.clientEmail : (resolved.email || ""),
-    clientPhone: String(docData.clientPhone || "").trim() ? docData.clientPhone : (resolved.phone || ""),
-
-    clientAddress1: String(docData.clientAddress1 || "").trim() ? docData.clientAddress1 : (resolved.address1 || ""),
-    clientAddress2: String(docData.clientAddress2 || "").trim() ? docData.clientAddress2 : (resolved.address2 || ""),
-    clientZip: String(docData.clientZip || "").trim() ? docData.clientZip : (resolved.zip || ""),
-    clientCity: String(docData.clientCity || "").trim() ? docData.clientCity : (resolved.city || ""),
-    clientCountry: String(docData.clientCountry || "").trim() ? docData.clientCountry : (resolved.country || "FR"),
-  };
-}catch(e){
-  console.warn("hydrate EVENT client failed:", e?.message || e);
-}
-
-renderRecap();
-
+      await loadProfile(currentUser.uid);
+      await hydrateEventClientInMemoryIfMissing();
+      renderRecap();
+    }
 
     async function loadDoc(){
       if(docId) return loadInvoiceFromSales(docId);
@@ -1162,21 +1182,27 @@ renderRecap();
 
     function lockUI(locked){
       saveBtn.disabled = !!locked || !docRef;
-      previewBtn.disabled = !!locked || !docRef; // ✅ brouillon OK
+      previewBtn.disabled = !!locked || !docRef; // brouillon OK
       saveBtn.style.opacity = locked ? "0.75" : "1";
-      payModeSel.disabled = payModeSel.disabled || locked; // respecte le "figé si numéro"
+      // respecte le "figé si numéro"
+      payModeSel.disabled = payModeSel.disabled || locked;
       payTermSel.disabled = payTermSel.disabled || locked;
     }
 
-    // ✅ update conditions live when user changes term (even before save)
-    payTermSel.addEventListener("change", ()=> {
+    // update conditions live when user changes term
+    payTermSel.addEventListener("change", ()=>{
+      try{ renderConditions(); }catch(e){}
+    });
+
+    // (optionnel) si tu veux recalculer conditions aussi quand mode change
+    payModeSel.addEventListener("change", ()=>{
       try{ renderConditions(); }catch(e){}
     });
 
     previewBtn.addEventListener("click", ()=>{
       if(!docRef || !docData) return;
 
-      // ✅ stocke un draft pour l’aperçu si pas de numéro
+      // stocke un draft pour l’aperçu si pas de numéro
       const draft = {
         ...docData,
         invoicePaymentMode: String(payModeSel.value || "VIREMENT").toUpperCase(),
@@ -1201,7 +1227,7 @@ renderRecap();
         const year = new Date().getFullYear();
         let invoiceNumber = String(docData?.invoiceNumber || "").trim();
 
-        // ====== snapshot client fields in SALES on save ======
+        // snapshot client fields in SALES on save
         let clientPatch = {};
         if(docKind === "SALES"){
           const missingAddr =
@@ -1233,7 +1259,7 @@ renderRecap();
           invoiceNotes: (invoiceNotesEl.value || "").trim(),
           invoiceUpdatedAt: serverTimestamp(),
 
-          // ✅ SAVE paiement depuis selects
+          // SAVE paiement depuis selects
           invoicePaymentMode: String(payModeSel.value || "VIREMENT").toUpperCase(),
           invoicePaymentTerm: String(payTermSel.value || "RECEPTION").toUpperCase(),
 
@@ -1242,9 +1268,8 @@ renderRecap();
 
         // ===== SALES =====
         if(docKind === "SALES"){
-          // snapshot clientType (ne touche rien si déjà renseigné)
           if(!String(docData?.clientType || "").trim()){
-            patch.clientType = getClientType(docData); // "PRO" | "PARTICULIER"
+            patch.clientType = getClientType(docData);
           }
 
           if(!invoiceNumber){
@@ -1274,7 +1299,7 @@ renderRecap();
           return;
         }
 
-        // ===== EVENT fallback =====
+        // ===== EVENT =====
         const qs = String(docData?.quoteStatus || "").toUpperCase().trim();
         if(qs !== "ACCEPTED"){
           throw new Error("Impossible : le devis doit être ACCEPTÉ avant facturation.");
@@ -1338,4 +1363,3 @@ renderRecap();
   </script>
 </body>
 </html>
-
