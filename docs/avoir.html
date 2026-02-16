@@ -810,4 +810,128 @@
         const tvaEnabled = !!bp.vat?.enabled;
         const tvaRate = Number.isFinite(Number(bp.vat?.rate)) ? Number(bp.vat.rate) : 0;
 
-        const year = new Date().
+        const year = new Date().getFullYear();
+        const creditNumber = await ensureCreditNumber(currentUser.uid, year);
+
+        // totaux : priorité stockés facture
+        const lines = Array.isArray(sourceInvoiceData.lines) ? sourceInvoiceData.lines : [];
+        const calc = computeTotalsFromLines(lines, tvaEnabled, tvaRate);
+        const totalHT  = Number.isFinite(Number(sourceInvoiceData.totalHT))  ? Number(sourceInvoiceData.totalHT)  : calc.ht;
+        const totalTVA = Number.isFinite(Number(sourceInvoiceData.totalTVA)) ? Number(sourceInvoiceData.totalTVA) : calc.tva;
+        const totalTTC = Number.isFinite(Number(sourceInvoiceData.totalTTC)) ? Number(sourceInvoiceData.totalTTC) : calc.ttc;
+
+        // créer doc avoir
+        const creditId = `credit_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+        creditRef = doc(db, "salesDocuments", creditId);
+
+        const creditPayload = {
+          conciergerieUid: currentUser.uid,
+          type: "CREDIT_NOTE",
+          docType: "CREDIT_NOTE",
+          listable: true,
+
+          creditNumber,
+          avoirNumber: creditNumber,
+
+          avoirStatus: "ISSUED",
+          creditStatus: "ISSUED",
+
+          creditIssuedAt: serverTimestamp(),
+          creditIssuedDate: todayIso(),
+
+          creditReason: (creditReasonEl.value||"").trim(),
+          creditMode: String(creditModeEl.value||"FULL").toUpperCase(),
+
+          // lien facture source
+          fromInvoiceId: sourceInvoiceData.id,
+          fromInvoiceNumber: invNum,
+
+          // snapshot client/logement pour affichage + exports
+          clientName: sourceInvoiceData.clientName || sourceInvoiceData.ownerName || "",
+          clientEmail: sourceInvoiceData.clientEmail || sourceInvoiceData.ownerEmail || "",
+          clientPhone: sourceInvoiceData.clientPhone || sourceInvoiceData.ownerPhone || "",
+          clientAddress1: sourceInvoiceData.clientAddress1 || sourceInvoiceData.ownerAddress1 || "",
+          clientAddress2: sourceInvoiceData.clientAddress2 || sourceInvoiceData.ownerAddress2 || "",
+          clientZip: sourceInvoiceData.clientZip || sourceInvoiceData.ownerZip || "",
+          clientCity: sourceInvoiceData.clientCity || sourceInvoiceData.ownerCity || "",
+          clientCountry: sourceInvoiceData.clientCountry || sourceInvoiceData.ownerCountry || "FR",
+          clientType: sourceInvoiceData.clientType || (sourceInvoiceData.isPro ? "PRO" : "PARTICULIER") || "PARTICULIER",
+
+          homeId: sourceInvoiceData.homeId || "",
+          homeName: sourceInvoiceData.homeName || "",
+          homeAddress: sourceInvoiceData.homeAddress || "",
+          homeZip: sourceInvoiceData.homeZip || "",
+          homeCity: sourceInvoiceData.homeCity || "",
+
+          arrivalDateKey: sourceInvoiceData.arrivalDateKey || "",
+          departureDateKey: sourceInvoiceData.departureDateKey || "",
+
+          quoteNumber: sourceInvoiceData.quoteNumber || "",
+
+          lines,
+
+          totalHT,
+          totalTVA,
+          totalTTC,
+
+          createdAt: serverTimestamp(),
+          createdAtMs: Date.now(),
+          updatedAt: serverTimestamp(),
+        };
+
+        await setDoc(creditRef, creditPayload);
+
+        // patch facture source : marquer créditée + lier avoir
+        await updateDoc(sourceInvoiceRef, {
+          invoiceStatus: "CREDITED",
+          creditedAt: serverTimestamp(),
+          avoirId: creditId,
+          creditId: creditId,
+          creditNumber: creditNumber,
+          commercialStatus: "FACTURE_CREDITEE",
+          commercialUpdatedAt: serverTimestamp(),
+        });
+
+        // reload avoir
+        const s = await getDoc(creditRef);
+        creditData = { id:s.id, ...(s.data()||{}) };
+
+        showAlert("✅ Avoir émis + facture marquée CRÉDITÉE.", true);
+        render();
+      }catch(e){
+        console.error(e);
+        showAlert("Erreur : " + (e?.message || "inconnue"));
+      }finally{
+        lockUI(false);
+      }
+    });
+
+    onAuthStateChanged(auth, async (user)=>{
+      if(!user){ location.href = "login.html?role=conciergerie"; return; }
+      currentUser = user;
+
+      try{
+        await loadProfile(user.uid);
+
+        // back
+        backLink.href = getBackHref();
+
+        const docId = getParam("docId");
+        const fromDocId = getParam("fromDocId");
+
+        if(docId){
+          await loadExistingCredit(docId);
+        }else if(fromDocId){
+          await loadSourceInvoice(fromDocId);
+        }else{
+          throw new Error("docId ou fromDocId manquant. Ex: avoir.html?fromDocId=FACTURE_ID");
+        }
+
+        render();
+      }catch(e){
+        showAlert("⛔ " + (e?.message || "Erreur chargement avoir"));
+      }
+    });
+  </script>
+</body>
+</html>
