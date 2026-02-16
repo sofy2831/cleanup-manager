@@ -1126,25 +1126,33 @@
       }
 
       await loadProfile(currentUser.uid);
-      await hydrateClientSnapshotInMemoryIfMissing();
-      renderRecap();
-    }
 
-    async function loadInvoiceFromEvent(id){
-      docKind = "EVENT";
-      docRef = doc(db, "events", id);
+// ✅ Hydrate client en mémoire pour EVENT (comme l’aperçu), sans écrire Firestore
+try{
+  const resolved = await resolveClientSnapshot(currentUser.uid, docData);
 
-      const snap = await getDoc(docRef);
-      if(!snap.exists()) throw new Error("Event introuvable.");
-      docData = { id: snap.id, ...(snap.data()||{}) };
+  docData = {
+    ...docData,
 
-      if(docData.conciergerieUid && currentUser?.uid && docData.conciergerieUid !== currentUser.uid){
-        throw new Error("Accès refusé (event d’une autre conciergerie).");
-      }
+    // On remplit les champs que renderClientHeader() utilise
+    clientOwnerDocId: docData.clientOwnerDocId || resolved.clientOwnerDocId || null,
 
-      await loadProfile(currentUser.uid);
-      renderRecap();
-    }
+    clientName: String(docData.clientName || "").trim() ? docData.clientName : (resolved.name || ""),
+    clientEmail: String(docData.clientEmail || "").trim() ? docData.clientEmail : (resolved.email || ""),
+    clientPhone: String(docData.clientPhone || "").trim() ? docData.clientPhone : (resolved.phone || ""),
+
+    clientAddress1: String(docData.clientAddress1 || "").trim() ? docData.clientAddress1 : (resolved.address1 || ""),
+    clientAddress2: String(docData.clientAddress2 || "").trim() ? docData.clientAddress2 : (resolved.address2 || ""),
+    clientZip: String(docData.clientZip || "").trim() ? docData.clientZip : (resolved.zip || ""),
+    clientCity: String(docData.clientCity || "").trim() ? docData.clientCity : (resolved.city || ""),
+    clientCountry: String(docData.clientCountry || "").trim() ? docData.clientCountry : (resolved.country || "FR"),
+  };
+}catch(e){
+  console.warn("hydrate EVENT client failed:", e?.message || e);
+}
+
+renderRecap();
+
 
     async function loadDoc(){
       if(docId) return loadInvoiceFromSales(docId);
@@ -1330,3 +1338,4 @@
   </script>
 </body>
 </html>
+
