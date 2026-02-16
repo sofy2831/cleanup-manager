@@ -1,4 +1,4 @@
-<!-- docs/profil-proprietaire.html (COMPLET + FIX — self mode robuste, owners.address + compat champs plats, pas d’undefined, whitelist safe) -->
+<!-- docs/profil-proprietaire.html (COMPLET + CORRIGÉ — self mode: owners SANS address map (rules OK), delete owners désactivé (rules delete=false), logout vers login owner/conciergerie, compat champs plats) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -357,7 +357,7 @@
     notes.value = "";
   }
 
-  // Payload unique (form)
+  // Payload unique (form) — pas de map "address" côté owners (rules owner whitelist)
   function serializeForm(){
     const fullname = (displayName.value || "").trim();
     const emailStr = (email.value || "").trim();
@@ -373,9 +373,8 @@
       fullname,
       email: emailStr,
       phone: phoneStr,
-      address: { street, address2: addr2, zip: z, city: c, country: ct },
 
-      // compat champs plats (si d’autres pages les utilisent déjà)
+      // champs plats (compat + rules owners)
       address1: street,
       address2: addr2,
       zip: z,
@@ -389,20 +388,14 @@
   }
 
   function applyData(data){
-    // support: owners.address + champs plats + anciennes clés
-    const addr = (data.address && typeof data.address === "object") ? data.address : {};
-
     displayName.value = safeStr(data.displayName || data.fullname || "");
     email.value = safeStr(data.email || email.value || "");
-
     phone.value = safeStr(data.phone || "");
-
-    address1.value = safeStr(addr.street || data.address1 || "");
-    address2.value = safeStr(addr.address2 || data.address2 || "");
-    zip.value      = safeStr(addr.zip || data.zip || "");
-    city.value     = safeStr(addr.city || data.city || "");
-    country.value  = safeStr(addr.country || data.country || "FR");
-
+    address1.value = safeStr(data.address1 || "");
+    address2.value = safeStr(data.address2 || "");
+    zip.value      = safeStr(data.zip || "");
+    city.value     = safeStr(data.city || "");
+    country.value  = safeStr(data.country || "FR");
     siret.value = safeStr(data.siret || "");
     vat.value   = safeStr(data.vat || "");
     notes.value = safeStr(data.notes || "");
@@ -413,7 +406,7 @@
     return t ? `owner-dashboard.html?token=${encodeURIComponent(t)}` : "owner-dashboard.html";
   }
 
-  async function setupSelfUi(){
+  function setupSelfUi(){
     cardTitle.textContent = "Mon profil";
     ownerIdLine.textContent = "—";
 
@@ -435,9 +428,9 @@
 
     // ===== MODE SELF (proprio) =====
     if(isSelfMode()){
-      await setupSelfUi();
+      setupSelfUi();
 
-      // 1) users/{uid} = source de vérité compte
+      // 1) users/{uid}
       let u = null;
       try{
         const snapU = await getDoc(doc(db, "users", currentUser.uid));
@@ -454,7 +447,7 @@
         email.readOnly = true;
       }
 
-      // 2) owners/{ownerDocId} si dispo
+      // 2) owners/{ownerDocId}
       if(selfOwnerDocId){
         try{
           const osnap = await getDoc(doc(db,"owners", selfOwnerDocId));
@@ -462,27 +455,29 @@
             applyData(osnap.data() || {});
             ownerIdLine.textContent = "Owner ID : " + selfOwnerDocId;
           }else{
-            showAlert("⚠️ owners/" + selfOwnerDocId + " introuvable. Demande à la conciergerie de régénérer/valider l’invitation.", false);
+            showAlert("⚠️ owners/" + selfOwnerDocId + " introuvable. Demande à la conciergerie de régénérer/valider l’invitation.");
           }
         }catch(err){
-          showAlert("⚠️ Accès owners refusé. Reconnecte-toi via le lien d’invitation.", false);
           console.warn(err);
+          showAlert("⚠️ Accès owners refusé. Reconnecte-toi via le lien d’invitation.");
         }
       }else{
-        showAlert("⚠️ ownerDocId manquant. Reconnecte-toi via le lien d’invitation.", false);
+        showAlert("⚠️ ownerDocId manquant. Reconnecte-toi via le lien d’invitation.");
       }
       return;
     }
 
-    // ===== MODE CONCIERGERIE (édition owners/{ownerId}) =====
+    // ===== MODE CONCIERGERIE =====
     ownerId = getParam("ownerId");
     const returnTo = getParam("returnTo");
     backBtn.href = returnTo ? `${returnTo}.html` : "clients.html";
 
+    // rules owners delete=false → on garde le bouton caché (et donc rien ne casse)
+    deleteBtn.style.display = "none";
+
     if(!ownerId){
       cardTitle.textContent = "Nouveau propriétaire";
       ownerIdLine.textContent = "—";
-      deleteBtn.disabled = true;
       copyBtn.disabled = true;
       clearForm();
       return;
@@ -490,7 +485,6 @@
 
     cardTitle.textContent = "Propriétaire";
     ownerIdLine.textContent = `ID : ${ownerId}`;
-    deleteBtn.disabled = false;
     copyBtn.disabled = false;
 
     try{
@@ -505,7 +499,6 @@
       if(String(data.conciergerieUid||"") !== String(currentUser.uid||"")){
         showAlert("Accès refusé : ce propriétaire n’appartient pas à ce compte.");
         clearForm();
-        deleteBtn.disabled = true;
         copyBtn.disabled = true;
         return;
       }
@@ -532,30 +525,20 @@
       if(isSelfMode()){
         const uid = currentUser.uid;
 
-        // users/{uid} (compte) : on stocke à plat + address (utile pour partout)
+        // users/{uid} : ok (self update autorisé)
         const userPayload = {
           uid,
           role: "proprietaire",
           email: currentUser.email || p.email || "",
           fullname: p.fullname,
-
           phone: p.phone || "",
 
-          // champs plats compat
-          address1: p.address.street || "",
-          address2: p.address.address2 || "",
-          zip: p.address.zip || "",
-          city: p.address.city || "",
-          country: p.address.country || "FR",
-
-          // structuré
-          address: {
-            street: p.address.street || "",
-            address2: p.address.address2 || "",
-            zip: p.address.zip || "",
-            city: p.address.city || "",
-            country: p.address.country || "FR"
-          },
+          // champs plats
+          address1: p.address1 || "",
+          address2: p.address2 || "",
+          zip: p.zip || "",
+          city: p.city || "",
+          country: p.country || "FR",
 
           siret: p.siret || "",
           vat: p.vat || "",
@@ -567,33 +550,23 @@
 
         await setDoc(doc(db, "users", uid), userPayload, { merge:true });
 
-        // owners/{ownerDocId} : WHITELIST (ne pas toucher à email/uid/status/conciergerieUid)
+        // owners/{ownerDocId} : ⚠️ rules owner whitelist → PAS de map "address"
         if(selfOwnerDocId){
-          await setDoc(doc(db, "owners", selfOwnerDocId), {
+          await updateDoc(doc(db, "owners", selfOwnerDocId), {
             fullname: p.fullname,
             phone: p.phone || "",
 
-            // compat
-            address1: p.address.street || "",
-            address2: p.address.address2 || "",
-            zip: p.address.zip || "",
-            city: p.address.city || "",
-            country: p.address.country || "FR",
-
-            // struct
-            address: {
-              street: p.address.street || "",
-              address2: p.address.address2 || "",
-              zip: p.address.zip || "",
-              city: p.address.city || "",
-              country: p.address.country || "FR"
-            },
+            address1: p.address1 || "",
+            address2: p.address2 || "",
+            zip: p.zip || "",
+            city: p.city || "",
+            country: p.country || "FR",
 
             siret: p.siret || "",
             vat: p.vat || "",
             notes: p.notes || "",
             updatedAt: serverTimestamp()
-          }, { merge:true });
+          });
         }
 
         showAlert("✅ Profil enregistré.", true);
@@ -606,26 +579,18 @@
         return;
       }
 
-      // ===== MODE CONCIERGERIE (création/édition owners/{id}) =====
+      // ===== MODE CONCIERGERIE =====
       const conciergeriePayload = {
         fullname: p.fullname,
         email: p.email || "",
         emailLower: (p.email || "").trim().toLowerCase(),
         phone: p.phone || "",
 
-        // compat + struct
-        address1: p.address.street || "",
-        address2: p.address.address2 || "",
-        zip: p.address.zip || "",
-        city: p.address.city || "",
-        country: p.address.country || "FR",
-        address: {
-          street: p.address.street || "",
-          address2: p.address.address2 || "",
-          zip: p.address.zip || "",
-          city: p.address.city || "",
-          country: p.address.country || "FR"
-        },
+        address1: p.address1 || "",
+        address2: p.address2 || "",
+        zip: p.zip || "",
+        city: p.city || "",
+        country: p.country || "FR",
 
         siret: p.siret || "",
         vat: p.vat || "",
@@ -662,26 +627,6 @@
     }
   }
 
-  async function deleteOwner(){
-    hideAlert();
-
-    if(isSelfMode()){
-      showAlert("Suppression indisponible en mode propriétaire.", false);
-      return;
-    }
-    if(!ownerId) return;
-    if(!confirm("Supprimer ce propriétaire ?")) return;
-
-    try{
-      await deleteDoc(doc(db, "owners", ownerId));
-      showAlert("✅ Supprimé.", true);
-      location.href = "profil-proprietaire.html";
-    }catch(err){
-      console.error(err);
-      showAlert("Erreur suppression : " + (err?.message || "inconnue"));
-    }
-  }
-
   // Buttons
   newBtn.addEventListener("click", ()=> location.href = "profil-proprietaire.html");
 
@@ -696,12 +641,14 @@
   });
 
   saveBtn.addEventListener("click", saveOwner);
-  deleteBtn.addEventListener("click", deleteOwner);
 
   logoutBtn.addEventListener("click", async ()=>{
     await signOut(auth);
     localStorage.removeItem("cm_auth");
-    location.href = "index.html";
+
+    // en mode self → renvoyer vers login owner, sinon conciergerie
+    const role = isSelfMode() ? "proprietaire" : "conciergerie";
+    location.href = "login.html?role=" + role;
   });
 
   // Init
