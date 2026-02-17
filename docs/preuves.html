@@ -1,4 +1,4 @@
-<!-- docs/preuves.html (FINAL+ — ZIP global MENAGE + type forcé + contrôle token/missionTypes + accept iOS + suppression logique par défaut) -->
+<!-- docs/preuves.html (FINAL+ — ZIP global MENAGE + type forcé + contrôle token/missionTypes + iOS accept + limite 30Mo alignée rules) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -131,6 +131,15 @@
     .helpTitle{ font-weight:900; font-size:12px; margin-bottom:6px; }
     .helpBox ul{ margin:0; padding-left:18px; }
     .helpBox li{ font-size:12px; font-weight:800; color:#333; margin:4px 0; }
+
+    .sizeHint{
+      margin-top:6px;
+      font-size:12px;
+      font-weight:900;
+      color:#333;
+    }
+    .sizeHint.bad{ color: var(--bad); }
+    .sizeHint.ok{ color: var(--ok); }
   </style>
 </head>
 
@@ -149,19 +158,21 @@
       </div>
 
       <section class="card">
-        <div class="mini">
-          Envoie <b>un seul fichier ZIP</b> (10/15/20 photos). C’est plus fiable que photo par photo.<br>
-          <b>ZIP global</b> enregistré sur la mission <b>MENAGE</b> (pas de sélection).
+        <div class="mini" id="ruleHint">
+          Envoie <b>un seul fichier ZIP</b> (10/15 photos). C’est plus fiable que photo par photo.<br>
+          <b>ZIP global</b> enregistré sur la mission <b>MENAGE</b> (pas de sélection).<br>
+          Limite : <b>30 Mo</b>.
         </div>
 
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:space-between;margin-top:8px;">
-          <!-- iOS: ajouter application/x-zip-compressed -->
           <input id="zipInput" type="file" accept=".zip,application/zip,application/x-zip-compressed" />
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
             <button class="btn ghost" id="clearZipBtn" type="button">Vider</button>
             <button class="btn" id="uploadZipBtn" type="button">Uploader ZIP</button>
           </div>
         </div>
+
+        <div class="sizeHint" id="sizeHint" style="display:none;"></div>
 
         <div class="progressWrap" id="progressWrap">
           <div class="mini" id="progressText">Upload…</div>
@@ -173,9 +184,9 @@
         <div class="helpBox" style="margin-top:10px;">
           <div class="helpTitle">Android / Samsung : créer un ZIP</div>
           <ul>
-            <li>Fais tes photos.</li>
+            <li>Fais tes photos (idéalement <b>10 à 15</b>).</li>
             <li>Ouvre <b>Mes Fichiers</b> → <b>Récents</b>.</li>
-            <li>Sélectionne 10/15/20 photos.</li>
+            <li>Sélectionne 10/15 photos.</li>
             <li>Menu <b>⋮</b> → <b>Compresser</b>.</li>
             <li>Renomme : un <b>.zip</b> apparaît, prêt à uploader.</li>
           </ul>
@@ -213,12 +224,17 @@
     const progressBar = document.getElementById("progressBar");
     const zipInfo = document.getElementById("zipInfo");
 
+    const sizeHint = document.getElementById("sizeHint");
+
     // ✅ ZIP GLOBAL: on force MENAGE, pas d'embrouille
     const FORCED_MISSION_TYPE = "MENAGE";
 
     // ✅ suppression Storage: par défaut on fait une suppression logique (Firestore only)
     // Mets true si tu décides d'autoriser delete dans Storage rules pour l'agent token.
     const ALLOW_STORAGE_DELETE = false;
+
+    // ✅ ALIGNÉ RULES STORAGE : 30 Mo max
+    const MAX_BYTES = 30 * 1024 * 1024;
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -273,6 +289,27 @@
       zipInput.disabled = !!locked;
     }
 
+    function fmtSize(bytes){
+      const b = Number(bytes || 0);
+      if(!Number.isFinite(b) || b <= 0) return "0 Mo";
+      return (b / (1024*1024)).toFixed(1) + " Mo";
+    }
+
+    function showSizeHint(file){
+      if(!file){
+        sizeHint.style.display = "none";
+        sizeHint.textContent = "";
+        sizeHint.classList.remove("bad","ok");
+        return;
+      }
+      const s = Number(file.size || 0);
+      const ok = s > 0 && s <= MAX_BYTES;
+      sizeHint.style.display = "block";
+      sizeHint.classList.toggle("ok", ok);
+      sizeHint.classList.toggle("bad", !ok);
+      sizeHint.textContent = `Taille ZIP : ${fmtSize(s)} / limite ${fmtSize(MAX_BYTES)}${ok ? "" : " — trop lourd"}`;
+    }
+
     function renderZipInfo(proofZip){
       zipInfo.innerHTML = "";
       if(!proofZip || !proofZip.url){
@@ -314,12 +351,10 @@
 
         lockUI(true);
         try{
-          // 1) suppression Storage (optionnelle)
           if(ALLOW_STORAGE_DELETE && proofZip.path){
             try{ await deleteObject(sRef(storage, proofZip.path)); }catch(e){ console.warn("deleteObject failed", e); }
           }
 
-          // 2) suppression logique dans Firestore (toujours)
           await updateDoc(doc(db,"events",prestationId,"missions",missionType),{
             proofZip: null,
             updatedAt: serverTimestamp()
@@ -341,7 +376,6 @@
     const token = qs("token");
     const prestationId = qs("prestationId");
 
-    // ✅ missionType forcé
     const missionType = FORCED_MISSION_TYPE;
 
     async function load(){
@@ -349,6 +383,7 @@
       subLine.textContent = "Chargement…";
       hideProgress();
       zipInfo.innerHTML = "";
+      showSizeHint(null);
 
       if(!token || !prestationId){
         subLine.textContent = "";
@@ -359,7 +394,6 @@
       chipLine.textContent = "token: " + token;
       backBtn.href = `agent.html?token=${encodeURIComponent(token)}&prestationId=${encodeURIComponent(prestationId)}`;
 
-      // 1) token
       const tSnap = await getDoc(doc(db,"dayTokens",token));
       if(!tSnap.exists()){
         subLine.textContent = "";
@@ -379,7 +413,6 @@
         return;
       }
 
-      // ✅ garde-fou : le token doit autoriser MENAGE
       const allowedTypes = (Array.isArray(tokenDoc.missionTypes) && tokenDoc.missionTypes.length)
         ? tokenDoc.missionTypes.map(x => String(x||"").toUpperCase())
         : ["MENAGE"];
@@ -390,7 +423,6 @@
         return;
       }
 
-      // 2) mission doc (MENAGE)
       const mRef = doc(db,"events",prestationId,"missions",missionType);
       const mSnap = await getDoc(mRef);
       if(!mSnap.exists()){
@@ -400,7 +432,6 @@
       }
       const m = mSnap.data() || {};
 
-      // ✅ le token doit être attaché à la mission
       if(String(m.dayToken || "") !== String(token)){
         subLine.textContent = "";
         showAlert("⛔ Token non associé à cette mission (MENAGE).");
@@ -411,7 +442,15 @@
       subLine.textContent = "";
     }
 
-    clearZipBtn.addEventListener("click", ()=>{ zipInput.value = ""; });
+    clearZipBtn.addEventListener("click", ()=>{
+      zipInput.value = "";
+      showSizeHint(null);
+    });
+
+    zipInput.addEventListener("change", ()=>{
+      const file = zipInput.files && zipInput.files[0] ? zipInput.files[0] : null;
+      showSizeHint(file);
+    });
 
     uploadZipBtn.addEventListener("click", async ()=>{
       hideAlert();
@@ -420,21 +459,21 @@
 
       const name = safeZipName(file.name);
 
-      const maxBytes = 120 * 1024 * 1024; // 120 Mo
-      if(Number(file.size || 0) > maxBytes) return showAlert("Fichier trop lourd (limite 120 Mo).");
+      if(Number(file.size || 0) > MAX_BYTES){
+        showSizeHint(file);
+        return showAlert(`Fichier trop lourd (${fmtSize(file.size)}). Limite : ${fmtSize(MAX_BYTES)}. Réduis à 10–15 photos.`);
+      }
 
       lockUI(true);
       setProgress(1, "Démarrage upload…");
 
       try{
-        // re-check mission (anti bidouille)
         const mRef = doc(db,"events",prestationId,"missions",missionType);
         const mSnap = await getDoc(mRef);
         if(!mSnap.exists()) throw new Error("Mission introuvable.");
         const m = mSnap.data() || {};
         if(String(m.dayToken || "") !== String(token)) throw new Error("Token non associé à cette mission (MENAGE).");
 
-        // ⚠️ stockage: on met token dans le path (pratique pour règles et purge)
         const path = `proofZips/${prestationId}/${missionType}/${token}/${Date.now()}_${Math.random().toString(16).slice(2)}_${name}`;
         const r = sRef(storage, path);
         const task = uploadBytesResumable(r, file, { contentType:"application/zip" });
@@ -458,7 +497,6 @@
           sizeBytes: Number(file.size || 0),
           createdAtMs: Date.now(),
           token: String(token),
-          // (optionnel) si tu veux un jour afficher qui a upload
           agentEmail: "",
           agentName: ""
         };
@@ -469,6 +507,7 @@
         });
 
         zipInput.value = "";
+        showSizeHint(null);
         hideProgress();
         showAlert("✅ ZIP uploadé.", true);
 
