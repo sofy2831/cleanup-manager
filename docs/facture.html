@@ -1,4 +1,4 @@
-<!-- docs/facture.html (FINAL — FIX: plus de blocage ACCEPTED + persistance paiement mode/délai) -->
+<!-- docs/facture.html (FINAL — MIGRATION EVENT->salesDocuments: ouverture eventId crée/ouvre un salesDocuments lié, tout le reste reste inchangé) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -436,7 +436,7 @@
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
       doc, getDoc, updateDoc, serverTimestamp, runTransaction,
-      collection, query, where, getDocs, limit
+      collection, query, where, getDocs, limit, addDoc
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     // ===== UI =====
@@ -479,7 +479,7 @@
 
     let docRef = null;
     let docData = null;
-    let docKind = ""; // "SALES" | "EVENT"
+    let docKind = ""; // "SALES" | "EVENT" (EVENT utilisé uniquement le temps de la migration)
 
     let profileData = null; // users/{conciergerieUid}
 
@@ -898,39 +898,6 @@
       }
     }
 
-    async function hydrateEventClientInMemoryIfMissing(){
-      if(docKind !== "EVENT") return;
-      if(!currentUser?.uid || !docData) return;
-
-      const hasName = !!String(docData.ownerName || "").trim();
-      const hasEmail = !!String(docData.ownerEmail || "").trim();
-      const hasAddr =
-        !!String(docData.ownerAddress1 || "").trim() ||
-        !!String(docData.ownerZip || "").trim() ||
-        !!String(docData.ownerCity || "").trim();
-
-      if(hasName && hasEmail && hasAddr) return;
-
-      try{
-        const resolved = await resolveClientSnapshot(currentUser.uid, docData);
-
-        docData = {
-          ...docData,
-          ownerDocId: docData.ownerDocId || resolved.clientOwnerDocId || null,
-          ownerName: String(docData.ownerName || "").trim() ? docData.ownerName : (resolved.name || ""),
-          ownerEmail: String(docData.ownerEmail || "").trim() ? docData.ownerEmail : (resolved.email || ""),
-          ownerPhone: String(docData.ownerPhone || "").trim() ? docData.ownerPhone : (resolved.phone || ""),
-          ownerAddress1: String(docData.ownerAddress1 || "").trim() ? docData.ownerAddress1 : (resolved.address1 || ""),
-          ownerAddress2: String(docData.ownerAddress2 || "").trim() ? docData.ownerAddress2 : (resolved.address2 || ""),
-          ownerZip: String(docData.ownerZip || "").trim() ? docData.ownerZip : (resolved.zip || ""),
-          ownerCity: String(docData.ownerCity || "").trim() ? docData.ownerCity : (resolved.city || ""),
-          ownerCountry: String(docData.ownerCountry || "").trim() ? docData.ownerCountry : (resolved.country || "FR"),
-        };
-      }catch(e){
-        console.warn("hydrateEventClientInMemoryIfMissing failed:", e?.message || e);
-      }
-    }
-
     function renderBusinessHeader(){
       const bp = (profileData?.businessProfile || {});
       const cName = String(bp.companyName || "Conciergerie").trim();
@@ -964,12 +931,12 @@
 
     function renderClientHeader(){
       const d = docData || {};
-      const name = String(d.clientName || d.ownerName || "—").trim();
+      const name = String(d.clientName || "—").trim();
 
-      const a1 = String(d.clientAddress1 || d.ownerAddress1 || "").trim();
-      const a2 = String(d.clientAddress2 || d.ownerAddress2 || "").trim();
-      const zip = String(d.clientZip || d.ownerZip || "").trim();
-      const city = String(d.clientCity || d.ownerCity || "").trim();
+      const a1 = String(d.clientAddress1 || "").trim();
+      const a2 = String(d.clientAddress2 || "").trim();
+      const zip = String(d.clientZip || "").trim();
+      const city = String(d.clientCity || "").trim();
 
       clientNameEl.textContent = name || "—";
 
@@ -978,8 +945,8 @@
       if(a2) lines.push(esc(a2));
       if(zip || city) lines.push(esc([zip, city].filter(Boolean).join(" ")));
 
-      const mail = String(d.clientEmail || d.ownerEmail || "").trim();
-      const tel  = String(d.clientPhone || d.ownerPhone || "").trim();
+      const mail = String(d.clientEmail || "").trim();
+      const tel  = String(d.clientPhone || "").trim();
       const contact = [mail, tel].filter(Boolean).join(" • ");
       if(contact) lines.push(`<span class="mut">${esc(contact)}</span>`);
 
@@ -1172,21 +1139,134 @@
       renderRecap();
     }
 
+    function findLinkedInvoiceIdFromEvent(e){
+      const keys = ["linkedInvoiceDocId","invoiceDocId","linkedSalesDocId","salesDocId","invoiceSalesDocId","linkedInvoiceId"];
+      for(const k of keys){
+        const v = String(e?.[k] || "").trim();
+        if(v) return v;
+      }
+      return "";
+    }
+
+    async function migrateEventToSalesInvoice(evId, evData){
+      // pre-req profile pour TVA + config société
+      await loadProfile(currentUser.uid);
+
+      // client snapshot (on stocke proprement sur salesDocuments)
+      const resolved = await resolveClientSnapshot(currentUser.uid, evData);
+
+      // payment defaults (reprend ce que tu avais, sinon defaults)
+      const payMode = String(evData?.invoicePaymentMode || evData?.quotePaymentMode || "VIREMENT").toUpperCase();
+      const payTerm = String(evData?.invoicePaymentTerm || evData?.quotePaymentTerm || "RECEPTION").toUpperCase();
+
+      // lines
+      const lines = Array.isArray(evData?.lines) ? evData.lines : [];
+
+      // totals
+      const bp = (profileData?.businessProfile || {});
+      const tvaEnabled = !!bp.vat?.enabled;
+      const tvaRate = Number.isFinite(Number(bp.vat?.rate)) ? Number(bp.vat.rate) : 0;
+      const totals = computeTotals(lines, tvaEnabled, tvaRate);
+
+      // docType legacy conservé + type canonique
+      const payload = {
+        // identité / tri
+        conciergerieUid: String(currentUser.uid),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        createdBy: String(currentUser.uid),
+        listable: true,
+
+        // canon
+        type: "INVOICE",
+        docType: "INVOICE_EVENT",
+        sourceKind: "EVENT",
+        sourceEventId: String(evId),
+
+        // data logement / séjour
+        homeId: String(evData?.homeId || evData?.homeDocId || "").trim() || null,
+        homeName: String(evData?.homeName || "").trim() || "",
+        homeAddress: String(evData?.homeAddress || "").trim() || "",
+        homeZip: String(evData?.homeZip || "").trim() || "",
+        homeCity: String(evData?.homeCity || "").trim() || "",
+        arrivalDateKey: String(evData?.arrivalDateKey || evData?.arrivalDate || "").trim() || "",
+        departureDateKey: String(evData?.departureDateKey || evData?.departureDate || "").trim() || "",
+
+        // référence devis si existant
+        quoteNumber: String(evData?.quoteNumber || "").trim() || "",
+        commercialStatus: String(evData?.commercialStatus || "FACTURE").trim() || "FACTURE",
+        commercialUpdatedAt: serverTimestamp(),
+
+        // client facturation (snapshot)
+        clientOwnerDocId: resolved.clientOwnerDocId || null,
+        clientName: resolved.name || String(evData?.clientName || evData?.ownerName || "").trim() || "",
+        clientEmail: resolved.email || normalizeEmail(evData?.clientEmail || evData?.ownerEmail || ""),
+        clientPhone: resolved.phone || String(evData?.clientPhone || evData?.ownerPhone || "").trim() || "",
+        clientAddress1: resolved.address1 || String(evData?.clientAddress1 || evData?.ownerAddress1 || "").trim() || "",
+        clientAddress2: resolved.address2 || String(evData?.clientAddress2 || evData?.ownerAddress2 || "").trim() || "",
+        clientZip: resolved.zip || String(evData?.clientZip || evData?.ownerZip || "").trim() || "",
+        clientCity: resolved.city || String(evData?.clientCity || evData?.ownerCity || "").trim() || "",
+        clientCountry: resolved.country || String(evData?.clientCountry || evData?.ownerCountry || "FR").trim() || "FR",
+        clientType: getClientType(evData),
+
+        // facture (draft au départ)
+        invoiceNumber: String(evData?.invoiceNumber || "").trim() || "",
+        invoiceStatus: String(evData?.invoiceStatus || "DRAFT").toUpperCase().trim() || "DRAFT",
+        invoiceNotes: String(evData?.invoiceNotes || "").trim() || "",
+
+        // paiement (conditions)
+        invoicePaymentMode: ["VIREMENT","CHEQUE","ESPECES"].includes(payMode) ? payMode : "VIREMENT",
+        invoicePaymentTerm: ["RECEPTION","8J","15J","30J","45J"].includes(payTerm) ? payTerm : "RECEPTION",
+
+        // pénalités (reprend quote si existant)
+        invoicePenaltyMode: String(evData?.invoicePenaltyMode || evData?.quotePenaltyMode || "B2C").toUpperCase(),
+        invoicePenaltyText: String(evData?.invoicePenaltyText || evData?.quotePenaltyText || getPenaltyTemplate(evData?.quotePenaltyMode || "B2C")).trim(),
+
+        // lignes + totaux stockés (pour journal/exports)
+        lines,
+        totalHT: Number(totals.ht) || 0,
+        totalTVA: Number(totals.tva) || 0,
+        totalTTC: Number(totals.ttc) || 0
+      };
+
+      // create salesDocuments
+      const created = await addDoc(collection(db, "salesDocuments"), payload);
+
+      // link back to event (idempotence future)
+      try{
+        await updateDoc(doc(db,"events", evId), {
+          linkedInvoiceDocId: created.id,
+          linkedInvoiceUpdatedAt: serverTimestamp()
+        });
+      }catch(e){
+        // si règles/events refusent, on ne casse pas la facture (juste pas de lien)
+        console.warn("event link update failed:", e?.message || e);
+      }
+
+      return created.id;
+    }
+
     async function loadInvoiceFromEvent(id){
       docKind = "EVENT";
-      docRef = doc(db, "events", id);
+      const evRef = doc(db, "events", id);
 
-      const snap = await getDoc(docRef);
+      const snap = await getDoc(evRef);
       if(!snap.exists()) throw new Error("Event introuvable.");
-      docData = { id: snap.id, ...(snap.data()||{}) };
+      const evData = { id: snap.id, ...(snap.data()||{}) };
 
-      if(docData.conciergerieUid && currentUser?.uid && docData.conciergerieUid !== currentUser.uid){
+      if(evData.conciergerieUid && currentUser?.uid && evData.conciergerieUid !== currentUser.uid){
         throw new Error("Accès refusé (event d’une autre conciergerie).");
       }
 
-      await loadProfile(currentUser.uid);
-      await hydrateEventClientInMemoryIfMissing();
-      renderRecap();
+      // 1) si déjà lié -> ouvrir le salesDocuments
+      const linked = findLinkedInvoiceIdFromEvent(evData);
+      if(linked){
+        return loadInvoiceFromSales(linked);
+      }
+
+      // 2) sinon -> migration silencieuse -> puis ouvrir le salesDocuments
+      const newId = await migrateEventToSalesInvoice(id, evData);
+      return loadInvoiceFromSales(newId);
     }
 
     async function loadDoc(){
@@ -1216,7 +1296,6 @@
     previewBtn.addEventListener("click", ()=>{
       if(!docRef || !docData) return;
 
-      // persist avant nav (pour retour)
       saveUiState();
 
       const draft = {
@@ -1227,131 +1306,90 @@
       };
       sessionStorage.setItem("invoiceDraftPreview", JSON.stringify(draft));
 
-      if(docKind === "SALES"){
-        location.href = `facture-apercu.html?docId=${encodeURIComponent(docData.id)}&draft=1`;
-      }else{
-        location.href = `facture-apercu.html?eventId=${encodeURIComponent(eventId)}&draft=1`;
-      }
+      // IMPORTANT: après migration, on est toujours en SALES
+      location.href = `facture-apercu.html?docId=${encodeURIComponent(docData.id)}&draft=1`;
     });
 
     saveBtn.addEventListener("click", async ()=>{
       hideAlert();
-      if(!docRef) return showAlert("Document non chargé.");
+      if(!docRef || !docData) return showAlert("Document non chargé.");
 
       lockUI(true);
       try{
+        // sécurité: on n'autorise pas d'écriture sur events ici
+        if(docKind !== "SALES"){
+          throw new Error("Facture legacy (event) non migrée. Recharge la page (la migration est automatique).");
+        }
+
         const year = new Date().getFullYear();
         let invoiceNumber = String(docData?.invoiceNumber || "").trim();
 
         let clientPatch = {};
-        if(docKind === "SALES"){
-          const missingAddr =
-            !String(docData?.clientAddress1 || "").trim() &&
-            !String(docData?.clientZip || "").trim() &&
-            !String(docData?.clientCity || "").trim();
+        const missingAddr =
+          !String(docData?.clientAddress1 || "").trim() &&
+          !String(docData?.clientZip || "").trim() &&
+          !String(docData?.clientCity || "").trim();
 
-          const missingName = !String(docData?.clientName || "").trim();
-          const missingEmail = !String(docData?.clientEmail || "").trim();
+        const missingName = !String(docData?.clientName || "").trim();
+        const missingEmail = !String(docData?.clientEmail || "").trim();
 
-          if(missingAddr || missingName || missingEmail){
-            const resolved = await resolveClientSnapshot(currentUser.uid, docData);
-
-            clientPatch = {
-              clientOwnerDocId: resolved.clientOwnerDocId || docData.clientOwnerDocId || null,
-              clientName: resolved.name || docData.clientName || "",
-              clientEmail: resolved.email || docData.clientEmail || "",
-              clientPhone: resolved.phone || docData.clientPhone || "",
-              clientAddress1: resolved.address1 || docData.clientAddress1 || "",
-              clientAddress2: resolved.address2 || docData.clientAddress2 || "",
-              clientZip: resolved.zip || docData.clientZip || "",
-              clientCity: resolved.city || docData.clientCity || "",
-              clientCountry: resolved.country || docData.clientCountry || "FR"
-            };
-          }
+        if(missingAddr || missingName || missingEmail){
+          const resolved = await resolveClientSnapshot(currentUser.uid, docData);
+          clientPatch = {
+            clientOwnerDocId: resolved.clientOwnerDocId || docData.clientOwnerDocId || null,
+            clientName: resolved.name || docData.clientName || "",
+            clientEmail: resolved.email || docData.clientEmail || "",
+            clientPhone: resolved.phone || docData.clientPhone || "",
+            clientAddress1: resolved.address1 || docData.clientAddress1 || "",
+            clientAddress2: resolved.address2 || docData.clientAddress2 || "",
+            clientZip: resolved.zip || docData.clientZip || "",
+            clientCity: resolved.city || docData.clientCity || "",
+            clientCountry: resolved.country || docData.clientCountry || "FR"
+          };
         }
+
+        // recalcul totaux au moment du save (évite totalTTC=0 qui casse les boutons ensuite)
+        const bp = (profileData?.businessProfile || {});
+        const tvaEnabled = !!bp.vat?.enabled;
+        const tvaRate = Number.isFinite(Number(bp.vat?.rate)) ? Number(bp.vat.rate) : 0;
+        const totals = computeTotals(docData?.lines, tvaEnabled, tvaRate);
 
         const patch = {
           invoiceNotes: (invoiceNotesEl.value || "").trim(),
           invoiceUpdatedAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
 
           invoicePaymentMode: String(payModeSel.value || "VIREMENT").toUpperCase(),
           invoicePaymentTerm: String(payTermSel.value || "RECEPTION").toUpperCase(),
 
+          totalHT: Number(totals.ht) || 0,
+          totalTVA: Number(totals.tva) || 0,
+          totalTTC: Number(totals.ttc) || 0,
+
           ...clientPatch
         };
 
-        // persist UI (au cas où)
+        if(!String(docData?.clientType || "").trim()){
+          patch.clientType = getClientType(docData);
+        }
+
         saveUiState();
-
-        // ===== SALES =====
-        if(docKind === "SALES"){
-          if(!String(docData?.clientType || "").trim()){
-            patch.clientType = getClientType(docData);
-          }
-
-          if(!invoiceNumber){
-            invoiceNumber = await ensureInvoiceNumber(currentUser.uid, year);
-            patch.invoiceNumber = invoiceNumber;
-
-            patch.invoiceStatus = "ISSUED";
-            patch.invoiceIssuedAt = serverTimestamp();
-            patch.invoiceIssuedDate = todayIso();
-            patch.invoiceIssuedBy = currentUser.uid;
-
-            patch.commercialStatus = "FACTURE_EMISE";
-            patch.commercialUpdatedAt = serverTimestamp();
-          }else{
-            const cur = String(docData?.invoiceStatus || "").toUpperCase().trim();
-            patch.invoiceStatus = (cur === "DRAFT" || !cur) ? "ISSUED" : cur;
-            patch.invoiceIssuedDate = String(docData?.invoiceIssuedDate || todayIso()).trim();
-          }
-
-          await updateDoc(docRef, patch);
-
-          const snap2 = await getDoc(docRef);
-          docData = { id: snap2.id, ...(snap2.data()||{}) };
-
-          showAlert("✅ Facture enregistrée (émise).", true);
-          renderRecap();
-          return;
-        }
-
-        // ===== EVENT =====
-        // FIX #1 : on NE BLOQUE PLUS si quoteStatus != ACCEPTED
-        // (tu peux garder l'info pour un warning si tu veux, mais pas de throw)
-        const qs = String(docData?.quoteStatus || "").toUpperCase().trim();
-        if(qs && qs !== "ACCEPTED"){
-          console.warn("Quote non ACCEPTED, facturation autorisée quand même:", qs);
-        }
 
         if(!invoiceNumber){
           invoiceNumber = await ensureInvoiceNumber(currentUser.uid, year);
           patch.invoiceNumber = invoiceNumber;
 
-          patch.invoiceStatus = "SENT";
-          patch.invoiceSentAt = serverTimestamp();
-
+          patch.invoiceStatus = "ISSUED";
           patch.invoiceIssuedAt = serverTimestamp();
           patch.invoiceIssuedDate = todayIso();
+          patch.invoiceIssuedBy = currentUser.uid;
 
-          patch.invoicePenaltyMode = String(docData?.quotePenaltyMode || "B2C").toUpperCase();
-          patch.invoicePenaltyText = String(docData?.quotePenaltyText || getPenaltyTemplate(patch.invoicePenaltyMode)).trim();
-
-          patch.commercialStatus = "FACTURE_ENVOYEE";
+          patch.commercialStatus = "FACTURE_EMISE";
           patch.commercialUpdatedAt = serverTimestamp();
         }else{
-          const inv = String(docData?.invoiceStatus || "").toUpperCase().trim();
-          patch.invoiceStatus = inv || "SENT";
-
-          patch.invoicePenaltyMode = String(docData?.invoicePenaltyMode || docData?.quotePenaltyMode || "B2C").toUpperCase();
-          patch.invoicePenaltyText = String(docData?.invoicePenaltyText || docData?.quotePenaltyText || getPenaltyTemplate(patch.invoicePenaltyMode)).trim();
-
+          const cur = String(docData?.invoiceStatus || "").toUpperCase().trim();
+          patch.invoiceStatus = (cur === "DRAFT" || !cur) ? "ISSUED" : cur;
           patch.invoiceIssuedDate = String(docData?.invoiceIssuedDate || todayIso()).trim();
-        }
-
-        const invNow = String(docData?.invoiceStatus || "").toUpperCase().trim();
-        if(invNow === "PAID" || invNow === "CANCELLED"){
-          patch.invoiceStatus = invNow;
         }
 
         await updateDoc(docRef, patch);
@@ -1359,7 +1397,7 @@
         const snap2 = await getDoc(docRef);
         docData = { id: snap2.id, ...(snap2.data()||{}) };
 
-        showAlert("✅ Facture enregistrée.", true);
+        showAlert("✅ Facture enregistrée (émise).", true);
         renderRecap();
       }catch(err){
         console.error(err);
@@ -1375,6 +1413,7 @@
 
       try{
         await loadDoc();
+
         // applique UI state après load (retour d'aperçu)
         const ui = loadUiState();
         if(ui){
