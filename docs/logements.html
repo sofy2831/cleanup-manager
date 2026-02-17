@@ -1,4 +1,4 @@
-<!-- docs/logements.html (COMPLET + PATCH HYDRATE OWNER SNAPSHOT) -->
+<!-- docs/logements.html (COMPLET + PATCH: owner existant => "Associer" au lieu de "Inviter" + compteur X logements) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -227,6 +227,8 @@
     }
     .chip.ok{ background:rgba(27,143,77,0.14); color:var(--ok); }
     .chip.bad{ background:rgba(179,38,30,0.14); color:var(--bad); }
+    .chip.blue{ background:rgba(0,163,255,0.14); color:#0067a6; }
+    .chip.orange{ background:rgba(255,140,0,0.16); color:#9a4f00; }
 
     .item-actions{ display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; }
     .mini-btn{
@@ -251,6 +253,7 @@
       color:#fff;
     }
     .mini-btn.red{ background:#ffe3ec; color:var(--bad); }
+    .mini-btn.ok{ background:#e7fff1; color:var(--ok); }
     .mini-btn.disabled{
       opacity:.45;
       pointer-events:none;
@@ -421,7 +424,7 @@
   <div class="modal-backdrop" id="modalBackdrop" aria-hidden="true">
     <div class="modal" role="dialog" aria-modal="true">
       <h2 id="modalTitle">Ajouter un logement</h2>
-      <p>Crée le logement d’abord. Ensuite tu invites le propriétaire depuis la ligne du logement.</p>
+      <p>Crée le logement d’abord. Ensuite tu invites le propriétaire depuis la ligne du logement (ou tu l’associes si le compte existe déjà).</p>
 
       <form id="homeForm" autocomplete="off">
         <label for="homeName">Nom du logement</label>
@@ -447,7 +450,7 @@
         <label for="ownerPhone">Téléphone propriétaire</label>
         <input id="ownerPhone" type="tel" inputmode="tel" placeholder="Ex. 06 12 34 56 78" required />
 
-        <label for="ownerAccountEmail">Email propriétaire (pour pré-remplir l’invitation)</label>
+        <label for="ownerAccountEmail">Email propriétaire (pour pré-remplir l’invitation / association)</label>
         <input id="ownerAccountEmail" type="email" placeholder="ex: proprio@email.com" />
 
         <div class="kv" id="linkRuleInfo" style="display:block;">
@@ -676,6 +679,96 @@
 
   function isArchived(h){ return h?.status === "archived"; }
 
+  // ===== PATCH : owners index (emailLower -> owner) + compteur X logements =====
+  let ownersByEmailLower = new Map(); // emailLower -> ownerObj
+  let ownersById = new Map();         // ownerId -> ownerObj
+  let ownerHomeCountById = new Map(); // ownerId -> count (homes liés)
+
+  function computeOwnerHomeCounts(){
+    ownerHomeCountById = new Map();
+    for(const h of allHomes){
+      const oid = String(h.ownerUid || h.ownerDocId || "").trim();
+      if(!oid) continue;
+      ownerHomeCountById.set(oid, (ownerHomeCountById.get(oid) || 0) + 1);
+    }
+  }
+
+  async function loadOwnersIndex(){
+    ownersByEmailLower = new Map();
+    ownersById = new Map();
+
+    if(!currentUid) return;
+
+    // on charge les owners de la conciergerie (emailLower indexé chez toi)
+    try{
+      const qo = query(
+        collection(db,"owners"),
+        where("conciergerieUid","==", currentUid),
+        limit(800)
+      );
+      const snap = await getDocs(qo);
+      for(const d of snap.docs){
+        const o = { id: d.id, ...(d.data()||{}) };
+        const emailLower = String(o.emailLower || o.email || "").trim().toLowerCase();
+        ownersById.set(o.id, o);
+        if(emailLower) ownersByEmailLower.set(emailLower, o);
+      }
+    }catch(e){
+      console.warn("loadOwnersIndex:", e?.message || e);
+    }
+
+    computeOwnerHomeCounts();
+  }
+
+  function getExistingOwnerForHome(home){
+    const emailLower = normEmail(home.ownerAccountEmail || home.ownerEmail || home.pendingOwnerEmail || "");
+    if(!emailLower) return null;
+    return ownersByEmailLower.get(emailLower) || null;
+  }
+
+  async function linkHomeToOwner(homeId, owner){
+    if(!homeId || !owner?.id) return;
+
+    try{
+      // on lie le home
+      await updateDoc(doc(db,"homes", homeId), {
+        ownerUid: owner.id,
+        ownerDocId: owner.id,
+        ownerLinkStatus: "LINKED",
+        pendingOwnerEmail: "",
+
+        // on garde les champs email propres
+        ownerAccountEmail: String(owner.email || owner.emailLower || "").trim(),
+        ownerEmail: String(owner.email || owner.emailLower || "").trim(),
+
+        updatedAt: serverTimestamp()
+      });
+
+      // update cache local
+      const h = allHomes.find(x=>x.id===homeId);
+      if(h){
+        h.ownerUid = owner.id;
+        h.ownerDocId = owner.id;
+        h.ownerLinkStatus = "LINKED";
+        h.pendingOwnerEmail = "";
+        if(owner.email || owner.emailLower){
+          h.ownerAccountEmail = String(owner.email || owner.emailLower || "").trim();
+          h.ownerEmail = String(owner.email || owner.emailLower || "").trim();
+        }
+      }
+
+      // recompute counts + hydrate snapshot + refresh UI
+      computeOwnerHomeCounts();
+      if(h) await hydrateOwnerSnapshotForHome(h);
+
+      showAlert("✅ Logement associé au propriétaire existant.", true);
+      render();
+    }catch(err){
+      console.error(err);
+      showAlert("Erreur association propriétaire : " + (err?.message || "inconnue"));
+    }
+  }
+
   // ===== PATCH : hydrate owner snapshot in homes =====
   const hydratedHomeIds = new Set();
 
@@ -757,6 +850,9 @@
         const tb = b.createdAt?.seconds ? b.createdAt.seconds : 0;
         return tb - ta;
       });
+
+      // PATCH: charge owners index pour savoir si "owner existe déjà"
+      await loadOwnersIndex();
 
       render();
     }catch(err){
@@ -869,7 +965,13 @@
 
     const h = allHomes.find(x => x.id === (bookingHomeSelect.value || homeId || ""));
     if(h && !String(h.ownerUid || "").trim()){
-      showBookingAlert("⛔ Propriétaire non lié : invite + acceptation obligatoires avant de créer une réservation.", false);
+      const ex = getExistingOwnerForHome(h);
+      if(ex){
+        const n = ownerHomeCountById.get(ex.id) || 0;
+        showBookingAlert(`⛔ Propriétaire non lié. Compte existe déjà (${n} logement(s)). Retourne sur la ligne du logement et clique “Associer”.`, false);
+      }else{
+        showBookingAlert("⛔ Propriétaire non lié : invite + acceptation obligatoires avant de créer une réservation.", false);
+      }
     }
 
     setTimeout(()=> bookingHomeSelect.focus(), 0);
@@ -887,7 +989,13 @@
 
     const h = allHomes.find(x => x.id === (bookingHomeSelect.value || ""));
     if(h && !String(h.ownerUid || "").trim()){
-      showBookingAlert("⛔ Propriétaire non lié : réservation bloquée.", false);
+      const ex = getExistingOwnerForHome(h);
+      if(ex){
+        const n = ownerHomeCountById.get(ex.id) || 0;
+        showBookingAlert(`⛔ Propriétaire non lié. Compte existe déjà (${n} logement(s)). Clique “Associer” dans Logements.`, false);
+      }else{
+        showBookingAlert("⛔ Propriétaire non lié : réservation bloquée.", false);
+      }
     }else{
       hideBookingAlert();
     }
@@ -981,19 +1089,31 @@
         || ""
       );
 
+      // PATCH : si ownerUid vide mais owner existe déjà (emailLower match)
+      const existingOwner = (!ownerUid && !isArchived(h)) ? getExistingOwnerForHome(h) : null;
+      const existingOwnerCount = existingOwner ? (ownerHomeCountById.get(existingOwner.id) || 0) : 0;
+
       const statusChip = isArchived(h) ? `<span class="chip">Archivé</span>` : "";
 
       const accountChip = ownerUid
         ? `<span class="chip ok">Compte lié ✅</span>`
-        : (pendingEmail
-            ? `<span class="chip">Invite en attente…</span>`
-            : `<span class="chip bad">Compte non lié ⛔</span>`
+        : (existingOwner
+            ? `<span class="chip orange">Propriétaire existant (${existingOwnerCount} logement(s))</span>`
+            : (pendingEmail
+                ? `<span class="chip">Invite en attente…</span>`
+                : `<span class="chip bad">Compte non lié ⛔</span>`
+              )
           );
 
       const canBook = !!ownerUid && !isArchived(h);
 
-      const inviteBtn = (isArchived(h) || ownerUid)
-        ? `<span class="mini-btn disabled">${ownerUid ? "Invité" : "Inviter"}</span>`
+      // PATCH : bouton "Associer" si owner existe déjà
+      const associateBtn = (existingOwner)
+        ? `<button class="mini-btn ok" type="button" data-assoc="${escapeHtml(h.id)}">🔗 Associer</button>`
+        : ``;
+
+      const inviteBtn = (isArchived(h) || ownerUid || existingOwner)
+        ? `<span class="mini-btn disabled">${ownerUid ? "Invité" : (existingOwner ? "Associer" : "Inviter")}</span>`
         : `<a class="mini-btn" href="${escapeHtml(buildInviteUrlForHome(h))}" data-invite="${escapeHtml(h.id)}">✉️ Inviter</a>`;
 
       const bookingBtn = isArchived(h)
@@ -1014,6 +1134,7 @@
               ${ownerPhone ? `<br/>📞 ${escapeHtml(ownerPhone)}` : ""}
               ${ownerEmail ? `<br/>Email : <b>${escapeHtml(ownerEmail)}</b>` : `<br/>Email : <b>—</b>`}
               ${ownerUid ? `<br/>Compte : <b>${escapeHtml(ownerUid)}</b>` : ``}
+              ${existingOwner ? `<br/><b>Compte existant trouvé :</b> ${escapeHtml(existingOwner.email || existingOwner.emailLower || "")}` : ``}
             </div>
             <div class="chips">
               <span class="chip">${escapeHtml(h.homeType || h.type || "Type")}</span>
@@ -1026,6 +1147,7 @@
           </div>
 
           <div class="item-actions">
+            ${associateBtn}
             ${inviteBtn}
             ${bookingBtn}
             <button class="mini-btn" type="button" data-edit="${h.id}">✏️ Modifier</button>
@@ -1042,6 +1164,27 @@
       homesListEl.appendChild(item);
       item.querySelectorAll(".item-actions button, .item-actions a").forEach(el=>{
         el.addEventListener("click", (e)=> e.stopPropagation());
+      });
+    });
+
+    // Associer
+    homesListEl.querySelectorAll("button[data-assoc]").forEach(btn=>{
+      btn.addEventListener("click", async ()=>{
+        hideAlert();
+        const homeId = btn.getAttribute("data-assoc");
+        const h = allHomes.find(x=>x.id===homeId);
+        if(!h) return;
+
+        const ex = getExistingOwnerForHome(h);
+        if(!ex){
+          showAlert("Aucun propriétaire existant trouvé pour cet email. (Vérifie emailLower dans owners)", false);
+          return;
+        }
+
+        const n = ownerHomeCountById.get(ex.id) || 0;
+        if(!confirm(`Associer ce logement au propriétaire existant (${n} logement(s)) ?`)) return;
+
+        await linkHomeToOwner(homeId, ex);
       });
     });
 
@@ -1143,6 +1286,8 @@
         try{
           await deleteDoc(doc(db,"homes", id));
           allHomes = allHomes.filter(x=>x.id !== id);
+          // refresh owners counts (car un home lié peut disparaître)
+          computeOwnerHomeCounts();
           render();
           showAlert("✅ Logement supprimé.", true);
         }catch(err){
@@ -1222,7 +1367,8 @@
         await addDoc(collection(db,"homes"), {
           conciergerieUid: user.uid,
           status: "active",
-          ownerUid: "",              // = owners.docId (sera rempli par invite-proprietaire)
+          ownerUid: "",              // = owners.docId (sera rempli par invite-proprietaire ou association)
+          ownerDocId: "",
           ownerLinkStatus: "NONE",
           pendingOwnerEmail: "",
           createdAt: serverTimestamp(),
@@ -1231,7 +1377,19 @@
 
         closeHomeModal();
         await loadHomes();
-        showAlert("✅ Logement créé. Maintenant → clique “Inviter” sur la ligne du logement.", true);
+
+        // PATCH: si email saisi et owner existe déjà => message clair (UI proposera "Associer")
+        if(ownerAccountEmail){
+          const ex = ownersByEmailLower.get(ownerAccountEmail);
+          if(ex){
+            const n = ownerHomeCountById.get(ex.id) || 0;
+            showAlert(`✅ Logement créé. Propriétaire déjà existant (${n} logement(s)) → clique “Associer” sur la ligne.`, true);
+          }else{
+            showAlert("✅ Logement créé. Maintenant → clique “Inviter” sur la ligne du logement.", true);
+          }
+        }else{
+          showAlert("✅ Logement créé. Maintenant → clique “Inviter” sur la ligne du logement.", true);
+        }
       }
     }catch(err){
       console.error(err);
@@ -1269,7 +1427,13 @@
 
     const ownerUid = String(h?.ownerUid || "").trim();
     if(!ownerUid){
-      showBookingAlert("⛔ Propriétaire non lié : impossible de créer une réservation. Invite + acceptation d'abord.", false);
+      const ex = getExistingOwnerForHome(h);
+      if(ex){
+        const n = ownerHomeCountById.get(ex.id) || 0;
+        showBookingAlert(`⛔ Propriétaire non lié mais existant (${n} logement(s)). Clique “Associer” dans Logements.`, false);
+      }else{
+        showBookingAlert("⛔ Propriétaire non lié : impossible de créer une réservation. Invite + acceptation d'abord.", false);
+      }
       return;
     }
 
