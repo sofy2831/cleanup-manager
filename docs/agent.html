@@ -1,4 +1,4 @@
-<!-- docs/agent.html (PATCH — 1 commentaire global + bouton Photos réactivé + suppression texte bas de page ; Firestore inchangé) -->
+<!-- docs/agent.html (FINAL — 1 commentaire global + Photos ON + update serverTimestamp + opStatus A_VALIDER ; Firestore structure inchangée) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -214,14 +214,12 @@
         <div class="mini">Missions</div>
         <div class="missions" id="missionsWrap"></div>
       </section>
-
-      <!-- ✅ texte bas de page supprimé -->
     </div>
   </div>
 
   <script type="module">
     import { db } from "./firebase-init.js";
-    import { doc, getDoc, updateDoc, Timestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import { doc, getDoc, updateDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     // ✅ PHOTOS ON
     const PHOTOS_ENABLED = true;
@@ -309,7 +307,7 @@
       return false;
     }
 
-    // Checklist template (affichage only ; aucune création de doc)
+    // Checklist template (affichage only)
     function compactChecklistTemplate(type){
       const t = (type||"").toUpperCase();
 
@@ -428,7 +426,6 @@
 
     const token = qs("token");
     const prestationId = qs("prestationId");
-
     let tokenDoc = null;
 
     function setPrestaHeaderFromToken(presta){
@@ -478,7 +475,6 @@
       whoAmI.textContent = "Agent (token)";
       chipToken.textContent = "token: " + token;
 
-      // ✅ Photos ON
       if(PHOTOS_ENABLED){
         photosBtn.classList.remove("disabled");
         photosBtn.textContent = "📷 Photos";
@@ -521,11 +517,9 @@
       }
       chipStatus.innerHTML = `<span class="chip ok">OK</span>`;
 
-      // Header depuis dayTokens snapshot
       setPrestaHeaderFromToken(tokenDoc?.presta || {});
       agentLine.textContent = `Agent : ${(tokenDoc.agentName || "—")}${tokenDoc.agentEmail ? " • " + tokenDoc.agentEmail : ""}`;
 
-      // Missions : uniquement celles du token
       const TYPES = (Array.isArray(tokenDoc.missionTypes) && tokenDoc.missionTypes.length)
         ? tokenDoc.missionTypes.map(x => String(x||"").toUpperCase()).filter(Boolean)
         : ["MENAGE"];
@@ -548,7 +542,7 @@
       if(missing.length){
         showAlert(
           "⚠️ Missions manquantes côté Firestore : " + missing.join(", ") + "\n" +
-          "=> Retourne dans intervention.html → Générer lien (ça doit créer events/{prestationId}/missions/{TYPE} avec dayToken)."
+          "=> Retourne dans intervention.html → Générer lien (ça doit créer events/{prestationId}/missions/{TYPE})."
         );
       }
 
@@ -568,13 +562,11 @@
         const done = !!d.agentDone;
         const status = (d.status || "").toUpperCase() || "—";
 
-        // checklist: template + merge états existants
         const tpl = compactChecklistTemplate(m.id);
         const savedItems = checklistToArray(extractChecklistRaw(d));
         const doneByKey = {};
-        for(const it of savedItems){
-          doneByKey[String(it.key)] = !!it.done;
-        }
+        for(const it of savedItems) doneByKey[String(it.key)] = !!it.done;
+
         const items = tpl.map(x => ({
           key: x.key,
           label: x.label,
@@ -629,32 +621,30 @@
             return { key, label, done: !!ch.checked };
           });
 
-          // ✅ commentaire global utilisé pour toutes les missions
           const comment = (globalCommentEl?.value || "").trim();
 
           const payload = {
             checklist: arrayToChecklistObject(newItems),
-            agentComment: comment, // même champ, Firestore inchangé
+            agentComment: comment,
             status: markDone ? "A_VALIDER" : "EN_COURS",
             agentDone: markDone ? true : false,
             locked: markDone ? true : false,
-            updatedAt: Timestamp.now()
+            updatedAt: serverTimestamp()
           };
           if(markDone){
-            payload.agentDoneAt = Timestamp.now();
+            payload.agentDoneAt = serverTimestamp();
           }
 
           try{
-            // 1) update mission
             await updateDoc(doc(db, "events", prestationId, "missions", type), payload);
 
-            // 2) si Terminer => remonter opStatus sur le parent event
+            // ✅ quand l'agent termine => la prestation passe "A_VALIDER" (la conciergerie validera ensuite)
             if(markDone){
               try{
                 await updateDoc(doc(db,"events",prestationId),{
                   opStatus: "A_VALIDER",
                   proofToken: token,
-                  updatedAt: Timestamp.now()
+                  updatedAt: serverTimestamp()
                 });
               }catch(e){
                 console.error("update event opStatus", e);
@@ -663,7 +653,6 @@
 
             showAlert(markDone ? "✅ Mission terminée (À VALIDER) + verrouillée." : "✅ Enregistré.", true);
             await load();
-
           }catch(err){
             console.error(err);
             showAlert("Erreur enregistrement : " + (err?.code || err?.message || "inconnue"));
