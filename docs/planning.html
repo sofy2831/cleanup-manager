@@ -1,4 +1,4 @@
-<!-- docs/planning.html (FINAL — modale réservation sans footer, surlignage séjours à traiter, suppression textes internes) -->
+<!-- docs/planning.html (FINAL — Facture via facture.html?eventId=... / plus de création salesDocuments ici) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -228,7 +228,6 @@
       box-shadow: 0 18px 34px rgba(0,0,0,0.12);
     }
 
-    /* ✅ SURLIGNAGE interventions */
     .item.prestaRow{
       background: linear-gradient(90deg, rgba(122,92,255,0.10), rgba(255,255,255,1) 55%);
       border-left: 6px solid rgba(122,92,255,0.35);
@@ -240,7 +239,6 @@
       box-shadow: 0 18px 34px rgba(0,0,0,0.10);
     }
 
-    /* ✅ SURLIGNAGE séjours à traiter (nouveau logement / prestations manquantes) */
     .item.bookingAttention{
       background: linear-gradient(90deg, rgba(255,140,0,0.16), rgba(255,255,255,1) 58%);
       border-left: 6px solid rgba(255,140,0,0.55);
@@ -275,7 +273,6 @@
       align-items:center;
       justify-content:flex-end;
     }
-    .actionsRow.left{ justify-content:flex-start; }
     .actionsSplit{
       margin-top:8px;
       display:flex;
@@ -535,8 +532,6 @@
               <a class="qa-btn" href="equipe.html">🧑‍🔧 Équipe</a>
             </div>
           </div>
-
-          <!-- ✅ Légende supprimée -->
         </section>
 
         <!-- LISTE JOUR -->
@@ -567,7 +562,6 @@
         <button class="xBtn" id="closeModalBtn" type="button">✕</button>
       </div>
       <div class="kv2" id="modalBody"></div>
-      <!-- ✅ footer conservé mais vide -->
       <div class="modalFoot" id="modalFoot"></div>
     </div>
   </div>
@@ -589,7 +583,7 @@
   import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
   import {
     collection, query, where, orderBy, limit, getDocs,
-    doc, getDoc, updateDoc, deleteDoc, serverTimestamp, addDoc
+    doc, getDoc, updateDoc, deleteDoc, serverTimestamp
   } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
   const companyLine = document.getElementById("companyLine");
@@ -936,7 +930,8 @@
 
         opStatus: normalizeOpStatus(ev.opStatus || ev.status || "EN_COURS"),
 
-        invoiceDocId: (ev.invoiceDocId || ev.salesInvoiceDocId || "").toString()
+        // ✅ récupère toutes variantes possibles
+        invoiceDocId: (ev.linkedInvoiceDocId || ev.invoiceDocId || ev.salesInvoiceDocId || ev.linkedSalesDocId || "").toString()
       };
 
       allEvents.push(obj);
@@ -1002,63 +997,17 @@
     location.href = `preuves-admin.html?${p.toString()}`;
   }
 
-  async function openFacture(ev){
-    try{
-      if(!ev?.id) return;
+  // ✅ Facture = on passe TOUJOURS par facture.html?eventId=...
+  // facture.html sait : si lien existe -> ouvre doc, sinon migration auto -> ouvre doc
+  function openFacture(ev){
+    if(!ev?.id) return;
 
-      if(ev.invoiceDocId){
-        location.href = `facture.html?docId=${encodeURIComponent(ev.invoiceDocId)}&returnTo=planning&returnDate=${encodeURIComponent(selectedDateKey)}`;
-        return;
-      }
+    const p = new URLSearchParams();
+    p.set("eventId", ev.id);
+    p.set("returnTo", "planning");
+    p.set("returnDate", selectedDateKey);
 
-      const payload = {
-        conciergerieUid: currentUser.uid,
-        type: "INVOICE",
-        docType: "INVOICE_EVENT",
-        listable: true,
-
-        sourceKind: "EVENT",
-        sourceEventId: ev.id,
-
-        createdAt: serverTimestamp(),
-        invoiceStatus: "DRAFT",
-        commercialStatus: "FACTURE",
-        commercialUpdatedAt: serverTimestamp(),
-
-        homeId: ev.homeId || "",
-        homeName: ev.homeName || "",
-        homeAddress: ev.homeAddress || "",
-        homeZip: ev.homeZip || "",
-        homeCity: ev.homeCity || "",
-
-        arrivalDateKey: ev.arrivalDateKey || "",
-        departureDateKey: ev.departureDateKey || "",
-
-        clientName: ev.ownerName || "",
-        clientEmail: ev.ownerEmail || "",
-        clientPhone: ev.ownerPhone || "",
-        clientOwnerDocId: ev.ownerDocId || null,
-
-        lines: Array.isArray(ev.lines) ? ev.lines : [],
-
-        totalHT: 0,
-        totalTVA: 0,
-        totalTTC: 0
-      };
-
-      const created = await addDoc(collection(db,"salesDocuments"), payload);
-
-      await updateDoc(doc(db,"events", ev.id), {
-        invoiceDocId: created.id,
-        updatedAt: serverTimestamp()
-      });
-
-      location.href = `facture.html?docId=${encodeURIComponent(created.id)}&returnTo=planning&returnDate=${encodeURIComponent(selectedDateKey)}`;
-
-    }catch(e){
-      console.error(e);
-      showAlert("Erreur création facture : " + (e?.message || "inconnue"));
-    }
+    location.href = `facture.html?${p.toString()}`;
   }
 
   function openEventDetail(ev){
@@ -1086,7 +1035,6 @@
     `;
 
     eventModalFoot.innerHTML = "";
-
     eventModalBack.style.display = "flex";
   }
 
@@ -1170,9 +1118,7 @@
       ${note ? `<div><b>Note</b> : ${esc(note)}</div>` : ``}
     `;
 
-    /* ✅ suppression des 4 boutons bas */
     modalFoot.innerHTML = "";
-
     setFocusParams(selectedDateKey, b.id);
     modalBack.style.display = "flex";
   }
@@ -1396,7 +1342,6 @@
       const badge = allowEdit ? `<span class="badge blue">MANUEL</span>` : `<span class="badge">iCAL</span>`;
       const title = `${b.homeName}${b.homeCity ? " — " + b.homeCity : ""}`;
 
-      // ✅ attention si nouveau logement (homeId vide) OU pas encore d’intervention ce jour sur ce logement
       const hasPrestaSameDay = !!presta.find(ev => (ev.homeId && b.homeId && ev.homeId === b.homeId));
       const needsAttention = (!b.homeId) || (!hasPrestaSameDay);
 
