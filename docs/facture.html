@@ -1,4 +1,4 @@
-<!-- docs/facture.html (FINAL — ouverture via eventId => crée/ouvre salesDocuments + link events/{eventId}.invoiceDocId) -->
+<!-- docs/facture.html (FINAL — CANON salesDocuments + docId, migration éventuelle depuis eventId, client+lignes+totaux cohérents) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -320,7 +320,7 @@
       <div class="card">
         <div class="card-title">
           <span>Récapitulatif</span>
-          <span class="small">Référence devis + logement</span>
+          <span class="small">Logement + période</span>
         </div>
 
         <div class="alert" id="alertBox"></div>
@@ -330,7 +330,7 @@
 
         <div class="card-title" style="font-size:14px; margin-bottom:6px;">
           <span>Lignes</span>
-          <span class="small">auto</span>
+          <span class="small">depuis event</span>
         </div>
 
         <div class="linesCards" id="linesCards"></div>
@@ -357,7 +357,7 @@
       <div class="card">
         <div class="card-title">
           <span>Gestion facture</span>
-          <span class="small">2 actions</span>
+          <span class="small">émission + aperçu</span>
         </div>
 
         <label for="invoiceNotes">Notes internes</label>
@@ -367,7 +367,7 @@
 
         <div class="card-title" style="font-size:14px; margin-bottom:6px;">
           <span>Paiement</span>
-          <span class="small">modifiable avant émission</span>
+          <span class="small">bloqué après émission</span>
         </div>
 
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
@@ -411,7 +411,7 @@
 
         <div class="card-title" style="font-size:14px; margin-bottom:6px;">
           <span>Pénalités</span>
-          <span class="small">reprend le devis</span>
+          <span class="small">B2C/B2B</span>
         </div>
         <div class="kv" id="penaltyKv"></div>
 
@@ -511,7 +511,7 @@
     }
     function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
 
-    // back routing (planning -> facture -> retour planning)
+    // ===== Routing (retour planning) =====
     function buildBackLink(){
       const p = new URLSearchParams(location.search);
       const returnTo = (p.get("returnTo") || "").trim();
@@ -524,13 +524,12 @@
         backLink.textContent = "← Planning";
         return;
       }
-
       backLink.href = "factures-liste.html";
       backLink.textContent = "← Retour";
     }
     buildBackLink();
 
-    // ---------- PERSIST UI (mode/délai) ----------
+    // ===== UI persist payMode/payTerm =====
     function uiKey(){
       const id = String(docData?.id || getParam("docId") || getParam("eventId") || "").trim();
       return id ? ("invoice_ui_" + id) : "invoice_ui_tmp";
@@ -562,6 +561,7 @@
       return "PARTICULIER";
     }
 
+    // ✅ totaux robustes : si totals existants sont 0 mais lines existent => on recalc toujours
     function computeTotals(lines, tvaEnabled, tvaRate){
       let ht = 0;
       for(const l of (Array.isArray(lines) ? lines : [])){
@@ -614,16 +614,13 @@
       const [dd,mm,yy] = String(ddmmyyyy).split("/").map(x=>parseInt(x,10));
       const d = new Date(yy, (mm||1)-1, dd||1);
       d.setDate(d.getDate() + (Number(days)||0));
-      const out = String(d.getDate()).padStart(2,"0") + "/" + String(d.getMonth()+1).padStart(2,"0") + "/" + d.getFullYear();
-      return out;
+      return String(d.getDate()).padStart(2,"0") + "/" + String(d.getMonth()+1).padStart(2,"0") + "/" + d.getFullYear();
     }
-    function pickDate(v){
-      const s = String(v||"").trim();
-      return s || "";
-    }
+
+    function pickDate(v){ const s = String(v||"").trim(); return s || ""; }
     function getStayPeriod(d){
-      const a = pickDate(d?.arrivalDateKey || d?.arrivalDate || d?.checkinDate || d?.arrival || d?.dateArrivee);
-      const b = pickDate(d?.departureDateKey || d?.departureDate || d?.checkoutDate || d?.departure || d?.dateDepart);
+      const a = pickDate(d?.arrivalDateKey || d?.arrivalDate || d?.checkinDate || d?.arrival);
+      const b = pickDate(d?.departureDateKey || d?.departureDate || d?.checkoutDate || d?.departure);
       if(a && b) return { from:a, to:b, label:`Du ${a} au ${b}` };
       if(a && !b) return { from:a, to:"", label:`À partir du ${a}` };
       if(!a && b) return { from:"", to:b, label:`Jusqu’au ${b}` };
@@ -632,12 +629,8 @@
 
     function getPenaltyTemplate(mode){
       const m = String(mode||"").toUpperCase();
-      if(m === "B2B"){
-        return "Pénalités de retard : 3 fois le taux d’intérêt légal en vigueur + indemnité forfaitaire de recouvrement de 40 € .";
-      }
-      if(m === "B2C"){
-        return "Pénalités de retard : 3 fois le taux d’intérêt légal en vigueur.";
-      }
+      if(m === "B2B") return "Pénalités de retard : 3 fois le taux d’intérêt légal en vigueur + indemnité forfaitaire de recouvrement de 40 € .";
+      if(m === "B2C") return "Pénalités de retard : 3 fois le taux d’intérêt légal en vigueur.";
       return "";
     }
 
@@ -665,25 +658,19 @@
       const url = String(bp.logoUrl || "").trim();
 
       if(url){
-        logoImg.src = url;
-        logoImg.style.display = "block";
-        logoFallback.style.display = "none";
+        logoImg.src = url; logoImg.style.display = "block"; logoFallback.style.display = "none";
       }else{
-        logoImg.style.display = "none";
-        logoFallback.style.display = "block";
+        logoImg.style.display = "none"; logoFallback.style.display = "block";
       }
 
       if(url){
-        bizLogoImg.src = url;
-        bizLogoImg.style.display = "block";
-        bizLogoFallback.style.display = "none";
+        bizLogoImg.src = url; bizLogoImg.style.display = "block"; bizLogoFallback.style.display = "none";
       }else{
-        bizLogoImg.style.display = "none";
-        bizLogoFallback.style.display = "block";
+        bizLogoImg.style.display = "none"; bizLogoFallback.style.display = "block";
       }
     }
 
-    // ====== CLIENT SNAPSHOT RESOLUTION (owners -> homes -> doc snapshot) ======
+    // ===== Client snapshot resolution (owners -> homes -> doc snapshot) =====
     function extractAddr(obj){
       const o = obj || {};
       const a = (o.address && typeof o.address === "object") ? o.address : null;
@@ -776,9 +763,7 @@
               };
             }
           }
-        }catch(e){
-          console.warn("load owner by docId failed:", e?.message || e);
-        }
+        }catch(e){}
       }
 
       const emailLower = normalizeEmail(d?.clientEmail || d?.ownerEmail || "");
@@ -799,17 +784,9 @@
         if(!snap.exists()) return null;
         const h = snap.data() || {};
 
-        const ownerName = String(
-          h.ownerName || h.ownerFullname || h.ownerDisplayName || h.owner || ""
-        ).trim();
-
-        const ownerPhone = String(
-          h.ownerPhone || h.ownerTel || h.phone || ""
-        ).trim();
-
-        const ownerEmail = normalizeEmail(
-          h.ownerEmail || h.ownerAccountEmail || h.email || ""
-        );
+        const ownerName = String(h.ownerName || h.ownerFullname || h.ownerDisplayName || h.owner || "").trim();
+        const ownerPhone = String(h.ownerPhone || h.ownerTel || h.phone || "").trim();
+        const ownerEmail = normalizeEmail(h.ownerEmail || h.ownerAccountEmail || h.email || "");
 
         const addr = extractAddr(h.owner || h);
 
@@ -824,7 +801,6 @@
           country: addr.country
         };
       }catch(e){
-        console.warn("loadHomeOwnerSnapshotOrNull failed:", e?.message || e);
         return null;
       }
     }
@@ -895,7 +871,6 @@
 
       try{
         const resolved = await resolveClientSnapshot(currentUser.uid, docData);
-
         docData = {
           ...docData,
           clientOwnerDocId: docData.clientOwnerDocId || resolved.clientOwnerDocId || null,
@@ -908,9 +883,7 @@
           clientCity: String(docData.clientCity || "").trim() ? docData.clientCity : (resolved.city || ""),
           clientCountry: String(docData.clientCountry || "").trim() ? docData.clientCountry : (resolved.country || "FR")
         };
-      }catch(e){
-        console.warn("hydrateClientSnapshotInMemoryIfMissing failed:", e?.message || e);
-      }
+      }catch(e){}
     }
 
     function renderBusinessHeader(){
@@ -965,9 +938,7 @@
       const contact = [mail, tel].filter(Boolean).join(" • ");
       if(contact) lines.push(`<span class="mut">${esc(contact)}</span>`);
 
-      clientLinesEl.innerHTML = lines.length
-        ? lines.join("<br>")
-        : `<span class="mut">Adresse manquante</span>`;
+      clientLinesEl.innerHTML = lines.length ? lines.join("<br>") : `<span class="mut">Adresse manquante</span>`;
     }
 
     function renderLinesAndTotals(){
@@ -1038,8 +1009,8 @@
       const hasInvoice = !!String(d.invoiceNumber || "").trim();
 
       const ui = loadUiState();
-      const mode = String(ui?.payMode || d?.invoicePaymentMode || d?.quotePaymentMode || "VIREMENT").toUpperCase();
-      const term = String(ui?.payTerm || d?.invoicePaymentTerm || d?.quotePaymentTerm || "RECEPTION").toUpperCase();
+      const mode = String(ui?.payMode || d?.invoicePaymentMode || "VIREMENT").toUpperCase();
+      const term = String(ui?.payTerm || d?.invoicePaymentTerm || "RECEPTION").toUpperCase();
 
       payModeSel.value = ["VIREMENT","CHEQUE","ESPECES"].includes(mode) ? mode : "VIREMENT";
       payTermSel.value = ["RECEPTION","8J","15J","30J","45J"].includes(term) ? term : "RECEPTION";
@@ -1052,7 +1023,7 @@
       const d = docData || {};
       const bp = (profileData?.businessProfile || {});
 
-      const term = String(payTermSel?.value || d?.invoicePaymentTerm || d?.quotePaymentTerm || "RECEPTION").toUpperCase();
+      const term = String(payTermSel?.value || d?.invoicePaymentTerm || "RECEPTION").toUpperCase();
       const issued = String(d?.invoiceIssuedDate || todayIso()).trim();
       const dueDate = addDaysLabel(issued, termToDays(term));
 
@@ -1085,8 +1056,8 @@
 
     function renderPenalty(){
       const d = docData || {};
-      const mode = String(d?.invoicePenaltyMode || d?.quotePenaltyMode || "B2C").toUpperCase();
-      const text = String(d?.invoicePenaltyText || d?.quotePenaltyText || getPenaltyTemplate(mode)).trim();
+      const mode = String(d?.invoicePenaltyMode || "B2C").toUpperCase();
+      const text = String(d?.invoicePenaltyText || getPenaltyTemplate(mode)).trim();
       penaltyKv.innerHTML = `<div class="line">${esc(text || "—")}</div>`;
     }
 
@@ -1149,19 +1120,36 @@
       }
 
       await loadProfile(currentUser.uid);
+
+      // ✅ si le doc a des lignes mais les totaux sont 0 => on recalc et on patch silencieusement
+      try{
+        const lines = Array.isArray(docData.lines) ? docData.lines : [];
+        const hasLines = lines.length > 0;
+        const totalsZero = (Number(docData.totalTTC)||0) === 0 && (Number(docData.totalHT)||0) === 0;
+        if(hasLines && totalsZero){
+          const bp = (profileData?.businessProfile || {});
+          const tvaEnabled = !!bp.vat?.enabled;
+          const tvaRate = Number.isFinite(Number(bp.vat?.rate)) ? Number(bp.vat.rate) : 0;
+          const totals = computeTotals(lines, tvaEnabled, tvaRate);
+          await updateDoc(docRef, {
+            totalHT: Number(totals.ht)||0,
+            totalTVA: Number(totals.tva)||0,
+            totalTTC: Number(totals.ttc)||0,
+            updatedAt: serverTimestamp()
+          });
+          const snap2 = await getDoc(docRef);
+          docData = { id: snap2.id, ...(snap2.data()||{}) };
+        }
+      }catch(e){}
+
       await hydrateClientSnapshotInMemoryIfMissing();
       renderRecap();
     }
 
-    // ✅ events link field canonical : invoiceDocId
     function findLinkedInvoiceIdFromEvent(e){
       const keys = [
-        "invoiceDocId",                // CANON
-        "linkedInvoiceDocId",          // legacy
-        "invoiceSalesDocId",
-        "linkedSalesDocId",
-        "salesDocId",
-        "linkedInvoiceId"
+        "invoiceDocId", // CANON
+        "linkedInvoiceDocId","invoiceSalesDocId","linkedSalesDocId","salesDocId","linkedInvoiceId"
       ];
       for(const k of keys){
         const v = String(e?.[k] || "").trim();
@@ -1175,8 +1163,8 @@
 
       const resolved = await resolveClientSnapshot(currentUser.uid, evData);
 
-      const payMode = String(evData?.invoicePaymentMode || evData?.quotePaymentMode || "VIREMENT").toUpperCase();
-      const payTerm = String(evData?.invoicePaymentTerm || evData?.quotePaymentTerm || "RECEPTION").toUpperCase();
+      const payMode = String(evData?.invoicePaymentMode || "VIREMENT").toUpperCase();
+      const payTerm = String(evData?.invoicePaymentTerm || "RECEPTION").toUpperCase();
 
       const lines = Array.isArray(evData?.lines) ? evData.lines : [];
 
@@ -1197,27 +1185,27 @@
         sourceKind: "EVENT",
         sourceEventId: String(evId),
 
-        homeId: String(evData?.homeId || evData?.homeDocId || "").trim() || null,
+        homeId: String(evData?.homeId || "").trim() || null,
         homeName: String(evData?.homeName || "").trim() || "",
         homeAddress: String(evData?.homeAddress || "").trim() || "",
         homeZip: String(evData?.homeZip || "").trim() || "",
         homeCity: String(evData?.homeCity || "").trim() || "",
-        arrivalDateKey: String(evData?.arrivalDateKey || evData?.arrivalDate || "").trim() || "",
-        departureDateKey: String(evData?.departureDateKey || evData?.departureDate || "").trim() || "",
+        arrivalDateKey: String(evData?.arrivalDateKey || "").trim() || "",
+        departureDateKey: String(evData?.departureDateKey || "").trim() || "",
 
         quoteNumber: String(evData?.quoteNumber || "").trim() || "",
-        commercialStatus: String(evData?.commercialStatus || "FACTURE").trim() || "FACTURE",
+        commercialStatus: "FACTURE",
         commercialUpdatedAt: serverTimestamp(),
 
         clientOwnerDocId: resolved.clientOwnerDocId || null,
-        clientName: resolved.name || String(evData?.clientName || evData?.ownerName || "").trim() || "",
-        clientEmail: resolved.email || normalizeEmail(evData?.clientEmail || evData?.ownerEmail || ""),
-        clientPhone: resolved.phone || String(evData?.clientPhone || evData?.ownerPhone || "").trim() || "",
-        clientAddress1: resolved.address1 || String(evData?.clientAddress1 || evData?.ownerAddress1 || "").trim() || "",
-        clientAddress2: resolved.address2 || String(evData?.clientAddress2 || evData?.ownerAddress2 || "").trim() || "",
-        clientZip: resolved.zip || String(evData?.clientZip || evData?.ownerZip || "").trim() || "",
-        clientCity: resolved.city || String(evData?.clientCity || evData?.ownerCity || "").trim() || "",
-        clientCountry: resolved.country || String(evData?.clientCountry || evData?.ownerCountry || "FR").trim() || "FR",
+        clientName: resolved.name || String(evData?.ownerName || "").trim() || "",
+        clientEmail: resolved.email || normalizeEmail(evData?.ownerEmail || ""),
+        clientPhone: resolved.phone || String(evData?.ownerPhone || "").trim() || "",
+        clientAddress1: resolved.address1 || String(evData?.ownerAddress1 || "").trim() || "",
+        clientAddress2: resolved.address2 || String(evData?.ownerAddress2 || "").trim() || "",
+        clientZip: resolved.zip || String(evData?.ownerZip || "").trim() || "",
+        clientCity: resolved.city || String(evData?.ownerCity || "").trim() || "",
+        clientCountry: resolved.country || String(evData?.ownerCountry || "FR").trim() || "FR",
         clientType: getClientType(evData),
 
         invoiceNumber: String(evData?.invoiceNumber || "").trim() || "",
@@ -1227,8 +1215,8 @@
         invoicePaymentMode: ["VIREMENT","CHEQUE","ESPECES"].includes(payMode) ? payMode : "VIREMENT",
         invoicePaymentTerm: ["RECEPTION","8J","15J","30J","45J"].includes(payTerm) ? payTerm : "RECEPTION",
 
-        invoicePenaltyMode: String(evData?.invoicePenaltyMode || evData?.quotePenaltyMode || "B2C").toUpperCase(),
-        invoicePenaltyText: String(evData?.invoicePenaltyText || evData?.quotePenaltyText || getPenaltyTemplate(evData?.quotePenaltyMode || "B2C")).trim(),
+        invoicePenaltyMode: "B2C",
+        invoicePenaltyText: "",
 
         lines,
         totalHT: Number(totals.ht) || 0,
@@ -1244,16 +1232,13 @@
           invoiceDocId: created.id,
           invoiceLinkedAt: serverTimestamp()
         });
-      }catch(e){
-        console.warn("event link update failed:", e?.message || e);
-      }
+      }catch(e){}
 
       return created.id;
     }
 
     async function loadInvoiceFromEvent(id){
       const evRef = doc(db, "events", id);
-
       const snap = await getDoc(evRef);
       if(!snap.exists()) throw new Error("Event introuvable.");
       const evData = { id: snap.id, ...(snap.data()||{}) };
@@ -1263,9 +1248,7 @@
       }
 
       const linked = findLinkedInvoiceIdFromEvent(evData);
-      if(linked){
-        return loadInvoiceFromSales(linked);
-      }
+      if(linked) return loadInvoiceFromSales(linked);
 
       const newId = await migrateEventToSalesInvoice(id, evData);
       return loadInvoiceFromSales(newId);
@@ -1274,7 +1257,7 @@
     async function loadDoc(){
       if(docId) return loadInvoiceFromSales(docId);
       if(eventId) return loadInvoiceFromEvent(eventId);
-      throw new Error("docId ou eventId manquant dans l’URL. Ex: facture.html?eventId=XXXX");
+      throw new Error("docId ou eventId manquant dans l’URL. Ex: facture.html?docId=XXXX");
     }
 
     function lockUI(locked){
@@ -1285,14 +1268,8 @@
       payTermSel.disabled = payTermSel.disabled || locked;
     }
 
-    payTermSel.addEventListener("change", ()=>{
-      saveUiState();
-      try{ renderConditions(); }catch(e){}
-    });
-    payModeSel.addEventListener("change", ()=>{
-      saveUiState();
-      try{ renderConditions(); }catch(e){}
-    });
+    payTermSel.addEventListener("change", ()=>{ saveUiState(); try{ renderConditions(); }catch(e){} });
+    payModeSel.addEventListener("change", ()=>{ saveUiState(); try{ renderConditions(); }catch(e){} });
 
     previewBtn.addEventListener("click", ()=>{
       if(!docRef || !docData) return;
@@ -1319,6 +1296,7 @@
         const year = new Date().getFullYear();
         let invoiceNumber = String(docData?.invoiceNumber || "").trim();
 
+        // ensure client snapshot before issuing
         let clientPatch = {};
         const missingAddr =
           !String(docData?.clientAddress1 || "").trim() &&
@@ -1346,7 +1324,9 @@
         const bp = (profileData?.businessProfile || {});
         const tvaEnabled = !!bp.vat?.enabled;
         const tvaRate = Number.isFinite(Number(bp.vat?.rate)) ? Number(bp.vat.rate) : 0;
-        const totals = computeTotals(docData?.lines, tvaEnabled, tvaRate);
+
+        const lines = Array.isArray(docData?.lines) ? docData.lines : [];
+        const totals = computeTotals(lines, tvaEnabled, tvaRate);
 
         const patch = {
           invoiceNotes: (invoiceNotesEl.value || "").trim(),
