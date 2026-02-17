@@ -1,4 +1,4 @@
-<!-- docs/facture.html (FINAL — MIGRATION EVENT->salesDocuments: ouverture eventId crée/ouvre un salesDocuments lié, tout le reste reste inchangé) -->
+<!-- docs/facture.html (FINAL — ouverture via eventId => crée/ouvre salesDocuments + link events/{eventId}.invoiceDocId) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -275,7 +275,7 @@
 <body>
   <div class="page">
     <div class="topbar">
-      <a class="pill-link" href="factures-liste.html">← Retour</a>
+      <a class="pill-link" id="backLink" href="factures-liste.html">← Retour</a>
       <span></span>
     </div>
 
@@ -470,18 +470,16 @@
     const saveBtn = document.getElementById("saveBtn");
     const previewBtn = document.getElementById("previewBtn");
 
-    // payment selects
     const payModeSel = document.getElementById("payModeSel");
     const payTermSel = document.getElementById("payTermSel");
 
+    const backLink = document.getElementById("backLink");
+
     // ===== State =====
     let currentUser = null;
-
     let docRef = null;
     let docData = null;
-    let docKind = ""; // "SALES" | "EVENT" (EVENT utilisé uniquement le temps de la migration)
-
-    let profileData = null; // users/{conciergerieUid}
+    let profileData = null;
 
     // ===== Helpers =====
     function showAlert(msg, ok=false){
@@ -513,6 +511,25 @@
     }
     function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
 
+    // back routing (planning -> facture -> retour planning)
+    function buildBackLink(){
+      const p = new URLSearchParams(location.search);
+      const returnTo = (p.get("returnTo") || "").trim();
+      const returnDate = (p.get("returnDate") || "").trim();
+
+      if(returnTo === "planning"){
+        const url = new URL("planning.html", location.href);
+        if(returnDate) url.searchParams.set("date", returnDate);
+        backLink.href = url.pathname + (url.search ? url.search : "");
+        backLink.textContent = "← Planning";
+        return;
+      }
+
+      backLink.href = "factures-liste.html";
+      backLink.textContent = "← Retour";
+    }
+    buildBackLink();
+
     // ---------- PERSIST UI (mode/délai) ----------
     function uiKey(){
       const id = String(docData?.id || getParam("docId") || getParam("eventId") || "").trim();
@@ -535,7 +552,6 @@
       }catch(_){ return null; }
     }
 
-    // clientType (PRO/PARTICULIER) — minimal & safe
     function getClientType(d){
       const ct = String(d?.clientType || "").toUpperCase().trim();
       if(ct === "PRO") return "PRO";
@@ -866,7 +882,6 @@
     }
 
     async function hydrateClientSnapshotInMemoryIfMissing(){
-      if(docKind !== "SALES") return;
       if(!currentUser?.uid || !docData) return;
 
       const hasName = !!String(docData.clientName || "").trim();
@@ -1022,7 +1037,6 @@
       const d = docData || {};
       const hasInvoice = !!String(d.invoiceNumber || "").trim();
 
-      // priorité : UI state sessionStorage > invoice* > quote* > default
       const ui = loadUiState();
       const mode = String(ui?.payMode || d?.invoicePaymentMode || d?.quotePaymentMode || "VIREMENT").toUpperCase();
       const term = String(ui?.payTerm || d?.invoicePaymentTerm || d?.quotePaymentTerm || "RECEPTION").toUpperCase();
@@ -1119,15 +1133,15 @@
       profileData = snap.exists() ? (snap.data() || {}) : {};
     }
 
+    // ===== Routing params =====
     const docId = getParam("docId");
     const eventId = getParam("eventId");
 
     async function loadInvoiceFromSales(id){
-      docKind = "SALES";
       docRef = doc(db, "salesDocuments", id);
-
       const snap = await getDoc(docRef);
       if(!snap.exists()) throw new Error("Facture introuvable (salesDocuments).");
+
       docData = { id: snap.id, ...(snap.data()||{}) };
 
       if(String(docData.conciergerieUid||"") !== String(currentUser.uid)){
@@ -1139,8 +1153,16 @@
       renderRecap();
     }
 
+    // ✅ events link field canonical : invoiceDocId
     function findLinkedInvoiceIdFromEvent(e){
-      const keys = ["linkedInvoiceDocId","invoiceDocId","linkedSalesDocId","salesDocId","invoiceSalesDocId","linkedInvoiceId"];
+      const keys = [
+        "invoiceDocId",                // CANON
+        "linkedInvoiceDocId",          // legacy
+        "invoiceSalesDocId",
+        "linkedSalesDocId",
+        "salesDocId",
+        "linkedInvoiceId"
+      ];
       for(const k of keys){
         const v = String(e?.[k] || "").trim();
         if(v) return v;
@@ -1149,41 +1171,32 @@
     }
 
     async function migrateEventToSalesInvoice(evId, evData){
-      // pre-req profile pour TVA + config société
       await loadProfile(currentUser.uid);
 
-      // client snapshot (on stocke proprement sur salesDocuments)
       const resolved = await resolveClientSnapshot(currentUser.uid, evData);
 
-      // payment defaults (reprend ce que tu avais, sinon defaults)
       const payMode = String(evData?.invoicePaymentMode || evData?.quotePaymentMode || "VIREMENT").toUpperCase();
       const payTerm = String(evData?.invoicePaymentTerm || evData?.quotePaymentTerm || "RECEPTION").toUpperCase();
 
-      // lines
       const lines = Array.isArray(evData?.lines) ? evData.lines : [];
 
-      // totals
       const bp = (profileData?.businessProfile || {});
       const tvaEnabled = !!bp.vat?.enabled;
       const tvaRate = Number.isFinite(Number(bp.vat?.rate)) ? Number(bp.vat.rate) : 0;
       const totals = computeTotals(lines, tvaEnabled, tvaRate);
 
-      // docType legacy conservé + type canonique
       const payload = {
-        // identité / tri
         conciergerieUid: String(currentUser.uid),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
         createdBy: String(currentUser.uid),
         listable: true,
 
-        // canon
         type: "INVOICE",
         docType: "INVOICE_EVENT",
         sourceKind: "EVENT",
         sourceEventId: String(evId),
 
-        // data logement / séjour
         homeId: String(evData?.homeId || evData?.homeDocId || "").trim() || null,
         homeName: String(evData?.homeName || "").trim() || "",
         homeAddress: String(evData?.homeAddress || "").trim() || "",
@@ -1192,12 +1205,10 @@
         arrivalDateKey: String(evData?.arrivalDateKey || evData?.arrivalDate || "").trim() || "",
         departureDateKey: String(evData?.departureDateKey || evData?.departureDate || "").trim() || "",
 
-        // référence devis si existant
         quoteNumber: String(evData?.quoteNumber || "").trim() || "",
         commercialStatus: String(evData?.commercialStatus || "FACTURE").trim() || "FACTURE",
         commercialUpdatedAt: serverTimestamp(),
 
-        // client facturation (snapshot)
         clientOwnerDocId: resolved.clientOwnerDocId || null,
         clientName: resolved.name || String(evData?.clientName || evData?.ownerName || "").trim() || "",
         clientEmail: resolved.email || normalizeEmail(evData?.clientEmail || evData?.ownerEmail || ""),
@@ -1209,37 +1220,31 @@
         clientCountry: resolved.country || String(evData?.clientCountry || evData?.ownerCountry || "FR").trim() || "FR",
         clientType: getClientType(evData),
 
-        // facture (draft au départ)
         invoiceNumber: String(evData?.invoiceNumber || "").trim() || "",
         invoiceStatus: String(evData?.invoiceStatus || "DRAFT").toUpperCase().trim() || "DRAFT",
         invoiceNotes: String(evData?.invoiceNotes || "").trim() || "",
 
-        // paiement (conditions)
         invoicePaymentMode: ["VIREMENT","CHEQUE","ESPECES"].includes(payMode) ? payMode : "VIREMENT",
         invoicePaymentTerm: ["RECEPTION","8J","15J","30J","45J"].includes(payTerm) ? payTerm : "RECEPTION",
 
-        // pénalités (reprend quote si existant)
         invoicePenaltyMode: String(evData?.invoicePenaltyMode || evData?.quotePenaltyMode || "B2C").toUpperCase(),
         invoicePenaltyText: String(evData?.invoicePenaltyText || evData?.quotePenaltyText || getPenaltyTemplate(evData?.quotePenaltyMode || "B2C")).trim(),
 
-        // lignes + totaux stockés (pour journal/exports)
         lines,
         totalHT: Number(totals.ht) || 0,
         totalTVA: Number(totals.tva) || 0,
         totalTTC: Number(totals.ttc) || 0
       };
 
-      // create salesDocuments
       const created = await addDoc(collection(db, "salesDocuments"), payload);
 
-      // link back to event (idempotence future)
+      // ✅ canon : events/{eventId}.invoiceDocId
       try{
         await updateDoc(doc(db,"events", evId), {
-          linkedInvoiceDocId: created.id,
-          linkedInvoiceUpdatedAt: serverTimestamp()
+          invoiceDocId: created.id,
+          invoiceLinkedAt: serverTimestamp()
         });
       }catch(e){
-        // si règles/events refusent, on ne casse pas la facture (juste pas de lien)
         console.warn("event link update failed:", e?.message || e);
       }
 
@@ -1247,7 +1252,6 @@
     }
 
     async function loadInvoiceFromEvent(id){
-      docKind = "EVENT";
       const evRef = doc(db, "events", id);
 
       const snap = await getDoc(evRef);
@@ -1258,13 +1262,11 @@
         throw new Error("Accès refusé (event d’une autre conciergerie).");
       }
 
-      // 1) si déjà lié -> ouvrir le salesDocuments
       const linked = findLinkedInvoiceIdFromEvent(evData);
       if(linked){
         return loadInvoiceFromSales(linked);
       }
 
-      // 2) sinon -> migration silencieuse -> puis ouvrir le salesDocuments
       const newId = await migrateEventToSalesInvoice(id, evData);
       return loadInvoiceFromSales(newId);
     }
@@ -1272,7 +1274,7 @@
     async function loadDoc(){
       if(docId) return loadInvoiceFromSales(docId);
       if(eventId) return loadInvoiceFromEvent(eventId);
-      throw new Error("docId ou eventId manquant dans l’URL. Ex: facture.html?docId=XXXX");
+      throw new Error("docId ou eventId manquant dans l’URL. Ex: facture.html?eventId=XXXX");
     }
 
     function lockUI(locked){
@@ -1283,7 +1285,6 @@
       payTermSel.disabled = payTermSel.disabled || locked;
     }
 
-    // live update + persist UI
     payTermSel.addEventListener("change", ()=>{
       saveUiState();
       try{ renderConditions(); }catch(e){}
@@ -1306,7 +1307,6 @@
       };
       sessionStorage.setItem("invoiceDraftPreview", JSON.stringify(draft));
 
-      // IMPORTANT: après migration, on est toujours en SALES
       location.href = `facture-apercu.html?docId=${encodeURIComponent(docData.id)}&draft=1`;
     });
 
@@ -1316,11 +1316,6 @@
 
       lockUI(true);
       try{
-        // sécurité: on n'autorise pas d'écriture sur events ici
-        if(docKind !== "SALES"){
-          throw new Error("Facture legacy (event) non migrée. Recharge la page (la migration est automatique).");
-        }
-
         const year = new Date().getFullYear();
         let invoiceNumber = String(docData?.invoiceNumber || "").trim();
 
@@ -1348,7 +1343,6 @@
           };
         }
 
-        // recalcul totaux au moment du save (évite totalTTC=0 qui casse les boutons ensuite)
         const bp = (profileData?.businessProfile || {});
         const tvaEnabled = !!bp.vat?.enabled;
         const tvaRate = Number.isFinite(Number(bp.vat?.rate)) ? Number(bp.vat.rate) : 0;
@@ -1414,7 +1408,6 @@
       try{
         await loadDoc();
 
-        // applique UI state après load (retour d'aperçu)
         const ui = loadUiState();
         if(ui){
           if(ui.payMode && ["VIREMENT","CHEQUE","ESPECES"].includes(String(ui.payMode).toUpperCase())){
