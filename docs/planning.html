@@ -1,4 +1,4 @@
-<!-- docs/planning.html (PATCH: renomme blocs Jour -> "Séjours (réservations)" + "Interventions (prestations)") -->
+<!-- docs/planning.html (FINAL — nettoyage Interventions: surlignage, période, suppression devis, facture->salesDocuments, modale sans footer + note agent) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -227,6 +227,19 @@
       outline: 3px solid rgba(122,92,255,0.30);
       box-shadow: 0 18px 34px rgba(0,0,0,0.12);
     }
+
+    /* ✅ SURLIGNAGE interventions */
+    .item.prestaRow{
+      background: linear-gradient(90deg, rgba(122,92,255,0.10), rgba(255,255,255,1) 55%);
+      border-left: 6px solid rgba(122,92,255,0.35);
+      cursor:pointer;
+      transition: transform .06s ease, box-shadow .10s ease;
+    }
+    .item.prestaRow:hover{
+      transform: translateY(-1px);
+      box-shadow: 0 18px 34px rgba(0,0,0,0.10);
+    }
+
     .iMain{ min-width:0; flex:1; }
     .iTop{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
     .iTitle{
@@ -404,7 +417,8 @@
       gap:8px;
       font-size:13px;
       color:#333;
-      font-weight:800;
+      font-weight:500; /* ✅ non gras */
+      line-height:1.35;
     }
     .kv2 b{ font-weight:900; }
     .modalFoot{
@@ -414,37 +428,34 @@
       justify-content:flex-end;
       flex-wrap:wrap;
     }
+
     .sectionHeader{
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  padding:10px 12px;
-  border-radius:12px;
-  margin-bottom:8px;
-  font-weight:900;
-  font-size:14px;
-}
-
-.sectionHeader.resa{
-  background:rgba(0,163,255,0.12);
-  border:1px solid rgba(0,163,255,0.25);
-  color:#0067a6;
-}
-
-.sectionHeader.presta{
-  background:rgba(122,92,255,0.12);
-  border:1px solid rgba(122,92,255,0.25);
-  color:#5b45c8;
-}
-
-.sectionHeader .count{
-  font-size:12px;
-  background:#fff;
-  padding:3px 8px;
-  border-radius:999px;
-  font-weight:900;
-}
-
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      padding:10px 12px;
+      border-radius:12px;
+      margin-bottom:8px;
+      font-weight:900;
+      font-size:14px;
+    }
+    .sectionHeader.resa{
+      background:rgba(0,163,255,0.12);
+      border:1px solid rgba(0,163,255,0.25);
+      color:#0067a6;
+    }
+    .sectionHeader.presta{
+      background:rgba(122,92,255,0.12);
+      border:1px solid rgba(122,92,255,0.25);
+      color:#5b45c8;
+    }
+    .sectionHeader .count{
+      font-size:12px;
+      background:#fff;
+      padding:3px 8px;
+      border-radius:999px;
+      font-weight:900;
+    }
   </style>
 </head>
 
@@ -563,6 +574,7 @@
         <button class="xBtn" id="closeEventModalBtn" type="button">✕</button>
       </div>
       <div class="kv2" id="eventModalBody"></div>
+      <!-- ✅ footer volontairement vide (pas de boutons bas) -->
       <div class="modalFoot" id="eventModalFoot"></div>
     </div>
   </div>
@@ -572,7 +584,7 @@
   import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
   import {
     collection, query, where, orderBy, limit, getDocs,
-    doc, getDoc, updateDoc, deleteDoc, serverTimestamp
+    doc, getDoc, updateDoc, deleteDoc, serverTimestamp, addDoc
   } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
   const companyLine = document.getElementById("companyLine");
@@ -634,6 +646,11 @@
     const d = new Date(y, mo, da);
     return Number.isFinite(d.getTime()) ? d : null;
   }
+  function fmtFRDateKey(s){
+    const d = parseDateKey(s);
+    if(!d) return (s||"—");
+    return `${pad2(d.getDate())}/${pad2(d.getMonth()+1)}/${d.getFullYear()}`;
+  }
   function monthName(m){
     const names = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"];
     return names[m] || "—";
@@ -683,6 +700,15 @@
     const s = (source || "").toString().toLowerCase();
     if(s === "manual") return "manual";
     return "ical";
+  }
+
+  function periodLabel(obj){
+    const a = safeStr(obj?.arrivalDateKey || obj?.arrivalDate || obj?.checkinDate || "");
+    const b = safeStr(obj?.departureDateKey || obj?.departureDate || obj?.checkoutDate || "");
+    if(a && b) return `${fmtFRDateKey(a)} → ${fmtFRDateKey(b)}`;
+    if(a && !b) return `À partir du ${fmtFRDateKey(a)}`;
+    if(!a && b) return `Jusqu’au ${fmtFRDateKey(b)}`;
+    return "—";
   }
 
   function closeModal(){
@@ -743,7 +769,6 @@
     const uid = currentUser.uid;
     let societe = "";
 
-    // 1) conciergeries/{uid}
     try{
       const cSnap = await getDoc(doc(db, "conciergeries", uid));
       if(cSnap.exists()){
@@ -752,7 +777,6 @@
       }
     }catch(e){}
 
-    // 2) users/{uid}
     if(!societe){
       try{
         const uSnap = await getDoc(doc(db, "users", uid));
@@ -890,7 +914,12 @@
         homeZip: (ev.homeZip || ev.zip || "").toString(),
         homeAddress: (ev.homeAddress || ev.address || "").toString(),
 
+        /* ✅ période séjour */
+        arrivalDateKey: (ev.arrivalDateKey || ev.arrival || ev.checkinDate || "").toString(),
+        departureDateKey: (ev.departureDateKey || ev.departure || ev.checkoutDate || "").toString(),
+
         ownerUid: (ev.ownerUid || "").toString(),
+        ownerDocId: (ev.ownerDocId || "").toString(),
         ownerName: (ev.ownerName || "").toString(),
         ownerEmail: (ev.ownerEmail || "").toString(),
         ownerPhone: (ev.ownerPhone || "").toString(),
@@ -898,9 +927,13 @@
         assignedToName: (ev.assignedToName || ev.agentName || "").toString(),
         assignedToEmail: (ev.assignedToEmail || ev.agentEmail || "").toString().toLowerCase(),
 
-        meta: (ev.meta || ev.summary || "").toString(),
+        meta: (ev.meta || ev.summary || "").toString(),              // note voyageurs
+        agentNote: (ev.agentNote || ev.missionNote || ev.noteAgent || ev.agentComment || "").toString(), // ✅ note agent
+
         opStatus: normalizeOpStatus(ev.opStatus || ev.status || "EN_COURS"),
-        type: (ev.type || "Prestation").toString()
+
+        /* ✅ facture via salesDocuments */
+        invoiceDocId: (ev.invoiceDocId || ev.salesInvoiceDocId || "").toString()
       };
 
       allEvents.push(obj);
@@ -965,67 +998,95 @@
     p.set("date", selectedDateKey);
     location.href = `preuves-admin.html?${p.toString()}`;
   }
-  function openDevis(prestationId){
-    location.href = `devis-event.html?eventId=${encodeURIComponent(prestationId)}&returnTo=planning&returnDate=${encodeURIComponent(selectedDateKey)}`;
-  }
-  function openFacture(prestationId){
-    location.href = `facture.html?eventId=${encodeURIComponent(prestationId)}&returnTo=planning&returnDate=${encodeURIComponent(selectedDateKey)}`;
+
+  /* ✅ FACTURE = toujours salesDocuments */
+  async function openFacture(ev){
+    try{
+      if(!ev?.id) return;
+
+      // si déjà lié (idempotent) on ouvre
+      if(ev.invoiceDocId){
+        location.href = `facture.html?docId=${encodeURIComponent(ev.invoiceDocId)}&returnTo=planning&returnDate=${encodeURIComponent(selectedDateKey)}`;
+        return;
+      }
+
+      // sinon on crée un salesDocuments minimal + on stocke invoiceDocId dans events
+      const payload = {
+        conciergerieUid: currentUser.uid,
+        type: "INVOICE",
+        docType: "INVOICE_EVENT",      // legacy friendly
+        listable: true,
+
+        sourceKind: "EVENT",
+        sourceEventId: ev.id,
+
+        createdAt: serverTimestamp(),
+        invoiceStatus: "DRAFT",
+        commercialStatus: "FACTURE",
+        commercialUpdatedAt: serverTimestamp(),
+
+        homeId: ev.homeId || "",
+        homeName: ev.homeName || "",
+        homeAddress: ev.homeAddress || "",
+        homeZip: ev.homeZip || "",
+        homeCity: ev.homeCity || "",
+
+        arrivalDateKey: ev.arrivalDateKey || "",
+        departureDateKey: ev.departureDateKey || "",
+
+        clientName: ev.ownerName || "",
+        clientEmail: ev.ownerEmail || "",
+        clientPhone: ev.ownerPhone || "",
+        clientOwnerDocId: ev.ownerDocId || null,
+
+        lines: Array.isArray(ev.lines) ? ev.lines : [],
+
+        totalHT: 0,
+        totalTVA: 0,
+        totalTTC: 0
+      };
+
+      const created = await addDoc(collection(db,"salesDocuments"), payload);
+
+      await updateDoc(doc(db,"events", ev.id), {
+        invoiceDocId: created.id,
+        updatedAt: serverTimestamp()
+      });
+
+      location.href = `facture.html?docId=${encodeURIComponent(created.id)}&returnTo=planning&returnDate=${encodeURIComponent(selectedDateKey)}`;
+
+    }catch(e){
+      console.error(e);
+      showAlert("Erreur création facture : " + (e?.message || "inconnue"));
+    }
   }
 
   function openEventDetail(ev){
     const st = normalizeOpStatus(ev.opStatus);
-    const allowBilling = (st === "REALISEE");
 
     eventModalTitle.textContent = "Détails prestation";
 
     const title = `${ev.homeName || "Logement"}${ev.homeCity ? " — " + ev.homeCity : ""}`;
     const addr = [ev.homeAddress, ev.homeZip, ev.homeCity].filter(Boolean).join(" • ");
+    const per = periodLabel(ev);
+
+    const noteVoy = (ev.meta || "").trim();
+    const noteAgent = (ev.agentNote || "").trim();
 
     eventModalBody.innerHTML = `
       <div><b>Logement</b> : ${esc(title)}</div>
       ${addr ? `<div><b>Adresse</b> : ${esc(addr)}</div>` : ``}
-      <div><b>Date</b> : ${esc(ev.dateKey || "—")} ${ev.time ? `• <b>Heure</b> : ${esc(ev.time)}` : ``}</div>
+      <div><b>Période</b> : ${esc(per)}</div>
       <div><b>Statut</b> : ${esc(opLabel(st))}</div>
-      ${ev.type ? `<div><b>Type</b> : ${esc(ev.type)}</div>` : ``}
       ${ev.assignedToName || ev.assignedToEmail ? `<div><b>Agent</b> : ${esc(ev.assignedToName || ev.assignedToEmail)}</div>` : ``}
       ${ev.ownerName || ev.ownerEmail ? `<div><b>Propriétaire</b> : ${esc(ev.ownerName || ev.ownerEmail)}</div>` : ``}
       ${ev.ownerPhone ? `<div><b>Téléphone</b> : ${esc(ev.ownerPhone)}</div>` : ``}
-      ${ev.meta ? `<div><b>Note</b> : ${esc(ev.meta)}</div>` : ``}
+      ${noteVoy ? `<div><b>Note voyageurs</b> : ${esc(noteVoy)}</div>` : ``}
+      ${noteAgent ? `<div><b>Note agent</b> : ${esc(noteAgent)}</div>` : ``}
     `;
 
-    eventModalFoot.innerHTML = `
-      <button class="mini ghost" type="button" id="evCloseBtn">
-        <span class="ico">✕</span><span class="txt">Fermer</span>
-      </button>
-
-      ${st === "A_VALIDER" ? `
-        <button class="mini" type="button" id="evValidateBtn" title="Valider">
-          <span class="ico">✅</span><span class="txt">Valider</span>
-        </button>
-      ` : ``}
-
-      <button class="mini ghost" type="button" id="evDevisBtn"
-        ${allowBilling ? "" : "disabled"}
-        title="${allowBilling ? "Ouvrir devis" : "Valider la prestation avant devis"}">
-        <span class="ico">🧾</span><span class="txt">Devis</span>
-      </button>
-
-      <button class="mini ghost" type="button" id="evFactureBtn"
-        ${allowBilling ? "" : "disabled"}
-        title="${allowBilling ? "Ouvrir facture" : "Valider la prestation avant facture"}">
-        <span class="ico">💶</span><span class="txt">Facture</span>
-      </button>
-
-      <button class="mini ghost" type="button" id="evPhotosBtn" title="Photos">
-        <span class="ico">📷</span><span class="txt">Photos</span>
-      </button>
-    `;
-
-    document.getElementById("evCloseBtn")?.addEventListener("click", closeEventModal);
-    document.getElementById("evValidateBtn")?.addEventListener("click", async ()=>{ await validateEvent(ev); });
-    document.getElementById("evDevisBtn")?.addEventListener("click", ()=>{ if(allowBilling) openDevis(ev.id); });
-    document.getElementById("evFactureBtn")?.addEventListener("click", ()=>{ if(allowBilling) openFacture(ev.id); });
-    document.getElementById("evPhotosBtn")?.addEventListener("click", ()=>{ openProofsAdmin(ev.id); });
+    /* ✅ aucun bouton en bas */
+    eventModalFoot.innerHTML = "";
 
     eventModalBack.style.display = "flex";
   }
@@ -1163,22 +1224,22 @@
 
     for(const ev of toValidate){
       const title = `${ev.homeName}${ev.homeCity ? " — " + ev.homeCity : ""}`;
+      const per = periodLabel(ev);
       const sub = [
-        ev.dateKey ? `Date: ${ev.dateKey}` : null,
-        ev.time ? `Heure: ${ev.time}` : null,
+        per ? `Période: ${per}` : null,
         ev.assignedToName ? `Agent: ${ev.assignedToName}` : null
       ].filter(Boolean).join(" • ");
 
       const div = document.createElement("div");
-      div.className = "item";
+      div.className = "item prestaRow";
       div.innerHTML = `
         <div class="iMain">
           <div class="iTop">
             <span class="badge blue">À VALIDER</span>
-            <span class="badge">${esc(ev.type || "Prestation")}</span>
+            <span class="badge">Prestation</span>
           </div>
           <div class="iTitle">${esc(title)}</div>
-          <div class="iSub">${esc(sub || ev.meta || "—")}</div>
+          <div class="iSub">${esc(sub || "—")}</div>
 
           <div class="actionsRow">
             <button class="mini" type="button" data-validate="${esc(ev.id)}" title="Valider">
@@ -1190,6 +1251,9 @@
             <button class="mini ghost" type="button" data-open-photos="${esc(ev.id)}" title="Photos">
               <span class="ico">📷</span><span class="txt">Photos</span>
             </button>
+            <button class="mini ghost" type="button" data-open-facture="${esc(ev.id)}" title="Facture">
+              <span class="ico">💶</span><span class="txt">Facture</span>
+            </button>
             <button class="mini ghost" type="button" data-open-day="${esc(ev.dateKey)}" title="Voir jour">
               <span class="ico">📅</span><span class="txt">Voir jour</span>
             </button>
@@ -1198,9 +1262,11 @@
       `;
       toValidateList.appendChild(div);
 
+      div.addEventListener("click", ()=> openEventDetail(ev));
       div.querySelector(`[data-validate="${CSS.escape(ev.id)}"]`)?.addEventListener("click", (e)=>{ e.stopPropagation(); validateEvent(ev); });
       div.querySelector(`[data-open-presta="${CSS.escape(ev.id)}"]`)?.addEventListener("click", (e)=>{ e.stopPropagation(); openEventDetail(ev); });
       div.querySelector(`[data-open-photos="${CSS.escape(ev.id)}"]`)?.addEventListener("click", (e)=>{ e.stopPropagation(); openProofsAdmin(ev.id); });
+      div.querySelector(`[data-open-facture="${CSS.escape(ev.id)}"]`)?.addEventListener("click", (e)=>{ e.stopPropagation(); openFacture(ev); });
       div.querySelector(`[data-open-day="${CSS.escape(ev.dateKey)}"]`)?.addEventListener("click", (e)=>{
         e.stopPropagation();
         selectedDateKey = ev.dateKey;
@@ -1215,7 +1281,7 @@
     const first = new Date(y, m, 1);
     const last = new Date(y, m+1, 0);
 
-    const firstDow = (first.getDay() + 6) % 7; // 0=Mon
+    const firstDow = (first.getDay() + 6) % 7;
     const daysInMonth = last.getDate();
 
     const prevLast = new Date(y, m, 0).getDate();
@@ -1332,22 +1398,20 @@
     dayCount.textContent = `${presta.length + books.length}`;
     dayTitle.textContent = `Jour — ${selectedDateKey}`;
 
-    // ✅ RENOMMAGE BLOC 1
     const block = document.createElement("div");
-block.className = "item";
-block.innerHTML = `
-  <div class="iMain">
-    <div class="sectionHeader resa">
-      <span>🏠 Séjours (réservations)</span>
-      <span class="count">${books.length}</span>
-    </div>
-    <div class="iSub" style="margin-top:6px;">
-      Détails via modale. Modif/Supp/Archive uniquement si manuel.
-    </div>
-  </div>
-`;
-dayList.appendChild(block);
-
+    block.className = "item";
+    block.innerHTML = `
+      <div class="iMain">
+        <div class="sectionHeader resa">
+          <span>🏠 Séjours (réservations)</span>
+          <span class="count">${books.length}</span>
+        </div>
+        <div class="iSub" style="margin-top:6px;">
+          Détails via modale. Modif/Supp/Archive uniquement si manuel.
+        </div>
+      </div>
+    `;
+    dayList.appendChild(block);
 
     for(const b of books.slice(0, 80)){
       const src = (b.source || "import").toLowerCase();
@@ -1419,22 +1483,20 @@ dayList.appendChild(block);
       });
     }
 
-    // ✅ RENOMMAGE BLOC 2
     const block2 = document.createElement("div");
-block2.className = "item";
-block2.innerHTML = `
-  <div class="iMain">
-    <div class="sectionHeader presta">
-      <span>🧑‍🔧 Interventions (prestations)</span>
-      <span class="count">${presta.length}</span>
-    </div>
-    <div class="iSub" style="margin-top:6px;">
-      Ouvrir / Photos / Valider si nécessaire.
-    </div>
-  </div>
-`;
-dayList.appendChild(block2);
-
+    block2.className = "item";
+    block2.innerHTML = `
+      <div class="iMain">
+        <div class="sectionHeader presta">
+          <span>🧑‍🔧 Interventions (prestations)</span>
+          <span class="count">${presta.length}</span>
+        </div>
+        <div class="iSub" style="margin-top:6px;">
+          Ouvrir / Photos / Facture (salesDocuments) / Valider si nécessaire.
+        </div>
+      </div>
+    `;
+    dayList.appendChild(block2);
 
     if(!presta.length){
       const div = document.createElement("div");
@@ -1451,24 +1513,28 @@ dayList.appendChild(block2);
 
     for(const ev of presta){
       const title = `${ev.homeName}${ev.homeCity ? " — " + ev.homeCity : ""}`;
-      const sub = [ ev.time ? `Heure: ${ev.time}` : null, ev.assignedToName ? `Agent: ${ev.assignedToName}` : null ].filter(Boolean).join(" • ");
+
+      /* ✅ plus d’heure : on met la période */
+      const per = periodLabel(ev);
+      const sub = [
+        per ? `Période: ${per}` : null,
+        ev.assignedToName ? `Agent: ${ev.assignedToName}` : null
+      ].filter(Boolean).join(" • ");
 
       const st = normalizeOpStatus(ev.opStatus);
       const bCls = opBadgeClass(st);
       const bTxt = opLabel(st);
 
-      const allowBilling = (st === "REALISEE");
-
       const div = document.createElement("div");
-      div.className = "item";
+      div.className = "item prestaRow";
       div.innerHTML = `
         <div class="iMain">
           <div class="iTop">
             <span class="badge ${esc(bCls)}">${esc(bTxt)}</span>
-            <span class="badge">${esc(ev.type || "Prestation")}</span>
+            <span class="badge">Prestation</span>
           </div>
           <div class="iTitle">${esc(title)}</div>
-          <div class="iSub">${esc((ev.dateKey ? `Date: ${ev.dateKey}` : "") + (sub ? (" • " + sub) : "") || ev.meta || "—")}</div>
+          <div class="iSub">${esc(sub || "—")}</div>
 
           <div class="actionsRow">
             <button class="mini ghost" type="button" data-open-photos="${esc(ev.id)}" title="Photos">
@@ -1479,15 +1545,9 @@ dayList.appendChild(block2);
               <span class="ico">🛈</span><span class="txt">Ouvrir</span>
             </button>
 
-            <button class="mini ghost" type="button" data-open-devis="${esc(ev.id)}"
-              ${allowBilling ? "" : "disabled"}
-              title="${allowBilling ? "Ouvrir devis" : "Valider la prestation avant devis"}">
-              <span class="ico">🧾</span><span class="txt">Devis</span>
-            </button>
+            <!-- ✅ DEVIS supprimé -->
 
-            <button class="mini ghost" type="button" data-open-facture="${esc(ev.id)}"
-              ${allowBilling ? "" : "disabled"}
-              title="${allowBilling ? "Ouvrir facture" : "Valider la prestation avant facture"}">
+            <button class="mini ghost" type="button" data-open-facture="${esc(ev.id)}" title="Facture">
               <span class="ico">💶</span><span class="txt">Facture</span>
             </button>
 
@@ -1501,10 +1561,12 @@ dayList.appendChild(block2);
       `;
       dayList.appendChild(div);
 
+      /* clic sur la carte = ouvrir modale */
+      div.addEventListener("click", ()=> openEventDetail(ev));
+
       div.querySelector(`[data-open-photos="${CSS.escape(ev.id)}"]`)?.addEventListener("click", (e)=>{ e.stopPropagation(); openProofsAdmin(ev.id); });
       div.querySelector(`[data-open-presta="${CSS.escape(ev.id)}"]`)?.addEventListener("click", (e)=>{ e.stopPropagation(); openEventDetail(ev); });
-      div.querySelector(`[data-open-devis="${CSS.escape(ev.id)}"]`)?.addEventListener("click", (e)=>{ e.stopPropagation(); if(allowBilling) openDevis(ev.id); });
-      div.querySelector(`[data-open-facture="${CSS.escape(ev.id)}"]`)?.addEventListener("click", (e)=>{ e.stopPropagation(); if(allowBilling) openFacture(ev.id); });
+      div.querySelector(`[data-open-facture="${CSS.escape(ev.id)}"]`)?.addEventListener("click", (e)=>{ e.stopPropagation(); openFacture(ev); });
       div.querySelector(`[data-validate="${CSS.escape(ev.id)}"]`)?.addEventListener("click", (e)=>{ e.stopPropagation(); validateEvent(ev); });
     }
   }
