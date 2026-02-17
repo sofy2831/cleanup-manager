@@ -1,4 +1,4 @@
-<!-- docs/agent.html (FINAL — bouton unique Enregistrer => verrouille + A_VALIDER + redirect missionfini.html ; Firestore structure inchangée) -->
+<!-- docs/agent.html (FINAL+ — Terminer par mission (lock sans redirection) + Enregistrer global (update parent + redirect missionfini.html) ; Photos ON ; Firestore structure inchangée) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -22,6 +22,7 @@
     }
     body{ margin:0; background:linear-gradient(180deg,var(--bg1) 0%, var(--bg2) 80%); color:var(--text); }
     .page{ min-height:100vh; display:flex; flex-direction:column; align-items:center; padding:14px 14px 26px; padding-bottom:36px; }
+
     .topbar{
       width:100%; max-width:980px; display:flex; justify-content:space-between; align-items:center;
       gap:10px; position:sticky; top:0; z-index:10; padding:10px 0;
@@ -148,6 +149,19 @@
       border-left:5px solid rgba(122,92,255,0.55);
       background:linear-gradient(180deg,#ffffff 0%, rgba(122,92,255,0.06) 100%);
     }
+
+    .footerCard{
+      display:flex;
+      flex-direction:column;
+      gap:10px;
+    }
+    .footerRow{
+      display:flex;
+      gap:8px;
+      flex-wrap:wrap;
+      justify-content:space-between;
+      align-items:center;
+    }
   </style>
 </head>
 
@@ -206,13 +220,24 @@
         <div class="mini" style="margin-bottom:6px;">Commentaire global (optionnel)</div>
         <textarea id="globalComment" rows="2" placeholder="Ex. remarque générale, incident, manque matériel..."></textarea>
         <div class="mini" style="margin-top:8px;">
-          Astuce : mets ici tout ce qui concerne 1 ou plusieurs missions (ça sera envoyé avec Enregistrer).
+          Astuce : mets ici tout ce qui concerne 1 ou plusieurs missions (ça sera envoyé avec “Terminer”).
         </div>
       </section>
 
       <section class="card">
         <div class="mini">Missions</div>
         <div class="missions" id="missionsWrap"></div>
+      </section>
+
+      <!-- ✅ Enregistrer global -->
+      <section class="card footerCard">
+        <div class="footerRow">
+          <div>
+            <div style="font-weight:900;">Fin de prestation</div>
+            <div class="mini" id="globalHint">Termine chaque mission, puis enregistre la prestation.</div>
+          </div>
+          <button class="btn" id="finishAllBtn" type="button">Enregistrer (fin prestation)</button>
+        </div>
       </section>
     </div>
   </div>
@@ -221,6 +246,7 @@
     import { db } from "./firebase-init.js";
     import { doc, getDoc, updateDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
+    // ✅ PHOTOS ON
     const PHOTOS_ENABLED = true;
 
     const alertBox = document.getElementById("alertBox");
@@ -244,6 +270,8 @@
     const photosBtn = document.getElementById("photosBtn");
 
     const globalCommentEl = document.getElementById("globalComment");
+    const finishAllBtn = document.getElementById("finishAllBtn");
+    const globalHint = document.getElementById("globalHint");
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -306,6 +334,7 @@
       return false;
     }
 
+    // Checklist template (affichage only)
     function compactChecklistTemplate(type){
       const t = (type||"").toUpperCase();
 
@@ -425,6 +454,7 @@
     const token = qs("token");
     const prestationId = qs("prestationId");
     let tokenDoc = null;
+    let TYPES = ["MENAGE"]; // sera écrasé par tokenDoc.missionTypes
 
     function setPrestaHeaderFromToken(presta){
       const e = presta || {};
@@ -459,11 +489,54 @@
       return { id:type, data: snap.data() || {} };
     }
 
-    function gotoMissionFini(){
-      const p = new URLSearchParams();
-      p.set("token", token);
-      p.set("prestationId", prestationId);
-      location.href = "missionfini.html?" + p.toString();
+    function lockUI(locked){
+      finishAllBtn.disabled = !!locked;
+      refreshBtn.disabled = !!locked;
+      photosBtn.classList.toggle("disabled", !!locked);
+      // Les boutons mission sont gérés par disabled dans le rendu
+    }
+
+    function normalizeTypeList(list){
+      return (Array.isArray(list) && list.length)
+        ? list.map(x => String(x||"").toUpperCase()).filter(Boolean)
+        : ["MENAGE"];
+    }
+
+    async function computeMissingDone(){
+      // On relit les missions pour avoir la vérité serveur avant "fin prestation"
+      const missing = [];
+      for(const t of TYPES){
+        const snap = await getDoc(doc(db,"events",prestationId,"missions",t));
+        if(!snap.exists()){
+          missing.push(t);
+          continue;
+        }
+        const d = snap.data() || {};
+        const locked = !!d.locked;
+        const done = !!d.agentDone;
+        const status = String(d.status||"").toUpperCase();
+        const ok = (locked && done) || (status === "A_VALIDER") || (status === "VALIDEE");
+        if(!ok) missing.push(t);
+      }
+      return missing;
+    }
+
+    function updateGlobalHintFromRendered(missions){
+      const missing = [];
+      for(const m of missions){
+        const d = m.data || {};
+        const locked = !!d.locked;
+        const done = !!d.agentDone;
+        const status = String(d.status||"").toUpperCase();
+        const ok = (locked && done) || (status === "A_VALIDER") || (status === "VALIDEE");
+        if(!ok) missing.push(m.id);
+      }
+
+      if(missing.length){
+        globalHint.textContent = "Il reste des missions à terminer : " + missing.join(", ");
+      }else{
+        globalHint.textContent = "Toutes les missions sont terminées. Tu peux enregistrer la prestation.";
+      }
     }
 
     async function load(){
@@ -480,6 +553,7 @@
       whoAmI.textContent = "Agent (token)";
       chipToken.textContent = "token: " + token;
 
+      // ✅ Photos ON (ZIP global -> preuves.html sans type)
       if(PHOTOS_ENABLED){
         photosBtn.classList.remove("disabled");
         photosBtn.textContent = "📷 Photos";
@@ -522,31 +596,30 @@
       }
       chipStatus.innerHTML = `<span class="chip ok">OK</span>`;
 
+      // Header depuis dayTokens snapshot
       setPrestaHeaderFromToken(tokenDoc?.presta || {});
       agentLine.textContent = `Agent : ${(tokenDoc.agentName || "—")}${tokenDoc.agentEmail ? " • " + tokenDoc.agentEmail : ""}`;
 
-      const TYPES = (Array.isArray(tokenDoc.missionTypes) && tokenDoc.missionTypes.length)
-        ? tokenDoc.missionTypes.map(x => String(x||"").toUpperCase()).filter(Boolean)
-        : ["MENAGE"];
+      TYPES = normalizeTypeList(tokenDoc.missionTypes);
 
       subLine.textContent = "";
 
       const missions = [];
-      const missing = [];
+      const missingDocs = [];
       for(const t of TYPES){
         try{
           const m = await loadMissionDoc(t);
           if(m) missions.push(m);
-          else missing.push(t);
+          else missingDocs.push(t);
         }catch(e){
           console.error("loadMissionDoc", t, e);
-          missing.push(t);
+          missingDocs.push(t);
         }
       }
 
-      if(missing.length){
+      if(missingDocs.length){
         showAlert(
-          "⚠️ Missions manquantes côté Firestore : " + missing.join(", ") + "\n" +
+          "⚠️ Missions manquantes côté Firestore : " + missingDocs.join(", ") + "\n" +
           "=> Retourne dans intervention.html → Générer lien (ça doit créer events/{prestationId}/missions/{TYPE})."
         );
       }
@@ -557,6 +630,7 @@
             <div class="mtitle">Aucune mission disponible</div>
             <div class="msub">Soit les docs missions n'existent pas, soit l'accès est bloqué.</div>
           </div>`;
+        globalHint.textContent = "Aucune mission détectée.";
         return;
       }
 
@@ -607,12 +681,12 @@
           </div>
 
           <div class="actions">
-            <button class="btn" type="button" data-save="${esc(m.id)}" ${locked ? "disabled" : ""}>Enregistrer</button>
+            <button class="btn" type="button" data-done="${esc(m.id)}" ${locked ? "disabled" : ""}>Terminer</button>
           </div>
         `;
         missionsWrap.appendChild(wrap);
 
-        async function saveMissionAndLock(){
+        async function finishMission(){
           hideAlert();
           const type = m.id;
 
@@ -638,37 +712,55 @@
           };
 
           try{
-            // 1) mission
             await updateDoc(doc(db, "events", prestationId, "missions", type), payload);
-
-            // 2) parent event
-            try{
-              await updateDoc(doc(db,"events",prestationId),{
-                opStatus: "A_VALIDER",
-                proofToken: token,
-                updatedAt: serverTimestamp()
-              });
-            }catch(e){
-              console.error("update event opStatus", e);
-            }
-
-            // 3) redirect
-            gotoMissionFini();
-
+            showAlert(`✅ Mission "${type}" terminée (verrouillée).`, true);
+            await load();
           }catch(err){
             console.error(err);
             showAlert("Erreur enregistrement : " + (err?.code || err?.message || "inconnue"));
           }
         }
 
-        wrap.querySelector(`button[data-save="${m.id}"]`)?.addEventListener("click", saveMissionAndLock);
+        wrap.querySelector(`button[data-done="${m.id}"]`)?.addEventListener("click", finishMission);
       }
+
+      updateGlobalHintFromRendered(missions);
     }
 
     refreshBtn.addEventListener("click", ()=> load().catch(err=>{
       console.error(err);
       showAlert("Erreur reload : " + (err?.code || err?.message || "inconnue"));
     }));
+
+    finishAllBtn.addEventListener("click", async ()=>{
+      hideAlert();
+      if(!token || !prestationId) return showAlert("⛔ Paramètres manquants.");
+
+      lockUI(true);
+      try{
+        // Vérif: toutes les missions terminées
+        const missing = await computeMissingDone();
+        if(missing.length){
+          showAlert("⛔ Il reste des missions à terminer : " + missing.join(", "), false);
+          return;
+        }
+
+        // Update parent event
+        await updateDoc(doc(db,"events",prestationId),{
+          opStatus: "A_VALIDER",
+          proofToken: token,
+          updatedAt: serverTimestamp()
+        });
+
+        // Redirect fin prestation
+        location.href = "missionfini.html";
+      }catch(err){
+        console.error(err);
+        showAlert("Erreur fin prestation : " + (err?.code || err?.message || "inconnue"));
+      }finally{
+        lockUI(false);
+      }
+    });
 
     load().catch(err=>{
       console.error(err);
