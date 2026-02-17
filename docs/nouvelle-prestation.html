@@ -1,4 +1,4 @@
-<!-- docs/nouvelle-prestation.html (FINAL — UI clean: companyName + pas de logout + contexte sans ville/type redondants) -->
+<!-- docs/nouvelle-prestation.html (FINAL + PATCH AGENT LINK + INIT VALIDATION FIELDS) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -319,7 +319,6 @@
   <div class="page">
     <div class="topbar">
       <a class="pill" href="planning.html">← Retour planning</a>
-      <!-- bouton déconnexion supprimé -->
     </div>
 
     <div class="logo-title">
@@ -480,17 +479,14 @@
   <nav class="bottom-nav" aria-label="Navigation">
     <a href="planning.html">Planning</a>
     <a href="prestations.html">Production</a>
-     <a href="logements.html">Logements</a>
+    <a href="logements.html">Logements</a>
     <a href="import-ical.html">iCal</a>
     <a href="messagerie.html">Messages</a>
-   
-    
-    
   </nav>
 
   <script type="module">
     import { auth, db } from "./firebase-init.js";
-    import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+    import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
       doc, getDoc, addDoc, updateDoc, writeBatch,
       collection, serverTimestamp
@@ -574,6 +570,11 @@
     const ownerNameParam  = getParam("ownerName");
     const noteParam       = getParam("note");
     const homeTypeParam   = getParam("homeType");
+
+    // ✅ agent sélectionné côté création (passé en URL depuis prestations/planning)
+    const assignedToUidParam   = getParam("assignedToUid");     // string uid
+    const assignedToNameParam  = getParam("assignedToName");    // string
+    const assignedToEmailParam = getParam("assignedToEmail");   // string
 
     // ========= Produits (suggestions) =========
     const PRODUCT_TEMPLATES = [
@@ -890,10 +891,7 @@
       const homeName = (currentHome?.name || "").trim();
       const ht = (currentHome?.homeType || "").trim();
 
-      // ✅ Logement seulement (sans ville/type ici)
-      const homeText = currentHome
-        ? (homeName || "Logement")
-        : "—";
+      const homeText = currentHome ? (homeName || "Logement") : "—";
 
       const ownerName = (ownerNameEl.value || currentHome?.ownerName || "—").trim() || "—";
       const ownerPhone = cleanPhone(ownerPhoneEl.value || currentHome?.ownerPhone || "") || "—";
@@ -916,12 +914,16 @@
       rows.push(`<div><b>Arrivée</b> : ${escapeHtml(stay.arrivalDateKey || "—")} • ${escapeHtml(arrivalTimeInput.value || "—")}</div>`);
       rows.push(`<div><b>Départ</b> : ${escapeHtml(departureDateKeyInput.value || "—")} • ${escapeHtml(departureTimeInput.value || "—")}</div>`);
 
+      // ✅ affichage agent si passé en URL
+      if(assignedToUidParam || assignedToEmailParam || assignedToNameParam){
+        rows.push(`<div><b>Agent</b> : ${escapeHtml(assignedToNameParam || assignedToEmailParam || assignedToUidParam)}</div>`);
+      }
+
       if(summary) rows.push(`<div><b>Réservation</b> : ${escapeHtml(summary)}</div>`);
       if(noteParam) rows.push(`<div><b>Note</b> : ${escapeHtml(noteParam)}</div>`);
 
       contextKv.innerHTML = rows.join("");
 
-      // homeLabel à droite (on garde, c'est "juste en dessous")
       const labelRight = [homeName || "Logement", city || "", (ht ? `(${ht})` : "")].filter(Boolean).join(" — ").replace("— (", " (");
       homeLabel.textContent = labelRight || homeText;
     }
@@ -1005,6 +1007,12 @@
       const ownerName  = (ownerNameEl.value || currentHome.ownerName || "").trim();
       const ownerPhone = cleanPhone(ownerPhoneEl.value || currentHome.ownerPhone || "");
 
+      // ✅ agent (si fourni)
+      const assignedToUid = (assignedToUidParam || "").trim();
+      const assignedToName = (assignedToNameParam || "").trim();
+      const assignedToEmail = (assignedToEmailParam || "").trim().toLowerCase();
+
+      // ✅ champs validation init
       const basePayload = {
         conciergerieUid: currentUser.uid,
 
@@ -1057,8 +1065,19 @@
         })),
         total: computeTotal(),
 
+        // ✅ statut opérationnel
         status: "EN_COURS",
         opStatus: "EN_COURS",
+
+        // ✅ agent link (clé pour stats)
+        assignedToUid: assignedToUid || "",
+        assignedToName: assignedToName || "",
+        assignedToEmail: assignedToEmail || "",
+
+        // ✅ init validation/stat counting
+        validatedAt: null,
+        validatedBy: "",
+        agentStatsCounted: false,
 
         source: (from === "ical") ? "ical" : "manual",
         icalEventId: icalEventId || null,
@@ -1112,7 +1131,6 @@
 
       currentUser = user;
 
-      // ✅ header : companyName (users/{uid}.businessProfile.companyName) sinon email
       await loadCompanyNameForHeader(user.uid, user.email);
 
       const baseDate = dateKeyParam || todayKey();
@@ -1181,4 +1199,3 @@
 
 </body>
 </html>
-
