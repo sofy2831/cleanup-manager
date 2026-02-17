@@ -25,7 +25,7 @@
 
     .topbar{
       width:100%; max-width:980px;
-      display:flex; justify-content:space-between; gap:10px; align-items:center;
+      display:flex; justify-content:flex-start; gap:10px; align-items:center;
       position:sticky; top:0; z-index:10; padding:10px 0;
       background:rgba(248,244,255,.85); backdrop-filter:blur(6px);
     }
@@ -109,10 +109,6 @@
   <div class="page">
     <div class="topbar">
       <a class="pill" id="backBtn" href="planning.html">← Planning</a>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;">
-        <button class="pill" id="refreshBtn" type="button">Rafraîchir</button>
-        <button class="pill" id="logoutBtn" type="button">Déconnexion</button>
-      </div>
     </div>
 
     <div class="wrap">
@@ -128,12 +124,9 @@
       </section>
 
       <section class="card">
-        <div class="mini">ZIP preuves (mission MENAGE)</div>
+        <div class="mini">ZIP preuves</div>
         <div style="margin-top:10px;" id="zipWrap">
           <div class="empty">—</div>
-        </div>
-        <div class="mini" style="margin-top:10px;">
-          Source = <b>events/{prestationId}/missions/MENAGE.proofZip</b>
         </div>
       </section>
     </div>
@@ -141,7 +134,7 @@
 
   <script type="module">
     import { auth, db /*, storage*/ } from "./firebase-init.js";
-    import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+    import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import { doc, getDoc, updateDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
     // Si tu veux supprimer le fichier storage côté client (optionnel):
     // import { ref as sRef, deleteObject } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js";
@@ -150,9 +143,6 @@
     const subLine = document.getElementById("subLine");
     const ctx = document.getElementById("ctx");
     const zipWrap = document.getElementById("zipWrap");
-
-    const refreshBtn = document.getElementById("refreshBtn");
-    const logoutBtn = document.getElementById("logoutBtn");
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -229,24 +219,48 @@
             <button class="btn red" id="delBtn" type="button">Supprimer</button>
           </div>
         </div>
-        <div class="mini">
-          Note : supprimer ici enlève la référence Firestore. (Le fichier Storage peut être supprimé aussi si tu actives l’option.)
-        </div>
       `;
       zipWrap.appendChild(div);
 
       div.querySelector("#dlBtn")?.addEventListener("click", ()=>{
-        // download simple
         window.open(proofZip.url, "_blank", "noopener");
       });
+
+      // Bind delete (soft delete Firestore only)
+      div.querySelector("#delBtn")?.addEventListener("click", async ()=>{
+        hideAlert();
+        const ok = confirm("Supprimer le ZIP ? (référence Firestore)");
+        if(!ok) return;
+
+        const delBtn = div.querySelector("#delBtn");
+        delBtn.disabled = true;
+        delBtn.textContent = "Suppression…";
+
+        try{
+          await updateDoc(doc(db,"events",prestationId,"missions",MISSION),{
+            proofZip: null,
+            updatedAt: serverTimestamp()
+          });
+
+          showAlert("✅ ZIP supprimé (Firestore).", true);
+          await load();
+        }catch(err){
+          console.error(err);
+          showAlert("Erreur suppression : " + (err?.code || err?.message || "inconnue"));
+        }finally{
+          delBtn.disabled = false;
+          delBtn.textContent = "Supprimer";
+        }
+      });
+
+      // Note interne SUPPRIMÉE (tu voulais la virer)
+      // Source interne SUPPRIMÉE (tu voulais la virer)
     }
 
     const prestationId = qs("prestationId");
     const MISSION = "MENAGE";
 
     let currentUser = null;
-    let eventDoc = null;
-    let missionDoc = null;
 
     async function load(){
       hideAlert();
@@ -272,7 +286,7 @@
         showAlert("Prestation introuvable.");
         return;
       }
-      eventDoc = eSnap.data() || {};
+      const eventDoc = eSnap.data() || {};
 
       if(String(eventDoc.conciergerieUid || "") !== String(currentUser.uid || "")){
         subLine.textContent = "";
@@ -286,59 +300,17 @@
       const mSnap = await getDoc(mRef);
       if(!mSnap.exists()){
         subLine.textContent = "";
-        showAlert(`Mission ${MISSION} introuvable. (Pas de doc missions/${MISSION})`);
+        showAlert(`Mission ${MISSION} introuvable.`);
         zipWrap.innerHTML = `<div class="empty">Aucun ZIP.</div>`;
         return;
       }
-      missionDoc = mSnap.data() || {};
+      const missionDoc = mSnap.data() || {};
 
       renderZipCard(missionDoc.proofZip || null);
 
-      // bind delete
-      const delBtn = document.getElementById("delBtn");
-      if(delBtn){
-        delBtn.addEventListener("click", async ()=>{
-          hideAlert();
-          const ok = confirm("Supprimer le ZIP ? (référence Firestore).");
-          if(!ok) return;
-
-          delBtn.disabled = true;
-          delBtn.textContent = "Suppression…";
-
-          try{
-            // OPTION A: soft delete (recommandé)
-            await updateDoc(mRef, { proofZip: null, updatedAt: serverTimestamp() });
-
-            // OPTION B (si tu veux aussi supprimer le fichier storage) :
-            // const p = (missionDoc?.proofZip?.path || "").trim();
-            // if(p){
-            //   await deleteObject(sRef(storage, p));
-            // }
-
-            showAlert("✅ ZIP supprimé (Firestore).", true);
-            await load();
-          }catch(err){
-            console.error(err);
-            showAlert("Erreur suppression : " + (err?.code || err?.message || "inconnue"));
-          }finally{
-            delBtn.disabled = false;
-            delBtn.textContent = "Supprimer";
-          }
-        });
-      }
-
-      subLine.textContent = `Prestation #${prestationId.slice(0,6)} • Mission ${MISSION}`;
+      // ✅ on ne montre plus l'info interne "Prestation #... • Mission MENAGE"
+      subLine.textContent = "";
     }
-
-    refreshBtn.addEventListener("click", ()=> load().catch(err=>{
-      console.error(err);
-      showAlert("Erreur reload : " + (err?.code || err?.message || "inconnue"));
-    }));
-
-    logoutBtn.addEventListener("click", async ()=>{
-      await signOut(auth);
-      location.href = "index.html";
-    });
 
     onAuthStateChanged(auth, async (u)=>{
       if(!u){
