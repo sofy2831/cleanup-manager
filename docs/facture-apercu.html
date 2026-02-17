@@ -1,4 +1,4 @@
-<!-- docs/facture-apercu.html (FINAL — PATCH: support draft=1 via sessionStorage + titre BROUILLON) -->
+<!-- docs/facture-apercu.html (FINAL — FIX CSS + respect invoiceShowCancellation + support draft=1 via sessionStorage) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -242,9 +242,7 @@
       }
 
       .docTitle{ margin-top:6px !important; }
-
       .grid2{ grid-template-columns: 1fr 1fr !important; gap:6px !important; }
-
       .summary{ gap:6px !important; }
       .box, .totalBox, .payBox{ padding:6px 8px !important; }
       table{ margin-top:8px !important; }
@@ -265,7 +263,6 @@
         background:#fff;
       }
       .paper{ padding-bottom: 12mm !important; }
-    }
     }
   </style>
 </head>
@@ -356,7 +353,7 @@
       <div class="sectionTitle">Conditions</div>
       <div class="box">
         <div class="line" id="cond1">—</div>
-        <div class="line" id="cond2">—</div>
+        <div class="line" id="cond2" style="display:none;"></div>
         <div class="line" id="cond3">—</div>
       </div>
 
@@ -435,7 +432,6 @@
     const footerEl = document.getElementById("footer");
 
     // state
-    let docKind = ""; // "SALES" | "EVENT"
     let docData = null;
     let isDraftPreview = false;
 
@@ -571,7 +567,6 @@
     function applyBusinessProfile(profile){
       const bp = (profile?.businessProfile || {});
       const companyName = String(bp.companyName || "Conciergerie").trim();
-
       const logoUrl = String(bp.logoUrl || "").trim();
 
       const street = String(bp.address?.street || "").trim();
@@ -619,22 +614,16 @@
       const issuedDate = parseDDMMYYYY(issuedStr) || new Date();
       const issuedLabel = issuedStr || ddmmyyyy(issuedDate);
 
-      const term = String(d?.invoicePaymentTerm || d?.quotePaymentTerm || "RECEPTION").toUpperCase();
+      const term = String(d?.invoicePaymentTerm || "RECEPTION").toUpperCase();
       const due = addDays(issuedDate, termToDays(term));
       return { issuedLabel, term, due };
     }
 
     function renderDocHeader(d){
       const invNum = String(d?.invoiceNumber || "").trim();
-      if(invNum){
-        docTitleEl.textContent = `FACTURE N° ${invNum}`;
-      }else{
-        // ✅ demandé : FACTURE N° — (BROUILLON)
-        docTitleEl.textContent = `FACTURE N° — (BROUILLON)`;
-      }
+      docTitleEl.textContent = invNum ? `FACTURE N° ${invNum}` : `FACTURE N° — (BROUILLON)`;
 
       const { issuedLabel, due } = computeInvoiceDates(d);
-
       metaRightEl.innerHTML = `
         <div><b>Émise le</b> ${esc(issuedLabel)}</div>
         <div><b>Échéance</b> ${esc(ddmmyyyy(due))}</div>
@@ -709,7 +698,7 @@
               };
             }
           }
-        }catch(e){ /* ignore */ }
+        }catch(e){}
       }
 
       const emailLower = normalizeEmail(d?.clientEmail || d?.ownerEmail || "");
@@ -729,18 +718,9 @@
         if(!hSnap.exists()) return null;
         const h = hSnap.data() || {};
 
-        const name = String(
-          h.ownerName || h.ownerFullname || h.ownerDisplayName || h.owner || ""
-        ).trim();
-
-        const email = normalizeEmail(
-          h.ownerEmail || h.ownerAccountEmail || h.email || ""
-        );
-
-        const phone = String(
-          h.ownerPhone || h.ownerTel || h.phone || ""
-        ).trim();
-
+        const name = String(h.ownerName || h.ownerFullname || h.ownerDisplayName || h.owner || "").trim();
+        const email = normalizeEmail(h.ownerEmail || h.ownerAccountEmail || h.email || "");
+        const phone = String(h.ownerPhone || h.ownerTel || h.phone || "").trim();
         const addr = extractAddr(h.owner || h);
 
         if(!(name || email || phone || addr.street || addr.zip || addr.city)) return null;
@@ -754,39 +734,20 @@
           country: addr.country
         };
       }catch(e){
-        console.warn("home fallback failed:", e?.message || e);
         return null;
       }
     }
 
     function clientSnapshot(d){
-      const sName = String(d?.clientName || "").trim();
-      const sEmail = normalizeEmail(d?.clientEmail || "");
-      const sPhone = String(d?.clientPhone || "").trim();
-      const sA1 = String(d?.clientAddress1 || d?.clientAddress || "").trim();
-      const sA2 = String(d?.clientAddress2 || "").trim();
-      const sZip = String(d?.clientZip || "").trim();
-      const sCity = String(d?.clientCity || "").trim();
-      const sCountry = String(d?.clientCountry || "FR").trim();
-
-      const eName = String(d?.ownerName || "").trim();
-      const eEmail = normalizeEmail(d?.ownerEmail || "");
-      const ePhone = String(d?.ownerPhone || "").trim();
-      const eA1 = String(d?.ownerAddress1 || "").trim();
-      const eA2 = String(d?.ownerAddress2 || "").trim();
-      const eZip = String(d?.ownerZip || "").trim();
-      const eCity = String(d?.ownerCity || "").trim();
-      const eCountry = String(d?.ownerCountry || "FR").trim();
-
       return {
-        fullname: sName || eName,
-        email: sEmail || eEmail,
-        phone: sPhone || ePhone,
-        address1: sA1 || eA1,
-        address2: sA2 || eA2,
-        zip: sZip || eZip,
-        city: sCity || eCity,
-        country: sCountry || eCountry
+        fullname: String(d?.clientName || d?.ownerName || "").trim(),
+        email: normalizeEmail(d?.clientEmail || d?.ownerEmail || ""),
+        phone: String(d?.clientPhone || d?.ownerPhone || "").trim(),
+        address1: String(d?.clientAddress1 || d?.ownerAddress1 || d?.clientAddress || "").trim(),
+        address2: String(d?.clientAddress2 || d?.ownerAddress2 || "").trim(),
+        zip: String(d?.clientZip || d?.ownerZip || "").trim(),
+        city: String(d?.clientCity || d?.ownerCity || "").trim(),
+        country: String(d?.clientCountry || d?.ownerCountry || "FR").trim()
       };
     }
 
@@ -861,31 +822,39 @@
     }
 
     function renderPaymentAndConditions(d, businessProfile){
-      const mode = String(d?.invoicePaymentMode || d?.quotePaymentMode || "VIREMENT").toUpperCase();
-      const term = String(d?.invoicePaymentTerm || d?.quotePaymentTerm || "RECEPTION").toUpperCase();
+      const mode = String(d?.invoicePaymentMode || "VIREMENT").toUpperCase();
+      const term = String(d?.invoicePaymentTerm || "RECEPTION").toUpperCase();
 
       payModeEl.textContent = `Mode : ${modeLabel(mode)}`;
       payTermEl.textContent = `Délai : ${termLabel(term)}`;
 
+      const quoteRef = String(d?.quoteNumber || "").trim();
+      cond1.innerHTML = `<b>Référence devis</b> : ${esc(quoteRef || "—")}`;
+
+      // ✅ annulation affichable/masquable
+      const showCancel = (typeof d?.invoiceShowCancellation === "boolean") ? d.invoiceShowCancellation : true;
       const cancelPct = Number.isFinite(Number(businessProfile?.conditions?.cancellationPercent))
         ? Number(businessProfile.conditions.cancellationPercent)
         : 30;
 
-      cond1.innerHTML = `<b>Référence devis</b> : ${esc(String(d?.quoteNumber || "—"))}`;
-      cond2.innerHTML = `<b>Annulation</b> : ${esc(String(cancelPct))} % du montant en cas d’annulation moins de 48 h avant l’intervention.`;
+      if(showCancel){
+        cond2.style.display = "";
+        cond2.innerHTML = `<b>Annulation</b> : ${esc(String(cancelPct))} % du montant en cas d’annulation moins de 48 h avant l’intervention.`;
+      }else{
+        cond2.style.display = "none";
+        cond2.textContent = "";
+      }
+
       cond3.innerHTML = `&nbsp;`;
     }
 
     function renderBank(businessProfile, profileRaw){
-      const bank = (businessProfile?.bank || businessProfile?.banking || businessProfile?.bankDetails || {});
-      const holder = String(bank.accountHolder || bank.holder || businessProfile?.companyName || "").trim();
-      const bankName = String(bank.bankName || bank.name || "").trim();
+      const bank = (businessProfile?.bank || {});
+      const bankName = String(bank.name || "").trim();
+      const iban = String(bank.iban || "").trim();
+      const bic  = String(bank.bic  || "").trim();
 
-      const iban = String(bank.iban || "").trim() || String(profileRaw?.businessProfile?.bank?.iban || "").trim();
-      const bic  = String(bank.bic || bank.swift || "").trim() || String(profileRaw?.businessProfile?.bank?.bic || "").trim();
-
-      const hasAny = !!(holder || bankName || iban || bic);
-
+      const hasAny = !!(bankName || iban || bic);
       if(!hasAny){
         bankTitle.style.display = "none";
         bankBox.style.display = "none";
@@ -895,32 +864,21 @@
       bankTitle.style.display = "";
       bankBox.style.display = "";
 
-      const l1 = [holder ? `Titulaire : ${holder}` : "", bankName ? `Banque : ${bankName}` : ""].filter(Boolean).join(" • ");
-      bank1.textContent = l1 || "—";
-
+      bank1.textContent = bankName ? `Banque : ${bankName}` : "—";
       bank2.textContent = iban ? `IBAN : ${iban}` : "";
       bank2.style.display = iban ? "" : "none";
-
       bank3.textContent = bic ? `BIC : ${bic}` : "";
       bank3.style.display = bic ? "" : "none";
     }
 
     function renderPenalty(d){
-      const candidates = [
-        d?.invoicePenaltyText,
-        d?.quotePenaltyText,
-        d?.penaltyText
-      ].map(v => String(v || "").trim()).filter(Boolean);
-
-      if(candidates.length){
-        penaltyTextEl.textContent = candidates[0];
-        penTitle.style.display = "";
-        penBox.style.display = "";
-        return;
+      const storedText = String(d?.invoicePenaltyText || "").trim();
+      if(storedText){
+        penaltyTextEl.textContent = storedText;
+      }else{
+        const mode = String(d?.invoicePenaltyMode || "B2C").toUpperCase();
+        penaltyTextEl.textContent = getPenaltyTemplate(mode);
       }
-
-      const mode = String(d?.invoicePenaltyMode || d?.quotePenaltyMode || "B2C").trim().toUpperCase();
-      penaltyTextEl.textContent = getPenaltyTemplate(mode);
       penTitle.style.display = "";
       penBox.style.display = "";
     }
@@ -964,11 +922,9 @@
         // 1) doc source
         let snap = null;
         if(docId){
-          docKind = "SALES";
           snap = await getDoc(doc(db, "salesDocuments", docId));
           if(!snap.exists()) return showError("Facture introuvable (salesDocuments).");
         }else{
-          docKind = "EVENT";
           snap = await getDoc(doc(db, "events", eventId));
           if(!snap.exists()) return showError("Facture introuvable (event).");
         }
@@ -979,12 +935,11 @@
           return showError("Accès refusé (document d’une autre conciergerie).");
         }
 
-        // ✅ 3) draft merge (pour aperçu avant save)
+        // 3) draft merge (aperçu avant save)
         if(isDraftPreview){
           const expectedId = docId ? docId : eventId;
           const draft = loadDraftFromSession(expectedId);
           if(draft){
-            // merge draft over firestore (sans casser lignes/home/etc)
             docData = { ...docData, ...draft, id: docData.id };
           }
         }
@@ -1015,4 +970,3 @@
   </script>
 </body>
 </html>
-
