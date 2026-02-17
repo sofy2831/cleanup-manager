@@ -1,4 +1,4 @@
-<!-- docs/facture.html (FINAL — CANON salesDocuments + docId, migration éventuelle depuis eventId, client+lignes+totaux cohérents) -->
+<!-- docs/facture.html (FINAL — CANON salesDocuments + docId, migration éventuelle depuis eventId, client+lignes+totaux cohérents, pénalités B2C/B2B choisissables, annulation affichable/masquable, layout aligné) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -84,6 +84,17 @@
       color:#222;
       display:flex; gap:10px; align-items:center;
       white-space:nowrap;
+    }
+
+    /* ✅ layout 2 colonnes aligné partout (head + cards) */
+    .headCard{
+      max-width:1100px; width:100%;
+      display:grid; grid-template-columns:1fr; gap:14px;
+      align-items:stretch;
+      margin-top:14px;
+    }
+    @media(min-width:980px){
+      .headCard{ grid-template-columns: 520px 1fr; }
     }
 
     .layout{
@@ -204,6 +215,18 @@
     }
     .select:disabled{ opacity:.75; cursor:not-allowed; }
 
+    .checkline{
+      display:flex; align-items:center; gap:10px;
+      padding:10px 12px;
+      border-radius:12px;
+      border:1px solid #D3C7FF;
+      background:#fff;
+      font-weight:900;
+      color:#111;
+      user-select:none;
+    }
+    .checkline input{ width:18px; height:18px; }
+
     .actions{
       display:flex; gap:8px; flex-wrap:wrap; margin-top:12px;
     }
@@ -220,15 +243,6 @@
     }
     .btn:disabled{ opacity:.65; cursor:not-allowed; }
 
-    .headCard{
-      max-width:1100px; width:100%;
-      display:grid; grid-template-columns:1fr; gap:12px;
-      align-items:stretch;
-      margin-top:14px;
-    }
-    @media(min-width:860px){
-      .headCard{ grid-template-columns: 1fr 1fr; }
-    }
     .headBox{
       background:#fff; border:1px solid rgba(122,92,255,0.18);
       border-radius:18px; box-shadow:0 10px 22px rgba(0,0,0,.08);
@@ -394,9 +408,41 @@
         <div class="divider"></div>
 
         <div class="card-title" style="font-size:14px; margin-bottom:6px;">
+          <span>Pénalités</span>
+          <span class="small">B2C/B2B</span>
+        </div>
+
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+          <div>
+            <label for="penaltyModeSel">Mode</label>
+            <select id="penaltyModeSel" class="select">
+              <option value="B2C">Particulier (B2C)</option>
+              <option value="B2B">Professionnel (B2B)</option>
+            </select>
+          </div>
+          <div>
+            <label>&nbsp;</label>
+            <button class="btn" type="button" id="penaltyApplyTplBtn">Appliquer le texte modèle</button>
+          </div>
+        </div>
+
+        <label for="penaltyText">Texte pénalités</label>
+        <textarea id="penaltyText" rows="3" placeholder="Texte affiché sur la facture"></textarea>
+
+        <div class="kv" id="penaltyKv" style="margin-top:8px;"></div>
+
+        <div class="divider"></div>
+
+        <div class="card-title" style="font-size:14px; margin-bottom:6px;">
           <span>Conditions</span>
           <span class="small">échéance + annulation</span>
         </div>
+
+        <div class="checkline">
+          <input type="checkbox" id="showCancelChk" />
+          <label for="showCancelChk" style="margin:0; font-size:13px; font-weight:1000;">Afficher la clause d’annulation</label>
+        </div>
+
         <div class="kv" id="conditionsKv"></div>
 
         <div class="divider"></div>
@@ -406,14 +452,6 @@
           <span class="small">IBAN/BIC</span>
         </div>
         <div class="kv" id="bankKv"></div>
-
-        <div class="divider"></div>
-
-        <div class="card-title" style="font-size:14px; margin-bottom:6px;">
-          <span>Pénalités</span>
-          <span class="small">B2C/B2B</span>
-        </div>
-        <div class="kv" id="penaltyKv"></div>
 
         <div class="actions">
           <button class="btn primary" type="button" id="saveBtn">Enregistrer (créer numéro)</button>
@@ -473,6 +511,13 @@
     const payModeSel = document.getElementById("payModeSel");
     const payTermSel = document.getElementById("payTermSel");
 
+    // ✅ new controls
+    const penaltyModeSel = document.getElementById("penaltyModeSel");
+    const penaltyTextEl = document.getElementById("penaltyText");
+    const penaltyApplyTplBtn = document.getElementById("penaltyApplyTplBtn");
+
+    const showCancelChk = document.getElementById("showCancelChk");
+
     const backLink = document.getElementById("backLink");
 
     // ===== State =====
@@ -529,7 +574,7 @@
     }
     buildBackLink();
 
-    // ===== UI persist payMode/payTerm =====
+    // ===== UI persist =====
     function uiKey(){
       const id = String(docData?.id || getParam("docId") || getParam("eventId") || "").trim();
       return id ? ("invoice_ui_" + id) : "invoice_ui_tmp";
@@ -539,7 +584,10 @@
         const key = uiKey();
         sessionStorage.setItem(key, JSON.stringify({
           payMode: String(payModeSel.value||"").toUpperCase(),
-          payTerm: String(payTermSel.value||"").toUpperCase()
+          payTerm: String(payTermSel.value||"").toUpperCase(),
+          penaltyMode: String(penaltyModeSel.value||"B2C").toUpperCase(),
+          penaltyText: String(penaltyTextEl.value||""),
+          showCancel: !!showCancelChk.checked
         }));
       }catch(_){}
     }
@@ -561,7 +609,6 @@
       return "PARTICULIER";
     }
 
-    // ✅ totaux robustes : si totals existants sont 0 mais lines existent => on recalc toujours
     function computeTotals(lines, tvaEnabled, tvaRate){
       let ht = 0;
       for(const l of (Array.isArray(lines) ? lines : [])){
@@ -629,7 +676,7 @@
 
     function getPenaltyTemplate(mode){
       const m = String(mode||"").toUpperCase();
-      if(m === "B2B") return "Pénalités de retard : 3 fois le taux d’intérêt légal en vigueur + indemnité forfaitaire de recouvrement de 40 € .";
+      if(m === "B2B") return "Pénalités de retard : 3 fois le taux d’intérêt légal en vigueur + indemnité forfaitaire de recouvrement de 40 €.";
       if(m === "B2C") return "Pénalités de retard : 3 fois le taux d’intérêt légal en vigueur.";
       return "";
     }
@@ -1019,6 +1066,36 @@
       payTermSel.disabled = hasInvoice;
     }
 
+    function renderPenaltyControls(){
+      const d = docData || {};
+      const hasInvoice = !!String(d.invoiceNumber || "").trim();
+      const ui = loadUiState();
+
+      const mode = String(ui?.penaltyMode || d?.invoicePenaltyMode || "B2C").toUpperCase();
+      penaltyModeSel.value = (mode === "B2B") ? "B2B" : "B2C";
+
+      // texte : UI > doc > template
+      const baseText =
+        (typeof ui?.penaltyText === "string" && ui.penaltyText.length) ? ui.penaltyText :
+        String(d?.invoicePenaltyText || "").trim();
+
+      if(penaltyTextEl.value === ""){
+        penaltyTextEl.value = baseText || getPenaltyTemplate(penaltyModeSel.value);
+      }
+
+      penaltyModeSel.disabled = hasInvoice;
+      penaltyTextEl.disabled = hasInvoice;
+      penaltyApplyTplBtn.disabled = hasInvoice;
+
+      renderPenaltyPreview();
+    }
+
+    function renderPenaltyPreview(){
+      const mode = String(penaltyModeSel.value || "B2C").toUpperCase();
+      const text = String(penaltyTextEl.value || getPenaltyTemplate(mode)).trim();
+      penaltyKv.innerHTML = `<div class="line"><b>${esc(mode)}</b> : ${esc(text || "—")}</div>`;
+    }
+
     function renderConditions(){
       const d = docData || {};
       const bp = (profileData?.businessProfile || {});
@@ -1036,7 +1113,12 @@
       const lines = [];
       if(quoteRef) lines.push(`<div class="line"><b>Référence devis</b> : ${esc(quoteRef)}</div>`);
       lines.push(`<div class="line"><b>Échéance de paiement</b> : ${esc(dueDate)} (${esc(dueLabel(term))})</div>`);
-      lines.push(`<div class="line"><b>Annulation</b> : ${esc(cancelPct)} % du montant en cas d’annulation moins de 48 h avant l’intervention</div>`);
+
+      const showCancel = !!showCancelChk.checked;
+      if(showCancel){
+        lines.push(`<div class="line"><b>Annulation</b> : ${esc(cancelPct)} % du montant en cas d’annulation moins de 48 h avant l’intervention</div>`);
+      }
+
       conditionsKv.innerHTML = lines.join("");
     }
 
@@ -1052,13 +1134,6 @@
       if(iban) lines.push(`<div class="line"><b>IBAN</b> : ${esc(iban)}</div>`);
       if(bic)  lines.push(`<div class="line"><b>BIC</b> : ${esc(bic)}</div>`);
       bankKv.innerHTML = lines.length ? lines.join("") : `<div class="line">—</div>`;
-    }
-
-    function renderPenalty(){
-      const d = docData || {};
-      const mode = String(d?.invoicePenaltyMode || "B2C").toUpperCase();
-      const text = String(d?.invoicePenaltyText || getPenaltyTemplate(mode)).trim();
-      penaltyKv.innerHTML = `<div class="line">${esc(text || "—")}</div>`;
     }
 
     function renderRecap(){
@@ -1086,13 +1161,21 @@
 
       if(invoiceNotesEl.value === "" && d.invoiceNotes) invoiceNotesEl.value = d.invoiceNotes;
 
+      // ✅ showCancel: UI > doc > default ON
+      const ui = loadUiState();
+      const showCancel =
+        (typeof ui?.showCancel === "boolean") ? ui.showCancel :
+        (typeof d?.invoiceShowCancellation === "boolean") ? d.invoiceShowCancellation :
+        true;
+      showCancelChk.checked = !!showCancel;
+
       renderBusinessHeader();
       renderClientHeader();
       renderLinesAndTotals();
       renderPaymentControls();
+      renderPenaltyControls();
       renderConditions();
       renderBank();
-      renderPenalty();
 
       saveBtn.disabled = !docRef;
       previewBtn.disabled = !docRef;
@@ -1173,6 +1256,10 @@
       const tvaRate = Number.isFinite(Number(bp.vat?.rate)) ? Number(bp.vat.rate) : 0;
       const totals = computeTotals(lines, tvaEnabled, tvaRate);
 
+      // ✅ pénalités par défaut selon clientType (modifiable ensuite avant émission)
+      const inferredClientType = getClientType(evData);
+      const defaultPenaltyMode = (inferredClientType === "PRO") ? "B2B" : "B2C";
+
       const payload = {
         conciergerieUid: String(currentUser.uid),
         createdAt: serverTimestamp(),
@@ -1206,7 +1293,7 @@
         clientZip: resolved.zip || String(evData?.ownerZip || "").trim() || "",
         clientCity: resolved.city || String(evData?.ownerCity || "").trim() || "",
         clientCountry: resolved.country || String(evData?.ownerCountry || "FR").trim() || "FR",
-        clientType: getClientType(evData),
+        clientType: inferredClientType,
 
         invoiceNumber: String(evData?.invoiceNumber || "").trim() || "",
         invoiceStatus: String(evData?.invoiceStatus || "DRAFT").toUpperCase().trim() || "DRAFT",
@@ -1215,8 +1302,11 @@
         invoicePaymentMode: ["VIREMENT","CHEQUE","ESPECES"].includes(payMode) ? payMode : "VIREMENT",
         invoicePaymentTerm: ["RECEPTION","8J","15J","30J","45J"].includes(payTerm) ? payTerm : "RECEPTION",
 
-        invoicePenaltyMode: "B2C",
+        invoicePenaltyMode: defaultPenaltyMode,
         invoicePenaltyText: "",
+
+        // ✅ annulation affichable/masquable (par défaut ON)
+        invoiceShowCancellation: true,
 
         lines,
         totalHT: Number(totals.ht) || 0,
@@ -1226,7 +1316,6 @@
 
       const created = await addDoc(collection(db, "salesDocuments"), payload);
 
-      // ✅ canon : events/{eventId}.invoiceDocId
       try{
         await updateDoc(doc(db,"events", evId), {
           invoiceDocId: created.id,
@@ -1261,15 +1350,51 @@
     }
 
     function lockUI(locked){
+      const hasInvoice = !!String(docData?.invoiceNumber || "").trim();
+
       saveBtn.disabled = !!locked || !docRef;
       previewBtn.disabled = !!locked || !docRef;
       saveBtn.style.opacity = locked ? "0.75" : "1";
-      payModeSel.disabled = payModeSel.disabled || locked;
-      payTermSel.disabled = payTermSel.disabled || locked;
+
+      // pay controls
+      payModeSel.disabled = hasInvoice || locked;
+      payTermSel.disabled = hasInvoice || locked;
+
+      // penalty controls
+      penaltyModeSel.disabled = hasInvoice || locked;
+      penaltyTextEl.disabled = hasInvoice || locked;
+      penaltyApplyTplBtn.disabled = hasInvoice || locked;
+
+      // cancellation toggle
+      showCancelChk.disabled = hasInvoice || locked;
     }
 
+    // ===== Events listeners (UI) =====
     payTermSel.addEventListener("change", ()=>{ saveUiState(); try{ renderConditions(); }catch(e){} });
     payModeSel.addEventListener("change", ()=>{ saveUiState(); try{ renderConditions(); }catch(e){} });
+
+    penaltyModeSel.addEventListener("change", ()=>{
+      // si texte vide => on met le modèle
+      if(!String(penaltyTextEl.value||"").trim()){
+        penaltyTextEl.value = getPenaltyTemplate(penaltyModeSel.value);
+      }
+      saveUiState();
+      renderPenaltyPreview();
+    });
+    penaltyTextEl.addEventListener("input", ()=>{
+      saveUiState();
+      renderPenaltyPreview();
+    });
+    penaltyApplyTplBtn.addEventListener("click", ()=>{
+      penaltyTextEl.value = getPenaltyTemplate(penaltyModeSel.value);
+      saveUiState();
+      renderPenaltyPreview();
+    });
+
+    showCancelChk.addEventListener("change", ()=>{
+      saveUiState();
+      try{ renderConditions(); }catch(e){}
+    });
 
     previewBtn.addEventListener("click", ()=>{
       if(!docRef || !docData) return;
@@ -1280,7 +1405,10 @@
         ...docData,
         invoicePaymentMode: String(payModeSel.value || "VIREMENT").toUpperCase(),
         invoicePaymentTerm: String(payTermSel.value || "RECEPTION").toUpperCase(),
-        invoiceIssuedDate: String(docData.invoiceIssuedDate || todayIso()).trim()
+        invoiceIssuedDate: String(docData.invoiceIssuedDate || todayIso()).trim(),
+        invoicePenaltyMode: String(penaltyModeSel.value || "B2C").toUpperCase(),
+        invoicePenaltyText: String(penaltyTextEl.value || "").trim(),
+        invoiceShowCancellation: !!showCancelChk.checked
       };
       sessionStorage.setItem("invoiceDraftPreview", JSON.stringify(draft));
 
@@ -1336,6 +1464,13 @@
           invoicePaymentMode: String(payModeSel.value || "VIREMENT").toUpperCase(),
           invoicePaymentTerm: String(payTermSel.value || "RECEPTION").toUpperCase(),
 
+          // ✅ pénalités choisies
+          invoicePenaltyMode: String(penaltyModeSel.value || "B2C").toUpperCase(),
+          invoicePenaltyText: String(penaltyTextEl.value || "").trim(),
+
+          // ✅ annulation affichée/masquée
+          invoiceShowCancellation: !!showCancelChk.checked,
+
           totalHT: Number(totals.ht) || 0,
           totalTVA: Number(totals.tva) || 0,
           totalTTC: Number(totals.ttc) || 0,
@@ -1388,6 +1523,7 @@
       try{
         await loadDoc();
 
+        // re-apply UI state if any
         const ui = loadUiState();
         if(ui){
           if(ui.payMode && ["VIREMENT","CHEQUE","ESPECES"].includes(String(ui.payMode).toUpperCase())){
@@ -1396,8 +1532,22 @@
           if(ui.payTerm && ["RECEPTION","8J","15J","30J","45J"].includes(String(ui.payTerm).toUpperCase())){
             payTermSel.value = String(ui.payTerm).toUpperCase();
           }
-          try{ renderConditions(); }catch(e){}
+          if(ui.penaltyMode && ["B2C","B2B"].includes(String(ui.penaltyMode).toUpperCase())){
+            penaltyModeSel.value = String(ui.penaltyMode).toUpperCase();
+          }
+          if(typeof ui.penaltyText === "string" && ui.penaltyText.length && penaltyTextEl.value === ""){
+            penaltyTextEl.value = ui.penaltyText;
+          }
+          if(typeof ui.showCancel === "boolean"){
+            showCancelChk.checked = !!ui.showCancel;
+          }
+          try{
+            renderPenaltyPreview();
+            renderConditions();
+          }catch(e){}
         }
+
+        lockUI(false);
       }catch(e){
         showAlert("⛔ " + (e.message || "Erreur chargement facture"), false);
       }
