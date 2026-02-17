@@ -1,4 +1,4 @@
-<!-- docs/equipe.html -->
+<!-- docs/equipe.html (FINAL+ — stats events via opStatus/status + liste agents + CRUD simple) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -129,18 +129,6 @@
       background:linear-gradient(90deg,var(--violet),var(--violet2));
       color:#fff;
       box-shadow:0 10px 22px rgba(0,0,0,0.10);
-    }
-    .btn.ghost{
-      background:#fff;
-      border:2px solid var(--violet);
-      color:var(--violet);
-      box-shadow:0 3px 10px rgba(0,0,0,.06);
-    }
-    .btn.danger{
-      background:#fff;
-      border:2px solid #ffb7cc;
-      color:var(--bad);
-      box-shadow:0 3px 10px rgba(0,0,0,.06);
     }
     .btn:disabled{ opacity:.55; cursor:not-allowed; }
 
@@ -344,7 +332,7 @@
           </div>
 
           <div class="tiny" style="margin-top:8px;">
-            Stats basées sur <b>events</b> (assignedToEmail). Si tu changes de schéma plus tard, on adaptera.
+            Stats basées sur <b>events</b> (assignedToEmail) + <b>opStatus</b> (fallback status).
           </div>
 
           <div class="list" id="agentsList"></div>
@@ -431,16 +419,21 @@
     // State
     let currentUser = null;
     let allAgents = [];
-    let statsByEmail = new Map(); // email -> { total, enCours, aValider, facture, devis }
+    let statsByEmail = new Map(); // email -> buckets
 
     function badgeHtml(text, cls=""){
       return `<span class="badge ${cls}">${esc(text)}</span>`;
     }
 
+    function inc(map, key){
+      if(!(key in map)) map[key] = 0;
+      map[key]++;
+    }
+
     async function loadAgentStats(){
-      // Stats simplifiées : on scanne les events de la conciergerie et on compte par assignedToEmail
       statsByEmail = new Map();
 
+      // ⚠️ limit(2000) suffisant MVP. Si tu dépasses, on passe en pagination.
       const qE = query(
         collection(db,"events"),
         where("conciergerieUid","==", currentUser.uid),
@@ -455,13 +448,32 @@
         if(!email) continue;
 
         if(!statsByEmail.has(email)){
-          statsByEmail.set(email, { total:0, EN_COURS:0, A_VALIDER:0, DEVIS:0, FACTURE:0 });
+          statsByEmail.set(email, {
+            total:0,
+            ASSIGNEE:0,
+            EN_COURS:0,
+            A_VALIDER:0,
+            TERMINEE:0,
+            VALIDEE:0,
+            DEVIS:0,
+            FACTURE:0,
+            OTHER:0
+          });
         }
+
         const s = statsByEmail.get(email);
         s.total++;
 
-        const st = (e.status || "").toString().trim().toUpperCase();
-        if(st in s) s[st]++; // EN_COURS / A_VALIDER / DEVIS / FACTURE
+        const st = (e.opStatus || e.status || "").toString().trim().toUpperCase();
+
+        if(st === "ASSIGNEE") inc(s,"ASSIGNEE");
+        else if(st === "EN_COURS") inc(s,"EN_COURS");
+        else if(st === "A_VALIDER") inc(s,"A_VALIDER");
+        else if(st === "TERMINEE") inc(s,"TERMINEE");
+        else if(st === "VALIDEE") inc(s,"VALIDEE");
+        else if(st === "DEVIS") inc(s,"DEVIS");
+        else if(st === "FACTURE") inc(s,"FACTURE");
+        else inc(s,"OTHER");
       }
     }
 
@@ -469,7 +481,6 @@
       hideAlert();
       allAgents = [];
 
-      // agents
       const qA = query(
         collection(db,"agents"),
         where("conciergerieUid","==", currentUser.uid),
@@ -478,9 +489,7 @@
       const snapA = await getDocs(qA);
       allAgents = snapA.docs.map(d=>({ id:d.id, ...(d.data()||{}) }));
 
-      // stats
       await loadAgentStats();
-
       render();
     }
 
@@ -517,7 +526,9 @@
 
       for(const a of visible){
         const email = normalizeEmail(a.email || "");
-        const st = statsByEmail.get(email) || { total:0, EN_COURS:0, A_VALIDER:0, DEVIS:0, FACTURE:0 };
+        const st = statsByEmail.get(email) || {
+          total:0, ASSIGNEE:0, EN_COURS:0, A_VALIDER:0, TERMINEE:0, VALIDEE:0, DEVIS:0, FACTURE:0, OTHER:0
+        };
         const status = (a.status || a.active || "actif").toString().toLowerCase().trim();
 
         const div = document.createElement("div");
@@ -538,10 +549,11 @@
                 <span class="badge">${esc(String(st.total))}</span>
               </summary>
               <div class="accBody">
+                <div class="statRow"><span class="mut">ASSIGNEE</span><span>${esc(String(st.ASSIGNEE||0))}</span></div>
                 <div class="statRow"><span class="mut">EN_COURS</span><span>${esc(String(st.EN_COURS||0))}</span></div>
                 <div class="statRow"><span class="mut">A_VALIDER</span><span>${esc(String(st.A_VALIDER||0))}</span></div>
-                <div class="statRow"><span class="mut">DEVIS</span><span>${esc(String(st.DEVIS||0))}</span></div>
-                <div class="statRow"><span class="mut">FACTURE</span><span>${esc(String(st.FACTURE||0))}</span></div>
+                <div class="statRow"><span class="mut">VALIDEE</span><span>${esc(String(st.VALIDEE||0))}</span></div>
+                <div class="statRow"><span class="mut">AUTRES</span><span>${esc(String(st.OTHER||0))}</span></div>
                 ${a.note ? `<div class="statRow"><span class="mut">Note</span><span>${esc(a.note)}</span></div>` : ``}
               </div>
             </details>
@@ -627,7 +639,7 @@
           });
           showAlert("✅ Agent mis à jour.", true);
         }else{
-          // Empêcher doublon email (simple check client-side)
+          // check doublon email (MVP côté client)
           const exists = allAgents.some(a => normalizeEmail(a.email||"") === email);
           if(exists) throw new Error("Cet email agent existe déjà.");
 
