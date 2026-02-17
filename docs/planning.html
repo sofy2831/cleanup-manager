@@ -1,4 +1,4 @@
-<!-- docs/planning.html (FINAL — Facture via facture.html?eventId=... / plus de création salesDocuments ici) -->
+<!-- docs/planning.html (FINAL — facture via salesDocuments + invoiceDocId canonique + totaux calculés à la création) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -583,7 +583,7 @@
   import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
   import {
     collection, query, where, orderBy, limit, getDocs,
-    doc, getDoc, updateDoc, deleteDoc, serverTimestamp
+    doc, getDoc, updateDoc, deleteDoc, serverTimestamp, addDoc
   } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
   const companyLine = document.getElementById("companyLine");
@@ -708,6 +708,19 @@
     if(a && !b) return `À partir du ${fmtFRDateKey(a)}`;
     if(!a && b) return `Jusqu’au ${fmtFRDateKey(b)}`;
     return "—";
+  }
+
+  // ---- Totaux (TTC) à la création facture ----
+  function computeTotalsFromLines(lines){
+    let ht = 0;
+    for(const l of (Array.isArray(lines) ? lines : [])){
+      const qty = Number(l?.qty)||0;
+      const up  = Number(l?.unitPrice)||0;
+      ht += qty * up;
+    }
+    // Ici: TTC=HT (TVA gérée dans facture.html via profil conciergerie).
+    // L'objectif: ne plus avoir 0 et ne pas "vider" les listes / boutons.
+    return { ht, ttc: ht };
   }
 
   function closeModal(){
@@ -930,8 +943,11 @@
 
         opStatus: normalizeOpStatus(ev.opStatus || ev.status || "EN_COURS"),
 
-        // ✅ récupère toutes variantes possibles
-        invoiceDocId: (ev.linkedInvoiceDocId || ev.invoiceDocId || ev.salesInvoiceDocId || ev.linkedSalesDocId || "").toString()
+        // ✅ CANON : on garde invoiceDocId côté events
+        invoiceDocId: (ev.invoiceDocId || "").toString(),
+
+        // ✅ Lignes pour créer une facture non vide
+        lines: Array.isArray(ev.lines) ? ev.lines : []
       };
 
       allEvents.push(obj);
@@ -997,17 +1013,76 @@
     location.href = `preuves-admin.html?${p.toString()}`;
   }
 
-  // ✅ Facture = on passe TOUJOURS par facture.html?eventId=...
-  // facture.html sait : si lien existe -> ouvre doc, sinon migration auto -> ouvre doc
-  function openFacture(ev){
-    if(!ev?.id) return;
+  // ✅ FACTURE : tout passe par facture.html (salesDocuments), event écrit invoiceDocId
+  async function openFacture(ev){
+    try{
+      if(!ev?.id) return;
 
-    const p = new URLSearchParams();
-    p.set("eventId", ev.id);
-    p.set("returnTo", "planning");
-    p.set("returnDate", selectedDateKey);
+      // 1) déjà créée -> ouvrir directement facture.html docId
+      if(ev.invoiceDocId){
+        location.href = `facture.html?docId=${encodeURIComponent(ev.invoiceDocId)}&returnTo=planning&returnDate=${encodeURIComponent(selectedDateKey)}`;
+        return;
+      }
 
-    location.href = `facture.html?${p.toString()}`;
+      // 2) créer salesDocuments INVOICE non vide (lines + totaux)
+      const lines = Array.isArray(ev.lines) ? ev.lines : [];
+      const totals = computeTotalsFromLines(lines);
+
+      const payload = {
+        conciergerieUid: currentUser.uid,
+
+        type: "INVOICE",
+        docType: "INVOICE_EVENT",
+        listable: true,
+
+        sourceKind: "EVENT",
+        sourceEventId: ev.id,
+
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+
+        invoiceStatus: "DRAFT",
+        commercialStatus: "FACTURE",
+        commercialUpdatedAt: serverTimestamp(),
+
+        homeId: ev.homeId || "",
+        homeName: ev.homeName || "",
+        homeAddress: ev.homeAddress || "",
+        homeZip: ev.homeZip || "",
+        homeCity: ev.homeCity || "",
+
+        arrivalDateKey: ev.arrivalDateKey || "",
+        departureDateKey: ev.departureDateKey || "",
+
+        clientName: ev.ownerName || "",
+        clientEmail: ev.ownerEmail || "",
+        clientPhone: ev.ownerPhone || "",
+        clientOwnerDocId: ev.ownerDocId || null,
+
+        lines,
+
+        // ✅ plus de 0 : au minimum HT=TTC = sum(qty*unitPrice)
+        totalHT: Number(totals.ht) || 0,
+        totalTVA: 0,
+        totalTTC: Number(totals.ttc) || 0
+      };
+
+      const created = await addDoc(collection(db,"salesDocuments"), payload);
+
+      // 3) canon : on écrit invoiceDocId sur l'event
+      await updateDoc(doc(db,"events", ev.id), {
+        invoiceDocId: created.id,
+        invoiceDocUpdatedAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+
+      // 4) ouvrir facture.html docId
+      location.href = `facture.html?docId=${encodeURIComponent(created.id)}&returnTo=planning&returnDate=${encodeURIComponent(selectedDateKey)}`;
+
+    }catch(e){
+      console.error(e);
+      showAlert("Erreur création facture : " + (e?.message || "inconnue"));
+    }
   }
 
   function openEventDetail(ev){
@@ -1119,6 +1194,7 @@
     `;
 
     modalFoot.innerHTML = "";
+
     setFocusParams(selectedDateKey, b.id);
     modalBack.style.display = "flex";
   }
