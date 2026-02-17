@@ -1,4 +1,5 @@
-<!-- docs/facture.html (FINAL — CANON salesDocuments + docId, migration éventuelle depuis eventId, client+lignes+totaux cohérents, pénalités B2C/B2B choisissables, annulation affichable/masquable, layout aligné) -->
+<!-- docs/facture.html (FINAL — CANON salesDocuments + docId, migration éventuelle depuis eventId, client+lignes+totaux cohérents,
+     pénalités B2C/B2B choisissables (sans bouton “appliquer modèle”), annulation affichable/masquable, layout aligné) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -421,13 +422,10 @@
             </select>
           </div>
           <div>
-            <label>&nbsp;</label>
-           
+            <label for="penaltyText">Texte pénalités</label>
+            <textarea id="penaltyText" rows="2" placeholder="Texte affiché sur la facture"></textarea>
           </div>
         </div>
-
-        <label for="penaltyText">Texte pénalités</label>
-        <textarea id="penaltyText" rows="3" placeholder="Texte affiché sur la facture"></textarea>
 
         <div class="kv" id="penaltyKv" style="margin-top:8px;"></div>
 
@@ -509,28 +507,26 @@
     const previewBtn = document.getElementById("previewBtn");
 
     const payModeSel = document.getElementById("payModeSel");
-const payTermSel = document.getElementById("payTermSel");
+    const payTermSel = document.getElementById("payTermSel");
 
-const penaltyModeSel = document.getElementById("penaltyModeSel"); // ← AJOUT
-const penaltyTextEl = document.getElementById("penaltyText");     // ← AJOUT
+    const penaltyModeSel = document.getElementById("penaltyModeSel");
+    const penaltyTextEl  = document.getElementById("penaltyText");
+    const showCancelChk  = document.getElementById("showCancelChk");
 
-const backLink = document.getElementById("backLink");
-
-    penaltyTextEl.addEventListener("input", ()=>{
-  penaltyTouched = true;
-});
-
+    const backLink = document.getElementById("backLink");
 
     // ===== State =====
     let currentUser = null;
-let docRef = null;
-let docData = null;
-let profileData = null;
-let penaltyTouched = false; // ← AJOUT ICI
+    let docRef = null;
+    let docData = null;
+    let profileData = null;
+    let penaltyTouched = false;
 
-// ===== Helpers =====
-function showAlert(msg, ok=false){
-
+    // ===== Helpers =====
+    function showAlert(msg, ok=false){
+      alertBox.style.display = "block";
+      alertBox.classList.toggle("ok", !!ok);
+      alertBox.textContent = msg;
     }
     function hideAlert(){
       alertBox.style.display = "none";
@@ -1066,45 +1062,28 @@ function showAlert(msg, ok=false){
       payTermSel.disabled = hasInvoice;
     }
 
-    function renderPenaltyControls(){
+    function renderPenalty(){
       const d = docData || {};
-      const hasInvoice = !!String(d.invoiceNumber || "").trim();
       const ui = loadUiState();
+      const hasInvoice = !!String(d.invoiceNumber || "").trim();
 
       const mode = String(ui?.penaltyMode || d?.invoicePenaltyMode || "B2C").toUpperCase();
       penaltyModeSel.value = (mode === "B2B") ? "B2B" : "B2C";
 
-      // texte : UI > doc > template
-      const baseText =
-        (typeof ui?.penaltyText === "string" && ui.penaltyText.length) ? ui.penaltyText :
-        String(d?.invoicePenaltyText || "").trim();
+      const stored = String(d?.invoicePenaltyText || "").trim();
+      const uiText = (typeof ui?.penaltyText === "string") ? ui.penaltyText : "";
+      const baseText = (uiText && uiText.trim().length) ? uiText.trim() : stored;
 
-      if(penaltyTextEl.value === ""){
+      if(!penaltyTextEl.value.trim()){
         penaltyTextEl.value = baseText || getPenaltyTemplate(penaltyModeSel.value);
       }
 
       penaltyModeSel.disabled = hasInvoice;
       penaltyTextEl.disabled = hasInvoice;
-      penaltyApplyTplBtn.disabled = hasInvoice;
 
-      renderPenaltyPreview();
+      // ✅ affichage UNE SEULE FOIS
+      penaltyKv.innerHTML = `<div class="line">${esc(String(penaltyTextEl.value || "").trim() || "—")}</div>`;
     }
-
-    function renderPenalty(){
-  const d = docData || {};
-
-  const mode = String(d?.invoicePenaltyMode || "B2C").toUpperCase();
-  const textStored = String(d?.invoicePenaltyText || "").trim();
-
-  penaltyModeSel.value = (mode === "B2B") ? "B2B" : "B2C";
-
-  penaltyTextEl.value = textStored || getPenaltyTemplate(mode);
-
-  penaltyTouched = !!textStored;
-
-  penaltyKv.innerHTML = `<div class="line">${esc(penaltyTextEl.value || "—")}</div>`;
-}
-
 
     function renderConditions(){
       const d = docData || {};
@@ -1183,7 +1162,7 @@ function showAlert(msg, ok=false){
       renderClientHeader();
       renderLinesAndTotals();
       renderPaymentControls();
-      renderPenaltyControls();
+      renderPenalty();
       renderConditions();
       renderBank();
 
@@ -1366,16 +1345,12 @@ function showAlert(msg, ok=false){
       previewBtn.disabled = !!locked || !docRef;
       saveBtn.style.opacity = locked ? "0.75" : "1";
 
-      // pay controls
       payModeSel.disabled = hasInvoice || locked;
       payTermSel.disabled = hasInvoice || locked;
 
-      // penalty controls
       penaltyModeSel.disabled = hasInvoice || locked;
       penaltyTextEl.disabled = hasInvoice || locked;
-      penaltyApplyTplBtn.disabled = hasInvoice || locked;
 
-      // cancellation toggle
       showCancelChk.disabled = hasInvoice || locked;
     }
 
@@ -1383,34 +1358,21 @@ function showAlert(msg, ok=false){
     payTermSel.addEventListener("change", ()=>{ saveUiState(); try{ renderConditions(); }catch(e){} });
     payModeSel.addEventListener("change", ()=>{ saveUiState(); try{ renderConditions(); }catch(e){} });
 
-penaltyModeSel.addEventListener("change", ()=>{   // ← AJOUT
-  const mode = String(penaltyModeSel.value || "B2C").toUpperCase();
-
-  if(!penaltyTouched || !penaltyTextEl.value.trim()){
-    penaltyTextEl.value = getPenaltyTemplate(mode);
-    penaltyTouched = false;
-  }
-
-  saveUiState();
-});
-
-
     penaltyModeSel.addEventListener("change", ()=>{
-      // si texte vide => on met le modèle
-      if(!String(penaltyTextEl.value||"").trim()){
-        penaltyTextEl.value = getPenaltyTemplate(penaltyModeSel.value);
+      const mode = String(penaltyModeSel.value || "B2C").toUpperCase();
+      // si l'utilisateur n'a pas touché le texte, ou si texte vide => on bascule sur modèle
+      if(!penaltyTouched || !penaltyTextEl.value.trim()){
+        penaltyTextEl.value = getPenaltyTemplate(mode);
+        penaltyTouched = false;
       }
       saveUiState();
-      renderPenaltyPreview();
+      try{ renderPenalty(); }catch(e){}
     });
+
     penaltyTextEl.addEventListener("input", ()=>{
+      penaltyTouched = true;
       saveUiState();
-      renderPenaltyPreview();
-    });
-    penaltyApplyTplBtn.addEventListener("click", ()=>{
-      penaltyTextEl.value = getPenaltyTemplate(penaltyModeSel.value);
-      saveUiState();
-      renderPenaltyPreview();
+      try{ renderPenalty(); }catch(e){}
     });
 
     showCancelChk.addEventListener("change", ()=>{
@@ -1479,22 +1441,16 @@ penaltyModeSel.addEventListener("change", ()=>{   // ← AJOUT
         const totals = computeTotals(lines, tvaEnabled, tvaRate);
 
         const patch = {
-  invoiceNotes: (invoiceNotesEl.value || "").trim(),
-  invoiceUpdatedAt: serverTimestamp(),
-  updatedAt: serverTimestamp(),
-
-  invoicePenaltyMode: String(penaltyModeSel.value || "B2C").toUpperCase(), // ← AJOUT
-  invoicePenaltyText: String(penaltyTextEl.value || "").trim(),            // ← AJOUT
-
+          invoiceNotes: (invoiceNotesEl.value || "").trim(),
+          invoiceUpdatedAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
 
           invoicePaymentMode: String(payModeSel.value || "VIREMENT").toUpperCase(),
           invoicePaymentTerm: String(payTermSel.value || "RECEPTION").toUpperCase(),
 
-          // ✅ pénalités choisies
           invoicePenaltyMode: String(penaltyModeSel.value || "B2C").toUpperCase(),
           invoicePenaltyText: String(penaltyTextEl.value || "").trim(),
 
-          // ✅ annulation affichée/masquée
           invoiceShowCancellation: !!showCancelChk.checked,
 
           totalHT: Number(totals.ht) || 0,
@@ -1542,6 +1498,7 @@ penaltyModeSel.addEventListener("change", ()=>{   // ← AJOUT
       }
     });
 
+    // ===== Init =====
     onAuthStateChanged(auth, async (user)=>{
       if(!user){ location.href = "login.html?role=conciergerie"; return; }
       currentUser = user;
@@ -1561,14 +1518,15 @@ penaltyModeSel.addEventListener("change", ()=>{   // ← AJOUT
           if(ui.penaltyMode && ["B2C","B2B"].includes(String(ui.penaltyMode).toUpperCase())){
             penaltyModeSel.value = String(ui.penaltyMode).toUpperCase();
           }
-          if(typeof ui.penaltyText === "string" && ui.penaltyText.length && penaltyTextEl.value === ""){
+          if(typeof ui.penaltyText === "string" && ui.penaltyText.length){
             penaltyTextEl.value = ui.penaltyText;
+            penaltyTouched = true;
           }
           if(typeof ui.showCancel === "boolean"){
             showCancelChk.checked = !!ui.showCancel;
           }
           try{
-            renderPenaltyPreview();
+            renderPenalty();
             renderConditions();
           }catch(e){}
         }
@@ -1581,10 +1539,3 @@ penaltyModeSel.addEventListener("change", ()=>{   // ← AJOUT
   </script>
 </body>
 </html>
-
-
-
-
-
-
-
