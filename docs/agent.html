@@ -1,4 +1,4 @@
-<!-- docs/agent.html (FINAL — 1 commentaire global + Photos ON + update serverTimestamp + opStatus A_VALIDER ; Firestore structure inchangée) -->
+<!-- docs/agent.html (FINAL — bouton unique Enregistrer => verrouille + A_VALIDER + redirect missionfini.html ; Firestore structure inchangée) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -206,7 +206,7 @@
         <div class="mini" style="margin-bottom:6px;">Commentaire global (optionnel)</div>
         <textarea id="globalComment" rows="2" placeholder="Ex. remarque générale, incident, manque matériel..."></textarea>
         <div class="mini" style="margin-top:8px;">
-          Astuce : mets ici tout ce qui concerne 1 ou plusieurs missions (ça sera envoyé avec Enregistrer/Terminer).
+          Astuce : mets ici tout ce qui concerne 1 ou plusieurs missions (ça sera envoyé avec Enregistrer).
         </div>
       </section>
 
@@ -221,7 +221,6 @@
     import { db } from "./firebase-init.js";
     import { doc, getDoc, updateDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
-    // ✅ PHOTOS ON
     const PHOTOS_ENABLED = true;
 
     const alertBox = document.getElementById("alertBox");
@@ -307,7 +306,6 @@
       return false;
     }
 
-    // Checklist template (affichage only)
     function compactChecklistTemplate(type){
       const t = (type||"").toUpperCase();
 
@@ -461,6 +459,13 @@
       return { id:type, data: snap.data() || {} };
     }
 
+    function gotoMissionFini(){
+      const p = new URLSearchParams();
+      p.set("token", token);
+      p.set("prestationId", prestationId);
+      location.href = "missionfini.html?" + p.toString();
+    }
+
     async function load(){
       hideAlert();
       missionsWrap.innerHTML = "";
@@ -602,13 +607,12 @@
           </div>
 
           <div class="actions">
-            <button class="btn ghost" type="button" data-save="${esc(m.id)}" ${locked ? "disabled" : ""}>Enregistrer</button>
-            <button class="btn" type="button" data-done="${esc(m.id)}" ${locked ? "disabled" : ""}>Terminer</button>
+            <button class="btn" type="button" data-save="${esc(m.id)}" ${locked ? "disabled" : ""}>Enregistrer</button>
           </div>
         `;
         missionsWrap.appendChild(wrap);
 
-        async function saveMission(markDone=false){
+        async function saveMissionAndLock(){
           hideAlert();
           const type = m.id;
 
@@ -626,41 +630,38 @@
           const payload = {
             checklist: arrayToChecklistObject(newItems),
             agentComment: comment,
-            status: markDone ? "A_VALIDER" : "EN_COURS",
-            agentDone: markDone ? true : false,
-            locked: markDone ? true : false,
+            status: "A_VALIDER",
+            agentDone: true,
+            locked: true,
+            agentDoneAt: serverTimestamp(),
             updatedAt: serverTimestamp()
           };
-          if(markDone){
-            payload.agentDoneAt = serverTimestamp();
-          }
 
           try{
+            // 1) mission
             await updateDoc(doc(db, "events", prestationId, "missions", type), payload);
 
-            // ✅ quand l'agent termine => la prestation passe "A_VALIDER" (la conciergerie validera ensuite)
-            if(markDone){
-              try{
-                await updateDoc(doc(db,"events",prestationId),{
-                  opStatus: "A_VALIDER",
-                  proofToken: token,
-                  updatedAt: serverTimestamp()
-                });
-              }catch(e){
-                console.error("update event opStatus", e);
-              }
+            // 2) parent event
+            try{
+              await updateDoc(doc(db,"events",prestationId),{
+                opStatus: "A_VALIDER",
+                proofToken: token,
+                updatedAt: serverTimestamp()
+              });
+            }catch(e){
+              console.error("update event opStatus", e);
             }
 
-            showAlert(markDone ? "✅ Mission terminée (À VALIDER) + verrouillée." : "✅ Enregistré.", true);
-            await load();
+            // 3) redirect
+            gotoMissionFini();
+
           }catch(err){
             console.error(err);
             showAlert("Erreur enregistrement : " + (err?.code || err?.message || "inconnue"));
           }
         }
 
-        wrap.querySelector(`button[data-save="${m.id}"]`)?.addEventListener("click", ()=> saveMission(false));
-        wrap.querySelector(`button[data-done="${m.id}"]`)?.addEventListener("click", ()=> saveMission(true));
+        wrap.querySelector(`button[data-save="${m.id}"]`)?.addEventListener("click", saveMissionAndLock);
       }
     }
 
