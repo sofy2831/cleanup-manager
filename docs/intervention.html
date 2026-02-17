@@ -1,4 +1,4 @@
-<!-- docs/intervention.html -->
+<!-- docs/intervention.html (UPDATED — no logout button, conciergerieName prefill from users/{uid}.businessProfile.companyName, header like prestations) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -23,12 +23,38 @@
     *,*::before,*::after{ box-sizing:border-box; font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; }
     body{ margin:0; background:linear-gradient(180deg,var(--bg1) 0%, var(--bg2) 80%); color:var(--text); }
     .page{ min-height:100vh; display:flex; flex-direction:column; align-items:center; padding:14px 14px 26px; }
+
+    /* header like prestations */
     .topbar{
       width:100%; max-width:980px;
       display:flex; justify-content:space-between; gap:10px; align-items:center;
       position:sticky; top:0; z-index:10; padding:10px 0;
       background:rgba(248,244,255,.85); backdrop-filter:blur(6px);
     }
+    .brand{
+      display:flex; align-items:center; gap:10px;
+      background:#fff; border:1px solid var(--border);
+      border-radius:18px; padding:10px 12px;
+      box-shadow:0 8px 24px rgba(0,0,0,0.06);
+      min-width:0;
+    }
+    .logo{
+      width:34px; height:34px; border-radius:10px;
+      background:linear-gradient(135deg,var(--violet-main),var(--violet-dark));
+      display:flex; align-items:center; justify-content:center;
+      color:#fff; font-weight:900; letter-spacing:.5px;
+      flex:0 0 auto;
+    }
+    .brandTxt{ min-width:0; }
+    .brandTitle{
+      font-weight:900; font-size:14px; line-height:1.1;
+      white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+    }
+    .brandSub{
+      font-weight:800; font-size:12px; color:#444; margin-top:3px;
+      white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+    }
+
     .pill{
       display:inline-flex; align-items:center; gap:8px;
       padding:8px 12px; border-radius:999px;
@@ -159,7 +185,14 @@
   <div class="page">
     <div class="topbar">
       <a class="pill" href="prestations.html">← Retour</a>
-      <button class="pill" id="logoutBtn" type="button">Déconnexion</button>
+
+      <div class="brand" aria-label="En-tête CleanUp">
+        <div class="logo">CU</div>
+        <div class="brandTxt">
+          <div class="brandTitle">CleanUp Manager</div>
+          <div class="brandSub" id="helloLine">Bonjour, —</div>
+        </div>
+      </div>
     </div>
 
     <div style="width:100%;max-width:980px;margin-top:8px;">
@@ -241,11 +274,12 @@
 
   <script type="module">
     import { auth, db } from "./firebase-init.js";
-    import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+    import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import { doc, getDoc, setDoc, serverTimestamp, Timestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const alertBox = document.getElementById("alertBox");
     const subLine = document.getElementById("subLine");
+    const helloLine = document.getElementById("helloLine");
 
     const homeLine = document.getElementById("homeLine");
     const arrLine  = document.getElementById("arrLine");
@@ -266,7 +300,6 @@
     const copyBtn = document.getElementById("copyBtn");
     const mailtoBtn = document.getElementById("mailtoBtn");
     const linkBox = document.getElementById("linkBox");
-    const logoutBtn = document.getElementById("logoutBtn");
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -398,6 +431,30 @@
       }
     }
 
+    async function loadCompanyNameForHeaderAndPrefill(){
+      // users/{uid}.businessProfile.companyName -> header + conciergerieName (si vide)
+      try{
+        const uSnap = await getDoc(doc(db, "users", currentUser.uid));
+        const uData = uSnap.exists() ? (uSnap.data() || {}) : {};
+        const company =
+          (uData?.businessProfile?.companyName || uData?.companyName || "").trim();
+
+        const display = company || "Conciergerie";
+        helloLine.textContent = `Bonjour, ${display}.`;
+
+        // Prefill conciergerieName only if empty (keeps user edits)
+        if(!String(conciergerieName.value || "").trim()){
+          conciergerieName.value = display;
+        }
+      }catch(e){
+        console.warn("CompanyName load failed:", e);
+        // fallback UI (do not block the rest)
+        if(!helloLine.textContent || helloLine.textContent.includes("—")){
+          helloLine.textContent = "Bonjour, Conciergerie.";
+        }
+      }
+    }
+
     async function load(){
       hideAlert();
       subLine.textContent = "Chargement…";
@@ -511,7 +568,7 @@
         conciergerieName: (conciergerieName?.value || "").trim() || null,
 
         missionTypes,
-        presta: prestaSnapshot,   // ✅ lu par preuves.html (agent) sans lire events
+        presta: prestaSnapshot,
 
         active:true,
         expiresAt,
@@ -601,15 +658,16 @@
       }
     });
 
-    logoutBtn.addEventListener("click", async ()=>{
-      await signOut(auth);
-      location.href="index.html";
-    });
-
     onAuthStateChanged(auth, async (u)=>{
       if(!u) return location.href="login.html";
       currentUser = u;
-      try{ await load(); }
+
+      // header + prefill conciergerieName
+      await loadCompanyNameForHeaderAndPrefill();
+
+      try{
+        await load();
+      }
       catch(err){
         console.error(err);
         showAlert("Erreur chargement intervention : " + (err?.message || "inconnue"));
