@@ -1,4 +1,4 @@
-<!-- docs/nouvelle-prestation.html (FINAL — patch devis + owner + updateDoc safe) -->
+<!-- docs/nouvelle-prestation.html (FINAL — UI clean: companyName + pas de logout + contexte sans ville/type redondants) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -319,7 +319,7 @@
   <div class="page">
     <div class="topbar">
       <a class="pill" href="planning.html">← Retour planning</a>
-      <button class="pill" id="logoutBtn" type="button">Déconnexion</button>
+      <!-- bouton déconnexion supprimé -->
     </div>
 
     <div class="logo-title">
@@ -495,7 +495,6 @@
 
     // ========= UI =========
     const emailLine = document.getElementById("emailLine");
-    const logoutBtn = document.getElementById("logoutBtn");
     const alertBox = document.getElementById("alertBox");
 
     const contextTag = document.getElementById("contextTag");
@@ -543,12 +542,6 @@
       alertBox.classList.remove("ok");
       alertBox.textContent = "";
     }
-
-    logoutBtn.addEventListener("click", async ()=>{
-      await signOut(auth);
-      localStorage.removeItem("cm_auth");
-      location.href = "index.html";
-    });
 
     // ========= Guard =========
     const FREE_EMAILS = new Set(["mathilde.debout31@gmail.com","s.dumas974@gmail.com"]);
@@ -657,6 +650,18 @@
       return (s||"").toString().trim().replace(/\s+/g," ");
     }
 
+    async function loadCompanyNameForHeader(uid, fallbackEmail){
+      let company = "";
+      try{
+        const uSnap = await getDoc(doc(db,"users", uid));
+        if(uSnap.exists()){
+          const d = uSnap.data() || {};
+          company = (d?.businessProfile?.companyName || d.companyName || d.raisonSociale || d.societe || d.company || d.name || "").toString().trim();
+        }
+      }catch(e){}
+      emailLine.textContent = company || fallbackEmail || uid;
+    }
+
     // ✅ INTÉGRATION LOGEMENT
     async function loadHome(){
       if(!homeId) throw new Error("homeId manquant (URL). Exemple : nouvelle-prestation.html?homeId=XXXX");
@@ -678,19 +683,16 @@
         ownerPhone: cleanPhone(d.ownerPhone || d.phone || d.ownerTel || "")
       };
 
-      // ✅ Owner snapshot (on distingue owners/{docId} et Firebase Auth uid)
-      currentHome.ownerDocId = (d.ownerDocId || "").toString().trim(); // owners/{docId}
-      currentHome.ownerUid   = (d.ownerUid || "").toString().trim();   // Firebase uid du owner (si stocké proprement)
+      currentHome.ownerDocId = (d.ownerDocId || "").toString().trim();
+      currentHome.ownerUid   = (d.ownerUid || "").toString().trim();
       currentHome.ownerEmail = (d.ownerEmail || d.ownerAccountEmail || "").toString().trim();
 
-      // ✅ Si tu stockes l’adresse owner dans home (snapshot), on la remonte aussi
       currentHome.ownerAddress1 = (d.ownerAddress1 || d.address1 || "").toString().trim();
       currentHome.ownerAddress2 = (d.ownerAddress2 || d.address2 || "").toString().trim();
       currentHome.ownerZip      = (d.ownerZip || "").toString().trim();
       currentHome.ownerCity     = (d.ownerCity || "").toString().trim();
       currentHome.ownerCountry  = (d.ownerCountry || "FR").toString().trim();
 
-      // backfill champs formulaire si vides
       if(!ownerNameEl.value.trim() && (currentHome.ownerName || "").trim()) ownerNameEl.value = currentHome.ownerName;
       if(!ownerPhoneEl.value.trim() && (currentHome.ownerPhone || "").trim()) ownerPhoneEl.value = currentHome.ownerPhone;
     }
@@ -703,8 +705,6 @@
       if(!snap.exists()) return null;
 
       const d = snap.data() || {};
-
-      // sécurité logique (pas des rules)
       if(d.conciergerieUid && currentUser?.uid && d.conciergerieUid !== currentUser.uid) return null;
 
       return { id: snap.id, ...d };
@@ -884,11 +884,12 @@
     function renderContext(){
       contextTag.textContent = (from === "ical") ? "Réservation" : "Création manuelle";
 
+      const homeName = (currentHome?.name || "").trim();
       const ht = (currentHome?.homeType || "").trim();
+
+      // ✅ Logement seulement (sans ville/type ici)
       const homeText = currentHome
-        ? (currentHome.name
-           + (currentHome.city ? " — " + currentHome.city : "")
-           + (ht ? ` (${ht})` : ""))
+        ? (homeName || "Logement")
         : "—";
 
       const ownerName = (ownerNameEl.value || currentHome?.ownerName || "—").trim() || "—";
@@ -896,14 +897,17 @@
 
       const addr = (currentHome?.homeAddress || "").trim();
       const zip = (currentHome?.homeZip || "").trim();
+      const city = (currentHome?.city || "").trim();
 
       const rows = [];
       rows.push(`<div><b>Logement</b> : ${escapeHtml(homeText)}</div>`);
-      if(addr || zip){
-        const adr = [addr, zip, (currentHome?.city || "").trim()].filter(Boolean).join(", ");
+      if(addr || zip || city){
+        const adr = [addr, zip, city].filter(Boolean).join(", ");
         rows.push(`<div><b>Adresse</b> : ${escapeHtml(adr || "—")}</div>`);
       }
+      if(city) rows.push(`<div><b>Ville</b> : ${escapeHtml(city)}</div>`);
       if(ht) rows.push(`<div><b>Type</b> : ${escapeHtml(ht)}</div>`);
+
       rows.push(`<div><b>Propriétaire</b> : ${escapeHtml(ownerName)} • ${escapeHtml(ownerPhone)}</div>`);
 
       rows.push(`<div><b>Arrivée</b> : ${escapeHtml(stay.arrivalDateKey || "—")} • ${escapeHtml(arrivalTimeInput.value || "—")}</div>`);
@@ -913,7 +917,10 @@
       if(noteParam) rows.push(`<div><b>Note</b> : ${escapeHtml(noteParam)}</div>`);
 
       contextKv.innerHTML = rows.join("");
-      homeLabel.textContent = homeText + (addr ? " • " + addr : "");
+
+      // homeLabel à droite (on garde, c'est "juste en dessous")
+      const labelRight = [homeName || "Logement", city || "", (ht ? `(${ht})` : "")].filter(Boolean).join(" — ").replace("— (", " (");
+      homeLabel.textContent = labelRight || homeText;
     }
 
     function lockUI(locked){
@@ -1008,7 +1015,6 @@
         dateKey: dateKeyInput.value,
         date:    dateKeyInput.value,
 
-        // ✅ time : cohérent (arrivalTimeInput est la vraie heure)
         time: (arrivalTimeInput.value || timeEl.value || "").trim(),
 
         arrivalDateKey: stay.arrivalDateKey || "",
@@ -1017,7 +1023,6 @@
         departureTime: (departureTimeInput.value || "").trim(),
         timezone: stay.timezone || "Europe/Paris",
 
-        // ✅ Owner : docId (owners) + uid (Firebase Auth) + snapshot adresse
         ownerDocId: String(currentHome.ownerDocId || "").trim() || null,
         ownerUid:   String(currentHome.ownerUid || "").trim() || null,
         ownerName:  ownerName || "",
@@ -1032,7 +1037,6 @@
 
         meta: (jobNoteEl.value || "").trim(),
 
-        // ✅ DEVIS : visible dans devis-liste dès la création
         commercialStatus: "DEVIS",
         commercialUpdatedAt: serverTimestamp(),
         quoteStatus: "DRAFT",
@@ -1078,7 +1082,6 @@
           location.href = `prestations.html?open=${encodeURIComponent(createdEventId)}`;
           return;
         }else{
-          // ✅ updateDoc safe (pas de createdAt en update)
           const upd = { ...basePayload };
           delete upd.createdAt;
           await updateDoc(createdEventRef, upd);
@@ -1105,16 +1108,15 @@
       }
 
       currentUser = user;
-      emailLine.textContent = user.email || user.uid;
 
-      // valeurs par défaut
+      // ✅ header : companyName (users/{uid}.businessProfile.companyName) sinon email
+      await loadCompanyNameForHeader(user.uid, user.email);
+
       const baseDate = dateKeyParam || todayKey();
       dateKeyInput.value = baseDate;
 
-      // ⚡ source = icalEvents si possible
       const ical = await loadIcalEventIfAny();
 
-      // 1) cohérence homeId (si on vient d'une résa)
       if (ical && ical.homeId && homeId && ical.homeId !== homeId) {
         const p = new URLSearchParams(location.search);
         p.set("homeId", ical.homeId);
@@ -1129,11 +1131,9 @@
         return;
       }
 
-      // backfill owner depuis params si fournis
       if(ownerNameParam && !ownerNameEl.value.trim()) ownerNameEl.value = ownerNameParam.trim();
       if(noteParam) jobNoteEl.value = noteParam;
 
-      // 2) seulement ensuite : appliquer les infos séjour
       if (ical) {
         stay.arrivalDateKey = (ical.arrivalDateKey || ical.dateKey || baseDate || "").trim();
         stay.departureDateKey = (ical.departureDateKey || "").trim();
@@ -1163,7 +1163,6 @@
         timeEl.value = timeParam || "";
       }
 
-      // champs séjour en lecture seule
       arrivalTimeInput.readOnly = true;
       departureDateKeyInput.readOnly = true;
       departureTimeInput.readOnly = true;
