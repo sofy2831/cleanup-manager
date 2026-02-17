@@ -1,4 +1,4 @@
-<!-- docs/preuves.html (FINAL — ZIP ONLY + progress + aide Samsung/iPhone, sans refresh, sans mission/logement, sans terminer) -->
+<!-- docs/preuves.html (FINAL+ — ZIP global MENAGE + type forcé + contrôle token/missionTypes + accept iOS + suppression logique par défaut) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -150,11 +150,13 @@
 
       <section class="card">
         <div class="mini">
-          Envoie <b>un seul fichier ZIP</b> (10/15/20 photos). C’est plus fiable que photo par photo.
+          Envoie <b>un seul fichier ZIP</b> (10/15/20 photos). C’est plus fiable que photo par photo.<br>
+          <b>ZIP global</b> enregistré sur la mission <b>MENAGE</b> (pas de sélection).
         </div>
 
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:space-between;margin-top:8px;">
-          <input id="zipInput" type="file" accept=".zip,application/zip" />
+          <!-- iOS: ajouter application/x-zip-compressed -->
+          <input id="zipInput" type="file" accept=".zip,application/zip,application/x-zip-compressed" />
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
             <button class="btn ghost" id="clearZipBtn" type="button">Vider</button>
             <button class="btn" id="uploadZipBtn" type="button">Uploader ZIP</button>
@@ -210,6 +212,13 @@
     const progressText = document.getElementById("progressText");
     const progressBar = document.getElementById("progressBar");
     const zipInfo = document.getElementById("zipInfo");
+
+    // ✅ ZIP GLOBAL: on force MENAGE, pas d'embrouille
+    const FORCED_MISSION_TYPE = "MENAGE";
+
+    // ✅ suppression Storage: par défaut on fait une suppression logique (Firestore only)
+    // Mets true si tu décides d'autoriser delete dans Storage rules pour l'agent token.
+    const ALLOW_STORAGE_DELETE = false;
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -300,20 +309,24 @@
 
       div.querySelector("#delZipBtn")?.addEventListener("click", async ()=>{
         hideAlert();
-        const ok = confirm("Supprimer le ZIP ? (irréversible)");
+        const ok = confirm("Supprimer le ZIP ? (irréversible côté app)");
         if(!ok) return;
 
         lockUI(true);
         try{
-          if(proofZip.path){
-            try{ await deleteObject(sRef(storage, proofZip.path)); }catch(e){ console.warn(e); }
+          // 1) suppression Storage (optionnelle)
+          if(ALLOW_STORAGE_DELETE && proofZip.path){
+            try{ await deleteObject(sRef(storage, proofZip.path)); }catch(e){ console.warn("deleteObject failed", e); }
           }
-          // on supprime la référence dans Firestore
+
+          // 2) suppression logique dans Firestore (toujours)
           await updateDoc(doc(db,"events",prestationId,"missions",missionType),{
             proofZip: null,
             updatedAt: serverTimestamp()
           });
-          showAlert("✅ ZIP supprimé.", true);
+
+          showAlert(ALLOW_STORAGE_DELETE ? "✅ ZIP supprimé." : "✅ ZIP supprimé dans l’app (archive Storage conservée).", true);
+
           const d = await getDoc(doc(db,"events",prestationId,"missions",missionType));
           renderZipInfo(d.exists() ? (d.data()?.proofZip || null) : null);
         }catch(err){
@@ -327,7 +340,9 @@
 
     const token = qs("token");
     const prestationId = qs("prestationId");
-    const missionType = (qs("type") || "MENAGE").toUpperCase(); // ✅ type passé par la page précédente
+
+    // ✅ missionType forcé
+    const missionType = FORCED_MISSION_TYPE;
 
     async function load(){
       hideAlert();
@@ -344,7 +359,7 @@
       chipLine.textContent = "token: " + token;
       backBtn.href = `agent.html?token=${encodeURIComponent(token)}&prestationId=${encodeURIComponent(prestationId)}`;
 
-      // token
+      // 1) token
       const tSnap = await getDoc(doc(db,"dayTokens",token));
       if(!tSnap.exists()){
         subLine.textContent = "";
@@ -364,7 +379,18 @@
         return;
       }
 
-      // mission doc
+      // ✅ garde-fou : le token doit autoriser MENAGE
+      const allowedTypes = (Array.isArray(tokenDoc.missionTypes) && tokenDoc.missionTypes.length)
+        ? tokenDoc.missionTypes.map(x => String(x||"").toUpperCase())
+        : ["MENAGE"];
+
+      if(!allowedTypes.includes(missionType)){
+        subLine.textContent = "";
+        showAlert("⛔ Ce token n’autorise pas l’upload preuves sur MENAGE.\nRegénère le lien.");
+        return;
+      }
+
+      // 2) mission doc (MENAGE)
       const mRef = doc(db,"events",prestationId,"missions",missionType);
       const mSnap = await getDoc(mRef);
       if(!mSnap.exists()){
@@ -373,9 +399,11 @@
         return;
       }
       const m = mSnap.data() || {};
+
+      // ✅ le token doit être attaché à la mission
       if(String(m.dayToken || "") !== String(token)){
         subLine.textContent = "";
-        showAlert("⛔ Token non associé à cette mission.");
+        showAlert("⛔ Token non associé à cette mission (MENAGE).");
         return;
       }
 
@@ -391,6 +419,7 @@
       if(!file) return showAlert("Choisis un fichier ZIP.");
 
       const name = safeZipName(file.name);
+
       const maxBytes = 120 * 1024 * 1024; // 120 Mo
       if(Number(file.size || 0) > maxBytes) return showAlert("Fichier trop lourd (limite 120 Mo).");
 
@@ -403,8 +432,9 @@
         const mSnap = await getDoc(mRef);
         if(!mSnap.exists()) throw new Error("Mission introuvable.");
         const m = mSnap.data() || {};
-        if(String(m.dayToken || "") !== String(token)) throw new Error("Token non associé à cette mission.");
+        if(String(m.dayToken || "") !== String(token)) throw new Error("Token non associé à cette mission (MENAGE).");
 
+        // ⚠️ stockage: on met token dans le path (pratique pour règles et purge)
         const path = `proofZips/${prestationId}/${missionType}/${token}/${Date.now()}_${Math.random().toString(16).slice(2)}_${name}`;
         const r = sRef(storage, path);
         const task = uploadBytesResumable(r, file, { contentType:"application/zip" });
@@ -428,7 +458,7 @@
           sizeBytes: Number(file.size || 0),
           createdAtMs: Date.now(),
           token: String(token),
-          // facultatif, mais utile
+          // (optionnel) si tu veux un jour afficher qui a upload
           agentEmail: "",
           agentName: ""
         };
@@ -444,6 +474,7 @@
 
         const m2 = await getDoc(doc(db,"events",prestationId,"missions",missionType));
         renderZipInfo(m2.exists() ? (m2.data()?.proofZip || null) : null);
+
       }catch(err){
         console.error(err);
         hideProgress();
