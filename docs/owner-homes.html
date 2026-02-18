@@ -136,6 +136,7 @@
       box-shadow:0 3px 10px rgba(0,0,0,.06);
       font-size:12px;
       font-weight:900;
+      white-space:pre-wrap;
     }
     .alert.ok{ border-left-color:var(--ok); }
 
@@ -264,7 +265,7 @@ import { auth, db } from "./firebase-init.js";
 import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
 import {
   collection, query, where, onSnapshot,
-  addDoc, serverTimestamp
+  addDoc, serverTimestamp, doc, getDoc
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
 const homesList = document.getElementById("homesList");
@@ -282,59 +283,108 @@ function showAlert(msg, ok=false){
   alertBox.classList.toggle("ok",ok);
   alertBox.textContent=msg;
 }
-function hideAlert(){ alertBox.style.display="none"; }
+function hideAlert(){ alertBox.style.display="none"; alertBox.classList.remove("ok"); alertBox.textContent=""; }
 function lock(btn,l){ btn.disabled=l; btn.style.opacity=l?"0.7":"1"; }
 
-onAuthStateChanged(auth, (user)=>{
+function esc(s){
+  return String(s ?? "")
+    .replaceAll("&","&amp;")
+    .replaceAll("<","&lt;")
+    .replaceAll(">","&gt;")
+    .replaceAll('"',"&quot;")
+    .replaceAll("'","&#039;");
+}
+
+let unsubHomes = null;
+
+onAuthStateChanged(auth, async (user)=>{
   if(!user){
     location.href="login.html?role=proprietaire";
     return;
   }
 
-  // Liste logements
-  onSnapshot(
-    query(collection(db,"homes"), where("ownerUid","==",user.uid)),
-    (snap)=>{
-      homesList.innerHTML="";
-      if(snap.empty){
-        emptyHomes.style.display="block";
-        return;
-      }
-      emptyHomes.style.display="none";
+  // 🔑 Source de vérité : users/{uid}.ownerDocId + conciergerieUid
+  let ownerDocId = "";
+  let conciergerieUid = "";
 
-      snap.forEach(d=>{
-        const h = d.data();
-        const el = document.createElement("div");
-        el.className="item";
-        el.innerHTML=`
-          <div class="meta">
-            <span>${h.name||"Logement"} • ${h.city||""}</span>
-            <span>${h.type||""}</span>
-          </div>
-          <p class="msg">${h.address||"Adresse non renseignée"}</p>
-        `;
-        homesList.appendChild(el);
-      });
+  try{
+    const us = await getDoc(doc(db,"users", user.uid));
+    const ud = us.exists() ? (us.data()||{}) : {};
+    ownerDocId = String(ud.ownerDocId || "").trim();
+    conciergerieUid = String(ud.conciergerieUid || "").trim();
+  }catch(e){
+    // si ça rate, on retombe sur fallback ownerUid
+  }
+
+  // stop old listener
+  if(unsubHomes) unsubHomes();
+  unsubHomes = null;
+
+  // ✅ Query principale (stable) : homes.ownerDocId == users.ownerDocId, et même conciergerieUid
+  // 🔁 Fallback compat : homes.ownerUid == auth.uid (anciens docs)
+  const q = (ownerDocId && conciergerieUid)
+    ? query(
+        collection(db,"homes"),
+        where("conciergerieUid","==", conciergerieUid),
+        where("ownerDocId","==", ownerDocId)
+      )
+    : query(
+        collection(db,"homes"),
+        where("ownerUid","==", user.uid)
+      );
+
+  unsubHomes = onSnapshot(q, (snap)=>{
+    homesList.innerHTML="";
+    if(snap.empty){
+      emptyHomes.style.display="block";
+      return;
     }
-  );
+    emptyHomes.style.display="none";
 
-  // Demande ajout logement
+    const rows = snap.docs.map(d=>({ id:d.id, ...(d.data()||{}) }));
+    rows.sort((a,b)=> (b.createdAt?.seconds ?? 0) - (a.createdAt?.seconds ?? 0));
+
+    for(const h of rows){
+      const name = h.name || h.label || "Logement";
+      const city = h.homeCity || h.city || "";
+      const type = h.homeType || h.type || "";
+      const addr = h.homeAddress || h.address || "Adresse non renseignée";
+      const cp = h.homeZip || h.zip || "";
+
+      const el = document.createElement("div");
+      el.className="item";
+      el.innerHTML=`
+        <div class="meta">
+          <span>${esc(name)}${city ? " • " + esc(city) : ""}${cp ? " (" + esc(cp) + ")" : ""}</span>
+          <span>${esc(type)}</span>
+        </div>
+        <p class="msg">${esc(addr)}</p>
+      `;
+      homesList.appendChild(el);
+    }
+  });
+
+  // Demande ajout logement (request routable conciergerie)
   sendBtn.onclick = async ()=>{
     hideAlert();
-    if(!homeName.value || !homeCity.value){
+    if(!homeName.value.trim() || !homeCity.value.trim()){
       return showAlert("Nom et ville requis.");
     }
     lock(sendBtn,true);
     try{
       await addDoc(collection(db,"requests"),{
-        ownerUid:user.uid,
-        ownerEmail:user.email,
+        // routage
+        conciergerieUid: conciergerieUid || "",
+        ownerDocId: ownerDocId || "",
+        ownerUid: user.uid,
+        ownerEmail: user.email || "",
+
         type:"add_home",
-        title:`Ajout logement – ${homeName.value}`,
-        message:homeMsg.value||"",
+        title:`Ajout logement – ${homeName.value.trim()}`,
+        message:(homeMsg.value||"").trim(),
         payload:{
-          name:homeName.value,
-          city:homeCity.value,
+          name:homeName.value.trim(),
+          city:homeCity.value.trim(),
           type:homeType.value
         },
         status:"pending",
@@ -343,7 +393,7 @@ onAuthStateChanged(auth, (user)=>{
       showAlert("✅ Demande envoyée.",true);
       homeName.value=""; homeCity.value=""; homeMsg.value=""; homeType.value="Studio";
     }catch(e){
-      showAlert("Erreur : "+e.message);
+      showAlert("Erreur : "+(e?.message||"inconnue"));
     }finally{
       lock(sendBtn,false);
     }
@@ -352,6 +402,3 @@ onAuthStateChanged(auth, (user)=>{
 </script>
 </body>
 </html>
-
-
-
