@@ -1,4 +1,4 @@
-<!-- docs/invite-proprietaire.html (FINAL STABLE — 2 modes + ownerUid/auth.uid + ownerDocId + auto-link homes + redirect profil obligatoire) -->
+<!-- docs/invite-proprietaire.html (FINAL STABLE — 2 modes + ownerUid/auth.uid + ownerDocId + auto-link homes + merge clients + redirect profil obligatoire) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -539,6 +539,19 @@
       return "profil-proprietaire.html?" + p.toString();
     }
 
+    // ---- clients merge (source de vérité commerciale “client”) ----
+    async function upsertClient(ownerDocId, conciergerieUid, payload){
+      // docId = ownerDocId (simple & stable)
+      const ref = doc(db, "clients", String(ownerDocId));
+      await setDoc(ref, {
+        ownerDocId: String(ownerDocId),
+        conciergerieUid: String(conciergerieUid),
+        type: "OWNER",
+        updatedAt: serverTimestamp(),
+        ...payload
+      }, { merge:true });
+    }
+
     // ---------- MODE OWNER ----------
     let invite = null;
     let ownerAuthedUser = null;
@@ -585,7 +598,6 @@
           return;
         }
 
-        // déjà utilisée ?
         if(invite.status === "accepted" || invite.usedAt){
           badgeLine.textContent = "Invitation déjà utilisée";
           showAlert(alertOwner, "⛔ Cette invitation a déjà été utilisée. Demande un nouveau lien.", false);
@@ -637,6 +649,9 @@
           return;
         }
 
+        const fullname = (fullnameEl.value || invite.name || "").trim();
+        const phone = (phoneEl.value || "").trim();
+
         badgeLine.textContent = "Finalisation du rattachement…";
 
         // users/{uid}
@@ -659,6 +674,8 @@
           conciergerieUid,
           email: userEmail,
           emailLower: userEmail,
+          fullname,
+          phone,
           uid: user.uid,
           status: "ACTIVE",
           isActive: true,
@@ -666,6 +683,18 @@
           acceptedAt: serverTimestamp(),
           updatedAt: serverTimestamp()
         }, { merge:true });
+
+        // ✅ clients/{ownerDocId} (merge)
+        await upsertClient(ownerDocId, conciergerieUid, {
+          status: "ACTIVE",
+          isActive: true,
+          uid: user.uid,
+          email: userEmail,
+          emailLower: userEmail,
+          fullname,
+          phone,
+          acceptedAt: serverTimestamp()
+        });
 
         // invites/{token}
         await updateDoc(doc(db, "invites", token), {
@@ -700,7 +729,6 @@
 
       const email = normalizeEmail(emailEl.value);
       const fullname = fullnameEl.value.trim();
-      const phone = phoneEl.value.trim();
       const password = passwordEl.value || "";
       const password2 = password2El.value || "";
 
@@ -719,7 +747,6 @@
 
       try{
         const cred = await createUserWithEmailAndPassword(auth, email, password);
-        // finalize avec le user connecté
         await finalizeIfAuthed(cred.user);
 
       }catch(err){
@@ -789,11 +816,9 @@
       badgeLine.textContent = "Connexion conciergerie requise";
       hideAlert(alertConciergerie);
 
-      // préfill depuis URL
       if(prefillEmail && !genEmail.value) genEmail.value = prefillEmail;
       if(prefillName && !genName.value) genName.value = prefillName;
 
-      // hint logement
       if(homeIdParam){
         try{
           const hs = await getDoc(doc(db,"homes",homeIdParam));
@@ -864,6 +889,20 @@
               updatedAt: serverTimestamp()
             }, { merge:true });
 
+            // ✅ clients/{ownerDocId} (INVITED)
+            await upsertClient(ownerDocId, user.uid, {
+              status: "INVITED",
+              isActive: true,
+              uid: "",
+              email,
+              emailLower: email,
+              fullname: name || "",
+              phone: "",
+              inviteToken: t,
+              invitedBy: user.email || user.uid,
+              createdAt: serverTimestamp()
+            });
+
             // invite doc
             await setDoc(doc(db, "invites", t), {
               token: t,
@@ -877,7 +916,6 @@
               createdAt: serverTimestamp()
             }, { merge:true });
 
-            // homes pending (optionnel)
             await attachInviteToHomeIfProvided(user.uid, t, email);
 
             // URL
@@ -886,7 +924,6 @@
             inviteLink.textContent = url;
             linkBox.classList.remove("hidden");
 
-            // mailto
             const subj = encodeURIComponent("Invitation – Accès propriétaire CleanUp Manager");
             const body = encodeURIComponent(
               `Bonjour${name ? " " + name : ""},\n\n` +
@@ -921,7 +958,6 @@
 
     // ---------- BOOT ----------
     if(token){
-      // owner mode
       ownerCard.classList.remove("hidden");
       conciergerieCard.classList.add("hidden");
 
@@ -934,7 +970,6 @@
 
       await loadInvite();
     }else{
-      // conciergerie mode
       await bootConciergerieMode();
     }
   </script>
