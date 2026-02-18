@@ -1,4 +1,4 @@
-<!-- docs/clients.html (FINAL — owners -> clients sync + homes snapshot, NO invite per line, NO logements per line, JOIN via homes.ownerDocId) -->
+<!-- docs/clients.html (FINAL — owners -> clients sync + homes snapshot, JOIN via homes.ownerDocId, robust clientKey/ownerDocId) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -277,7 +277,6 @@
     <div class="topbar">
       <a class="pill" href="planning.html" id="backPlanningBtn">← Planning</a>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-        <!-- invite supprimé ici : invite uniquement dans logements -->
         <a class="pill" href="logements.html" id="goLogementsBtn">Logements</a>
         <button class="pill" id="logoutBtn" type="button">Déconnexion</button>
       </div>
@@ -307,8 +306,8 @@
         </div>
 
         <div class="tiny" style="margin-top:8px;">
-          Source vérité : <b>owners</b>. Fiche stable de facturation : <b>clients</b>.
-          Cette page synchronise <b>owners → clients</b> + snapshots sur <b>homes</b>.
+          Source vérité : <b>owners</b>. Fiche stable : <b>clients</b>.
+          Sync <b>owners → clients</b> + snapshot sur <b>homes</b>.
           <br>Jointure logements : <b>homes.ownerDocId == owners.docId</b> (pas ownerUid).
         </div>
 
@@ -378,7 +377,6 @@
       writeBatch
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
-    // UI
     const emailLine = document.getElementById("emailLine");
     const logoutBtn = document.getElementById("logoutBtn");
     const refreshBtn = document.getElementById("refreshBtn");
@@ -387,7 +385,6 @@
     const clientsList = document.getElementById("clientsList");
     const searchInput = document.getElementById("searchInput");
 
-    // Modal UI
     const clientModalBackdrop = document.getElementById("clientModalBackdrop");
     const clientModalTitle = document.getElementById("clientModalTitle");
     const clientModalHint = document.getElementById("clientModalHint");
@@ -462,12 +459,10 @@
 
     let currentUser = null;
 
-    // Data in memory
-    let allOwners = [];   // [{id, ...data}]
-    let allHomes = [];    // [{id, ...data}]
-    let clientsByKey = new Map(); // key=ownerDocId, value={id,...data}
+    let allOwners = [];
+    let allHomes = [];
+    let clientsByKey = new Map(); // key = ownerDocId (robuste)
 
-    // Modal state
     let editingOwnerDocId = "";
     let editingOwner = null;
     let editingHomes = [];
@@ -479,7 +474,8 @@
         const snap = await getDocs(qc);
         for(const d of snap.docs){
           const data = d.data() || {};
-          const key = String(data.clientKey || "").trim(); // ownerDocId
+          // ✅ robuste : accepte clientKey OU ownerDocId
+          const key = String(data.clientKey || data.ownerDocId || "").trim();
           if(key) clientsByKey.set(key, { id:d.id, ...data });
         }
       }catch(err){
@@ -488,7 +484,6 @@
     }
 
     async function loadOwners(){
-      allOwners = [];
       const qo = query(collection(db,"owners"), where("conciergerieUid","==", currentUser.uid), limit(2000));
       const snap = await getDocs(qo);
       allOwners = snap.docs.map(d => ({ id:d.id, ...(d.data()||{}) }));
@@ -503,7 +498,6 @@
     }
 
     async function loadHomes(){
-      allHomes = [];
       const qh = query(collection(db,"homes"), where("conciergerieUid","==", currentUser.uid), limit(2000));
       const snap = await getDocs(qh);
       allHomes = snap.docs.map(d => ({ id:d.id, ...(d.data()||{}) }));
@@ -545,7 +539,7 @@
 
         const homesByOwnerDocId = new Map();
         for(const h of allHomes){
-          const ownerDocId = String(h.ownerDocId || "").trim(); // ✅ FIX
+          const ownerDocId = String(h.ownerDocId || "").trim();
           if(!ownerDocId) continue;
           if(!homesByOwnerDocId.has(ownerDocId)) homesByOwnerDocId.set(ownerDocId, []);
           homesByOwnerDocId.get(ownerDocId).push(h);
@@ -560,7 +554,6 @@
           const phone = String(o.phone || "").trim();
           const { address1, address2, zip, city, country } = ownerAddress(o);
 
-          // clients doc id stable
           const clientDocId = "c_owner_" + ownerDocId;
           const exists = clientsByKey.get(ownerDocId);
 
@@ -568,8 +561,12 @@
             const ref = doc(db,"clients", clientDocId);
             batch.set(ref, {
               conciergerieUid: currentUser.uid,
+
+              // ✅ écrire les 2, toujours
               clientKey: ownerDocId,
-              ownerUid: String(o.uid || "").trim(), // auth uid si présent
+              ownerDocId: ownerDocId,
+
+              ownerUid: String(o.uid || "").trim(),
               displayName: fullName || (exists?.displayName || ""),
               email: email || (exists?.email || ""),
               phone: phone || (exists?.phone || ""),
@@ -584,7 +581,6 @@
             }, { merge:true });
           });
 
-          // homes snapshot hydrate if empty
           const homes = homesByOwnerDocId.get(ownerDocId) || [];
           for(const h of homes){
             const hasSnapshot =
@@ -623,9 +619,6 @@
       }
     }
 
-    // =========================
-    // UI list model (owners + clients + homes count)
-    // =========================
     function buildOwnerCards(){
       const byOwnerDocId = new Map();
       for(const o of allOwners){
@@ -633,7 +626,7 @@
       }
 
       for(const h of allHomes){
-        const ownerDocId = String(h.ownerDocId || "").trim(); // ✅ FIX
+        const ownerDocId = String(h.ownerDocId || "").trim();
         if(!ownerDocId) continue;
         if(!byOwnerDocId.has(ownerDocId)) continue;
         byOwnerDocId.get(ownerDocId).homes.push(h);
@@ -779,7 +772,7 @@
 
       editingOwnerDocId = String(ownerDocId||"").trim();
       editingOwner = allOwners.find(o=>o.id===editingOwnerDocId) || null;
-      editingHomes = allHomes.filter(h=>String(h.ownerDocId||"").trim()===editingOwnerDocId); // ✅ FIX
+      editingHomes = allHomes.filter(h=>String(h.ownerDocId||"").trim()===editingOwnerDocId);
 
       const c = clientsByKey.get(editingOwnerDocId) || {};
       const o = editingOwner || {};
@@ -788,7 +781,7 @@
       const email = normalizeEmail(c.email || o.email || "");
       const phone = String(c.phone || o.phone || "").trim();
 
-      const oa = (()=>{
+      const oa = (()=> {
         const addrMap = (o?.address && typeof o.address === "object") ? o.address : {};
         return {
           address1: String(addrMap.street || o.address1 || o.addressLine1 || "").trim(),
@@ -806,9 +799,7 @@
 
       clientModalTitle.textContent = "Modifier client";
       clientModalHint.innerHTML = `Fiche <b>clients</b> (ownerDocId=${esc(editingOwnerDocId)}) • hydrate <b>${editingHomes.length}</b> logement(s)`;
-      linkInfo.textContent =
-        `ownerDocId: ${editingOwnerDocId}` +
-        (o?.uid ? ` • ownerUid(auth): ${o.uid}` : "");
+      linkInfo.textContent = `ownerDocId: ${editingOwnerDocId}` + (o?.uid ? ` • ownerUid(auth): ${o.uid}` : "");
 
       clientModalBackdrop.style.display = "flex";
       clientModalBackdrop.setAttribute("aria-hidden","false");
@@ -847,10 +838,13 @@
       try{
         const clientDocId = "c_owner_" + editingOwnerDocId;
 
-        // 1) Upsert clients
         await setDoc(doc(db,"clients", clientDocId), {
           conciergerieUid: currentUser.uid,
+
+          // ✅ toujours écrire les 2
           clientKey: editingOwnerDocId,
+          ownerDocId: editingOwnerDocId,
+
           displayName,
           email: email || "",
           phone: phone || "",
@@ -860,7 +854,6 @@
           updatedAt: serverTimestamp()
         }, { merge:true });
 
-        // 2) Hydrate homes snapshot (sans toucher ownerUid / ownerDocId / lien)
         const patchHomes = {
           ownerAccountName: displayName,
           ownerFullname: displayName,
@@ -873,7 +866,6 @@
           updatedAt: serverTimestamp()
         };
 
-        // batch homes updates
         const chunk = editingHomes.slice(0);
         for(let i=0; i<chunk.length; i+=450){
           const b = writeBatch(db);
@@ -885,7 +877,6 @@
 
         showMAlert("✅ Client enregistré + logements hydratés.", true);
 
-        // reload minimal
         await loadClientsCollection();
         await loadHomes();
         render();
@@ -916,7 +907,6 @@
       await loadOwners();
       await loadHomes();
 
-      // sync auto
       const syncRes = await syncOwnersToClientsAndHomes();
       if(syncRes?.error){
         showAlert("⚠️ Sync partielle : " + (syncRes.error?.message || "erreur") + "\nLa liste s’affiche quand même.", false);
