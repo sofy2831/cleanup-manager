@@ -1,4 +1,4 @@
-<!-- docs/preuves.html (FINAL+ — ZIP global MENAGE + type forcé + contrôle token/missionTypes + iOS accept + limite 30Mo alignée rules) -->
+<!-- docs/preuves.html (FINAL++ — WhatsApp-like multi-photos (MENAGE global) + limite 20 + MAJ events.proofPhotos ; ZIP fallback inchangé) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -140,6 +140,25 @@
     }
     .sizeHint.bad{ color: var(--bad); }
     .sizeHint.ok{ color: var(--ok); }
+
+    .thumbs{
+      display:grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap:8px;
+      margin-top:10px;
+    }
+    .thumb{
+      border-radius:12px;
+      border:1px solid rgba(0,0,0,0.08);
+      background:#fff;
+      overflow:hidden;
+      aspect-ratio: 1 / 1;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+    }
+    .thumb img{ width:100%; height:100%; object-fit:cover; display:block; }
+    .thumb .ph{ font-size:11px; font-weight:900; color:#666; padding:8px; text-align:center; }
   </style>
 </head>
 
@@ -152,14 +171,41 @@
 
     <div class="wrap">
       <div>
-        <h1>Preuves photos (ZIP)</h1>
+        <h1>Preuves photos (global ménage)</h1>
         <div class="sub" id="subLine">Chargement…</div>
         <div class="alert" id="alertBox"></div>
       </div>
 
+      <!-- ✅ MODE WHATSAPP : multi-photos -->
       <section class="card">
-        <div class="mini" id="ruleHint">
-          Envoie <b>un seul fichier ZIP</b> (10/15 photos). C’est plus fiable que photo par photo.<br>
+        <div class="mini" id="ruleHintPhotos">
+          <b>Le plus simple :</b> sélectionne 5/10/20 photos dans ta galerie et envoie-les d’un coup.<br>
+          Stockage : preuves rattachées à la prestation (mission <b>MENAGE</b>), visibles côté conciergerie.<br>
+          Limite : <b>20 photos</b> (pour éviter les soucis iPhone) • <b>30 Mo par fichier</b>.
+        </div>
+
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:space-between;margin-top:8px;">
+          <input id="photosInput" type="file" accept="image/*" multiple />
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button class="btn ghost" id="clearPhotosBtn" type="button">Vider</button>
+            <button class="btn" id="uploadPhotosBtn" type="button">Envoyer photos</button>
+          </div>
+        </div>
+
+        <div class="sizeHint" id="photosHint" style="display:none;"></div>
+
+        <div class="progressWrap" id="progressWrapPhotos">
+          <div class="mini" id="progressTextPhotos">Upload…</div>
+          <div class="bar"><div id="progressBarPhotos"></div></div>
+        </div>
+
+        <div id="photosPreview" class="thumbs" style="display:none;"></div>
+      </section>
+
+      <!-- ✅ ZIP fallback (inchangé dans la logique, juste en dessous) -->
+      <section class="card">
+        <div class="mini" id="ruleHintZip">
+          <b>Alternative (si besoin) :</b> envoie <b>un seul fichier ZIP</b> (10/15 photos).<br>
           <b>ZIP global</b> enregistré sur la mission <b>MENAGE</b> (pas de sélection).<br>
           Limite : <b>30 Mo</b>.
         </div>
@@ -172,11 +218,11 @@
           </div>
         </div>
 
-        <div class="sizeHint" id="sizeHint" style="display:none;"></div>
+        <div class="sizeHint" id="sizeHintZip" style="display:none;"></div>
 
-        <div class="progressWrap" id="progressWrap">
-          <div class="mini" id="progressText">Upload…</div>
-          <div class="bar"><div id="progressBar"></div></div>
+        <div class="progressWrap" id="progressWrapZip">
+          <div class="mini" id="progressTextZip">Upload…</div>
+          <div class="bar"><div id="progressBarZip"></div></div>
         </div>
 
         <div id="zipInfo" style="margin-top:10px;"></div>
@@ -215,26 +261,39 @@
     const chipLine = document.getElementById("chipLine");
     const backBtn = document.getElementById("backBtn");
 
+    // Photos (WhatsApp-like)
+    const photosInput = document.getElementById("photosInput");
+    const clearPhotosBtn = document.getElementById("clearPhotosBtn");
+    const uploadPhotosBtn = document.getElementById("uploadPhotosBtn");
+    const photosHint = document.getElementById("photosHint");
+    const photosPreview = document.getElementById("photosPreview");
+    const progressWrapPhotos = document.getElementById("progressWrapPhotos");
+    const progressTextPhotos = document.getElementById("progressTextPhotos");
+    const progressBarPhotos = document.getElementById("progressBarPhotos");
+
+    // ZIP fallback
     const zipInput = document.getElementById("zipInput");
     const clearZipBtn = document.getElementById("clearZipBtn");
     const uploadZipBtn = document.getElementById("uploadZipBtn");
-
-    const progressWrap = document.getElementById("progressWrap");
-    const progressText = document.getElementById("progressText");
-    const progressBar = document.getElementById("progressBar");
+    const progressWrapZip = document.getElementById("progressWrapZip");
+    const progressTextZip = document.getElementById("progressTextZip");
+    const progressBarZip = document.getElementById("progressBarZip");
     const zipInfo = document.getElementById("zipInfo");
+    const sizeHintZip = document.getElementById("sizeHintZip");
 
-    const sizeHint = document.getElementById("sizeHint");
-
-    // ✅ ZIP GLOBAL: on force MENAGE, pas d'embrouille
+    // ✅ MENAGE global (comme aujourd’hui)
     const FORCED_MISSION_TYPE = "MENAGE";
+    const missionType = FORCED_MISSION_TYPE;
 
     // ✅ suppression Storage: par défaut on fait une suppression logique (Firestore only)
-    // Mets true si tu décides d'autoriser delete dans Storage rules pour l'agent token.
     const ALLOW_STORAGE_DELETE = false;
 
-    // ✅ ALIGNÉ RULES STORAGE : 30 Mo max
+    // ✅ ALIGNÉ RULES STORAGE : 30 Mo max par fichier
     const MAX_BYTES = 30 * 1024 * 1024;
+
+    // ✅ Limite photos (simple et cohérent avec rules Firestore: proofPhotos <= 20)
+    const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    const MAX_PHOTOS = 20; // on garde 20 partout (simple + compatible rules)
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -266,48 +325,74 @@
       return false;
     }
 
-    function safeZipName(name){
-      const base = (name || "preuves.zip").toString().trim();
-      const clean = base.replace(/[^\w.\-]+/g, "_");
-      return (/\.zip$/i.test(clean)) ? clean : (clean + ".zip");
-    }
-
-    function setProgress(pct, text){
-      progressWrap.style.display = "block";
-      progressBar.style.width = `${Math.max(0, Math.min(100, pct))}%`;
-      progressText.textContent = text || "Upload…";
-    }
-    function hideProgress(){
-      progressWrap.style.display = "none";
-      progressBar.style.width = "0%";
-      progressText.textContent = "";
-    }
-
-    function lockUI(locked){
-      uploadZipBtn.disabled = !!locked;
-      clearZipBtn.disabled = !!locked;
-      zipInput.disabled = !!locked;
-    }
-
     function fmtSize(bytes){
       const b = Number(bytes || 0);
       if(!Number.isFinite(b) || b <= 0) return "0 Mo";
       return (b / (1024*1024)).toFixed(1) + " Mo";
     }
 
-    function showSizeHint(file){
-      if(!file){
-        sizeHint.style.display = "none";
-        sizeHint.textContent = "";
-        sizeHint.classList.remove("bad","ok");
+    function setProgressPhotos(pct, text){
+      progressWrapPhotos.style.display = "block";
+      progressBarPhotos.style.width = `${Math.max(0, Math.min(100, pct))}%`;
+      progressTextPhotos.textContent = text || "Upload…";
+    }
+    function hideProgressPhotos(){
+      progressWrapPhotos.style.display = "none";
+      progressBarPhotos.style.width = "0%";
+      progressTextPhotos.textContent = "";
+    }
+
+    function setProgressZip(pct, text){
+      progressWrapZip.style.display = "block";
+      progressBarZip.style.width = `${Math.max(0, Math.min(100, pct))}%`;
+      progressTextZip.textContent = text || "Upload…";
+    }
+    function hideProgressZip(){
+      progressWrapZip.style.display = "none";
+      progressBarZip.style.width = "0%";
+      progressTextZip.textContent = "";
+    }
+
+    function lockUI(locked){
+      uploadPhotosBtn.disabled = !!locked;
+      clearPhotosBtn.disabled = !!locked;
+      photosInput.disabled = !!locked;
+
+      uploadZipBtn.disabled = !!locked;
+      clearZipBtn.disabled = !!locked;
+      zipInput.disabled = !!locked;
+    }
+
+    function safeZipName(name){
+      const base = (name || "preuves.zip").toString().trim();
+      const clean = base.replace(/[^\w.\-]+/g, "_");
+      return (/\.zip$/i.test(clean)) ? clean : (clean + ".zip");
+    }
+
+    function showPhotosHint(msg, ok){
+      photosHint.style.display = "block";
+      photosHint.classList.toggle("ok", !!ok);
+      photosHint.classList.toggle("bad", !ok);
+      photosHint.textContent = msg;
+    }
+    function hidePhotosHint(){
+      photosHint.style.display = "none";
+      photosHint.textContent = "";
+      photosHint.classList.remove("ok","bad");
+    }
+
+    function renderLocalThumbs(files){
+      const arr = Array.from(files || []).filter(f => (f?.type || "").startsWith("image/"));
+      if(!arr.length){
+        photosPreview.style.display = "none";
+        photosPreview.innerHTML = "";
         return;
       }
-      const s = Number(file.size || 0);
-      const ok = s > 0 && s <= MAX_BYTES;
-      sizeHint.style.display = "block";
-      sizeHint.classList.toggle("ok", ok);
-      sizeHint.classList.toggle("bad", !ok);
-      sizeHint.textContent = `Taille ZIP : ${fmtSize(s)} / limite ${fmtSize(MAX_BYTES)}${ok ? "" : " — trop lourd"}`;
+      photosPreview.style.display = "grid";
+      photosPreview.innerHTML = arr.slice(0, 9).map((f)=>{
+        const url = URL.createObjectURL(f);
+        return `<div class="thumb"><img src="${esc(url)}" alt="photo"></div>`;
+      }).join("") + (arr.length > 9 ? `<div class="thumb"><div class="ph">+${arr.length-9}</div></div>` : "");
     }
 
     function renderZipInfo(proofZip){
@@ -340,9 +425,7 @@
       `;
       zipInfo.appendChild(div);
 
-      div.querySelector("#dlZipBtn")?.addEventListener("click", ()=>{
-        window.open(proofZip.url, "_blank", "noopener");
-      });
+      div.querySelector("#dlZipBtn")?.addEventListener("click", ()=> window.open(proofZip.url, "_blank", "noopener"));
 
       div.querySelector("#delZipBtn")?.addEventListener("click", async ()=>{
         hideAlert();
@@ -354,14 +437,11 @@
           if(ALLOW_STORAGE_DELETE && proofZip.path){
             try{ await deleteObject(sRef(storage, proofZip.path)); }catch(e){ console.warn("deleteObject failed", e); }
           }
-
           await updateDoc(doc(db,"events",prestationId,"missions",missionType),{
             proofZip: null,
             updatedAt: serverTimestamp()
           });
-
           showAlert(ALLOW_STORAGE_DELETE ? "✅ ZIP supprimé." : "✅ ZIP supprimé dans l’app (archive Storage conservée).", true);
-
           const d = await getDoc(doc(db,"events",prestationId,"missions",missionType));
           renderZipInfo(d.exists() ? (d.data()?.proofZip || null) : null);
         }catch(err){
@@ -376,14 +456,46 @@
     const token = qs("token");
     const prestationId = qs("prestationId");
 
-    const missionType = FORCED_MISSION_TYPE;
+    // tokenDoc cache
+    let tokenDocCache = null;
+
+    async function preflight(){
+      if(!token || !prestationId) throw new Error("Paramètres manquants (token / prestationId).");
+
+      const tSnap = await getDoc(doc(db,"dayTokens",token));
+      if(!tSnap.exists()) throw new Error("Token invalide.");
+      const tokenDoc = tSnap.data() || {};
+
+      if(String(tokenDoc.prestationId) !== String(prestationId)) throw new Error("Token ≠ prestation.");
+      if(!tokenValid(tokenDoc)) throw new Error("Token expiré. Demande un nouveau lien.");
+
+      const allowedTypes = (Array.isArray(tokenDoc.missionTypes) && tokenDoc.missionTypes.length)
+        ? tokenDoc.missionTypes.map(x => String(x||"").toUpperCase())
+        : ["MENAGE"];
+
+      if(!allowedTypes.includes(missionType)) throw new Error("Ce token n’autorise pas l’upload preuves sur MENAGE. Regénère le lien.");
+
+      const mRef = doc(db,"events",prestationId,"missions",missionType);
+      const mSnap = await getDoc(mRef);
+      if(!mSnap.exists()) throw new Error(`Mission "${missionType}" non initialisée. Regénère le lien.`);
+
+      const m = mSnap.data() || {};
+      if(String(m.dayToken || "") !== String(token)) throw new Error("Token non associé à cette mission (MENAGE).");
+
+      tokenDocCache = tokenDoc;
+      return { tokenDoc, missionDoc: m };
+    }
 
     async function load(){
       hideAlert();
       subLine.textContent = "Chargement…";
-      hideProgress();
+
+      hideProgressPhotos();
+      hideProgressZip();
+      hidePhotosHint();
+      photosPreview.style.display = "none";
+      photosPreview.innerHTML = "";
       zipInfo.innerHTML = "";
-      showSizeHint(null);
 
       if(!token || !prestationId){
         subLine.textContent = "";
@@ -394,62 +506,158 @@
       chipLine.textContent = "token: " + token;
       backBtn.href = `agent.html?token=${encodeURIComponent(token)}&prestationId=${encodeURIComponent(prestationId)}`;
 
-      const tSnap = await getDoc(doc(db,"dayTokens",token));
-      if(!tSnap.exists()){
+      try{
+        const { missionDoc } = await preflight();
+        renderZipInfo(missionDoc.proofZip || null);
         subLine.textContent = "";
-        showAlert("⛔ Token invalide.");
-        return;
+      }catch(e){
+        subLine.textContent = "";
+        showAlert("⛔ " + (e?.message || String(e)));
       }
-      const tokenDoc = tSnap.data() || {};
+    }
 
-      if(String(tokenDoc.prestationId) !== String(prestationId)){
-        subLine.textContent = "";
-        showAlert("⛔ Token ≠ prestation.");
-        return;
-      }
-      if(!tokenValid(tokenDoc)){
-        subLine.textContent = "";
-        showAlert("⛔ Token expiré. Demande un nouveau lien.");
-        return;
-      }
+    // ----------------------------
+    // Photos upload (WhatsApp-like)
+    // ----------------------------
+    clearPhotosBtn.addEventListener("click", ()=>{
+      photosInput.value = "";
+      hidePhotosHint();
+      photosPreview.style.display = "none";
+      photosPreview.innerHTML = "";
+    });
 
-      const allowedTypes = (Array.isArray(tokenDoc.missionTypes) && tokenDoc.missionTypes.length)
-        ? tokenDoc.missionTypes.map(x => String(x||"").toUpperCase())
-        : ["MENAGE"];
+    photosInput.addEventListener("change", ()=>{
+      hideAlert();
+      const files = Array.from(photosInput.files || []).filter(f => (f?.type || "").startsWith("image/"));
+      renderLocalThumbs(files);
 
-      if(!allowedTypes.includes(missionType)){
-        subLine.textContent = "";
-        showAlert("⛔ Ce token n’autorise pas l’upload preuves sur MENAGE.\nRegénère le lien.");
-        return;
-      }
-
-      const mRef = doc(db,"events",prestationId,"missions",missionType);
-      const mSnap = await getDoc(mRef);
-      if(!mSnap.exists()){
-        subLine.textContent = "";
-        showAlert(`⛔ Mission "${missionType}" non initialisée. Regénère le lien.`);
-        return;
-      }
-      const m = mSnap.data() || {};
-
-      if(String(m.dayToken || "") !== String(token)){
-        subLine.textContent = "";
-        showAlert("⛔ Token non associé à cette mission (MENAGE).");
+      if(!files.length){
+        hidePhotosHint();
         return;
       }
 
-      renderZipInfo(m.proofZip || null);
-      subLine.textContent = "";
+      // limite 20 (rules Firestore proofPhotos <= 20)
+      if(files.length > MAX_PHOTOS){
+        showPhotosHint(`⚠️ Trop de photos : ${files.length}. Limite ${MAX_PHOTOS}.`, false);
+        photosInput.value = "";
+        photosPreview.style.display = "none";
+        photosPreview.innerHTML = "";
+        return;
+      }
+
+      // taille max par fichier
+      const tooBig = files.find(f => Number(f.size || 0) > MAX_BYTES);
+      if(tooBig){
+        showPhotosHint(`⚠️ Une photo est trop lourde (${fmtSize(tooBig.size)}). Limite : ${fmtSize(MAX_BYTES)}.`, false);
+        return;
+      }
+
+      showPhotosHint(`✅ ${files.length} photo(s) sélectionnée(s).`, true);
+
+      if(IS_IOS && files.length >= 16){
+        showPhotosHint(`✅ ${files.length} photo(s) sélectionnée(s).\nNote iPhone : évite > 20, tu es au max.`, true);
+      }
+    });
+
+    uploadPhotosBtn.addEventListener("click", async ()=>{
+      hideAlert();
+      hideProgressPhotos();
+
+      const files = Array.from(photosInput.files || []).filter(f => (f?.type || "").startsWith("image/"));
+      if(!files.length) return showAlert("Choisis des photos (max 20).");
+
+      if(files.length > MAX_PHOTOS){
+        return showAlert(`Trop de photos : ${files.length}. Limite ${MAX_PHOTOS}.`);
+      }
+
+      const tooBig = files.find(f => Number(f.size || 0) > MAX_BYTES);
+      if(tooBig){
+        return showAlert(`Une photo est trop lourde (${fmtSize(tooBig.size)}). Limite : ${fmtSize(MAX_BYTES)}.`);
+      }
+
+      lockUI(true);
+      try{
+        await preflight();
+
+        const urls = [];
+        const total = files.length;
+
+        // Upload séquentiel (simple + stable mobile)
+        for(let i=0;i<files.length;i++){
+          const file = files[i];
+          const ext = (file.name || "").split(".").pop() || "jpg";
+          const safeExt = ext.replace(/[^\w]+/g,"").slice(0,6) || "jpg";
+          const fname = `${Date.now()}_${i+1}_${Math.random().toString(16).slice(2)}.${safeExt}`;
+          const path = `proofPhotos/${prestationId}/${missionType}/${token}/${fname}`;
+          const r = sRef(storage, path);
+
+          setProgressPhotos(Math.round((i/total)*100), `Upload photo ${i+1}/${total}…`);
+
+          const task = uploadBytesResumable(r, file, { contentType: file.type || "image/jpeg" });
+
+          await new Promise((resolve, reject)=>{
+            task.on("state_changed",(snap)=>{
+              // progression globale = (i + progression de la photo) / total
+              const frac = snap.totalBytes ? (snap.bytesTransferred / snap.totalBytes) : 0;
+              const global = ((i + frac) / total) * 100;
+              setProgressPhotos(Math.max(1, Math.round(global)), `Upload photo ${i+1}/${total}…`);
+            }, reject, resolve);
+          });
+
+          const url = await getDownloadURL(task.snapshot.ref);
+          urls.push(url);
+        }
+
+        setProgressPhotos(100, "Finalisation…");
+
+        // MAJ Event (token-only autorisé par tes rules)
+        const preview = urls.slice(0,3);
+        await updateDoc(doc(db,"events",prestationId),{
+          proofToken: token,
+          proofPhotos: urls,            // <= 20
+          proofPhotosPreview: preview,  // <= 3
+          updatedAt: serverTimestamp()
+        });
+
+        photosInput.value = "";
+        hideProgressPhotos();
+        showAlert(`✅ ${urls.length} photo(s) envoyée(s).`, true);
+
+      }catch(err){
+        console.error(err);
+        hideProgressPhotos();
+        showAlert("Erreur upload photos : " + (err?.code || err?.message || "inconnue"));
+      }finally{
+        lockUI(false);
+      }
+    });
+
+    // ----------------------------
+    // ZIP fallback (ton code, inchangé)
+    // ----------------------------
+    function showSizeHintZip(file){
+      if(!file){
+        sizeHintZip.style.display = "none";
+        sizeHintZip.textContent = "";
+        sizeHintZip.classList.remove("bad","ok");
+        return;
+      }
+      const s = Number(file.size || 0);
+      const ok = s > 0 && s <= MAX_BYTES;
+      sizeHintZip.style.display = "block";
+      sizeHintZip.classList.toggle("ok", ok);
+      sizeHintZip.classList.toggle("bad", !ok);
+      sizeHintZip.textContent = `Taille ZIP : ${fmtSize(s)} / limite ${fmtSize(MAX_BYTES)}${ok ? "" : " — trop lourd"}`;
     }
 
     clearZipBtn.addEventListener("click", ()=>{
       zipInput.value = "";
-      showSizeHint(null);
+      showSizeHintZip(null);
     });
 
     zipInput.addEventListener("change", ()=>{
       const file = zipInput.files && zipInput.files[0] ? zipInput.files[0] : null;
-      showSizeHint(file);
+      showSizeHintZip(file);
     });
 
     uploadZipBtn.addEventListener("click", async ()=>{
@@ -460,14 +668,16 @@
       const name = safeZipName(file.name);
 
       if(Number(file.size || 0) > MAX_BYTES){
-        showSizeHint(file);
+        showSizeHintZip(file);
         return showAlert(`Fichier trop lourd (${fmtSize(file.size)}). Limite : ${fmtSize(MAX_BYTES)}. Réduis à 10–15 photos.`);
       }
 
       lockUI(true);
-      setProgress(1, "Démarrage upload…");
+      setProgressZip(1, "Démarrage upload…");
 
       try{
+        const { tokenDoc } = await preflight(); // garde tes contrôles identiques
+
         const mRef = doc(db,"events",prestationId,"missions",missionType);
         const mSnap = await getDoc(mRef);
         if(!mSnap.exists()) throw new Error("Mission introuvable.");
@@ -483,29 +693,23 @@
             const total = snap.totalBytes || 0;
             const done = snap.bytesTransferred || 0;
             const pct = total ? Math.round((done/total)*100) : 0;
-            setProgress(Math.max(1,pct), `Upload ${pct}%…`);
+            setProgressZip(Math.max(1,pct), `Upload ${pct}%…`);
           }, reject, resolve);
         });
 
-        setProgress(100, "Récupération lien…");
+        setProgressZip(100, "Récupération lien…");
         const url = await getDownloadURL(task.snapshot.ref);
 
-        // récupérer infos agent depuis dayTokens
-const tSnap = await getDoc(doc(db,"dayTokens",token));
-const t = tSnap.exists() ? tSnap.data() : {};
-
-const proofZip = {
-  url,
-  path,
-  name,
-  sizeBytes: Number(file.size || 0),
-  createdAtMs: Date.now(),
-  token: String(token),
-
-  agentEmail: String(t.agentEmail || ""),
-  agentName: String(t.agentName || "")
-};
-
+        const proofZip = {
+          url,
+          path,
+          name,
+          sizeBytes: Number(file.size || 0),
+          createdAtMs: Date.now(),
+          token: String(token),
+          agentEmail: String(tokenDoc?.agentEmail || ""),
+          agentName: String(tokenDoc?.agentName || "")
+        };
 
         await updateDoc(doc(db,"events",prestationId,"missions",missionType),{
           proofZip,
@@ -513,8 +717,8 @@ const proofZip = {
         });
 
         zipInput.value = "";
-        showSizeHint(null);
-        hideProgress();
+        showSizeHintZip(null);
+        hideProgressZip();
         showAlert("✅ ZIP uploadé.", true);
 
         const m2 = await getDoc(doc(db,"events",prestationId,"missions",missionType));
@@ -522,7 +726,7 @@ const proofZip = {
 
       }catch(err){
         console.error(err);
-        hideProgress();
+        hideProgressZip();
         showAlert("Erreur upload ZIP : " + (err?.code || err?.message || "inconnue"));
       }finally{
         lockUI(false);
@@ -536,4 +740,3 @@ const proofZip = {
   </script>
 </body>
 </html>
-
