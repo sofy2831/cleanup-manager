@@ -1,547 +1,797 @@
-<!-- docs/messagerie.html (FINAL — conciergerie, Firebase Auth only, attachments support) -->
+<!-- docs/messagerie.html (FINAL — UI alignée sur conciergerie.html + threads/messages Firestore + Auth only) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>CleanUp Manager – Messagerie</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CleanUp Manager – Messagerie</title>
 
-<style>
-/* (CSS inchangé chez toi) */
-:root{
-  --violet-light:#F3ECFF;
-  --violet-main:#7A5CFF;
-  --violet-dark:#6238FF;
-  --text-dark:#111;
-  --grey:#666;
-  --green:#1E7A3A;
-  --orange:#B37400;
-  --red:#A61E4D;
-  --bad:#b3261e;
-  --ok:#1b8f4d;
-}
-body{
-  margin:0;
-  font-family:Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-  background:linear-gradient(180deg,#F8F4FF 0%,#EDE6FF 80%);
-  color:var(--text-dark);
-}
-/* ... garde tout ton CSS identique ensuite ... */
-</style>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+
+  <style>
+    *{ box-sizing:border-box; font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; }
+    :root{
+      --violet-light:#F3ECFF;
+      --violet-main:#7A5CFF;
+      --violet-dark:#6238FF;
+      --text:#111;
+      --muted:#666;
+      --border: rgba(122,92,255,0.18);
+      --shadow: 0 14px 36px rgba(0,0,0,0.08);
+      --bad:#b3261e;
+      --ok:#1b8f4d;
+    }
+    body{
+      margin:0;
+      background: linear-gradient(180deg,#F8F4FF 0%,#EDE6FF 80%);
+      color:var(--text);
+    }
+
+    .page{
+      min-height:100vh;
+      display:flex;
+      flex-direction:column;
+      align-items:center;
+      padding:16px 16px 32px;
+      padding-bottom: 96px;
+    }
+
+    .topbar{
+      width:100%;
+      max-width:980px;
+      position:sticky;
+      top:0;
+      z-index:10;
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      gap:10px;
+      padding:10px 0;
+      background:rgba(248,244,255,.85);
+      backdrop-filter:blur(6px);
+    }
+    .pill{
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      padding:8px 12px;
+      border-radius:999px;
+      background:#fff;
+      border:2px solid var(--violet-main);
+      color:var(--violet-main);
+      text-decoration:none;
+      font-weight:900;
+      font-size:13px;
+      white-space:nowrap;
+      cursor:pointer;
+      box-shadow:0 3px 10px rgba(0,0,0,.06);
+    }
+
+    .logo-title{
+      display:flex;
+      justify-content:center;
+      align-items:center;
+      gap:10px;
+      margin-top:10px;
+      margin-bottom:6px;
+      text-align:center;
+    }
+    .logo-icon{
+      width:44px;height:44px;border-radius:50%;
+      background:#fff;
+      border:2px solid var(--violet-main);
+      display:flex;align-items:center;justify-content:center;
+      color:var(--violet-main);
+      font-size:22px;font-weight:900;
+      position:relative;
+      flex-shrink:0;
+    }
+    .logo-icon::after{
+      content:"✦";
+      position:absolute;
+      top:-6px; right:-5px;
+      font-size:12px;
+      color:var(--violet-main);
+    }
+    h1{ margin:0; font-size:26px; font-weight:900; letter-spacing:-0.2px; }
+    .subtitle{ margin-top:2px; font-size:14px; color:#444; text-align:center; }
+    .badgeLine{
+      margin-top:8px;
+      font-size:11px;
+      font-weight:1000;
+      padding:6px 10px;
+      border-radius:999px;
+      border:1px solid rgba(122,92,255,0.25);
+      background:#fff;
+      color:#333;
+      display:inline-flex;
+      gap:6px;
+      align-items:center;
+    }
+
+    .alert{
+      width:100%;
+      max-width:980px;
+      display:none;
+      margin-top:12px;
+      padding:10px 12px;
+      background:#fff;
+      border-radius:14px;
+      border-left:5px solid var(--bad);
+      box-shadow:0 3px 10px rgba(0,0,0,.06);
+      font-size:12px;
+      color:#444;
+      white-space:pre-wrap;
+      font-weight:900;
+    }
+    .alert.ok{ border-left-color: var(--ok); }
+
+    /* layout messagerie */
+    .layout{
+      width:100%;
+      max-width:980px;
+      margin-top:14px;
+      display:grid;
+      grid-template-columns: 360px 1fr;
+      gap:12px;
+      align-items:stretch;
+    }
+    @media(max-width:920px){
+      .layout{ grid-template-columns: 1fr; }
+    }
+
+    .panel{
+      background: rgba(255,255,255,0.86);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(10px);
+      padding: 12px;
+      min-width:0;
+    }
+
+    .searchbar{
+      display:flex;
+      gap:10px;
+      align-items:center;
+      padding:10px 12px;
+      border-radius:14px;
+      background:#fff;
+      border:1px solid rgba(122,92,255,0.18);
+      box-shadow:0 3px 10px rgba(0,0,0,.06);
+      min-width:0;
+    }
+    .searchbar input{
+      flex:1;
+      border:none;
+      outline:none;
+      font-size:13px;
+      font-weight:900;
+      background:transparent;
+      min-width:0;
+    }
+    .btn{
+      display:inline-flex;
+      justify-content:center;
+      align-items:center;
+      gap:8px;
+      padding:10px 12px;
+      border-radius:999px;
+      border:none;
+      cursor:pointer;
+      font-weight:900;
+      font-size:12px;
+      background:#fff;
+      color:var(--violet-main);
+      border:1px solid rgba(122,92,255,0.35);
+      box-shadow:0 8px 18px rgba(0,0,0,0.06);
+      white-space:nowrap;
+      user-select:none;
+      text-decoration:none;
+    }
+    .btn.primary{
+      background:linear-gradient(90deg,var(--violet-main),var(--violet-dark));
+      color:#fff;
+      border-color:transparent;
+      box-shadow:0 12px 24px rgba(0,0,0,0.10);
+    }
+    .btn[aria-disabled="true"]{ opacity:.45; pointer-events:none; }
+
+    .thread-list{ margin-top:10px; display:flex; flex-direction:column; gap:10px; }
+    .thread{
+      background:#fff;
+      border:1px solid rgba(122,92,255,0.18);
+      border-radius:14px;
+      padding:10px 10px;
+      cursor:pointer;
+      box-shadow:0 3px 10px rgba(0,0,0,.05);
+      display:flex;
+      justify-content:space-between;
+      gap:10px;
+      align-items:flex-start;
+    }
+    .thread.active{ border-color: rgba(122,92,255,0.55); box-shadow:0 10px 24px rgba(0,0,0,.08); }
+    .thread .left{ min-width:0; }
+    .thread .title{ font-weight:1000; font-size:12px; color:#111; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .thread .sub{ margin-top:3px; font-weight:900; font-size:11px; color:#666; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .thread .right{ text-align:right; flex-shrink:0; font-size:11px; color:#666; font-weight:900; display:flex; flex-direction:column; gap:6px; align-items:flex-end; }
+    .pill-unread{
+      padding:4px 8px;
+      border-radius:999px;
+      font-size:11px;
+      font-weight:1000;
+      background:rgba(122,92,255,0.10);
+      border:1px solid rgba(122,92,255,0.25);
+      color:var(--violet-main);
+    }
+
+    .chat-head{
+      display:flex;
+      justify-content:space-between;
+      align-items:flex-start;
+      gap:10px;
+      padding-bottom:10px;
+      border-bottom:1px solid rgba(122,92,255,0.14);
+    }
+    .chat-title{ font-size:14px; font-weight:1000; }
+    .chat-meta{ margin-top:3px; font-size:12px; color:#666; font-weight:900; }
+    .chat-actions{ display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
+
+    .banner{
+      margin-top:10px;
+      padding:10px 12px;
+      border-radius:14px;
+      background:rgba(179,38,30,0.06);
+      border:1px solid rgba(179,38,30,0.18);
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      gap:10px;
+    }
+    .banner small{ display:block; margin-top:2px; color:#666; font-weight:900; font-size:11px; }
+    .banner a{ text-decoration:none; font-weight:1000; color:var(--violet-main); }
+
+    .msgs{
+      margin-top:10px;
+      height: 52vh;
+      min-height: 320px;
+      overflow:auto;
+      display:flex;
+      flex-direction:column;
+      gap:10px;
+      padding:4px 2px;
+    }
+
+    .msg{
+      max-width:92%;
+      padding:10px 12px;
+      border-radius:16px;
+      background:#fff;
+      border:1px solid rgba(0,0,0,0.05);
+      box-shadow:0 3px 10px rgba(0,0,0,.06);
+    }
+    .msg.me{ margin-left:auto; border-color: rgba(122,92,255,0.22); }
+    .msg .meta{ font-size:11px; color:#666; font-weight:900; margin-top:6px; display:flex; gap:8px; align-items:center; }
+    .msg .meta span{ white-space:nowrap; }
+    .msg .txt{ font-size:13px; font-weight:850; white-space:pre-wrap; }
+
+    .composer{
+      margin-top:10px;
+      display:flex;
+      gap:8px;
+      align-items:flex-end;
+    }
+    textarea{
+      flex:1;
+      width:100%;
+      padding:10px 12px;
+      border-radius:14px;
+      border:1px solid #D3C7FF;
+      font-size:14px;
+      outline:none;
+      background:#fff;
+      font-weight:800;
+      resize:vertical;
+      min-height:44px;
+      max-height:160px;
+    }
+    textarea:focus{ border-color:var(--violet-main); box-shadow:0 0 0 2px rgba(122,92,255,.15); }
+
+    .small-note{ margin-top:8px; font-size:12px; color:#666; font-weight:850; }
+
+    /* Bottom nav identique dashboard */
+    .bottom-nav{
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 50;
+      display: flex;
+      gap: 6px;
+      justify-content: space-around;
+      align-items: center;
+      padding: 10px 10px calc(10px + env(safe-area-inset-bottom));
+      background: rgba(255,255,255,0.92);
+      border-top: 1px solid rgba(122,92,255,0.18);
+      backdrop-filter: blur(10px);
+    }
+    .bottom-nav a{
+      flex: 1;
+      text-align: center;
+      text-decoration: none;
+      font-size: 11px;
+      font-weight: 900;
+      color: #666;
+      padding: 10px 8px;
+      border-radius: 999px;
+      white-space: nowrap;
+    }
+    .bottom-nav a.active{
+      background: linear-gradient(90deg,var(--violet-main),var(--violet-dark));
+      color:#fff;
+      box-shadow: 0 10px 22px rgba(0,0,0,0.10);
+    }
+
+    @media(min-width: 860px){
+      .bottom-nav{
+        position: static;
+        width: 100%;
+        max-width: 980px;
+        margin: 14px 0 0;
+        border-top: none;
+        border: 1px solid rgba(122,92,255,0.18);
+        border-radius: 999px;
+        box-shadow:0 4px 12px rgba(0,0,0,.08);
+        padding: 12px 12px;
+        gap: 10px;
+      }
+      .bottom-nav a{ font-size: 13px; padding: 12px 12px; }
+      .page{ padding-bottom: 32px; }
+      .msgs{ height: 56vh; }
+    }
+  </style>
 </head>
 
 <body>
-
-<div class="page">
-  <div class="topbar">
-    <a class="pill-link" href="conciergerie.html">← Tableau de bord</a>
-    <div style="display:flex; gap:8px; align-items:center;">
-      <a class="pill-link" href="import-ical.html">Import iCal</a>
-      <button class="pill-link" type="button" id="logoutBtn">Déconnexion</button>
-    </div>
-  </div>
-
-  <div class="logo-title">
-    <div class="logo-icon">✓</div>
-    <h1>CleanUp Manager</h1>
-  </div>
-  <div class="subtitle">Messagerie propriétaires ↔ conciergerie</div>
-  <div class="badge" id="badgeLine">Firestore • threads + messages</div>
-
-  <div class="alert" id="alertBox"></div>
-
-  <div class="top-nav">
-    <a href="planning.html">Planning</a>
-    <a href="logements.html">Logements</a>
-    <a href="prestations.html">Prestations</a>
-    <a class="active" href="messagerie.html">Messagerie</a>
-    <a href="paiements.html">Paiements</a>
-    <a href="historique.html">Historique</a>
-    <a href="import-ical.html">Import</a>
-  </div>
-
-  <div class="layout">
-    <div class="panel threads">
-      <div class="searchbar">
-        <input id="threadSearch" type="text" placeholder="Recherche (proprio, logement, mot-clé…)">
-        <button type="button" id="newThreadBtn">Nouveau</button>
-      </div>
-
-      <div class="thread-list" id="threadList"></div>
-      <div class="small-note">Firestore temps réel.</div>
-    </div>
-
-    <div class="panel chat">
-      <div class="chat-head">
-        <div>
-          <div class="chat-title" id="chatTitle">Sélectionne une conversation</div>
-          <div class="chat-meta" id="chatMeta">—</div>
-        </div>
-        <div class="chat-actions">
-          <button class="action" type="button" id="goHomeBtn">Logement</button>
-          <button class="action" type="button" id="goPaymentsBtn">Paiements</button>
-          <button class="action primary" type="button" id="createPrestaBtn">Créer prestation</button>
-        </div>
-      </div>
-
-      <div id="bannerZone"></div>
-
-      <div class="msgs" id="msgs">
-        <div class="small-note">Clique une conversation à gauche.</div>
-      </div>
-
-      <div class="composer">
-        <textarea id="composerText" placeholder="Écrire un message…"></textarea>
-        <button class="send" type="button" id="sendBtn">Envoyer</button>
+  <div class="page">
+    <div class="topbar">
+      <a class="pill" href="conciergerie.html">← Tableau de bord</a>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <a class="pill" href="import-ical.html">Import iCal</a>
+        <button class="pill" id="logoutBtn" type="button">Déconnexion</button>
       </div>
     </div>
-  </div>
-</div>
 
-<script type="module">
-  import { auth, db, storage } from "./firebase-init.js";
-  import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-  import {
-    collection, doc, addDoc, updateDoc, getDocs, getDoc, setDoc,
-    query, where, onSnapshot, serverTimestamp, increment, limit
-  } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
-  import { ref as sRef, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js";
+    <div class="logo-title">
+      <div class="logo-icon">✓</div>
+      <h1>CleanUp Manager</h1>
+    </div>
+    <div class="subtitle">Messagerie propriétaires ↔ conciergerie</div>
+    <div class="badgeLine" id="badgeLine">Firestore • threads + messages</div>
 
-  const badgeLine = document.getElementById("badgeLine");
-  const alertBox = document.getElementById("alertBox");
-  const logoutBtn = document.getElementById("logoutBtn");
+    <div class="alert" id="alertBox"></div>
 
-  function showAlert(msg, ok=false){
-    alertBox.style.display = "block";
-    alertBox.classList.toggle("ok", !!ok);
-    alertBox.textContent = msg;
-  }
-  function hideAlert(){
-    alertBox.style.display = "none";
-    alertBox.classList.remove("ok");
-    alertBox.textContent = "";
-  }
-
-  const threadListEl = document.getElementById("threadList");
-  const threadSearchEl = document.getElementById("threadSearch");
-  const chatTitleEl = document.getElementById("chatTitle");
-  const chatMetaEl = document.getElementById("chatMeta");
-  const msgsEl = document.getElementById("msgs");
-  const bannerZoneEl = document.getElementById("bannerZone");
-  const composerEl = document.getElementById("composerText");
-
-  const newThreadBtn = document.getElementById("newThreadBtn");
-  const sendBtn = document.getElementById("sendBtn");
-  const createPrestaBtn = document.getElementById("createPrestaBtn");
-  const goPaymentsBtn = document.getElementById("goPaymentsBtn");
-  const goHomeBtn = document.getElementById("goHomeBtn");
-
-  let currentUser = null;
-  let allThreads = [];
-  let activeThreadId = null;
-  let unsubThreads = null;
-  let unsubMessages = null;
-
-  function esc(str){
-    return String(str ?? "")
-      .replaceAll("&","&amp;")
-      .replaceAll("<","&lt;")
-      .replaceAll(">","&gt;")
-      .replaceAll('"',"&quot;")
-      .replaceAll("'","&#039;");
-  }
-  function truncate(str, n){
-    const s = String(str ?? "");
-    return (s.length > n) ? s.slice(0, n-1) + "…" : s;
-  }
-  function fmtTime(ts){
-    try{
-      const d = ts?.toDate ? ts.toDate() : new Date(ts || Date.now());
-      return d.toLocaleString("fr-FR", { day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit" });
-    }catch(e){ return "—"; }
-  }
-
-  // ===== AUTH / ROLE GUARD (Firebase only) =====
-  async function guardConciergerie(user){
-    try{
-      const snap = await getDoc(doc(db, "users", user.uid));
-      if(!snap.exists()) return false;
-      const data = snap.data() || {};
-      const roleOk = (data.role === "conciergerie" || data.role === "admin");
-      const subOk  = (data.subscriptionStatus === "active");
-      return roleOk && subOk;
-    }catch(e){
-      return false;
-    }
-  }
-
-  logoutBtn.onclick = async ()=>{
-    await signOut(auth);
-    try{ localStorage.removeItem("cm_auth"); }catch(_){}
-    location.href = "index.html";
-  };
-
-  function renderThreads(){
-    const q = (threadSearchEl.value || "").toLowerCase().trim();
-    threadListEl.innerHTML = "";
-
-    const threads = allThreads.slice().sort((a,b)=>{
-      const ta = a.lastAt?.seconds ?? 0;
-      const tb = b.lastAt?.seconds ?? 0;
-      return tb - ta;
-    });
-
-    const filtered = !q ? threads : threads.filter(t => {
-      const hay = `${t.ownerName||""} ${t.ownerEmailLower||""} ${t.homeLabel||""} ${t.lastText||""}`.toLowerCase();
-      return hay.includes(q);
-    });
-
-    if(!filtered.length){
-      const empty = document.createElement("div");
-      empty.className = "small-note";
-      empty.textContent = "Aucune conversation.";
-      threadListEl.appendChild(empty);
-      return;
-    }
-
-    filtered.forEach(t => {
-      const div = document.createElement("div");
-      div.className = "thread" + (t.id === activeThreadId ? " active" : "");
-      div.onclick = () => openThread(t.id);
-
-      const titleLeft = `${t.ownerName || "Propriétaire"} • ${t.homeLabel || "Logement"}`;
-      const unread = Number(t.unreadForConciergerie || 0);
-
-      div.innerHTML = `
-        <div class="thread-top">
-          <div>
-            <div class="thread-title">${esc(titleLeft)}</div>
-            <div class="thread-sub">${esc(truncate(t.lastText || "", 56))}</div>
-          </div>
-          <div class="thread-right">
-            <div>${fmtTime(t.lastAt)}</div>
-            ${unread ? `<div class="pill-unread">${unread}</div>` : ``}
-          </div>
+    <div class="layout">
+      <!-- Threads -->
+      <div class="panel">
+        <div class="searchbar">
+          <input id="threadSearch" type="text" placeholder="Recherche (proprio, logement, mot-clé…)" />
+          <button class="btn" type="button" id="newThreadBtn">Nouveau</button>
         </div>
-      `;
-      threadListEl.appendChild(div);
-    });
-  }
-
-  function renderBanner(t){
-    bannerZoneEl.innerHTML = "";
-    if(!t?.flags?.paymentDue) return;
-
-    const b = document.createElement("div");
-    b.className = "banner";
-    b.innerHTML = `
-      <div>
-        <strong>Paiement requis avant intervention</strong>
-        <small>Ce fil est marqué “paiement dû”. Tu peux lever le blocage dans Paiements.</small>
+        <div class="thread-list" id="threadList"></div>
+        <div class="small-note">Temps réel. Clique une conversation.</div>
       </div>
-      <a href="paiements.html">Voir paiements</a>
-    `;
-    bannerZoneEl.appendChild(b);
-  }
 
-  function stopMessages(){
-    if(unsubMessages) unsubMessages();
-    unsubMessages = null;
-  }
-
-  function isMeMessage(m){
-    if(String(m?.senderUid||"") === String(currentUser?.uid||"")) return true;
-    return String(m?.senderRole||"").toUpperCase() === "CONCIERGERIE";
-  }
-
-  async function openAttachment(att){
-    const path = String(att?.storagePath || "").trim();
-    if(!path) return showAlert("Pièce jointe : storagePath manquant.");
-    try{
-      const url = await getDownloadURL(sRef(storage, path));
-      window.open(url, "_blank");
-    }catch(e){
-      showAlert("Téléchargement impossible : " + (e?.message || "erreur"));
-    }
-  }
-
-  function renderAttachments(atts){
-    if(!Array.isArray(atts) || !atts.length) return "";
-    const items = atts.map((a,i)=>{
-      const label = esc(a?.label || "Pièce jointe");
-      const kind  = esc(a?.kind || "FILE");
-      const ct    = esc(a?.contentType || "");
-      return `
-        <div class="att">
-          <div class="l">
-            <b>${label}</b>
-            <span>${kind}${ct ? " • " + ct : ""}</span>
+      <!-- Chat -->
+      <div class="panel">
+        <div class="chat-head">
+          <div style="min-width:0;">
+            <div class="chat-title" id="chatTitle">Sélectionne une conversation</div>
+            <div class="chat-meta" id="chatMeta">—</div>
           </div>
-          <button class="btnMini" type="button" data-att="${i}">Ouvrir</button>
+          <div class="chat-actions">
+            <button class="btn" type="button" id="goHomeBtn">Logement</button>
+            <button class="btn" type="button" id="goPaymentsBtn">Paiements</button>
+            <button class="btn primary" type="button" id="createPrestaBtn">Créer prestation</button>
+          </div>
         </div>
-      `;
-    }).join("");
-    return `<div class="attBox">${items}</div>`;
-  }
 
-  function listenMessages(threadId){
-    stopMessages();
-    msgsEl.innerHTML = `<div class="small-note">Chargement…</div>`;
+        <div id="bannerZone"></div>
 
-    const col = collection(db, "threads", threadId, "messages");
+        <div class="msgs" id="msgs">
+          <div class="small-note">Clique une conversation à gauche.</div>
+        </div>
 
-    unsubMessages = onSnapshot(col, (snap)=>{
-      const msgs = snap.docs.map(d => ({ id:d.id, ...d.data() }));
-      msgs.sort((a,b)=>{
-        const ta = a.at?.seconds ?? a.createdAt?.seconds ?? 0;
-        const tb = b.at?.seconds ?? b.createdAt?.seconds ?? 0;
-        return ta - tb;
+        <div class="composer">
+          <textarea id="composerText" placeholder="Écrire un message…"></textarea>
+          <button class="btn primary" type="button" id="sendBtn">Envoyer</button>
+        </div>
+      </div>
+    </div>
+
+    <nav class="bottom-nav" aria-label="Navigation">
+      <a href="planning.html">Planning</a>
+      <a href="prestations.html">Production</a>
+      <a href="logements.html">Logements</a>
+      <a href="import-ical.html">iCal</a>
+      <a class="active" href="messagerie.html">Messages</a>
+    </nav>
+  </div>
+
+  <script type="module">
+    import { auth, db } from "./firebase-init.js";
+    import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+    import {
+      collection, doc, addDoc, updateDoc, getDocs,
+      query, where, onSnapshot,
+      serverTimestamp, increment, limit
+    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+
+    const badgeLine = document.getElementById("badgeLine");
+    const alertBox = document.getElementById("alertBox");
+    const logoutBtn = document.getElementById("logoutBtn");
+
+    function showAlert(msg, ok=false){
+      alertBox.style.display = "block";
+      alertBox.classList.toggle("ok", !!ok);
+      alertBox.textContent = msg;
+    }
+    function hideAlert(){
+      alertBox.style.display = "none";
+      alertBox.classList.remove("ok");
+      alertBox.textContent = "";
+    }
+
+    logoutBtn.onclick = async ()=>{
+      await signOut(auth);
+      localStorage.removeItem("cm_auth"); // si traîne encore, on nettoie
+      location.href = "index.html";
+    };
+
+    const threadListEl = document.getElementById("threadList");
+    const threadSearchEl = document.getElementById("threadSearch");
+    const chatTitleEl = document.getElementById("chatTitle");
+    const chatMetaEl = document.getElementById("chatMeta");
+    const msgsEl = document.getElementById("msgs");
+    const bannerZoneEl = document.getElementById("bannerZone");
+    const composerEl = document.getElementById("composerText");
+
+    const newThreadBtn = document.getElementById("newThreadBtn");
+    const sendBtn = document.getElementById("sendBtn");
+    const createPrestaBtn = document.getElementById("createPrestaBtn");
+    const goPaymentsBtn = document.getElementById("goPaymentsBtn");
+    const goHomeBtn = document.getElementById("goHomeBtn");
+
+    let currentUser = null;
+    let allThreads = [];
+    let activeThreadId = null;
+    let unsubThreads = null;
+    let unsubMessages = null;
+
+    function esc(str){
+      return String(str ?? "")
+        .replaceAll("&","&amp;")
+        .replaceAll("<","&lt;")
+        .replaceAll(">","&gt;")
+        .replaceAll('"',"&quot;")
+        .replaceAll("'","&#039;");
+    }
+    function truncate(str, n){
+      const s = String(str ?? "");
+      return (s.length > n) ? s.slice(0, n-1) + "…" : s;
+    }
+    function fmtTime(ts){
+      try{
+        const d = ts?.toDate ? ts.toDate() : new Date(ts || Date.now());
+        return d.toLocaleString("fr-FR", { day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit" });
+      }catch(e){ return "—"; }
+    }
+
+    function renderThreads(){
+      const q = (threadSearchEl.value || "").toLowerCase().trim();
+      threadListEl.innerHTML = "";
+
+      const threads = allThreads.slice().sort((a,b)=>{
+        const ta = a.lastAt?.seconds ?? 0;
+        const tb = b.lastAt?.seconds ?? 0;
+        return tb - ta;
       });
 
-      msgsEl.innerHTML = "";
-      if(!msgs.length){
-        msgsEl.innerHTML = `<div class="small-note">Aucun message.</div>`;
+      const filtered = !q ? threads : threads.filter(t => {
+        const hay = `${t.ownerName||""} ${t.ownerEmailLower||""} ${t.homeLabel||""} ${t.lastText||""}`.toLowerCase();
+        return hay.includes(q);
+      });
+
+      if(!filtered.length){
+        const empty = document.createElement("div");
+        empty.className = "small-note";
+        empty.textContent = "Aucune conversation.";
+        threadListEl.appendChild(empty);
         return;
       }
 
-      msgs.forEach(m=>{
-        const me = isMeMessage(m);
+      filtered.forEach(t => {
         const div = document.createElement("div");
-        div.className = "msg " + (me ? "me" : "them");
+        div.className = "thread" + (t.id === activeThreadId ? " active" : "");
+        div.onclick = () => openThread(t.id);
 
-        const atts = Array.isArray(m.attachments) ? m.attachments : [];
+        const titleLeft = `${t.ownerName || "Propriétaire"} • ${t.homeLabel || "Logement"}`;
+        const unread = Number(t.unreadForConciergerie || 0);
+
         div.innerHTML = `
-          <div>${esc(m.text || "")}</div>
-          ${renderAttachments(atts)}
-          <div class="meta">
-            <span>${me ? "Conciergerie" : "Propriétaire"}</span>
-            <span>${fmtTime(m.at || m.createdAt)}</span>
+          <div class="left">
+            <div class="title">${esc(titleLeft)}</div>
+            <div class="sub">${esc(truncate(t.lastText || "", 56))}</div>
+          </div>
+          <div class="right">
+            <div>${fmtTime(t.lastAt)}</div>
+            ${unread ? `<div class="pill-unread">${unread}</div>` : ``}
           </div>
         `;
+        threadListEl.appendChild(div);
+      });
+    }
 
-        // bind buttons
-        if(atts.length){
-          div.querySelectorAll("button[data-att]").forEach(btn=>{
-            btn.onclick = ()=> openAttachment(atts[Number(btn.dataset.att)]);
-          });
+    function renderBanner(t){
+      bannerZoneEl.innerHTML = "";
+      if(!t?.flags?.paymentDue) return;
+
+      const b = document.createElement("div");
+      b.className = "banner";
+      b.innerHTML = `
+        <div>
+          <strong>Paiement requis avant intervention</strong>
+          <small>Ce fil est marqué “paiement dû”. Tu peux lever le blocage dans Paiements.</small>
+        </div>
+        <a href="paiements.html">Voir paiements</a>
+      `;
+      bannerZoneEl.appendChild(b);
+    }
+
+    function stopMessages(){
+      if(unsubMessages) unsubMessages();
+      unsubMessages = null;
+    }
+
+    function isMeMessage(m){
+      if(String(m?.senderUid||"") === String(currentUser?.uid||"")) return true;
+      return String(m?.senderRole||"").toUpperCase() === "CONCIERGERIE";
+    }
+
+    function listenMessages(threadId){
+      stopMessages();
+      msgsEl.innerHTML = `<div class="small-note">Chargement…</div>`;
+
+      const col = collection(db, "threads", threadId, "messages");
+
+      unsubMessages = onSnapshot(col, (snap)=>{
+        const msgs = snap.docs.map(d => ({ id:d.id, ...d.data() }));
+        msgs.sort((a,b)=>{
+          const ta = a.at?.seconds ?? a.createdAt?.seconds ?? 0;
+          const tb = b.at?.seconds ?? b.createdAt?.seconds ?? 0;
+          return ta - tb;
+        });
+
+        msgsEl.innerHTML = "";
+        if(!msgs.length){
+          msgsEl.innerHTML = `<div class="small-note">Aucun message.</div>`;
+          return;
         }
 
-        msgsEl.appendChild(div);
+        msgs.forEach(m=>{
+          const me = isMeMessage(m);
+          const div = document.createElement("div");
+          div.className = "msg " + (me ? "me" : "them");
+          div.innerHTML = `
+            <div class="txt">${esc(m.text || "")}</div>
+            <div class="meta">
+              <span>${me ? "Conciergerie" : "Propriétaire"}</span>
+              <span>${fmtTime(m.at || m.createdAt)}</span>
+            </div>
+          `;
+          msgsEl.appendChild(div);
+        });
+
+        setTimeout(()=>{ msgsEl.scrollTop = msgsEl.scrollHeight; }, 0);
+      }, (err)=>{
+        console.error(err);
+        showAlert("Erreur lecture messages : " + (err?.message || "inconnue"));
       });
-
-      setTimeout(()=>{ msgsEl.scrollTop = msgsEl.scrollHeight; }, 0);
-    }, (err)=>{
-      console.error(err);
-      showAlert("Erreur lecture messages : " + (err?.message || "inconnue"));
-    });
-  }
-
-  async function openThread(id){
-    activeThreadId = id;
-    const t = allThreads.find(x => x.id === id);
-    if(!t) return;
-
-    chatTitleEl.textContent = `${t.ownerName || "Propriétaire"} • ${t.homeLabel || "Logement"}`;
-    chatMetaEl.textContent =
-      t.homeId
-        ? `Lié au logement • ${t.homeLabel}${t.ownerDocId ? " • ownerDocId=" + t.ownerDocId : ""}`
-        : `Conversation générale${t.ownerDocId ? " • ownerDocId=" + t.ownerDocId : ""}`;
-
-    renderBanner(t);
-    renderThreads();
-    listenMessages(id);
-
-    try{
-      await updateDoc(doc(db,"threads",id), { unreadForConciergerie: 0 });
-    }catch(e){}
-  }
-
-  async function sendMessage(){
-    // NOTE: rules imposent text.size() > 0
-    let text = (composerEl.value || "").trim();
-
-    if(!activeThreadId){
-      alert("Choisis une conversation à gauche.");
-      return;
-    }
-    if(!text) return;
-
-    const threadId = activeThreadId;
-    try{
-      await addDoc(collection(db,"threads",threadId,"messages"), {
-        text,
-        at: serverTimestamp(),
-        senderUid: currentUser.uid,
-        senderRole: "CONCIERGERIE",
-        attachments: []
-      });
-
-      await updateDoc(doc(db,"threads",threadId), {
-        lastText: text,
-        lastAt: serverTimestamp(),
-        unreadForOwner: increment(1)
-      });
-
-      composerEl.value = "";
-    }catch(err){
-      console.error(err);
-      showAlert("Erreur envoi : " + (err?.message || "inconnue"));
-    }
-  }
-
-  async function newThread(){
-    hideAlert();
-
-    const homesSnap = await getDocs(query(
-      collection(db,"homes"),
-      where("conciergerieUid","==", currentUser.uid),
-      limit(2000)
-    ));
-    const homes = homesSnap.docs.map(d=>({id:d.id, ...d.data()}));
-    homes.sort((a,b)=> (b.createdAt?.seconds ?? 0) - (a.createdAt?.seconds ?? 0));
-
-    if(!homes.length){
-      alert("Ajoute d’abord un logement (Logements) pour lier une conversation.");
-      location.href = "logements.html";
-      return;
     }
 
-    const list = homes.map((h,i)=>{
-      const n = h.name || h.label || h.id;
-      const city = h.homeCity || h.city || "";
-      const owner = (h.ownerAccountName || h.ownerName || h.homeOwner || h.ownerEmail || "Proprio");
-      const ok = String(h.ownerDocId||"").trim() ? "✅" : "⛔ ownerDocId manquant";
-      return `${i+1}. ${n} (${city}) — ${owner} — ${ok}`;
-    }).join("\n");
+    async function openThread(id){
+      activeThreadId = id;
+      const t = allThreads.find(x => x.id === id);
+      if(!t) return;
 
-    const pickStr = prompt("Choisis un logement (numéro) :\n\n" + list);
-    if(!pickStr) return;
-    const idx = Number(pickStr) - 1;
-    const chosen = homes[idx];
-    if(!chosen){ alert("Numéro invalide."); return; }
+      chatTitleEl.textContent = `${t.ownerName || "Propriétaire"} • ${t.homeLabel || "Logement"}`;
+      chatMetaEl.textContent =
+        t.homeId
+          ? `Lié au logement • ${t.homeLabel}${t.ownerDocId ? " • ownerDocId=" + t.ownerDocId : ""}`
+          : `Conversation générale${t.ownerDocId ? " • ownerDocId=" + t.ownerDocId : ""}`;
 
-    const ownerDocId = String(chosen.ownerDocId || "").trim();
-    if(!ownerDocId){
-      alert("Ce logement n’a pas de ownerDocId. Tu dois d’abord lier le propriétaire (invite/associer).");
-      return;
-    }
-
-    const ownerUid = String(chosen.ownerUid || "").trim(); // obligatoire pour tes rules threads/create
-    const ownerEmail = String(chosen.ownerAccountEmail || chosen.ownerEmail || chosen.pendingOwnerEmail || "").trim();
-    if(!ownerUid || !ownerEmail){
-      alert("Ce logement n’a pas ownerUid ou ownerEmail. Corrige la liaison propriétaire.");
-      return;
-    }
-
-    const ownerNameDefault =
-      (chosen.ownerAccountName || chosen.ownerFullname || chosen.ownerName || chosen.homeOwner || "Propriétaire");
-    const ownerName = prompt("Nom du propriétaire :", ownerNameDefault);
-    if(!ownerName) return;
-
-    const ownerEmailLower = ownerEmail.toLowerCase();
-    const homeLabel = `${(chosen.name || chosen.label || "Logement")} • ${(chosen.homeCity || chosen.city || "")}`.trim();
-
-    try{
-      const threadRef = await addDoc(collection(db,"threads"), {
-        conciergerieUid: currentUser.uid,
-        ownerDocId,
-        ownerUid,
-        ownerName: String(ownerName).trim(),
-        ownerEmailLower,
-        homeId: chosen.id,
-        homeLabel,
-        lastText: "Conversation créée.",
-        lastAt: serverTimestamp(),
-        createdAt: serverTimestamp(),
-        unreadForConciergerie: 0,
-        unreadForOwner: 0,
-        flags: { paymentDue:false },
-        closed: false
-      });
-
-      await addDoc(collection(db,"threads",threadRef.id,"messages"), {
-        text:"Conversation créée.",
-        at: serverTimestamp(),
-        senderUid: currentUser.uid,
-        senderRole: "CONCIERGERIE",
-        attachments: []
-      });
-
-      showAlert("✅ Conversation créée.", true);
-      setTimeout(hideAlert, 900);
-    }catch(err){
-      console.error(err);
-      showAlert("Erreur création thread : " + (err?.message || "inconnue"));
-    }
-  }
-
-  function startThreadsListener(user){
-    badgeLine.textContent = `Firestore • threads • uid=${user.uid.slice(0,6)}…`;
-
-    const q = query(
-      collection(db,"threads"),
-      where("conciergerieUid","==", user.uid)
-    );
-
-    unsubThreads = onSnapshot(q, (snap)=>{
-      allThreads = snap.docs.map(d=>({ id:d.id, ...d.data() }));
-      hideAlert();
+      renderBanner(t);
       renderThreads();
+      listenMessages(id);
 
-      if(!activeThreadId && allThreads.length){
-        const sorted = allThreads.slice().sort((a,b)=>(b.lastAt?.seconds??0)-(a.lastAt?.seconds??0));
-        openThread(sorted[0].id);
+      try{
+        await updateDoc(doc(db,"threads",id), { unreadForConciergerie: 0 });
+      }catch(e){}
+    }
+
+    async function sendMessage(){
+      const text = (composerEl.value || "").trim();
+      if(!activeThreadId) return alert("Choisis une conversation à gauche.");
+      if(!text) return;
+
+      const threadId = activeThreadId;
+      try{
+        await addDoc(collection(db,"threads",threadId,"messages"), {
+          text,
+          at: serverTimestamp(),
+          senderUid: currentUser.uid,
+          senderRole: "CONCIERGERIE",
+          attachments: []
+        });
+
+        await updateDoc(doc(db,"threads",threadId), {
+          lastText: text,
+          lastAt: serverTimestamp(),
+          unreadForOwner: increment(1)
+        });
+
+        composerEl.value = "";
+      }catch(err){
+        console.error(err);
+        showAlert("Erreur envoi : " + (err?.message || "inconnue"));
       }
-    }, (err)=>{
-      console.error(err);
-      showAlert("Erreur lecture threads : " + (err?.message || "inconnue"));
+    }
+
+    async function newThread(){
+      hideAlert();
+
+      const homesSnap = await getDocs(query(
+        collection(db,"homes"),
+        where("conciergerieUid","==", currentUser.uid),
+        limit(2000)
+      ));
+      const homes = homesSnap.docs.map(d=>({id:d.id, ...d.data()}));
+      homes.sort((a,b)=> (b.createdAt?.seconds ?? 0) - (a.createdAt?.seconds ?? 0));
+
+      if(!homes.length){
+        alert("Ajoute d’abord un logement (Logements) pour lier une conversation.");
+        location.href = "logements.html";
+        return;
+      }
+
+      const list = homes.map((h,i)=>{
+        const n = h.name || h.label || h.id;
+        const city = h.homeCity || h.city || "";
+        const owner = (h.ownerAccountName || h.ownerName || h.homeOwner || h.ownerEmail || "Proprio");
+        const ok = String(h.ownerDocId||"").trim() ? "✅" : "⛔ ownerDocId manquant";
+        return `${i+1}. ${n} (${city}) — ${owner} — ${ok}`;
+      }).join("\n");
+
+      const pickStr = prompt("Choisis un logement (numéro) :\n\n" + list);
+      if(!pickStr) return;
+      const idx = Number(pickStr) - 1;
+      const chosen = homes[idx];
+      if(!chosen){ alert("Numéro invalide."); return; }
+
+      const ownerDocId = String(chosen.ownerDocId || "").trim();
+      if(!ownerDocId){
+        alert("Ce logement n’a pas de ownerDocId. Tu dois d’abord lier le propriétaire (invite/associer).");
+        return;
+      }
+
+      const ownerUid = String(chosen.ownerUid || "").trim(); // utile pour rules
+      const ownerNameDefault = (chosen.ownerAccountName || chosen.ownerFullname || chosen.ownerName || chosen.homeOwner || "Propriétaire");
+      const ownerName = prompt("Nom du propriétaire :", ownerNameDefault);
+      if(!ownerName) return;
+
+      const ownerEmail = String(chosen.ownerAccountEmail || chosen.ownerEmail || chosen.pendingOwnerEmail || "").trim();
+      const ownerEmailLower = ownerEmail.toLowerCase();
+
+      const homeLabel = `${(chosen.name || chosen.label || "Logement")} • ${(chosen.homeCity || chosen.city || "")}`.trim();
+
+      try{
+        const threadRef = await addDoc(collection(db,"threads"), {
+          conciergerieUid: currentUser.uid,
+          ownerDocId: ownerDocId,
+          ownerUid: ownerUid,
+          homeId: chosen.id,
+          homeLabel: homeLabel,
+
+          ownerName: String(ownerName).trim(),
+          ownerEmailLower,
+
+          lastText: "Conversation créée.",
+          lastAt: serverTimestamp(),
+          createdAt: serverTimestamp(),
+
+          unreadForConciergerie: 0,
+          unreadForOwner: 0,
+
+          flags: { paymentDue:false },
+          closed: false
+        });
+
+        await addDoc(collection(db,"threads",threadRef.id,"messages"), {
+          text:"Conversation créée.",
+          at: serverTimestamp(),
+          senderUid: currentUser.uid,
+          senderRole: "CONCIERGERIE",
+          attachments: []
+        });
+
+        showAlert("✅ Conversation créée.", true);
+        setTimeout(hideAlert, 900);
+      }catch(err){
+        console.error(err);
+        showAlert("Erreur création thread : " + (err?.message || "inconnue"));
+      }
+    }
+
+    function startThreadsListener(user){
+      badgeLine.textContent = `Firestore • threads • uid=${user.uid.slice(0,6)}…`;
+
+      const q = query(
+        collection(db,"threads"),
+        where("conciergerieUid","==", user.uid)
+      );
+
+      unsubThreads = onSnapshot(q, (snap)=>{
+        allThreads = snap.docs.map(d=>({ id:d.id, ...d.data() }));
+        hideAlert();
+        renderThreads();
+
+        if(!activeThreadId && allThreads.length){
+          const sorted = allThreads.slice().sort((a,b)=>(b.lastAt?.seconds??0)-(a.lastAt?.seconds??0));
+          openThread(sorted[0].id);
+        }
+      }, (err)=>{
+        console.error(err);
+        showAlert("Erreur lecture threads : " + (err?.message || "inconnue"));
+      });
+    }
+
+    threadSearchEl.addEventListener("input", renderThreads);
+    newThreadBtn.addEventListener("click", newThread);
+    sendBtn.addEventListener("click", sendMessage);
+    composerEl.addEventListener("keydown", (e)=>{
+      if(e.key === "Enter" && !e.shiftKey){
+        e.preventDefault();
+        sendMessage();
+      }
     });
-  }
 
-  threadSearchEl.addEventListener("input", renderThreads);
-  newThreadBtn.addEventListener("click", newThread);
-  sendBtn.addEventListener("click", sendMessage);
-  composerEl.addEventListener("keydown", (e)=>{
-    if(e.key === "Enter" && !e.shiftKey){
-      e.preventDefault();
-      sendMessage();
-    }
-  });
+    createPrestaBtn.addEventListener("click", ()=>{
+      const t = allThreads.find(x => x.id === activeThreadId);
+      location.href = t?.homeId ? ("planning.html?homeId=" + encodeURIComponent(t.homeId)) : "planning.html";
+    });
+    goPaymentsBtn.addEventListener("click", ()=> location.href = "paiements.html");
+    goHomeBtn.addEventListener("click", ()=>{
+      const t = allThreads.find(x => x.id === activeThreadId);
+      location.href = t?.homeId ? ("planning.html?homeId=" + encodeURIComponent(t.homeId)) : "logements.html";
+    });
 
-  createPrestaBtn.addEventListener("click", ()=>{
-    const t = allThreads.find(x => x.id === activeThreadId);
-    location.href = t?.homeId ? ("planning.html?homeId=" + encodeURIComponent(t.homeId)) : "planning.html";
-  });
-  goPaymentsBtn.addEventListener("click", ()=> location.href = "paiements.html");
-  goHomeBtn.addEventListener("click", ()=>{
-    const t = allThreads.find(x => x.id === activeThreadId);
-    location.href = t?.homeId ? ("planning.html?homeId=" + encodeURIComponent(t.homeId)) : "logements.html";
-  });
+    onAuthStateChanged(auth, async (user)=>{
+      if(!user){
+        location.href = "login.html?role=conciergerie";
+        return;
+      }
+      currentUser = user;
 
-  onAuthStateChanged(auth, async (user)=>{
-    if(!user){
-      location.href = "login.html?role=conciergerie";
-      return;
-    }
+      if(unsubThreads) unsubThreads();
+      stopMessages();
+      activeThreadId = null;
+      allThreads = [];
+      msgsEl.innerHTML = `<div class="small-note">Clique une conversation à gauche.</div>`;
 
-    const ok = await guardConciergerie(user);
-    if(!ok){
-      showAlert("⛔ Abonnement inactif. Merci de choisir une offre.");
-      setTimeout(()=> location.href = "abonnement.html?plan=starter", 700);
-      return;
-    }
-
-    currentUser = user;
-
-    if(unsubThreads) unsubThreads();
-    stopMessages();
-    activeThreadId = null;
-    allThreads = [];
-    msgsEl.innerHTML = `<div class="small-note">Clique une conversation à gauche.</div>`;
-
-    startThreadsListener(user);
-  });
-</script>
-
+      startThreadsListener(user);
+    });
+  </script>
 </body>
 </html>
