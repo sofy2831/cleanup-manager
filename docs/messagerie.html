@@ -129,7 +129,7 @@ body{
   import {
     collection, doc, addDoc, updateDoc, getDocs,
     query, where, onSnapshot,
-    serverTimestamp, increment
+    serverTimestamp, increment, limit
   } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
   const badgeLine = document.getElementById("badgeLine");
@@ -253,7 +253,6 @@ body{
   }
 
   function isMeMessage(m){
-    // conciergerie = "moi"
     if(String(m?.senderUid||"") === String(currentUser?.uid||"")) return true;
     return String(m?.senderRole||"").toUpperCase() === "CONCIERGERIE";
   }
@@ -305,7 +304,10 @@ body{
     if(!t) return;
 
     chatTitleEl.textContent = `${t.ownerName || "Propriétaire"} • ${t.homeLabel || "Logement"}`;
-    chatMetaEl.textContent = t.homeId ? `Lié au logement • ${t.homeLabel}` : `Conversation générale`;
+    chatMetaEl.textContent =
+      t.homeId
+        ? `Lié au logement • ${t.homeLabel}${t.ownerDocId ? " • ownerDocId=" + t.ownerDocId : ""}`
+        : `Conversation générale${t.ownerDocId ? " • ownerDocId=" + t.ownerDocId : ""}`;
 
     renderBanner(t);
     renderThreads();
@@ -352,7 +354,8 @@ body{
 
     const homesSnap = await getDocs(query(
       collection(db,"homes"),
-      where("conciergerieUid","==", currentUser.uid)
+      where("conciergerieUid","==", currentUser.uid),
+      limit(2000)
     ));
     const homes = homesSnap.docs.map(d=>({id:d.id, ...d.data()}));
     homes.sort((a,b)=> (b.createdAt?.seconds ?? 0) - (a.createdAt?.seconds ?? 0));
@@ -363,37 +366,60 @@ body{
       return;
     }
 
-    const list = homes.map((h,i)=>`${i+1}. ${h.name || h.label || h.id} (${h.city||""}) — ${(h.ownerName||h.ownerEmail||"Proprio")}`).join("\n");
+    const list = homes.map((h,i)=>{
+      const n = h.name || h.label || h.id;
+      const city = h.homeCity || h.city || "";
+      const owner = (h.ownerAccountName || h.ownerName || h.homeOwner || h.ownerEmail || "Proprio");
+      const ok = String(h.ownerDocId||"").trim() ? "✅" : "⛔ ownerDocId manquant";
+      return `${i+1}. ${n} (${city}) — ${owner} — ${ok}`;
+    }).join("\n");
+
     const pickStr = prompt("Choisis un logement (numéro) :\n\n" + list);
     if(!pickStr) return;
     const idx = Number(pickStr) - 1;
     const chosen = homes[idx];
     if(!chosen){ alert("Numéro invalide."); return; }
 
-    if(!chosen.ownerUid){
-      alert("Ce logement n’a pas de ownerUid (propriétaire lié). Impossible de créer un thread.");
+    const ownerDocId = String(chosen.ownerDocId || "").trim();
+    if(!ownerDocId){
+      alert("Ce logement n’a pas de ownerDocId. Tu dois d’abord lier le propriétaire (invite/associer).");
       return;
     }
 
-    const ownerName = prompt("Nom du propriétaire :", chosen.ownerName || "Propriétaire");
+    const ownerUid = String(chosen.ownerUid || "").trim(); // optionnel mais utile
+    const ownerNameDefault =
+      (chosen.ownerAccountName || chosen.ownerFullname || chosen.ownerName || chosen.homeOwner || "Propriétaire");
+    const ownerName = prompt("Nom du propriétaire :", ownerNameDefault);
     if(!ownerName) return;
 
-    const ownerEmail = String(chosen.ownerEmail || "").trim();
+    const ownerEmail = String(chosen.ownerAccountEmail || chosen.ownerEmail || chosen.pendingOwnerEmail || "").trim();
     const ownerEmailLower = ownerEmail.toLowerCase();
+
+    const homeLabel = `${(chosen.name || chosen.label || "Logement")} • ${(chosen.homeCity || chosen.city || "")}`.trim();
 
     try{
       const threadRef = await addDoc(collection(db,"threads"), {
         conciergerieUid: currentUser.uid,
-        ownerUid: String(chosen.ownerUid),
+
+        // 🔑 clé stable
+        ownerDocId: ownerDocId,
+
+        // bonus
+        ownerUid: ownerUid,
+
         homeId: chosen.id,
-        homeLabel: `${chosen.name || chosen.label || "Logement"} • ${chosen.city || ""}`.trim(),
+        homeLabel: homeLabel,
+
         ownerName: String(ownerName).trim(),
         ownerEmailLower,
+
         lastText: "Conversation créée.",
         lastAt: serverTimestamp(),
         createdAt: serverTimestamp(),
+
         unreadForConciergerie: 0,
         unreadForOwner: 0,
+
         flags: { paymentDue:false },
         closed: false
       });
