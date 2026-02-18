@@ -1,4 +1,4 @@
-<!-- docs/login.html (PATCHED — reset mdp + messages erreur + flux owner/conciergerie) -->
+<!-- docs/login.html (FINAL — reset mdp + erreurs + flux owner/conciergerie + merge safety clients) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -118,7 +118,9 @@ import {
   signInWithEmailAndPassword,
   sendPasswordResetEmail
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-import { doc, getDoc } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+import {
+  doc, getDoc, setDoc, serverTimestamp
+} from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
 const form = document.getElementById("loginForm");
 const msgBox = document.getElementById("msgBox");
@@ -149,7 +151,7 @@ function humanAuthError(err){
   switch(code){
     case "auth/invalid-email": return "Email invalide.";
     case "auth/user-disabled": return "Compte désactivé.";
-    case "auth/user-not-found": return "Compte introuvable (cet email n’existe pas dans Firebase Auth).";
+    case "auth/user-not-found": return "Compte introuvable (cet email n’existe pas).";
     case "auth/wrong-password": return "Mot de passe incorrect.";
     case "auth/invalid-credential": return "Identifiants invalides (email ou mot de passe).";
     case "auth/too-many-requests": return "Trop d’essais. Attends un peu et réessaie.";
@@ -157,11 +159,44 @@ function humanAuthError(err){
   }
 }
 
+function normEmail(s){ return (s||"").trim().toLowerCase(); }
+
+// Filet de sécurité : s'assurer que clients/{c_owner_ownerDocId} existe
+async function ensureClientDocForOwner(user){
+  try{
+    const us = await getDoc(doc(db,"users", user.uid));
+    const u  = us.exists() ? (us.data() || {}) : {};
+
+    const ownerDocId = String(u.ownerDocId || "").trim();
+    const conciergerieUid = String(u.conciergerieUid || "").trim();
+
+    // si pas encore finalisé, on ne force rien
+    if(!ownerDocId || !conciergerieUid) return { ok:false, reason:"missing_ownerDocId_or_conciergerieUid" };
+
+    const email = normEmail(user.email || u.email || "");
+    const clientDocId = "c_owner_" + ownerDocId;
+
+    await setDoc(doc(db,"clients", clientDocId), {
+      conciergerieUid,
+      clientKey: ownerDocId,
+      ownerDocId: ownerDocId,
+      ownerUid: user.uid,
+      email: email,
+      updatedAt: serverTimestamp()
+    }, { merge:true });
+
+    return { ok:true, ownerDocId, conciergerieUid };
+  }catch(e){
+    console.warn("ensureClientDocForOwner:", e?.message || e);
+    return { ok:false, reason:"error" };
+  }
+}
+
 resetLink.addEventListener("click", async (e)=>{
   e.preventDefault();
   msgBox.style.display="none";
 
-  const email = (emailEl.value || "").trim().toLowerCase();
+  const email = normEmail(emailEl.value || "");
   if(!email){
     showMsg("Entre ton email, puis clique à nouveau sur “Mot de passe oublié”.");
     emailEl.focus();
@@ -188,7 +223,7 @@ form.addEventListener("submit", async (e)=>{
   msgBox.style.display = "none";
 
   try{
-    const email = (emailEl.value || "").trim().toLowerCase();
+    const email = normEmail(emailEl.value || "");
     const pass  = (passEl.value || "");
 
     const cred = await signInWithEmailAndPassword(auth, email, pass);
@@ -196,20 +231,17 @@ form.addEventListener("submit", async (e)=>{
 
     // PROPRIÉTAIRE
     if(role === "proprietaire"){
+      // si token : on laisse invite-proprietaire finaliser (source de vérité)
       if(token){
         location.replace("invite-proprietaire.html?token="+encodeURIComponent(token));
         return;
       }
 
-      const us = await getDoc(doc(db,"users", user.uid));
-      const u  = us.exists() ? (us.data() || {}) : {};
+      // sinon : filet de sécurité (merge minimal clients)
+      await ensureClientDocForOwner(user);
 
-      if(!u.ownerDocId){
-        location.replace("profil-proprietaire.html?self=1");
-      }else{
-       location.replace("profil-proprietaire.html?self=1");
-
-      }
+      // redirect (tu peux forcer profil si tu veux)
+      location.replace("owner-dashboard.html");
       return;
     }
 
