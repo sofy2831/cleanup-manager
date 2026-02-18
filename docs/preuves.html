@@ -1,4 +1,4 @@
-<!-- docs/preuves.html (FINAL++++ — WhatsApp-like multi-photos (MENAGE global) + limite 20 + MAJ events.proofPhotos ; ZIP fallback OK ; delete ZIP sans toucher event) -->
+<!-- docs/preuves.html (FINAL CLEAN — WhatsApp-like multi-photos (MENAGE global) + limite 20 + update events.proofPhotos ; ZIP fallback ; stable) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -131,13 +131,16 @@
     .helpBox ul{ margin:0; padding-left:18px; }
     .helpBox li{ font-size:12px; font-weight:800; color:#333; margin:4px 0; }
 
-    .sizeHint{
+    .hint{
       margin-top:6px;
       font-size:12px;
       font-weight:900;
       color:#333;
       white-space:pre-wrap;
     }
+    .hint.bad{ color: var(--bad); }
+    .hint.ok{ color: var(--ok); }
+
     .thumbs{
       display:grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -175,7 +178,7 @@
 
       <!-- ✅ MODE WHATSAPP : multi-photos -->
       <section class="card">
-        <div class="mini" id="ruleHintPhotos">
+        <div class="mini">
           <b>Le plus simple :</b> sélectionne 5/10/20 photos dans ta galerie et envoie-les d’un coup.<br>
           Stockage : preuves rattachées à la prestation (mission <b>MENAGE</b>), visibles côté conciergerie.<br>
           Limite : <b>20 photos</b> • <b>30 Mo par fichier</b>.
@@ -189,7 +192,7 @@
           </div>
         </div>
 
-        <div class="sizeHint" id="photosHint" style="display:none;"></div>
+        <div class="hint" id="photosHint" style="display:none;"></div>
 
         <div class="progressWrap" id="progressWrapPhotos">
           <div class="mini" id="progressTextPhotos">Upload…</div>
@@ -201,7 +204,7 @@
 
       <!-- ✅ ZIP fallback -->
       <section class="card">
-        <div class="mini" id="ruleHintZip">
+        <div class="mini">
           <b>Alternative :</b> envoie <b>un seul fichier ZIP</b> (10/15 photos).<br>
           <b>ZIP global</b> enregistré sur la mission <b>MENAGE</b>.<br>
           Limite : <b>30 Mo</b>.
@@ -215,7 +218,7 @@
           </div>
         </div>
 
-        <div class="sizeHint" id="sizeHintZip" style="display:none;"></div>
+        <div class="hint" id="sizeHintZip" style="display:none;"></div>
 
         <div class="progressWrap" id="progressWrapZip">
           <div class="mini" id="progressTextZip">Upload…</div>
@@ -253,12 +256,14 @@
     import { doc, getDoc, updateDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
     import { ref as sRef, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js";
 
+    // -----------------------------
+    // DOM
+    // -----------------------------
     const alertBox = document.getElementById("alertBox");
     const subLine = document.getElementById("subLine");
     const chipLine = document.getElementById("chipLine");
     const backBtn = document.getElementById("backBtn");
 
-    // Photos
     const photosInput = document.getElementById("photosInput");
     const clearPhotosBtn = document.getElementById("clearPhotosBtn");
     const uploadPhotosBtn = document.getElementById("uploadPhotosBtn");
@@ -268,7 +273,6 @@
     const progressTextPhotos = document.getElementById("progressTextPhotos");
     const progressBarPhotos = document.getElementById("progressBarPhotos");
 
-    // ZIP
     const zipInput = document.getElementById("zipInput");
     const clearZipBtn = document.getElementById("clearZipBtn");
     const uploadZipBtn = document.getElementById("uploadZipBtn");
@@ -278,19 +282,18 @@
     const zipInfo = document.getElementById("zipInfo");
     const sizeHintZip = document.getElementById("sizeHintZip");
 
-    // ✅ MENAGE global
+    // -----------------------------
+    // Constantes
+    // -----------------------------
     const missionType = "MENAGE";
-
-    // ✅ suppression Storage: on ne delete pas Storage (rules fermées)
     const ALLOW_STORAGE_DELETE = false;
-
-    // ✅ 30 Mo max par fichier (aligné rules)
     const MAX_BYTES = 30 * 1024 * 1024;
-
-    // ✅ 20 photos max (aligné rules Firestore proofPhotos <= 20)
-    const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
     const MAX_PHOTOS = 20;
+    const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 
+    // -----------------------------
+    // Utils UI
+    // -----------------------------
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
       alertBox.classList.toggle("ok", !!ok);
@@ -310,17 +313,6 @@
         .replaceAll('"',"&quot;")
         .replaceAll("'","&#039;");
     }
-
-    function tokenValid(d){
-      if(!d?.active) return false;
-      const expMs = Number(d?.expiresAtMs);
-      if(Number.isFinite(expMs)) return Date.now() < expMs;
-      const ts = d?.expiresAt;
-      const ms = ts?.toMillis ? ts.toMillis() : NaN;
-      if(Number.isFinite(ms)) return Date.now() < ms;
-      return false;
-    }
-
     function fmtSize(bytes){
       const b = Number(bytes || 0);
       if(!Number.isFinite(b) || b <= 0) return "0 Mo";
@@ -359,19 +351,32 @@
       zipInput.disabled = !!locked;
     }
 
+    function showHint(el, msg, ok=true){
+      el.style.display = "block";
+      el.textContent = msg;
+      el.classList.toggle("ok", !!ok);
+      el.classList.toggle("bad", !ok);
+    }
+    function hideHint(el){
+      el.style.display = "none";
+      el.textContent = "";
+      el.classList.remove("ok","bad");
+    }
+
+    function tokenValid(d){
+      if(!d?.active) return false;
+      const expMs = Number(d?.expiresAtMs);
+      if(Number.isFinite(expMs)) return Date.now() < expMs;
+      const ts = d?.expiresAt;
+      const ms = ts?.toMillis ? ts.toMillis() : NaN;
+      if(Number.isFinite(ms)) return Date.now() < ms;
+      return false;
+    }
+
     function safeZipName(name){
       const base = (name || "preuves.zip").toString().trim();
       const clean = base.replace(/[^\w.\-]+/g, "_");
       return (/\.zip$/i.test(clean)) ? clean : (clean + ".zip");
-    }
-
-    function showPhotosHint(msg){
-      photosHint.style.display = "block";
-      photosHint.textContent = msg;
-    }
-    function hidePhotosHint(){
-      photosHint.style.display = "none";
-      photosHint.textContent = "";
     }
 
     function renderLocalThumbs(files){
@@ -382,12 +387,49 @@
         return;
       }
       photosPreview.style.display = "grid";
-      photosPreview.innerHTML = arr.slice(0, 9).map((f)=>{
-        const url = URL.createObjectURL(f);
-        return `<div class="thumb"><img src="${esc(url)}" alt="photo"></div>`;
-      }).join("") + (arr.length > 9 ? `<div class="thumb"><div class="ph">+${arr.length-9}</div></div>` : "");
+      photosPreview.innerHTML =
+        arr.slice(0, 9).map((f)=>{
+          const url = URL.createObjectURL(f);
+          return `<div class="thumb"><img src="${esc(url)}" alt="photo"></div>`;
+        }).join("")
+        + (arr.length > 9 ? `<div class="thumb"><div class="ph">+${arr.length-9}</div></div>` : "");
     }
 
+    // -----------------------------
+    // Preflight (token + mission)
+    // -----------------------------
+    const token = qs("token");
+    const prestationId = qs("prestationId");
+
+    async function preflight(){
+      if(!token || !prestationId) throw new Error("Paramètres manquants (token / prestationId).");
+
+      const tSnap = await getDoc(doc(db,"dayTokens",token));
+      if(!tSnap.exists()) throw new Error("Token invalide.");
+      const tokenDoc = tSnap.data() || {};
+
+      if(String(tokenDoc.prestationId) !== String(prestationId)) throw new Error("Token ≠ prestation.");
+      if(!tokenValid(tokenDoc)) throw new Error("Token expiré. Demande un nouveau lien.");
+
+      const allowedTypes = (Array.isArray(tokenDoc.missionTypes) && tokenDoc.missionTypes.length)
+        ? tokenDoc.missionTypes.map(x => String(x||"").toUpperCase())
+        : ["MENAGE"];
+
+      if(!allowedTypes.includes(missionType)) throw new Error("Ce token n’autorise pas MENAGE. Regénère le lien.");
+
+      const mRef = doc(db,"events",prestationId,"missions",missionType);
+      const mSnap = await getDoc(mRef);
+      if(!mSnap.exists()) throw new Error(`Mission "${missionType}" non initialisée. Regénère le lien.`);
+
+      const m = mSnap.data() || {};
+      if(String(m.dayToken || "") !== String(token)) throw new Error("Token non associé à cette mission (MENAGE).");
+
+      return { tokenDoc, missionDoc: m };
+    }
+
+    // -----------------------------
+    // ZIP info render
+    // -----------------------------
     function renderZipInfo(proofZip){
       zipInfo.innerHTML = "";
       if(!proofZip || !proofZip.url){
@@ -427,7 +469,9 @@
 
         lockUI(true);
         try{
-          // On ne touche PAS à events ici. On supprime juste la référence mission.proofZip.
+          if(ALLOW_STORAGE_DELETE && proofZip.path){
+            try{ await deleteObject(sRef(storage, proofZip.path)); }catch(e){ /* ignore */ }
+          }
           await updateDoc(doc(db,"events",prestationId,"missions",missionType),{
             proofZip: null,
             updatedAt: serverTimestamp()
@@ -446,46 +490,15 @@
       });
     }
 
-    const token = qs("token");
-    const prestationId = qs("prestationId");
-
-    // cache token
-    let tokenDocCache = null;
-
-    async function preflight(){
-      if(!token || !prestationId) throw new Error("Paramètres manquants (token / prestationId).");
-
-      const tSnap = await getDoc(doc(db,"dayTokens",token));
-      if(!tSnap.exists()) throw new Error("Token invalide.");
-      const tokenDoc = tSnap.data() || {};
-
-      if(String(tokenDoc.prestationId) !== String(prestationId)) throw new Error("Token ≠ prestation.");
-      if(!tokenValid(tokenDoc)) throw new Error("Token expiré. Demande un nouveau lien.");
-
-      const allowedTypes = (Array.isArray(tokenDoc.missionTypes) && tokenDoc.missionTypes.length)
-        ? tokenDoc.missionTypes.map(x => String(x||"").toUpperCase())
-        : ["MENAGE"];
-
-      if(!allowedTypes.includes(missionType)) throw new Error("Ce token n’autorise pas MENAGE. Regénère le lien.");
-
-      const mRef = doc(db,"events",prestationId,"missions",missionType);
-      const mSnap = await getDoc(mRef);
-      if(!mSnap.exists()) throw new Error(`Mission "${missionType}" non initialisée. Regénère le lien.`);
-
-      const m = mSnap.data() || {};
-      if(String(m.dayToken || "") !== String(token)) throw new Error("Token non associé à cette mission (MENAGE).");
-
-      tokenDocCache = tokenDoc;
-      return { tokenDoc, missionDoc: m };
-    }
-
+    // -----------------------------
+    // Load initial
+    // -----------------------------
     async function load(){
       hideAlert();
       subLine.textContent = "Chargement…";
-
       hideProgressPhotos();
       hideProgressZip();
-      hidePhotosHint();
+      hideHint(photosHint);
       photosPreview.style.display = "none";
       photosPreview.innerHTML = "";
       zipInfo.innerHTML = "";
@@ -509,28 +522,29 @@
       }
     }
 
-    // ----------------------------
-    // Photos upload (WhatsApp-like)
-    // ----------------------------
+    // -----------------------------
+    // Photos (WhatsApp-like)
+    // -----------------------------
     clearPhotosBtn.addEventListener("click", ()=>{
       photosInput.value = "";
-      hidePhotosHint();
+      hideHint(photosHint);
       photosPreview.style.display = "none";
       photosPreview.innerHTML = "";
     });
 
     photosInput.addEventListener("change", ()=>{
       hideAlert();
+
       const files = Array.from(photosInput.files || []).filter(f => (f?.type || "").startsWith("image/"));
       renderLocalThumbs(files);
 
       if(!files.length){
-        hidePhotosHint();
+        hideHint(photosHint);
         return;
       }
 
       if(files.length > MAX_PHOTOS){
-        showPhotosHint(`⚠️ Trop de photos : ${files.length}. Limite ${MAX_PHOTOS}.`);
+        showHint(photosHint, `⚠️ Trop de photos : ${files.length}. Limite ${MAX_PHOTOS}.`, false);
         photosInput.value = "";
         photosPreview.style.display = "none";
         photosPreview.innerHTML = "";
@@ -539,15 +553,15 @@
 
       const tooBig = files.find(f => Number(f.size || 0) > MAX_BYTES);
       if(tooBig){
-        showPhotosHint(`⚠️ Une photo est trop lourde (${fmtSize(tooBig.size)}). Limite : ${fmtSize(MAX_BYTES)}.`);
+        showHint(photosHint, `⚠️ Une photo est trop lourde (${fmtSize(tooBig.size)}). Limite : ${fmtSize(MAX_BYTES)}.`, false);
         return;
       }
 
-      if(IS_IOS && files.length >= 16){
-        showPhotosHint(`✅ ${files.length} photo(s) sélectionnée(s). (iPhone : évite > 20)`);
-      }else{
-        showPhotosHint(`✅ ${files.length} photo(s) sélectionnée(s).`);
-      }
+      const msg = IS_IOS && files.length >= 16
+        ? `✅ ${files.length} photo(s) sélectionnée(s).\nNote iPhone : reste ≤ 20.`
+        : `✅ ${files.length} photo(s) sélectionnée(s).`;
+
+      showHint(photosHint, msg, true);
     });
 
     uploadPhotosBtn.addEventListener("click", async ()=>{
@@ -567,6 +581,7 @@
       }
 
       lockUI(true);
+
       try{
         await preflight();
 
@@ -575,8 +590,10 @@
 
         for(let i=0;i<files.length;i++){
           const file = files[i];
+
           const ext = (file.name || "").split(".").pop() || "jpg";
           const safeExt = ext.replace(/[^\w]+/g,"").slice(0,6) || "jpg";
+
           const fname = `${Date.now()}_${i+1}_${Math.random().toString(16).slice(2)}.${safeExt}`;
           const path = `proofPhotos/${prestationId}/${missionType}/${token}/${fname}`;
           const r = sRef(storage, path);
@@ -597,24 +614,19 @@
           urls.push(url);
         }
 
-        // ✅ garde-fou RULES (strings only + <=20)
-        const cleanUrls = (urls || []).filter(u => typeof u === "string" && u.trim().length > 0);
-
-        if(cleanUrls.length !== urls.length){
-          console.warn("URLs invalides détectées:", urls);
-          throw new Error("Une ou plusieurs photos n'ont pas généré d'URL valide. Réessaie.");
-        }
-        if(cleanUrls.length > MAX_PHOTOS){
-          throw new Error("Trop de photos pour la preuve (max 20).");
-        }
+        // garde-fous rules
+        const cleanUrls = urls.filter(u => typeof u === "string" && u.trim().length > 0);
+        if(cleanUrls.length !== urls.length) throw new Error("Une ou plusieurs photos n'ont pas généré d'URL valide.");
+        if(cleanUrls.length > MAX_PHOTOS) throw new Error("Trop de photos (max 20).");
 
         setProgressPhotos(100, "Finalisation…");
 
-        // ✅ Update event (token-only, whitelist rules) — SANS updatedAt
+        // ✅ Update event (token-only) — compatible avec tes rules
         await updateDoc(doc(db,"events",prestationId),{
           proofToken: token,
           proofPhotos: cleanUrls,
-          proofPhotosPreview: cleanUrls.slice(0,3)
+          proofPhotosPreview: cleanUrls.slice(0,3),
+          updatedAt: serverTimestamp()
         });
 
         photosInput.value = "";
@@ -623,25 +635,36 @@
 
       }catch(err){
         console.error(err);
+
+        // aide debug rapide : storage vs firestore
+        const code = err?.code || "";
+        if(String(code).startsWith("storage/")){
+          showAlert("Erreur upload photos (Storage) : " + (err?.message || code));
+        }else{
+          showAlert("Erreur upload photos : " + (err?.message || code || "inconnue"));
+        }
+
         hideProgressPhotos();
-        showAlert("Erreur upload photos : " + (err?.code || err?.message || String(err) || "inconnue"));
       }finally{
         lockUI(false);
       }
     });
 
-    // ----------------------------
+    // -----------------------------
     // ZIP fallback
-    // ----------------------------
+    // -----------------------------
     function showSizeHintZip(file){
       if(!file){
         sizeHintZip.style.display = "none";
         sizeHintZip.textContent = "";
+        sizeHintZip.classList.remove("bad","ok");
         return;
       }
       const s = Number(file.size || 0);
       const ok = s > 0 && s <= MAX_BYTES;
       sizeHintZip.style.display = "block";
+      sizeHintZip.classList.toggle("ok", ok);
+      sizeHintZip.classList.toggle("bad", !ok);
       sizeHintZip.textContent = `Taille ZIP : ${fmtSize(s)} / limite ${fmtSize(MAX_BYTES)}${ok ? "" : " — trop lourd"}`;
     }
 
@@ -661,7 +684,6 @@
       if(!file) return showAlert("Choisis un fichier ZIP.");
 
       const name = safeZipName(file.name);
-
       if(Number(file.size || 0) > MAX_BYTES){
         showSizeHintZip(file);
         return showAlert(`Fichier trop lourd (${fmtSize(file.size)}). Limite : ${fmtSize(MAX_BYTES)}. Réduis à 10–15 photos.`);
@@ -722,12 +744,18 @@
       }catch(err){
         console.error(err);
         hideProgressZip();
-        showAlert("Erreur upload ZIP : " + (err?.code || err?.message || "inconnue"));
+        const code = err?.code || "";
+        if(String(code).startsWith("storage/")){
+          showAlert("Erreur upload ZIP (Storage) : " + (err?.message || code));
+        }else{
+          showAlert("Erreur upload ZIP : " + (err?.message || code || "inconnue"));
+        }
       }finally{
         lockUI(false);
       }
     });
 
+    // init
     load().catch(err=>{
       console.error(err);
       showAlert("Erreur chargement preuves : " + (err?.code || err?.message || "inconnue"));
