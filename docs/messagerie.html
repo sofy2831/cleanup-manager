@@ -1,4 +1,4 @@
-<!-- docs/messagerie.html (PATCHED — threadId stable t_<conciergerieUid>_<ownerDocId> + pièces jointes PDF (Storage) + bouton "Envoyer PDF" dans le chat) -->
+<!-- docs/messagerie.html (FINAL — conciergerie, Firebase Auth only, attachments support) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -31,39 +31,13 @@ body{
 </head>
 
 <body>
-<script>
-  function getSession(){
-    try{ return JSON.parse(localStorage.getItem("cm_auth") || "null"); }
-    catch(e){ return null; }
-  }
-  function requireRoleOneOf(roles){
-    const s = getSession();
-    if(!s || !roles.includes(s.role)){
-      location.href = "login.html?role=" + encodeURIComponent(roles[0] || "conciergerie");
-      return null;
-    }
-    return s;
-  }
-  function logout(){
-    localStorage.removeItem("cm_auth");
-    location.href = "index.html";
-  }
-  (function guard(){
-    const s = requireRoleOneOf(["conciergerie","admin"]);
-    if(!s) return;
-    if(!s.planActive){
-      location.href = "abonnement.html?plan=starter";
-      return;
-    }
-  })();
-</script>
 
 <div class="page">
   <div class="topbar">
     <a class="pill-link" href="conciergerie.html">← Tableau de bord</a>
     <div style="display:flex; gap:8px; align-items:center;">
       <a class="pill-link" href="import-ical.html">Import iCal</a>
-      <button class="pill-link" type="button" onclick="logout()">Déconnexion</button>
+      <button class="pill-link" type="button" id="logoutBtn">Déconnexion</button>
     </div>
   </div>
 
@@ -106,7 +80,6 @@ body{
         <div class="chat-actions">
           <button class="action" type="button" id="goHomeBtn">Logement</button>
           <button class="action" type="button" id="goPaymentsBtn">Paiements</button>
-          <button class="action" type="button" id="sendPdfBtn">Envoyer PDF</button>
           <button class="action primary" type="button" id="createPrestaBtn">Créer prestation</button>
         </div>
       </div>
@@ -125,67 +98,19 @@ body{
   </div>
 </div>
 
-<!-- Modal PDF (simple) -->
-<div id="pdfModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.35); z-index:9999; padding:16px;">
-  <div style="max-width:560px; margin:6vh auto; background:#fff; border-radius:16px; padding:14px; border:1px solid rgba(122,92,255,0.25);">
-    <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
-      <div style="font-weight:900;">Envoyer un PDF au propriétaire</div>
-      <button type="button" id="pdfCloseBtn" style="border:none; background:#fff; font-weight:900; cursor:pointer;">✕</button>
-    </div>
-
-    <div style="margin-top:10px; font-size:12px; color:#444; font-weight:800;">
-      Ce PDF sera envoyé dans la conversation (pièce jointe téléchargeable côté propriétaire).
-    </div>
-
-    <div style="margin-top:12px; display:grid; gap:10px;">
-      <div>
-        <label style="display:block; font-size:12px; font-weight:900; margin-bottom:4px;">Label</label>
-        <input id="pdfLabel" type="text" placeholder="Ex: Facture FA2026-0001" style="width:100%; padding:10px 12px; border-radius:12px; border:1px solid #D3C7FF; font-weight:800;">
-      </div>
-
-      <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
-        <div>
-          <label style="display:block; font-size:12px; font-weight:900; margin-bottom:4px;">Kind</label>
-          <select id="pdfKind" style="width:100%; padding:10px 12px; border-radius:12px; border:1px solid #D3C7FF; font-weight:900;">
-            <option value="INVOICE_PDF">INVOICE_PDF</option>
-            <option value="QUOTE_PDF">QUOTE_PDF</option>
-            <option value="OTHER_PDF">OTHER_PDF</option>
-          </select>
-        </div>
-        <div>
-          <label style="display:block; font-size:12px; font-weight:900; margin-bottom:4px;">salesDocId (optionnel)</label>
-          <input id="pdfSalesDocId" type="text" placeholder="Ex: W7Kx..." style="width:100%; padding:10px 12px; border-radius:12px; border:1px solid #D3C7FF; font-weight:800;">
-        </div>
-      </div>
-
-      <div>
-        <label style="display:block; font-size:12px; font-weight:900; margin-bottom:4px;">Fichier PDF</label>
-        <input id="pdfFile" type="file" accept="application/pdf" />
-        <div style="font-size:12px; color:#666; font-weight:800; margin-top:4px;">
-          Chemin Storage: invoices/&lt;conciergerieUid&gt;/&lt;ownerUid&gt;/&lt;salesDocId|misc&gt;/&lt;timestamp&gt;.pdf
-        </div>
-      </div>
-
-      <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:6px;">
-        <button id="pdfCancelBtn" type="button" style="padding:10px 12px; border-radius:999px; border:2px solid #7A5CFF; background:#fff; color:#7A5CFF; font-weight:900; cursor:pointer;">Annuler</button>
-        <button id="pdfSendBtn" type="button" style="padding:10px 12px; border-radius:999px; border:none; background:linear-gradient(90deg,#7A5CFF,#6238FF); color:#fff; font-weight:900; cursor:pointer;">Uploader & Envoyer</button>
-      </div>
-    </div>
-  </div>
-</div>
-
 <script type="module">
   import { auth, db, storage } from "./firebase-init.js";
-  import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+  import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
   import {
-    collection, doc, addDoc, setDoc, updateDoc, getDoc, getDocs,
-    query, where, onSnapshot,
-    serverTimestamp, increment, limit
+    collection, doc, addDoc, updateDoc, getDocs, getDoc, setDoc,
+    query, where, onSnapshot, serverTimestamp, increment, limit
   } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
-  import { ref as sRef, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js";
+  import { ref as sRef, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js";
 
   const badgeLine = document.getElementById("badgeLine");
   const alertBox = document.getElementById("alertBox");
+  const logoutBtn = document.getElementById("logoutBtn");
+
   function showAlert(msg, ok=false){
     alertBox.style.display = "block";
     alertBox.classList.toggle("ok", !!ok);
@@ -210,17 +135,6 @@ body{
   const createPrestaBtn = document.getElementById("createPrestaBtn");
   const goPaymentsBtn = document.getElementById("goPaymentsBtn");
   const goHomeBtn = document.getElementById("goHomeBtn");
-  const sendPdfBtn = document.getElementById("sendPdfBtn");
-
-  // Modal PDF
-  const pdfModal = document.getElementById("pdfModal");
-  const pdfCloseBtn = document.getElementById("pdfCloseBtn");
-  const pdfCancelBtn = document.getElementById("pdfCancelBtn");
-  const pdfSendBtn = document.getElementById("pdfSendBtn");
-  const pdfLabelEl = document.getElementById("pdfLabel");
-  const pdfKindEl = document.getElementById("pdfKind");
-  const pdfSalesDocIdEl = document.getElementById("pdfSalesDocId");
-  const pdfFileEl = document.getElementById("pdfFile");
 
   let currentUser = null;
   let allThreads = [];
@@ -247,10 +161,25 @@ body{
     }catch(e){ return "—"; }
   }
 
-  // ===== threadId stable =====
-  function makeThreadId(conciergerieUid, ownerDocId){
-    return `t_${String(conciergerieUid||"").trim()}_${String(ownerDocId||"").trim()}`;
+  // ===== AUTH / ROLE GUARD (Firebase only) =====
+  async function guardConciergerie(user){
+    try{
+      const snap = await getDoc(doc(db, "users", user.uid));
+      if(!snap.exists()) return false;
+      const data = snap.data() || {};
+      const roleOk = (data.role === "conciergerie" || data.role === "admin");
+      const subOk  = (data.subscriptionStatus === "active");
+      return roleOk && subOk;
+    }catch(e){
+      return false;
+    }
   }
+
+  logoutBtn.onclick = async ()=>{
+    await signOut(auth);
+    try{ localStorage.removeItem("cm_auth"); }catch(_){}
+    location.href = "index.html";
+  };
 
   function renderThreads(){
     const q = (threadSearchEl.value || "").toLowerCase().trim();
@@ -321,63 +250,38 @@ body{
   }
 
   function isMeMessage(m){
-    // ✅ règle simple : si senderRole=CONCIERGERIE => c'est moi
-    if(String(m?.senderRole||"").toUpperCase() === "CONCIERGERIE") return true;
-    // sinon fallback uid
     if(String(m?.senderUid||"") === String(currentUser?.uid||"")) return true;
-    return false;
+    return String(m?.senderRole||"").toUpperCase() === "CONCIERGERIE";
+  }
+
+  async function openAttachment(att){
+    const path = String(att?.storagePath || "").trim();
+    if(!path) return showAlert("Pièce jointe : storagePath manquant.");
+    try{
+      const url = await getDownloadURL(sRef(storage, path));
+      window.open(url, "_blank");
+    }catch(e){
+      showAlert("Téléchargement impossible : " + (e?.message || "erreur"));
+    }
   }
 
   function renderAttachments(atts){
-    const arr = Array.isArray(atts) ? atts : [];
-    if(!arr.length) return "";
-
-    const rows = arr.map((a, idx)=>{
-      const kind = esc(String(a?.kind||"FILE"));
-      const label = esc(String(a?.label||"Pièce jointe"));
-      const ct = esc(String(a?.contentType||""));
-      const sp = esc(String(a?.storagePath||""));
-      const salesDocId = esc(String(a?.salesDocId||""));
-      const info = [kind, ct].filter(Boolean).join(" • ");
-
-      // bouton download (data-path)
+    if(!Array.isArray(atts) || !atts.length) return "";
+    const items = atts.map((a,i)=>{
+      const label = esc(a?.label || "Pièce jointe");
+      const kind  = esc(a?.kind || "FILE");
+      const ct    = esc(a?.contentType || "");
       return `
-        <div class="att-row" style="margin-top:8px; padding:10px; border-radius:12px; background:rgba(122,92,255,0.10); border:1px solid rgba(122,92,255,0.20);">
-          <div style="display:flex; justify-content:space-between; gap:10px; align-items:center;">
-            <div style="min-width:0;">
-              <div style="font-weight:900; font-size:12px;">${label}</div>
-              <div style="font-weight:800; font-size:11px; color:#555;">${info}${salesDocId ? " • " + salesDocId : ""}</div>
-              ${sp ? `<div style="font-weight:800; font-size:11px; color:#666; margin-top:4px;">${sp}</div>` : `<div style="font-weight:800; font-size:11px; color:#A61E4D; margin-top:4px;">storagePath manquant</div>`}
-            </div>
-            <button class="att-dl" type="button" data-path="${sp}" style="border:none; border-radius:999px; padding:9px 10px; font-weight:900; cursor:pointer; color:#fff; background:linear-gradient(90deg,#7A5CFF,#6238FF); white-space:nowrap;">
-              Télécharger
-            </button>
+        <div class="att">
+          <div class="l">
+            <b>${label}</b>
+            <span>${kind}${ct ? " • " + ct : ""}</span>
           </div>
+          <button class="btnMini" type="button" data-att="${i}">Ouvrir</button>
         </div>
       `;
     }).join("");
-
-    return `<div class="att-box">${rows}</div>`;
-  }
-
-  function attachDownloadHandlers(scopeEl){
-    const btns = scopeEl.querySelectorAll(".att-dl");
-    btns.forEach(btn=>{
-      btn.addEventListener("click", async ()=>{
-        const path = String(btn.getAttribute("data-path") || "").trim();
-        if(!path){
-          showAlert("storagePath manquant sur cette pièce jointe.");
-          return;
-        }
-        try{
-          const url = await getDownloadURL(sRef(storage, path));
-          window.open(url, "_blank");
-        }catch(e){
-          console.error(e);
-          showAlert("Téléchargement impossible : " + (e?.message || "erreur"));
-        }
-      });
-    });
+    return `<div class="attBox">${items}</div>`;
   }
 
   function listenMessages(threadId){
@@ -389,8 +293,8 @@ body{
     unsubMessages = onSnapshot(col, (snap)=>{
       const msgs = snap.docs.map(d => ({ id:d.id, ...d.data() }));
       msgs.sort((a,b)=>{
-        const ta = (a.at?.seconds ?? a.createdAt?.seconds ?? 0);
-        const tb = (b.at?.seconds ?? b.createdAt?.seconds ?? 0);
+        const ta = a.at?.seconds ?? a.createdAt?.seconds ?? 0;
+        const tb = b.at?.seconds ?? b.createdAt?.seconds ?? 0;
         return ta - tb;
       });
 
@@ -405,20 +309,24 @@ body{
         const div = document.createElement("div");
         div.className = "msg " + (me ? "me" : "them");
 
-        const ts = m.at || m.createdAt;
-        const text = String(m.text || "");
-
+        const atts = Array.isArray(m.attachments) ? m.attachments : [];
         div.innerHTML = `
-          <div>${esc(text)}</div>
-          ${renderAttachments(m.attachments)}
+          <div>${esc(m.text || "")}</div>
+          ${renderAttachments(atts)}
           <div class="meta">
             <span>${me ? "Conciergerie" : "Propriétaire"}</span>
-            <span>${fmtTime(ts)}</span>
+            <span>${fmtTime(m.at || m.createdAt)}</span>
           </div>
         `;
 
+        // bind buttons
+        if(atts.length){
+          div.querySelectorAll("button[data-att]").forEach(btn=>{
+            btn.onclick = ()=> openAttachment(atts[Number(btn.dataset.att)]);
+          });
+        }
+
         msgsEl.appendChild(div);
-        attachDownloadHandlers(div);
       });
 
       setTimeout(()=>{ msgsEl.scrollTop = msgsEl.scrollHeight; }, 0);
@@ -449,7 +357,9 @@ body{
   }
 
   async function sendMessage(){
-    const text = (composerEl.value || "").trim();
+    // NOTE: rules imposent text.size() > 0
+    let text = (composerEl.value || "").trim();
+
     if(!activeThreadId){
       alert("Choisis une conversation à gauche.");
       return;
@@ -458,14 +368,10 @@ body{
 
     const threadId = activeThreadId;
     try{
-      // ✅ compat : on écrit at + createdAt (owner-dashboard utilise createdAt)
-      const ts = serverTimestamp();
-
       await addDoc(collection(db,"threads",threadId,"messages"), {
         text,
-        at: ts,
-        createdAt: ts,
-        senderUid: currentUser.uid,          // ✅ conciergerie uid
+        at: serverTimestamp(),
+        senderUid: currentUser.uid,
         senderRole: "CONCIERGERIE",
         attachments: []
       });
@@ -483,102 +389,6 @@ body{
     }
   }
 
-  // ===== PDF modal helpers =====
-  function openPdfModal(){
-    if(!activeThreadId){
-      alert("Choisis une conversation à gauche.");
-      return;
-    }
-    const t = allThreads.find(x => x.id === activeThreadId);
-    if(!t){
-      alert("Thread introuvable.");
-      return;
-    }
-    pdfLabelEl.value = "";
-    pdfKindEl.value = "INVOICE_PDF";
-    pdfSalesDocIdEl.value = "";
-    pdfFileEl.value = "";
-    pdfModal.style.display = "block";
-  }
-  function closePdfModal(){
-    pdfModal.style.display = "none";
-  }
-  pdfCloseBtn.addEventListener("click", closePdfModal);
-  pdfCancelBtn.addEventListener("click", closePdfModal);
-  pdfModal.addEventListener("click", (e)=>{
-    if(e.target === pdfModal) closePdfModal();
-  });
-
-  async function sendPdfAttachment(){
-    hideAlert();
-
-    if(!activeThreadId) return;
-    const t = allThreads.find(x => x.id === activeThreadId);
-    if(!t) return showAlert("Thread introuvable.");
-
-    const file = pdfFileEl.files && pdfFileEl.files[0];
-    if(!file) return showAlert("Choisis un fichier PDF.");
-    if(String(file.type || "") !== "application/pdf"){
-      return showAlert("Le fichier doit être un PDF (application/pdf).");
-    }
-
-    const label = String(pdfLabelEl.value || "").trim() || "Document PDF";
-    const kind = String(pdfKindEl.value || "OTHER_PDF").trim();
-    const salesDocId = String(pdfSalesDocIdEl.value || "").trim();
-
-    // pour le chemin storage: si salesDocId vide => misc
-    const folder = salesDocId ? salesDocId : "misc";
-    const filename = Date.now() + ".pdf";
-    const storagePath = `invoices/${currentUser.uid}/${String(t.ownerUid || "unknownOwnerUid")}/${folder}/${filename}`;
-
-    pdfSendBtn.disabled = true;
-    pdfSendBtn.style.opacity = "0.7";
-
-    try{
-      // 1) upload
-      await uploadBytes(sRef(storage, storagePath), file, { contentType: "application/pdf" });
-
-      // 2) message
-      const ts = serverTimestamp();
-      await addDoc(collection(db,"threads",activeThreadId,"messages"), {
-        text: label,
-        at: ts,
-        createdAt: ts,
-        senderUid: currentUser.uid,
-        senderRole: "CONCIERGERIE",
-        attachments: [{
-          kind,
-          label,
-          salesDocId: salesDocId || "",
-          storagePath,
-          contentType: "application/pdf"
-        }]
-      });
-
-      // 3) thread summary + unread owner
-      await updateDoc(doc(db,"threads",activeThreadId), {
-        lastText: label,
-        lastAt: serverTimestamp(),
-        unreadForOwner: increment(1)
-      });
-
-      showAlert("✅ PDF envoyé (message + pièce jointe).", true);
-      setTimeout(hideAlert, 900);
-      closePdfModal();
-
-    }catch(e){
-      console.error(e);
-      showAlert("Erreur envoi PDF : " + (e?.message || "inconnue"));
-    }finally{
-      pdfSendBtn.disabled = false;
-      pdfSendBtn.style.opacity = "1";
-    }
-  }
-
-  pdfSendBtn.addEventListener("click", sendPdfAttachment);
-  sendPdfBtn.addEventListener("click", openPdfModal);
-
-  // ===== Nouveau thread : setDoc sur un ID stable =====
   async function newThread(){
     hideAlert();
 
@@ -616,51 +426,42 @@ body{
       return;
     }
 
-    const ownerUid = String(chosen.ownerUid || chosen.ownerUserId || "").trim(); // peut être vide
+    const ownerUid = String(chosen.ownerUid || "").trim(); // obligatoire pour tes rules threads/create
+    const ownerEmail = String(chosen.ownerAccountEmail || chosen.ownerEmail || chosen.pendingOwnerEmail || "").trim();
+    if(!ownerUid || !ownerEmail){
+      alert("Ce logement n’a pas ownerUid ou ownerEmail. Corrige la liaison propriétaire.");
+      return;
+    }
+
     const ownerNameDefault =
       (chosen.ownerAccountName || chosen.ownerFullname || chosen.ownerName || chosen.homeOwner || "Propriétaire");
     const ownerName = prompt("Nom du propriétaire :", ownerNameDefault);
     if(!ownerName) return;
 
-    const ownerEmail = String(chosen.ownerAccountEmail || chosen.ownerEmail || chosen.pendingOwnerEmail || "").trim();
     const ownerEmailLower = ownerEmail.toLowerCase();
-
     const homeLabel = `${(chosen.name || chosen.label || "Logement")} • ${(chosen.homeCity || chosen.city || "")}`.trim();
 
-    // ✅ threadId stable
-    const threadId = makeThreadId(currentUser.uid, ownerDocId);
-
     try{
-      // crée/merge le thread (sans dupliquer)
-      await setDoc(doc(db,"threads", threadId), {
+      const threadRef = await addDoc(collection(db,"threads"), {
         conciergerieUid: currentUser.uid,
-
         ownerDocId,
-        ownerUid: ownerUid || "",
-
-        homeId: chosen.id,
-        homeLabel,
-
+        ownerUid,
         ownerName: String(ownerName).trim(),
         ownerEmailLower,
-
+        homeId: chosen.id,
+        homeLabel,
         lastText: "Conversation créée.",
         lastAt: serverTimestamp(),
         createdAt: serverTimestamp(),
-
         unreadForConciergerie: 0,
         unreadForOwner: 0,
-
         flags: { paymentDue:false },
         closed: false
-      }, { merge:true });
+      });
 
-      // message système si la sous-collection est vide (on ne sait pas lire vite ici, donc on ajoute 1 message "idempotent-ish")
-      const ts = serverTimestamp();
-      await addDoc(collection(db,"threads",threadId,"messages"), {
+      await addDoc(collection(db,"threads",threadRef.id,"messages"), {
         text:"Conversation créée.",
-        at: ts,
-        createdAt: ts,
+        at: serverTimestamp(),
         senderUid: currentUser.uid,
         senderRole: "CONCIERGERIE",
         attachments: []
@@ -668,11 +469,6 @@ body{
 
       showAlert("✅ Conversation créée.", true);
       setTimeout(hideAlert, 900);
-
-      // ouvre direct
-      activeThreadId = null;
-      openThread(threadId);
-
     }catch(err){
       console.error(err);
       showAlert("Erreur création thread : " + (err?.message || "inconnue"));
@@ -722,11 +518,19 @@ body{
     location.href = t?.homeId ? ("planning.html?homeId=" + encodeURIComponent(t.homeId)) : "logements.html";
   });
 
-  onAuthStateChanged(auth, (user)=>{
+  onAuthStateChanged(auth, async (user)=>{
     if(!user){
       location.href = "login.html?role=conciergerie";
       return;
     }
+
+    const ok = await guardConciergerie(user);
+    if(!ok){
+      showAlert("⛔ Abonnement inactif. Merci de choisir une offre.");
+      setTimeout(()=> location.href = "abonnement.html?plan=starter", 700);
+      return;
+    }
+
     currentUser = user;
 
     if(unsubThreads) unsubThreads();
