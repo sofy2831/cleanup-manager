@@ -1,4 +1,4 @@
-<!-- docs/logements.html (FINAL COHÉRENT — ownerDocId=owners.docId, ownerUid=auth.uid, "Associer" seulement si owner ACTIVE (uid présent), booking bloqué tant que ownerUid vide) -->
+<!-- docs/logements.html (COMPLET — COHÉRENT: homes.ownerDocId (owners docId) + homes.ownerUid (auth uid) + "Associer" si owner existe + compteur par ownerDocId) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -227,6 +227,7 @@
     }
     .chip.ok{ background:rgba(27,143,77,0.14); color:var(--ok); }
     .chip.bad{ background:rgba(179,38,30,0.14); color:var(--bad); }
+    .chip.blue{ background:rgba(0,163,255,0.14); color:#0067a6; }
     .chip.orange{ background:rgba(255,140,0,0.16); color:#9a4f00; }
 
     .item-actions{ display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; }
@@ -556,10 +557,9 @@
 
   // booking modal
   const bookingBackdrop = document.getElementById("bookingBackdrop");
+  const bookingAlert = document.getElementById("bookingAlert");
   const bookingHomeSelect = document.getElementById("bookingHomeSelect");
   const bookingHomeInfo = document.getElementById("bookingHomeInfo");
-  const bookingForm = document.getElementById("bookingForm");
-  const bookingAlert = document.getElementById("bookingAlert");
   const arrivalDateInput = document.getElementById("arrivalDateInput");
   const departureDateInput = document.getElementById("departureDateInput");
   const arrivalTimeInput = document.getElementById("arrivalTimeInput");
@@ -644,7 +644,11 @@
   }
 
   // ===== Abonnement guard =====
-  const FREE_EMAILS = new Set(["mathilde.debout31@gmail.com","s.dumas974@gmail.com"]);
+  const FREE_EMAILS = new Set([
+    "mathilde.debout31@gmail.com",
+    "s.dumas974@gmail.com"
+  ]);
+
   async function guardConciergerie(user){
     const email = (user.email || "").toLowerCase();
     if(FREE_EMAILS.has(email)) return true;
@@ -667,7 +671,7 @@
 
   function isArchived(h){ return h?.status === "archived"; }
 
-  // ===== Owners index + compteur logements par ownerDocId =====
+  // ===== owners index : emailLower -> owner ; id(ownerDocId) -> owner ; counts by ownerDocId =====
   let ownersByEmailLower = new Map(); // emailLower -> ownerObj
   let ownersById = new Map();         // ownerDocId -> ownerObj
   let ownerHomeCountById = new Map(); // ownerDocId -> count
@@ -684,6 +688,7 @@
   async function loadOwnersIndex(){
     ownersByEmailLower = new Map();
     ownersById = new Map();
+
     if(!currentUid) return;
 
     try{
@@ -706,45 +711,30 @@
     computeOwnerHomeCounts();
   }
 
-  // ✅ Associer uniquement si owner est déjà ACTIVE (uid auth présent)
-  function getExistingActiveOwnerForHome(home){
+  function getExistingOwnerForHome(home){
     const emailLower = normEmail(home.ownerAccountEmail || home.ownerEmail || home.pendingOwnerEmail || "");
     if(!emailLower) return null;
-    const o = ownersByEmailLower.get(emailLower) || null;
-    if(!o) return null;
-
-    const uid = String(o.uid || "").trim();
-    const st = String(o.status || "").trim().toUpperCase();
-
-    if(!uid) return null;                 // pas encore accepté
-    if(st && st !== "ACTIVE") return null; // on veut un owner “compte OK”
-    return o;
+    return ownersByEmailLower.get(emailLower) || null; // owner.id = ownerDocId, owner.uid = auth uid (si accepté)
   }
 
-  // ===== LIAISON HOME -> OWNER (cohérent) =====
-  // ownerDocId = owners.docId
-  // ownerUid   = owners.uid (auth uid) (peut être vide si pas accepté => on ne “lie” pas)
+  // ✅ COHÉRENT: homes.ownerDocId = owners doc id ; homes.ownerUid = auth uid (si connu)
   async function linkHomeToOwner(homeId, owner){
     if(!homeId || !owner?.id) return;
 
     const ownerDocId = String(owner.id).trim();
-    const ownerUid   = String(owner.uid || "").trim();
-    const email      = String(owner.email || owner.emailLower || "").trim();
-
-    if(!ownerUid){
-      showAlert("⛔ Impossible d’associer : ce propriétaire n’a pas encore accepté (uid manquant). Utilise “Inviter”.", false);
-      return;
-    }
+    const ownerUid = String(owner.uid || "").trim(); // auth uid (peut être vide si owner pas encore accepté)
 
     try{
       await updateDoc(doc(db,"homes", homeId), {
         ownerDocId,
-        ownerUid,                 // ✅ auth uid, pas ownerDocId
-        ownerLinkStatus: "LINKED",
+        ownerUid,
+        ownerLinkStatus: ownerUid ? "LINKED" : "LINKED_NOAUTH",
         pendingOwnerEmail: "",
         pendingInviteToken: "",
-        ownerAccountEmail: email,
-        ownerEmail: email,
+
+        ownerAccountEmail: String(owner.email || owner.emailLower || "").trim(),
+        ownerEmail: String(owner.email || owner.emailLower || "").trim(),
+
         updatedAt: serverTimestamp()
       });
 
@@ -752,17 +742,22 @@
       if(h){
         h.ownerDocId = ownerDocId;
         h.ownerUid = ownerUid;
-        h.ownerLinkStatus = "LINKED";
+        h.ownerLinkStatus = ownerUid ? "LINKED" : "LINKED_NOAUTH";
         h.pendingOwnerEmail = "";
         h.pendingInviteToken = "";
-        h.ownerAccountEmail = email;
-        h.ownerEmail = email;
+        if(owner.email || owner.emailLower){
+          h.ownerAccountEmail = String(owner.email || owner.emailLower || "").trim();
+          h.ownerEmail = String(owner.email || owner.emailLower || "").trim();
+        }
       }
 
       computeOwnerHomeCounts();
       if(h) await hydrateOwnerSnapshotForHome(h);
 
-      showAlert("✅ Logement associé au propriétaire existant (compte actif).", true);
+      showAlert(ownerUid
+        ? "✅ Logement associé au propriétaire (compte connecté)."
+        : "✅ Logement associé à la fiche propriétaire (compte pas encore accepté).", true);
+
       render();
     }catch(err){
       console.error(err);
@@ -770,7 +765,7 @@
     }
   }
 
-  // ===== hydrate owner snapshot in homes (sur ownerDocId) =====
+  // ===== hydrate owner snapshot in homes (depuis owners/{ownerDocId}) =====
   const hydratedHomeIds = new Set();
 
   async function hydrateOwnerSnapshotForHome(home){
@@ -787,7 +782,7 @@
         !!String(home.ownerZip || "").trim() ||
         !!String(home.ownerCity || "").trim() ||
         !!String(home.ownerAccountName || home.ownerFullname || "").trim() ||
-        !!normEmail(home.ownerAccountEmail || home.ownerEmail || "");
+        !!String(home.ownerAccountEmail || home.ownerEmail || "").trim();
 
       if(alreadyHasOwnerSnapshot){
         hydratedHomeIds.add(home.id);
@@ -837,7 +832,11 @@
     currentUid = user.uid;
 
     try{
-      const qh = query(collection(db, "homes"), where("conciergerieUid", "==", currentUid));
+      const qh = query(
+        collection(db, "homes"),
+        where("conciergerieUid", "==", currentUid)
+      );
+
       const snap = await getDocs(qh);
       allHomes = snap.docs.map(d => ({ id: d.id, ...d.data() }));
 
@@ -880,8 +879,8 @@
     ownerNameEl.value = (home.ownerName || home.homeOwner || "").trim();
     ownerPhoneEl.value = home.ownerPhone || "";
     homeType.value = (home.homeType || home.type || "Studio");
-
     ownerAccountEmailEl.value = (home.ownerAccountEmail || home.ownerEmail || home.pendingOwnerEmail || "").toString().trim();
+
     setTimeout(()=>homeName.focus(), 0);
   }
 
@@ -921,8 +920,8 @@
     const city = (h.homeCity || h.city || "—").toString().trim();
     const ownerName = (h.ownerName || h.homeOwner || "—").toString().trim();
     const ownerPhone = (h.ownerPhone || "—").toString().trim();
-    const ownerUid = (h.ownerUid || "").toString().trim();
-    const ownerDocId = (h.ownerDocId || "").toString().trim();
+    const ownerUid = (h.ownerUid || "").toString().trim();       // auth uid
+    const ownerDocId = (h.ownerDocId || "").toString().trim();   // owners doc id
     const ownerEmail = (h.ownerAccountEmail || h.ownerEmail || h.pendingOwnerEmail || "").toString().trim();
 
     bookingHomeInfo.style.display = "block";
@@ -932,8 +931,8 @@
       <div><b>CP :</b> ${escapeHtml(zip)} • <b>Ville :</b> ${escapeHtml(city)}</div>
       <div><b>Nom du propriétaire :</b> ${escapeHtml(ownerName)}</div>
       <div><b>Téléphone propriétaire :</b> ${escapeHtml(ownerPhone)}</div>
-      <div><b>OwnerDocId :</b> ${ownerDocId ? escapeHtml(ownerDocId) : "—"}</div>
-      <div><b>Compte lié :</b> ${ownerUid ? "✅ " + escapeHtml(ownerEmail || ownerUid) : "⛔ non (réservation bloquée)"}</div>
+      <div><b>OwnerDocId :</b> ${ownerDocId ? "✅ " + escapeHtml(ownerDocId) : "⛔ non"}</div>
+      <div><b>Compte (auth uid) :</b> ${ownerUid ? "✅ " + escapeHtml(ownerEmail || ownerUid) : "⛔ non (réservation bloquée)"}</div>
     `;
   }
 
@@ -952,21 +951,21 @@
 
     fillBookingHomeSelect(homeId);
 
-    const h0 = allHomes.find(x => x.id === (bookingHomeSelect.value || homeId || ""));
-    if(h0 && String(h0.ownerDocId || "").trim()){
-      hydrateOwnerSnapshotForHome(h0);
-    }
-
     const h = allHomes.find(x => x.id === (bookingHomeSelect.value || homeId || ""));
-    const ownerUid = String(h?.ownerUid || "").trim();
+    if(h){
+      if(String(h.ownerDocId || "").trim()){
+        hydrateOwnerSnapshotForHome(h);
+      }
 
-    if(h && !ownerUid){
-      const active = getExistingActiveOwnerForHome(h);
-      if(active){
-        const n = ownerHomeCountById.get(active.id) || 0;
-        showBookingAlert(`⛔ Propriétaire non lié. Compte actif existe déjà (${n} logement(s)). Retourne sur la ligne du logement et clique “Associer”.`, false);
-      }else{
-        showBookingAlert("⛔ Propriétaire non lié : invite + acceptation obligatoires avant de créer une réservation.", false);
+      const ownerUid = String(h.ownerUid || "").trim();
+      if(!ownerUid){
+        const ex = getExistingOwnerForHome(h);
+        if(ex){
+          const n = ownerHomeCountById.get(ex.id) || 0;
+          showBookingAlert(`⛔ Compte propriétaire non connecté (auth). La fiche existe (${n} logement(s)). Invite/acceptation obligatoire pour réserver.`, false);
+        }else{
+          showBookingAlert("⛔ Propriétaire non lié : invite + acceptation obligatoires avant de créer une réservation.", false);
+        }
       }
     }
 
@@ -984,22 +983,23 @@
     renderBookingHomeInfo(bookingHomeSelect.value);
 
     const h = allHomes.find(x => x.id === (bookingHomeSelect.value || ""));
-    const ownerUid = String(h?.ownerUid || "").trim();
-
-    if(h && !ownerUid){
-      const active = getExistingActiveOwnerForHome(h);
-      if(active){
-        const n = ownerHomeCountById.get(active.id) || 0;
-        showBookingAlert(`⛔ Propriétaire non lié. Compte actif existe déjà (${n} logement(s)). Clique “Associer” dans Logements.`, false);
-      }else{
-        showBookingAlert("⛔ Propriétaire non lié : réservation bloquée.", false);
+    if(h){
+      if(String(h.ownerDocId || "").trim()){
+        hydrateOwnerSnapshotForHome(h);
       }
-    }else{
-      hideBookingAlert();
-    }
 
-    if(h && String(h.ownerDocId || "").trim()){
-      hydrateOwnerSnapshotForHome(h);
+      const ownerUid = String(h.ownerUid || "").trim();
+      if(!ownerUid){
+        const ex = getExistingOwnerForHome(h);
+        if(ex){
+          const n = ownerHomeCountById.get(ex.id) || 0;
+          showBookingAlert(`⛔ Compte propriétaire non connecté (auth). Fiche existe (${n} logement(s)).`, false);
+        }else{
+          showBookingAlert("⛔ Propriétaire non lié : réservation bloquée.", false);
+        }
+      }else{
+        hideBookingAlert();
+      }
     }
   });
 
@@ -1063,6 +1063,7 @@
     }
 
     filtered.forEach(h=>{
+      // hydrate si ownerDocId présent
       if(String(h.ownerDocId || "").trim()){
         hydrateOwnerSnapshotForHome(h); // fire-and-forget
       }
@@ -1076,49 +1077,51 @@
       const ownerLabel = (h.ownerName || h.homeOwner || "").trim() || "—";
       const ownerPhone = (h.ownerPhone || "").trim();
 
-      const ownerUid = String(h.ownerUid || "").trim();
-      const ownerDocId = String(h.ownerDocId || "").trim();
-      const pendingEmail = String(h.pendingOwnerEmail || "").trim();
+      const ownerUid = (h.ownerUid || "").toString().trim();       // auth uid
+      const ownerDocId = (h.ownerDocId || "").toString().trim();   // owners doc id
+      const pendingEmail = (h.pendingOwnerEmail || "").toString().trim();
 
       const ownerEmail = (
-        String(h.ownerAccountEmail || h.ownerEmail || "").trim()
+        (h.ownerAccountEmail || h.ownerEmail || "").toString().trim()
         || pendingEmail
         || ""
       );
 
-      // owner actif existant si email match + uid présent
-      const existingActiveOwner = (!ownerUid && !isArchived(h)) ? getExistingActiveOwnerForHome(h) : null;
-      const existingActiveCount = existingActiveOwner ? (ownerHomeCountById.get(existingActiveOwner.id) || 0) : 0;
+      // si pas de liaison docId mais owner existe déjà (emailLower)
+      const existingOwner = (!ownerDocId && !isArchived(h)) ? getExistingOwnerForHome(h) : null;
+      const existingOwnerCount = existingOwner ? (ownerHomeCountById.get(existingOwner.id) || 0) : 0;
 
       const statusChip = isArchived(h) ? `<span class="chip">Archivé</span>` : "";
 
       const accountChip = ownerUid
-        ? `<span class="chip ok">Compte lié ✅</span>`
-        : (pendingEmail
-            ? `<span class="chip">Invite en attente…</span>`
-            : (existingActiveOwner
-                ? `<span class="chip orange">Compte actif trouvé (${existingActiveCount} logement(s))</span>`
-                : `<span class="chip bad">Compte non lié ⛔</span>`
+        ? `<span class="chip ok">Compte actif ✅</span>`
+        : (ownerDocId
+            ? `<span class="chip orange">Fiche liée (attente acceptation)</span>`
+            : (existingOwner
+                ? `<span class="chip orange">Propriétaire existant (${existingOwnerCount} logement(s))</span>`
+                : (pendingEmail
+                    ? `<span class="chip">Invite en attente…</span>`
+                    : `<span class="chip bad">Non lié ⛔</span>`
+                  )
               )
           );
 
       const canBook = !!ownerUid && !isArchived(h);
 
-      // bouton associer UNIQUEMENT si owner actif trouvé
-      const associateBtn = (existingActiveOwner)
+      // bouton associer si owner existe déjà (email match)
+      const associateBtn = (existingOwner)
         ? `<button class="mini-btn ok" type="button" data-assoc="${escapeHtml(h.id)}">🔗 Associer</button>`
         : ``;
 
-      // Inviter : uniquement si pas lié, pas archivé, pas pending
-      const inviteBtn = (isArchived(h) || ownerUid || pendingEmail)
-        ? `<span class="mini-btn disabled">${ownerUid ? "Invité" : (pendingEmail ? "Invité" : "Inviter")}</span>`
+      const inviteBtn = (isArchived(h) || ownerUid || ownerDocId || existingOwner)
+        ? `<span class="mini-btn disabled">${ownerUid ? "Invité" : (ownerDocId ? "Lié" : (existingOwner ? "Associer" : "Inviter"))}</span>`
         : `<a class="mini-btn" href="${escapeHtml(buildInviteUrlForHome(h))}" data-invite="${escapeHtml(h.id)}">✉️ Inviter</a>`;
 
       const bookingBtn = isArchived(h)
         ? `<span class="mini-btn disabled">Réservation</span>`
         : (canBook
             ? `<button class="mini-btn primary" type="button" data-book="${h.id}">➕ Réservation</button>`
-            : `<span class="mini-btn disabled" title="Compte non lié">Réservation</span>`
+            : `<span class="mini-btn disabled" title="Compte propriétaire non connecté">Réservation</span>`
           );
 
       item.innerHTML = `
@@ -1132,8 +1135,8 @@
               ${ownerPhone ? `<br/>📞 ${escapeHtml(ownerPhone)}` : ""}
               ${ownerEmail ? `<br/>Email : <b>${escapeHtml(ownerEmail)}</b>` : `<br/>Email : <b>—</b>`}
               ${ownerDocId ? `<br/>OwnerDocId : <b>${escapeHtml(ownerDocId)}</b>` : ``}
-              ${ownerUid ? `<br/>OwnerUid : <b>${escapeHtml(ownerUid)}</b>` : ``}
-              ${existingActiveOwner ? `<br/><b>Compte actif trouvé :</b> ${escapeHtml(existingActiveOwner.email || existingActiveOwner.emailLower || "")}` : ``}
+              ${ownerUid ? `<br/>OwnerUid(auth) : <b>${escapeHtml(ownerUid)}</b>` : ``}
+              ${existingOwner ? `<br/><b>Owner existant trouvé :</b> ${escapeHtml(existingOwner.email || existingOwner.emailLower || "")}` : ``}
             </div>
             <div class="chips">
               <span class="chip">${escapeHtml(h.homeType || h.type || "Type")}</span>
@@ -1166,7 +1169,7 @@
       });
     });
 
-    // Associer
+    // Associer (emailLower -> owners)
     homesListEl.querySelectorAll("button[data-assoc]").forEach(btn=>{
       btn.addEventListener("click", async ()=>{
         hideAlert();
@@ -1174,14 +1177,14 @@
         const h = allHomes.find(x=>x.id===homeId);
         if(!h) return;
 
-        const ex = getExistingActiveOwnerForHome(h);
+        const ex = getExistingOwnerForHome(h);
         if(!ex){
-          showAlert("⛔ Aucun propriétaire actif trouvable pour cet email (uid manquant ou status != ACTIVE). Invite d'abord.", false);
+          showAlert("Aucun propriétaire existant trouvé pour cet email. (Vérifie owners.emailLower)", false);
           return;
         }
 
         const n = ownerHomeCountById.get(ex.id) || 0;
-        if(!confirm(`Associer ce logement au propriétaire actif (${n} logement(s)) ?`)) return;
+        if(!confirm(`Associer ce logement au propriétaire existant (${n} logement(s)) ?`)) return;
 
         await linkHomeToOwner(homeId, ex);
       });
@@ -1365,11 +1368,14 @@
         await addDoc(collection(db,"homes"), {
           conciergerieUid: user.uid,
           status: "active",
-          ownerUid: "",              // ✅ auth uid (rempli à l’acceptation / association ACTIVE)
-          ownerDocId: "",            // ✅ owners.docId (rempli à l’acceptation / association ACTIVE)
+
+          // ✅ modèle cohérent
+          ownerDocId: "",            // owners doc id
+          ownerUid: "",              // auth uid (après acceptation)
           ownerLinkStatus: "NONE",
           pendingOwnerEmail: "",
           pendingInviteToken: "",
+
           createdAt: serverTimestamp(),
           ...payload
         });
@@ -1379,10 +1385,9 @@
 
         if(ownerAccountEmail){
           const ex = ownersByEmailLower.get(ownerAccountEmail);
-          const exUid = String(ex?.uid || "").trim();
-          if(ex && exUid && String(ex.status||"").toUpperCase() === "ACTIVE"){
+          if(ex){
             const n = ownerHomeCountById.get(ex.id) || 0;
-            showAlert(`✅ Logement créé. Propriétaire actif existe déjà (${n} logement(s)) → clique “Associer”.`, true);
+            showAlert(`✅ Logement créé. Propriétaire déjà existant (${n} logement(s)) → clique “Associer” sur la ligne.`, true);
           }else{
             showAlert("✅ Logement créé. Maintenant → clique “Inviter” sur la ligne du logement.", true);
           }
@@ -1424,16 +1429,20 @@
     const h = allHomes.find(x => x.id === homeId);
     if (!h) return showBookingAlert("Logement introuvable. Recharge la page.");
 
-    const ownerUid = String(h?.ownerUid || "").trim();
+    const ownerUid = String(h?.ownerUid || "").trim(); // auth uid requis
     const ownerDocId = String(h?.ownerDocId || "").trim();
 
-    if(!ownerUid || !ownerDocId){
-      const active = getExistingActiveOwnerForHome(h);
-      if(active){
-        const n = ownerHomeCountById.get(active.id) || 0;
-        showBookingAlert(`⛔ Propriétaire non lié mais actif (${n} logement(s)). Clique “Associer” dans Logements.`, false);
+    if(!ownerUid){
+      if(ownerDocId){
+        showBookingAlert("⛔ Fiche propriétaire liée mais compte pas encore accepté (auth). Invite/acceptation obligatoire.", false);
       }else{
-        showBookingAlert("⛔ Propriétaire non lié : impossible de créer une réservation. Invite + acceptation d'abord.", false);
+        const ex = getExistingOwnerForHome(h);
+        if(ex){
+          const n = ownerHomeCountById.get(ex.id) || 0;
+          showBookingAlert(`⛔ Owner existant (${n} logement(s)) mais non lié. Clique “Associer” puis fais accepter l’invite.`, false);
+        }else{
+          showBookingAlert("⛔ Propriétaire non lié : impossible de créer une réservation. Invite + acceptation d'abord.", false);
+        }
       }
       return;
     }
@@ -1456,8 +1465,10 @@
         ownerName: String(h?.ownerName || h?.homeOwner || ""),
         ownerPhone: String(h?.ownerPhone || ""),
 
-        ownerUid: ownerUid,       // ✅ auth uid
-        ownerDocId: ownerDocId,   // ✅ owners.docId (utile pour join clients)
+        // ✅ cohérent
+        ownerDocId: String(ownerDocId || ""), // owners doc id
+        ownerUid: String(ownerUid),           // auth uid
+
         ownerAccountEmail: String(h?.ownerAccountEmail || h?.ownerEmail || h?.pendingOwnerEmail || ""),
         ownerAccountName: String(h?.ownerAccountName || h?.ownerFullname || ""),
 
