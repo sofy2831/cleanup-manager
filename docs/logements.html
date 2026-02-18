@@ -1,4 +1,4 @@
-<!-- docs/logements.html (COMPLET + PATCH: owner existant => "Associer" au lieu de "Inviter" + compteur X logements) -->
+<!-- docs/logements.html (COMPLET + CORRIGÉ — ownerUid = auth.uid, ownerDocId = owners.docId, association OK + compteur OK) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -453,8 +453,6 @@
         <label for="ownerAccountEmail">Email propriétaire (pour pré-remplir l’invitation / association)</label>
         <input id="ownerAccountEmail" type="email" placeholder="ex: proprio@email.com" />
 
-       
-
         <label for="homeType">Type</label>
         <select id="homeType" required>
           <option value="Studio">Studio</option>
@@ -528,7 +526,7 @@
   import {
     collection, query, where, getDocs,
     addDoc, updateDoc, deleteDoc, doc, getDoc,
-    serverTimestamp, limit
+    serverTimestamp, limit, writeBatch
   } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
   // ===== UI =====
@@ -559,9 +557,6 @@
 
   // booking modal
   const bookingBackdrop = document.getElementById("bookingBackdrop");
-  const bookingModalTitle = document.getElementById("bookingModalTitle");
-  const bookingModalHint = document.getElementById("bookingModalHint");
-
   const bookingForm = document.getElementById("bookingForm");
   const bookingAlert = document.getElementById("bookingAlert");
   const bookingHomeSelect = document.getElementById("bookingHomeSelect");
@@ -677,17 +672,18 @@
 
   function isArchived(h){ return h?.status === "archived"; }
 
-  // ===== PATCH : owners index (emailLower -> owner) + compteur X logements =====
+  // ===== Owners index + compteur =====
   let ownersByEmailLower = new Map(); // emailLower -> ownerObj
-  let ownersById = new Map();         // ownerId -> ownerObj
-  let ownerHomeCountById = new Map(); // ownerId -> count (homes liés)
+  let ownersById = new Map();         // ownerDocId -> ownerObj
+  let ownerHomeCountById = new Map(); // ownerDocId -> count(homes liés)
 
+  // ✅ Compte PAR ownerDocId (owners/{docId})
   function computeOwnerHomeCounts(){
     ownerHomeCountById = new Map();
     for(const h of allHomes){
-      const oid = String(h.ownerUid || h.ownerDocId || "").trim();
-      if(!oid) continue;
-      ownerHomeCountById.set(oid, (ownerHomeCountById.get(oid) || 0) + 1);
+      const ownerDocId = String(h.ownerDocId || "").trim();
+      if(!ownerDocId) continue;
+      ownerHomeCountById.set(ownerDocId, (ownerHomeCountById.get(ownerDocId) || 0) + 1);
     }
   }
 
@@ -697,7 +693,6 @@
 
     if(!currentUid) return;
 
-    // on charge les owners de la conciergerie (emailLower indexé chez toi)
     try{
       const qo = query(
         collection(db,"owners"),
@@ -724,38 +719,46 @@
     return ownersByEmailLower.get(emailLower) || null;
   }
 
+  // ✅ Association manuelle : home.ownerUid = auth.uid ; home.ownerDocId = owners.docId
   async function linkHomeToOwner(homeId, owner){
     if(!homeId || !owner?.id) return;
 
+    const ownerDocId = String(owner.id || "").trim();      // owners/{docId}
+    const ownerAuthUid = String(owner.uid || "").trim();   // auth.uid du propriétaire
+
+    // si uid vide => owner n’a pas accepté (pas de compte auth lié)
+    if(!ownerAuthUid){
+      showAlert("⛔ Ce propriétaire existe mais n’a pas encore créé son accès (owners.uid vide). Invite-le pour qu’il accepte, puis réessaie.", false);
+      return;
+    }
+
     try{
-      // on lie le home
       await updateDoc(doc(db,"homes", homeId), {
-        ownerUid: owner.id,
-        ownerDocId: owner.id,
+        ownerUid: ownerAuthUid,     // ✅ auth.uid
+        ownerDocId: ownerDocId,     // ✅ owners docId
         ownerLinkStatus: "LINKED",
         pendingOwnerEmail: "",
+        pendingInviteToken: "",
 
-        // on garde les champs email propres
         ownerAccountEmail: String(owner.email || owner.emailLower || "").trim(),
         ownerEmail: String(owner.email || owner.emailLower || "").trim(),
 
         updatedAt: serverTimestamp()
       });
 
-      // update cache local
       const h = allHomes.find(x=>x.id===homeId);
       if(h){
-        h.ownerUid = owner.id;
-        h.ownerDocId = owner.id;
+        h.ownerUid = ownerAuthUid;
+        h.ownerDocId = ownerDocId;
         h.ownerLinkStatus = "LINKED";
         h.pendingOwnerEmail = "";
+        h.pendingInviteToken = "";
         if(owner.email || owner.emailLower){
           h.ownerAccountEmail = String(owner.email || owner.emailLower || "").trim();
           h.ownerEmail = String(owner.email || owner.emailLower || "").trim();
         }
       }
 
-      // recompute counts + hydrate snapshot + refresh UI
       computeOwnerHomeCounts();
       if(h) await hydrateOwnerSnapshotForHome(h);
 
@@ -767,14 +770,15 @@
     }
   }
 
-  // ===== PATCH : hydrate owner snapshot in homes =====
+  // ===== Hydrate owner snapshot in homes =====
   const hydratedHomeIds = new Set();
 
   async function hydrateOwnerSnapshotForHome(home){
     try{
       if(!home?.id) return;
 
-      const ownerDocId = String(home.ownerUid || home.ownerDocId || "").trim();
+      // ✅ ownerDocId uniquement (ownerUid = auth.uid, pas un docId)
+      const ownerDocId = String(home.ownerDocId || "").trim();
       if(!ownerDocId) return;
 
       if(hydratedHomeIds.has(home.id)) return;
@@ -816,7 +820,6 @@
 
       await updateDoc(doc(db, "homes", home.id), payload);
 
-      // update cache local + UI immédiate
       Object.assign(home, payload);
       render();
     }catch(e){
@@ -849,9 +852,7 @@
         return tb - ta;
       });
 
-      // PATCH: charge owners index pour savoir si "owner existe déjà"
       await loadOwnersIndex();
-
       render();
     }catch(err){
       console.error("Erreur lecture homes:", err);
@@ -926,7 +927,7 @@
     const city = (h.homeCity || h.city || "—").toString().trim();
     const ownerName = (h.ownerName || h.homeOwner || "—").toString().trim();
     const ownerPhone = (h.ownerPhone || "—").toString().trim();
-    const ownerUid = (h.ownerUid || "").toString().trim();
+    const ownerUid = (h.ownerUid || "").toString().trim(); // ✅ auth.uid
     const ownerEmail = (h.ownerAccountEmail || h.ownerEmail || h.pendingOwnerEmail || "").toString().trim();
 
     bookingHomeInfo.style.display = "block";
@@ -955,9 +956,8 @@
 
     fillBookingHomeSelect(homeId);
 
-    // PATCH : hydrate snapshot quand on ouvre la réservation
     const h0 = allHomes.find(x => x.id === (bookingHomeSelect.value || homeId || ""));
-    if(h0 && String(h0.ownerUid || "").trim()){
+    if(h0 && String(h0.ownerDocId || "").trim()){
       hydrateOwnerSnapshotForHome(h0);
     }
 
@@ -998,8 +998,7 @@
       hideBookingAlert();
     }
 
-    // PATCH : hydrate aussi au changement
-    if(h && String(h.ownerUid || "").trim()){
+    if(h && String(h.ownerDocId || "").trim()){
       hydrateOwnerSnapshotForHome(h);
     }
   });
@@ -1039,9 +1038,8 @@
         h.ownerAccountEmail, h.ownerEmail,
         h.pendingOwnerEmail,
         h.ownerUid,
+        h.ownerDocId,
         h.ownerLinkStatus,
-
-        // snapshot owner
         h.ownerAccountName,
         h.ownerAddress1, h.ownerAddress2,
         h.ownerZip, h.ownerCity
@@ -1063,8 +1061,8 @@
     }
 
     filtered.forEach(h=>{
-      // PATCH : hydrate snapshot owner une fois dès qu’un compte est lié
-      if(String(h.ownerUid || "").trim()){
+      // hydrate snapshot owner si docId présent
+      if(String(h.ownerDocId || "").trim()){
         hydrateOwnerSnapshotForHome(h); // fire-and-forget
       }
 
@@ -1077,17 +1075,16 @@
       const ownerLabel = (h.ownerName || h.homeOwner || "").trim() || "—";
       const ownerPhone = (h.ownerPhone || "").trim();
 
-      const ownerUid = (h.ownerUid || "").toString().trim();
+      const ownerUid = (h.ownerUid || "").toString().trim(); // ✅ auth.uid
       const pendingEmail = (h.pendingOwnerEmail || "").toString().trim();
 
-      // email affiché (priorité : email du compte owner snapshot, sinon home.ownerAccountEmail, sinon pending)
       const ownerEmail = (
         (h.ownerAccountEmail || h.ownerEmail || "").toString().trim()
         || pendingEmail
         || ""
       );
 
-      // PATCH : si ownerUid vide mais owner existe déjà (emailLower match)
+      // existing owner détecté par emailLower (owners doc)
       const existingOwner = (!ownerUid && !isArchived(h)) ? getExistingOwnerForHome(h) : null;
       const existingOwnerCount = existingOwner ? (ownerHomeCountById.get(existingOwner.id) || 0) : 0;
 
@@ -1105,7 +1102,7 @@
 
       const canBook = !!ownerUid && !isArchived(h);
 
-      // PATCH : bouton "Associer" si owner existe déjà
+      // bouton "Associer" si owner existe déjà (et a accepté => owner.uid présent sera vérifié au clic)
       const associateBtn = (existingOwner)
         ? `<button class="mini-btn ok" type="button" data-assoc="${escapeHtml(h.id)}">🔗 Associer</button>`
         : ``;
@@ -1131,7 +1128,8 @@
               <br/>Propriétaire : <b>${escapeHtml(ownerLabel)}</b>
               ${ownerPhone ? `<br/>📞 ${escapeHtml(ownerPhone)}` : ""}
               ${ownerEmail ? `<br/>Email : <b>${escapeHtml(ownerEmail)}</b>` : `<br/>Email : <b>—</b>`}
-              ${ownerUid ? `<br/>Compte : <b>${escapeHtml(ownerUid)}</b>` : ``}
+              ${ownerUid ? `<br/>Compte (auth.uid) : <b>${escapeHtml(ownerUid)}</b>` : ``}
+              ${h.ownerDocId ? `<br/>Owner doc : <b>${escapeHtml(String(h.ownerDocId))}</b>` : ``}
               ${existingOwner ? `<br/><b>Compte existant trouvé :</b> ${escapeHtml(existingOwner.email || existingOwner.emailLower || "")}` : ``}
             </div>
             <div class="chips">
@@ -1180,7 +1178,7 @@
         }
 
         const n = ownerHomeCountById.get(ex.id) || 0;
-        if(!confirm(`Associer ce logement au propriétaire existant (${n} logement(s)) ?`)) return;
+        if(!confirm(`Associer ce logement au propriétaire existant (${n} logement(s)) ?\n\n(Attention : si le propriétaire n’a pas accepté l’invitation, l’association est impossible.)`)) return;
 
         await linkHomeToOwner(homeId, ex);
       });
@@ -1284,7 +1282,6 @@
         try{
           await deleteDoc(doc(db,"homes", id));
           allHomes = allHomes.filter(x=>x.id !== id);
-          // refresh owners counts (car un home lié peut disparaître)
           computeOwnerHomeCounts();
           render();
           showAlert("✅ Logement supprimé.", true);
@@ -1365,10 +1362,15 @@
         await addDoc(collection(db,"homes"), {
           conciergerieUid: user.uid,
           status: "active",
-          ownerUid: "",              // = owners.docId (sera rempli par invite-proprietaire ou association)
+
+          // ✅ ownerUid = auth.uid (vide tant que pas lié)
+          ownerUid: "",
+          // ✅ ownerDocId = owners.docId (vide tant que pas lié)
           ownerDocId: "",
           ownerLinkStatus: "NONE",
           pendingOwnerEmail: "",
+          pendingInviteToken: "",
+
           createdAt: serverTimestamp(),
           ...payload
         });
@@ -1376,7 +1378,6 @@
         closeHomeModal();
         await loadHomes();
 
-        // PATCH: si email saisi et owner existe déjà => message clair (UI proposera "Associer")
         if(ownerAccountEmail){
           const ex = ownersByEmailLower.get(ownerAccountEmail);
           if(ex){
@@ -1423,7 +1424,7 @@
     const h = allHomes.find(x => x.id === homeId);
     if (!h) return showBookingAlert("Logement introuvable. Recharge la page.");
 
-    const ownerUid = String(h?.ownerUid || "").trim();
+    const ownerUid = String(h?.ownerUid || "").trim(); // ✅ auth.uid
     if(!ownerUid){
       const ex = getExistingOwnerForHome(h);
       if(ex){
@@ -1453,12 +1454,14 @@
         ownerName: String(h?.ownerName || h?.homeOwner || ""),
         ownerPhone: String(h?.ownerPhone || ""),
 
-        ownerUid: ownerUid, // owners.docId
+        ownerUid: ownerUid, // ✅ auth.uid du propriétaire
         ownerAccountEmail: String(h?.ownerAccountEmail || h?.ownerEmail || h?.pendingOwnerEmail || ""),
         ownerAccountName: String(h?.ownerAccountName || h?.ownerFullname || ""),
 
         ownerEmail: String(h?.ownerEmail || h?.ownerAccountEmail || ""),
         ownerFullname: String(h?.ownerFullname || h?.ownerAccountName || ""),
+
+        ownerDocId: String(h?.ownerDocId || ""), // ✅ owners docId
 
         // snapshot adresse owner (si déjà hydraté)
         ownerAddress1: String(h?.ownerAddress1 || ""),
@@ -1536,4 +1539,3 @@
 
 </body>
 </html>
-
