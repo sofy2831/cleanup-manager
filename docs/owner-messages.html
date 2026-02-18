@@ -1,4 +1,4 @@
-<!-- docs/owner-messages.html (FINAL — lecture messages propriétaire + téléchargement pièces jointes PDF depuis Storage) -->
+<!-- docs/owner-messages.html (FINAL — propriétaire : lecture + envoi messages + téléchargement pièces jointes PDF Storage, compatible rules threads/messages) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -80,6 +80,9 @@
     .chat{
       display:flex; flex-direction:column; gap:10px;
       margin-top:10px;
+      max-height:60vh;
+      overflow:auto;
+      padding-right:2px;
     }
     .msg{
       max-width:92%;
@@ -214,8 +217,8 @@
     import { auth, db, storage } from "./firebase-init.js";
     import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
-      doc, getDoc, setDoc, addDoc, collection,
-      query, orderBy, limit, onSnapshot, serverTimestamp
+      doc, getDoc, setDoc, addDoc, updateDoc, collection,
+      query, where, orderBy, limit, onSnapshot, serverTimestamp, getDocs, increment
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
     import { ref as sRef, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js";
 
@@ -264,36 +267,103 @@
     let threadId = "";
     let unsubMessages = null;
 
-    function makeThreadId(conciergerieUid, ownerDocId){
-      // stable et lisible
-      return `t_${conciergerieUid}_${ownerDocId}`;
+    async function loadOwnerDocSafe(ownerDocId){
+      try{
+        const snap = await getDoc(doc(db,"owners", ownerDocId));
+        if(!snap.exists()) return null;
+        const o = snap.data() || {};
+        return {
+          fullname: String(o.fullname || o.name || o.displayName || "Propriétaire").trim(),
+          emailLower: String(o.emailLower || (o.email || "")).trim().toLowerCase()
+        };
+      }catch(_){
+        return null;
+      }
+    }
+
+    async function findExistingThreadId(){
+      // On cherche un thread existant (créé par conciergerie ou par owner)
+      // IMPORTANT: on ne force PAS un docId stable, car conciergerie.html fait addDoc() (id aléatoire).
+      const q1 = query(
+        collection(db,"threads"),
+        where("conciergerieUid","==", conciergerieUid),
+        where("ownerUid","==", currentUser.uid),
+        limit(5)
+      );
+      const s1 = await getDocs(q1);
+      if(!s1.empty) return s1.docs[0].id;
+
+      // fallback : si conciergerie avait mis ownerDocId mais ownerUid absent (ancien), on tente par ownerDocId
+      const q2 = query(
+        collection(db,"threads"),
+        where("conciergerieUid","==", conciergerieUid),
+        where("ownerDocId","==", ownerDocId),
+        limit(5)
+      );
+      const s2 = await getDocs(q2);
+      if(!s2.empty) return s2.docs[0].id;
+
+      return "";
     }
 
     async function ensureThread(){
-      const tRef = doc(db, "threads", threadId);
-      const snap = await getDoc(tRef);
-      if(snap.exists()) return;
+      if(threadId) return threadId;
 
-      // création thread minimal (si pas déjà créé par conciergerie)
-      await setDoc(tRef, {
-        conciergerieUid,
-        ownerDocId,
+      // 1) trouver thread existant
+      const found = await findExistingThreadId();
+      if(found){
+        threadId = found;
+        return threadId;
+      }
+
+      // 2) sinon créer un thread conforme à tes rules (threads create exige ownerUid + ownerEmailLower + ownerName + lastText + closed + unread…)
+      const od = await loadOwnerDocSafe(ownerDocId);
+      const ownerName = String(od?.fullname || "Propriétaire").trim();
+      const ownerEmailLower = String(od?.emailLower || "").trim().toLowerCase();
+
+      // lastText doit être string (rules), même vide OK si tu le veux
+      const threadRef = await addDoc(collection(db,"threads"), {
+        conciergerieUid: conciergerieUid,
+        ownerDocId: ownerDocId,
         ownerUid: currentUser.uid,
-        createdAt: serverTimestamp(),
+        ownerName: ownerName,
+        ownerEmailLower: ownerEmailLower,
+
+        homeId: "",            // optionnel
+        homeLabel: "",         // optionnel
+
+        lastText: "Conversation créée.",
         lastAt: serverTimestamp(),
-        lastText: "",
+        createdAt: serverTimestamp(),
+
         unreadForConciergerie: 0,
-        unreadForOwner: 0
-      }, { merge:true });
+        unreadForOwner: 0,
+
+        flags: { paymentDue:false },
+        closed: false
+      });
+
+      threadId = threadRef.id;
+
+      // message système initial
+      await addDoc(collection(db,"threads", threadId, "messages"), {
+        text: "Conversation créée.",
+        at: serverTimestamp(),
+        senderUid: currentUser.uid,
+        senderRole: "PROPRIETAIRE",
+        attachments: []
+      });
+
+      return threadId;
     }
 
     function renderMessage(m){
-      const role = String(m.senderRole || "").toUpperCase();
+      const role = String(m.senderRole || "").toUpperCase().trim();
       const isMe = role === "PROPRIETAIRE";
 
       const div = document.createElement("div");
       div.className = "msg" + (isMe ? " me" : "");
-      const meta = `${isMe ? "Moi" : "Conciergerie"} • ${fmtTs(m.createdAt)}`;
+      const meta = `${isMe ? "Moi" : "Conciergerie"} • ${fmtTs(m.at)}`;
 
       const text = String(m.text || "").trim();
       const atts = Array.isArray(m.attachments) ? m.attachments : [];
@@ -321,7 +391,9 @@
             </div>
             <button class="btnMini" type="button">Télécharger</button>
           `;
+
           row.querySelector("button").onclick = async ()=>{
+            hideAlert();
             if(!path) return showAlert("storagePath manquant sur cette pièce jointe.");
             try{
               const url = await getDownloadURL(sRef(storage, path));
@@ -330,6 +402,7 @@
               showAlert("Téléchargement impossible : " + (e?.message || "erreur"));
             }
           };
+
           attBox.appendChild(row);
         }
       }
@@ -337,23 +410,36 @@
       return div;
     }
 
-    function subscribeMessages(){
+    async function subscribeMessages(){
       if(unsubMessages) unsubMessages();
-      chatBox.innerHTML = "";
+      chatBox.innerHTML = `<div class="tiny">Chargement…</div>`;
+
+      const tid = await ensureThread();
+
+      threadHint.textContent = `threadId: ${tid}`;
 
       const q = query(
-        collection(db, "threads", threadId, "messages"),
-        orderBy("createdAt","asc"),
+        collection(db, "threads", tid, "messages"),
+        orderBy("at","asc"),
         limit(300)
       );
 
-      unsubMessages = onSnapshot(q, (snap)=>{
+      unsubMessages = onSnapshot(q, async (snap)=>{
         chatBox.innerHTML = "";
-        snap.forEach(d=>{
-          const m = d.data() || {};
-          chatBox.appendChild(renderMessage(m));
-        });
-        // scroll bottom
+        if(snap.empty){
+          chatBox.innerHTML = `<div class="tiny">Aucun message.</div>`;
+        }else{
+          snap.forEach(d=>{
+            const m = d.data() || {};
+            chatBox.appendChild(renderMessage(m));
+          });
+        }
+
+        // on remet unreadForOwner à 0 dès que le owner lit
+        try{
+          await updateDoc(doc(db,"threads", tid), { unreadForOwner: 0 });
+        }catch(_){}
+
         chatBox.scrollTop = chatBox.scrollHeight + 9999;
       }, (err)=>{
         showAlert("Erreur messages : " + (err?.message || "inconnue"));
@@ -367,23 +453,21 @@
 
       sendBtn.disabled = true;
       try{
-        await ensureThread();
+        const tid = await ensureThread();
 
-        // IMPORTANT : senderUid = owner uid, senderRole = PROPRIETAIRE
-        await addDoc(collection(db,"threads", threadId, "messages"), {
+        await addDoc(collection(db,"threads", tid, "messages"), {
           text,
-          createdAt: serverTimestamp(),
+          at: serverTimestamp(),
           senderRole: "PROPRIETAIRE",
           senderUid: currentUser.uid,
           attachments: []
         });
 
-        // mise à jour thread (lastAt/lastText + unread)
-        await setDoc(doc(db,"threads", threadId), {
+        await updateDoc(doc(db,"threads", tid), {
           lastAt: serverTimestamp(),
           lastText: text,
-          unreadForConciergerie: 1
-        }, { merge:true });
+          unreadForConciergerie: increment(1)
+        });
 
         msgInput.value = "";
       }catch(e){
@@ -393,6 +477,13 @@
       }
     };
 
+    msgInput.addEventListener("keydown", (e)=>{
+      if(e.key === "Enter" && !e.shiftKey){
+        e.preventDefault();
+        sendBtn.click();
+      }
+    });
+
     onAuthStateChanged(auth, async (user)=>{
       if(!user){ location.href = "login.html?role=proprietaire"; return; }
       currentUser = user;
@@ -400,6 +491,7 @@
       try{
         const us = await getDoc(doc(db,"users", user.uid));
         const ud = us.exists() ? (us.data()||{}) : {};
+
         ownerDocId = String(ud.ownerDocId || "").trim();
         conciergerieUid = String(ud.conciergerieUid || "").trim();
 
@@ -408,11 +500,8 @@
           return;
         }
 
-        threadId = makeThreadId(conciergerieUid, ownerDocId);
-        threadHint.textContent = `thread: ${threadId}`;
-
-        await ensureThread();
-        subscribeMessages();
+        threadId = ""; // recalcul / recherche
+        await subscribeMessages();
 
       }catch(e){
         showAlert("Erreur chargement : " + (e?.message || "inconnue"));
