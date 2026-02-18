@@ -1,4 +1,4 @@
-<!-- docs/preuves.html (FINAL++ — WhatsApp-like multi-photos (MENAGE global) + limite 20 + MAJ events.proofPhotos ; ZIP fallback inchangé) -->
+<!-- docs/preuves.html (FINAL+++ — WhatsApp-like multi-photos (MENAGE global) + limite 20 + MAJ events.proofPhotos ; ZIP fallback OK ; delete ZIP sans toucher event) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -37,7 +37,6 @@
     }
 
     .wrap{ width:100%; max-width:980px; margin-top:6px; display:flex; flex-direction:column; gap:10px; }
-
     h1{ margin:0; font-size:18px; font-weight:900; letter-spacing:-0.2px; }
     .sub{ margin-top:4px; color:#444; font-size:12px; font-weight:800; }
 
@@ -181,7 +180,7 @@
         <div class="mini" id="ruleHintPhotos">
           <b>Le plus simple :</b> sélectionne 5/10/20 photos dans ta galerie et envoie-les d’un coup.<br>
           Stockage : preuves rattachées à la prestation (mission <b>MENAGE</b>), visibles côté conciergerie.<br>
-          Limite : <b>20 photos</b> (pour éviter les soucis iPhone) • <b>30 Mo par fichier</b>.
+          Limite : <b>20 photos</b> • <b>30 Mo par fichier</b>.
         </div>
 
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:space-between;margin-top:8px;">
@@ -202,11 +201,11 @@
         <div id="photosPreview" class="thumbs" style="display:none;"></div>
       </section>
 
-      <!-- ✅ ZIP fallback (inchangé dans la logique, juste en dessous) -->
+      <!-- ✅ ZIP fallback -->
       <section class="card">
         <div class="mini" id="ruleHintZip">
-          <b>Alternative (si besoin) :</b> envoie <b>un seul fichier ZIP</b> (10/15 photos).<br>
-          <b>ZIP global</b> enregistré sur la mission <b>MENAGE</b> (pas de sélection).<br>
+          <b>Alternative :</b> envoie <b>un seul fichier ZIP</b> (10/15 photos).<br>
+          <b>ZIP global</b> enregistré sur la mission <b>MENAGE</b>.<br>
           Limite : <b>30 Mo</b>.
         </div>
 
@@ -261,7 +260,7 @@
     const chipLine = document.getElementById("chipLine");
     const backBtn = document.getElementById("backBtn");
 
-    // Photos (WhatsApp-like)
+    // Photos
     const photosInput = document.getElementById("photosInput");
     const clearPhotosBtn = document.getElementById("clearPhotosBtn");
     const uploadPhotosBtn = document.getElementById("uploadPhotosBtn");
@@ -271,7 +270,7 @@
     const progressTextPhotos = document.getElementById("progressTextPhotos");
     const progressBarPhotos = document.getElementById("progressBarPhotos");
 
-    // ZIP fallback
+    // ZIP
     const zipInput = document.getElementById("zipInput");
     const clearZipBtn = document.getElementById("clearZipBtn");
     const uploadZipBtn = document.getElementById("uploadZipBtn");
@@ -281,19 +280,18 @@
     const zipInfo = document.getElementById("zipInfo");
     const sizeHintZip = document.getElementById("sizeHintZip");
 
-    // ✅ MENAGE global (comme aujourd’hui)
-    const FORCED_MISSION_TYPE = "MENAGE";
-    const missionType = FORCED_MISSION_TYPE;
+    // ✅ MENAGE global
+    const missionType = "MENAGE";
 
-    // ✅ suppression Storage: par défaut on fait une suppression logique (Firestore only)
+    // ✅ suppression Storage: on ne delete pas Storage (rules fermées)
     const ALLOW_STORAGE_DELETE = false;
 
-    // ✅ ALIGNÉ RULES STORAGE : 30 Mo max par fichier
+    // ✅ 30 Mo max par fichier (aligné rules)
     const MAX_BYTES = 30 * 1024 * 1024;
 
-    // ✅ Limite photos (simple et cohérent avec rules Firestore: proofPhotos <= 20)
+    // ✅ 20 photos max (aligné rules Firestore proofPhotos <= 20)
     const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-    const MAX_PHOTOS = 20; // on garde 20 partout (simple + compatible rules)
+    const MAX_PHOTOS = 20;
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -369,16 +367,13 @@
       return (/\.zip$/i.test(clean)) ? clean : (clean + ".zip");
     }
 
-    function showPhotosHint(msg, ok){
+    function showPhotosHint(msg){
       photosHint.style.display = "block";
-      photosHint.classList.toggle("ok", !!ok);
-      photosHint.classList.toggle("bad", !ok);
       photosHint.textContent = msg;
     }
     function hidePhotosHint(){
       photosHint.style.display = "none";
       photosHint.textContent = "";
-      photosHint.classList.remove("ok","bad");
     }
 
     function renderLocalThumbs(files){
@@ -429,45 +424,19 @@
 
       div.querySelector("#delZipBtn")?.addEventListener("click", async ()=>{
         hideAlert();
-        const ok = confirm("Supprimer le ZIP ? (irréversible côté app)");
+        const ok = confirm("Supprimer le ZIP ? (référence app)");
         if(!ok) return;
 
         lockUI(true);
         try{
-          if(ALLOW_STORAGE_DELETE && proofZip.path){
-            try{ await deleteObject(sRef(storage, proofZip.path)); }catch(e){ console.warn("deleteObject failed", e); }
-          }
-
-          // ✅ nettoyage + garde-fou rules Firestore
-const cleanUrls = (urls || [])
-  .filter(u => typeof u === "string" && u.trim().length > 0);
-
-if(cleanUrls.length !== urls.length){
-  console.warn("URLs invalides détectées:", urls);
-  showAlert("⛔ Une ou plusieurs photos n'ont pas généré d'URL valide. Réessaie.", false);
-  return;
-}
-
-if(cleanUrls.length > 20){
-  showAlert("⛔ Trop de photos pour la preuve (max 20).", false);
-  return;
-}
-
-const preview = cleanUrls.slice(0,3);
-
-await updateDoc(doc(db,"events",prestationId),{
-  proofToken: token,
-  proofPhotos: cleanUrls,
-  proofPhotosPreview: preview,
-  updatedAt: serverTimestamp()
-});
-
-          
+          // On ne touche PAS à events ici. On supprime juste la référence mission.proofZip.
           await updateDoc(doc(db,"events",prestationId,"missions",missionType),{
             proofZip: null,
             updatedAt: serverTimestamp()
           });
+
           showAlert(ALLOW_STORAGE_DELETE ? "✅ ZIP supprimé." : "✅ ZIP supprimé dans l’app (archive Storage conservée).", true);
+
           const d = await getDoc(doc(db,"events",prestationId,"missions",missionType));
           renderZipInfo(d.exists() ? (d.data()?.proofZip || null) : null);
         }catch(err){
@@ -482,7 +451,7 @@ await updateDoc(doc(db,"events",prestationId),{
     const token = qs("token");
     const prestationId = qs("prestationId");
 
-    // tokenDoc cache
+    // cache token
     let tokenDocCache = null;
 
     async function preflight(){
@@ -499,7 +468,7 @@ await updateDoc(doc(db,"events",prestationId),{
         ? tokenDoc.missionTypes.map(x => String(x||"").toUpperCase())
         : ["MENAGE"];
 
-      if(!allowedTypes.includes(missionType)) throw new Error("Ce token n’autorise pas l’upload preuves sur MENAGE. Regénère le lien.");
+      if(!allowedTypes.includes(missionType)) throw new Error("Ce token n’autorise pas MENAGE. Regénère le lien.");
 
       const mRef = doc(db,"events",prestationId,"missions",missionType);
       const mSnap = await getDoc(mRef);
@@ -562,26 +531,24 @@ await updateDoc(doc(db,"events",prestationId),{
         return;
       }
 
-      // limite 20 (rules Firestore proofPhotos <= 20)
       if(files.length > MAX_PHOTOS){
-        showPhotosHint(`⚠️ Trop de photos : ${files.length}. Limite ${MAX_PHOTOS}.`, false);
+        showPhotosHint(`⚠️ Trop de photos : ${files.length}. Limite ${MAX_PHOTOS}.`);
         photosInput.value = "";
         photosPreview.style.display = "none";
         photosPreview.innerHTML = "";
         return;
       }
 
-      // taille max par fichier
       const tooBig = files.find(f => Number(f.size || 0) > MAX_BYTES);
       if(tooBig){
-        showPhotosHint(`⚠️ Une photo est trop lourde (${fmtSize(tooBig.size)}). Limite : ${fmtSize(MAX_BYTES)}.`, false);
+        showPhotosHint(`⚠️ Une photo est trop lourde (${fmtSize(tooBig.size)}). Limite : ${fmtSize(MAX_BYTES)}.`);
         return;
       }
 
-      showPhotosHint(`✅ ${files.length} photo(s) sélectionnée(s).`, true);
-
       if(IS_IOS && files.length >= 16){
-        showPhotosHint(`✅ ${files.length} photo(s) sélectionnée(s).\nNote iPhone : évite > 20, tu es au max.`, true);
+        showPhotosHint(`✅ ${files.length} photo(s) sélectionnée(s). (iPhone : évite > 20)`);
+      }else{
+        showPhotosHint(`✅ ${files.length} photo(s) sélectionnée(s).`);
       }
     });
 
@@ -608,7 +575,6 @@ await updateDoc(doc(db,"events",prestationId),{
         const urls = [];
         const total = files.length;
 
-        // Upload séquentiel (simple + stable mobile)
         for(let i=0;i<files.length;i++){
           const file = files[i];
           const ext = (file.name || "").split(".").pop() || "jpg";
@@ -617,13 +583,12 @@ await updateDoc(doc(db,"events",prestationId),{
           const path = `proofPhotos/${prestationId}/${missionType}/${token}/${fname}`;
           const r = sRef(storage, path);
 
-          setProgressPhotos(Math.round((i/total)*100), `Upload photo ${i+1}/${total}…`);
+          setProgressPhotos(Math.max(1, Math.round((i/total)*100)), `Upload photo ${i+1}/${total}…`);
 
           const task = uploadBytesResumable(r, file, { contentType: file.type || "image/jpeg" });
 
           await new Promise((resolve, reject)=>{
             task.on("state_changed",(snap)=>{
-              // progression globale = (i + progression de la photo) / total
               const frac = snap.totalBytes ? (snap.bytesTransferred / snap.totalBytes) : 0;
               const global = ((i + frac) / total) * 100;
               setProgressPhotos(Math.max(1, Math.round(global)), `Upload photo ${i+1}/${total}…`);
@@ -634,32 +599,44 @@ await updateDoc(doc(db,"events",prestationId),{
           urls.push(url);
         }
 
+        // ✅ garde-fou RULES (strings only + <=20)
+        const cleanUrls = (urls || []).filter(u => typeof u === "string" && u.trim().length > 0);
+
+        if(cleanUrls.length !== urls.length){
+          console.warn("URLs invalides détectées:", urls);
+          throw new Error("Une ou plusieurs photos n'ont pas généré d'URL valide. Réessaie.");
+        }
+        if(cleanUrls.length > MAX_PHOTOS){
+          throw new Error("Trop de photos pour la preuve (max 20).");
+        }
+
         setProgressPhotos(100, "Finalisation…");
 
-        // MAJ Event (token-only autorisé par tes rules)
-        const preview = urls.slice(0,3);
+        const preview = cleanUrls.slice(0,3);
+
+        // ✅ Update event (token-only, whitelist rules)
         await updateDoc(doc(db,"events",prestationId),{
           proofToken: token,
-          proofPhotos: urls,            // <= 20
-          proofPhotosPreview: preview,  // <= 3
+          proofPhotos: cleanUrls,
+          proofPhotosPreview: preview,
           updatedAt: serverTimestamp()
         });
 
         photosInput.value = "";
         hideProgressPhotos();
-        showAlert(`✅ ${urls.length} photo(s) envoyée(s).`, true);
+        showAlert(`✅ ${cleanUrls.length} photo(s) envoyée(s).`, true);
 
       }catch(err){
         console.error(err);
         hideProgressPhotos();
-        showAlert("Erreur upload photos : " + (err?.code || err?.message || "inconnue"));
+        showAlert("Erreur upload photos : " + (err?.code || err?.message || String(err) || "inconnue"));
       }finally{
         lockUI(false);
       }
     });
 
     // ----------------------------
-    // ZIP fallback (ton code, inchangé)
+    // ZIP fallback (inchangé)
     // ----------------------------
     function showSizeHintZip(file){
       if(!file){
@@ -702,13 +679,13 @@ await updateDoc(doc(db,"events",prestationId),{
       setProgressZip(1, "Démarrage upload…");
 
       try{
-        const { tokenDoc } = await preflight(); // garde tes contrôles identiques
+        const { tokenDoc } = await preflight();
 
         const mRef = doc(db,"events",prestationId,"missions",missionType);
         const mSnap = await getDoc(mRef);
         if(!mSnap.exists()) throw new Error("Mission introuvable.");
         const m = mSnap.data() || {};
-        if(String(m.dayToken || "") !== String(token)) throw new Error("Token non associé à cette mission (MENAGE).");
+        if(String(m.dayToken || "") !== String(token)) throw new Error("Token non associé à MENAGE.");
 
         const path = `proofZips/${prestationId}/${missionType}/${token}/${Date.now()}_${Math.random().toString(16).slice(2)}_${name}`;
         const r = sRef(storage, path);
@@ -766,4 +743,3 @@ await updateDoc(doc(db,"events",prestationId),{
   </script>
 </body>
 </html>
-
