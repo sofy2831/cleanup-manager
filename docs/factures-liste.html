@@ -1,4 +1,4 @@
-<!-- docs/factures-liste.html (FINAL — inclut INVOICE salesDocuments + factures issues des events) -->
+<!-- docs/factures-liste.html (PATCHED — bouton "Envoyer" -> upload PDF Storage + push message (attachments) dans thread stable t_<conciergerieUid>_<ownerDocId>) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -137,6 +137,10 @@
       background:linear-gradient(90deg,var(--violet),var(--violet2));
       color:#fff; border-color:transparent;
       box-shadow:0 12px 24px rgba(0,0,0,0.10);
+    }
+    .btn.danger{
+      color:#b3261e;
+      border-color: rgba(179,38,30,0.25);
     }
     .btn[aria-disabled="true"]{ opacity:.45; pointer-events:none; }
 
@@ -317,12 +321,62 @@
     <a href="messagerie.html">Messages</a>
   </nav>
 
+  <!-- Modal envoi PDF -->
+  <div id="sendModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.35); z-index:9999; padding:16px;">
+    <div style="max-width:620px; margin:6vh auto; background:#fff; border-radius:16px; padding:14px; border:1px solid rgba(122,92,255,0.25);">
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
+        <div style="font-weight:1000;">Envoyer la facture au propriétaire (messagerie)</div>
+        <button type="button" id="sendCloseBtn" style="border:none; background:#fff; font-weight:1000; cursor:pointer;">✕</button>
+      </div>
+
+      <div style="margin-top:10px; font-size:12px; color:#444; font-weight:850;">
+        Email automatique : <b>pas possible côté client</b> (il faut une Cloud Function). Ici on fait le “simple” : <b>PDF envoyé dans la messagerie propriétaire</b>.
+      </div>
+
+      <div style="margin-top:12px; display:grid; gap:10px;">
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+          <div>
+            <div style="font-size:12px; font-weight:1000; color:#333;">Propriétaire</div>
+            <div id="mOwnerName" style="font-weight:1000; margin-top:3px;">—</div>
+            <div id="mOwnerEmail" style="font-weight:900; color:#666; margin-top:2px;">—</div>
+          </div>
+          <div>
+            <div style="font-size:12px; font-weight:1000; color:#333;">Facture</div>
+            <div id="mInvoiceNumber" style="font-weight:1000; margin-top:3px;">—</div>
+            <div id="mHome" style="font-weight:900; color:#666; margin-top:2px;">—</div>
+          </div>
+        </div>
+
+        <div>
+          <div style="font-size:12px; font-weight:1000; color:#333; margin-bottom:4px;">Message (optionnel)</div>
+          <textarea id="mText" rows="2" placeholder="Ex: Voici votre facture. Merci !" style="width:100%; padding:10px 12px; border-radius:12px; border:1px solid #D3C7FF; font-weight:850;"></textarea>
+        </div>
+
+        <div>
+          <div style="font-size:12px; font-weight:1000; color:#333; margin-bottom:4px;">PDF</div>
+          <input id="mFile" type="file" accept="application/pdf" />
+          <div style="font-size:12px; color:#666; font-weight:850; margin-top:4px;">
+            Stockage: invoices/&lt;conciergerieUid&gt;/&lt;ownerDocId&gt;/&lt;salesDocId&gt;/&lt;invoiceNumber&gt;_&lt;timestamp&gt;.pdf
+          </div>
+        </div>
+
+        <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:6px;">
+          <button id="sendCancelBtn" type="button" class="btn">Annuler</button>
+          <button id="sendGoChatBtn" type="button" class="btn">Ouvrir messagerie</button>
+          <button id="sendDoBtn" type="button" class="btn primary">Uploader & Envoyer</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script type="module">
-    import { auth, db } from "./firebase-init.js";
+    import { auth, db, storage } from "./firebase-init.js";
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
-      collection, query, where, orderBy, limit, getDocs, doc, getDoc
+      collection, query, where, orderBy, limit, getDocs, doc, getDoc,
+      addDoc, setDoc, updateDoc, serverTimestamp, increment
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import { ref as sRef, uploadBytes } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js";
 
     const helloLine = document.getElementById("helloLine");
     const companyLine = document.getElementById("companyLine");
@@ -336,9 +390,26 @@
     const globalTotalsBox = document.getElementById("globalTotalsBox");
     const globalTotalsNote = document.getElementById("globalTotalsNote");
 
+    // Modal
+    const sendModal = document.getElementById("sendModal");
+    const sendCloseBtn = document.getElementById("sendCloseBtn");
+    const sendCancelBtn = document.getElementById("sendCancelBtn");
+    const sendDoBtn = document.getElementById("sendDoBtn");
+    const sendGoChatBtn = document.getElementById("sendGoChatBtn");
+    const mOwnerName = document.getElementById("mOwnerName");
+    const mOwnerEmail = document.getElementById("mOwnerEmail");
+    const mInvoiceNumber = document.getElementById("mInvoiceNumber");
+    const mHome = document.getElementById("mHome");
+    const mText = document.getElementById("mText");
+    const mFile = document.getElementById("mFile");
+
+    let currentUser = null;
     let all = [];
     let vatEnabled = false;
     let vatRate = 0;
+
+    // state modal
+    let modalItem = null;
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -378,9 +449,11 @@
       }catch{ return "—"; }
     }
 
+    function normalizeEmail(s){ return String(s||"").trim().toLowerCase(); }
+
     function computeHT(lines){
       if(!Array.isArray(lines)) return 0;
-      return lines.reduce((s,l)=> s + (Number(l?.qty)||0) * (Number(l?.unitPrice)||0), 0);
+      return lines.reduce((sum,l)=> sum + (Number(l?.qty)||0) * (Number(l?.unitPrice)||0), 0);
     }
     function computeTotalsFromLines(lines){
       const ht = computeHT(lines);
@@ -519,6 +592,178 @@
         : `TVA non applicable. Totaux calculés sur les factures affichées.`;
     }
 
+    // ===== thread stable (comme messagerie) =====
+    function makeThreadId(conciergerieUid, ownerDocId){
+      return `t_${String(conciergerieUid||"").trim()}_${String(ownerDocId||"").trim()}`;
+    }
+
+    function getOwnerDocIdForSend(x){
+      // CANON côté salesDocuments: clientOwnerDocId
+      const a = String(x?.clientOwnerDocId || "").trim();
+      if(a) return a;
+      // fallback legacy
+      const b = String(x?.ownerDocId || x?.clientOwnerId || "").trim();
+      if(b) return b;
+      return "";
+    }
+
+    function getOwnerNameEmailForSend(x){
+      const ownerName = String(x?.clientName || x?.ownerName || "Propriétaire").trim();
+      const ownerEmail = String(x?.clientEmail || x?.ownerEmail || "").trim();
+      return { ownerName, ownerEmail };
+    }
+
+    function sanitizeFilePart(s){
+      return String(s||"")
+        .replaceAll(" ","_")
+        .replaceAll("/","-")
+        .replaceAll("\\","-")
+        .replaceAll(":","-")
+        .replaceAll("?","")
+        .replaceAll("&","")
+        .replaceAll("#","")
+        .slice(0,80);
+    }
+
+    function openSendModalForItem(x){
+      modalItem = x;
+
+      const invNum = getInvoiceNumber(x);
+      const home = String(x.homeName || "—").trim();
+
+      const { ownerName, ownerEmail } = getOwnerNameEmailForSend(x);
+
+      mOwnerName.textContent = ownerName || "—";
+      mOwnerEmail.textContent = ownerEmail ? ownerEmail : "—";
+      mInvoiceNumber.textContent = invNum;
+      mHome.textContent = home;
+
+      mText.value = `Voici votre facture ${invNum}.`;
+      mFile.value = "";
+
+      sendModal.style.display = "block";
+    }
+
+    function closeSendModal(){
+      sendModal.style.display = "none";
+      modalItem = null;
+    }
+
+    sendCloseBtn.addEventListener("click", closeSendModal);
+    sendCancelBtn.addEventListener("click", closeSendModal);
+    sendModal.addEventListener("click", (e)=>{ if(e.target === sendModal) closeSendModal(); });
+
+    sendGoChatBtn.addEventListener("click", ()=>{
+      // on ouvre la page messagerie (fil sera visible)
+      location.href = "messagerie.html";
+    });
+
+    async function ensureThreadExists(conciergerieUid, ownerDocId, x){
+      const threadId = makeThreadId(conciergerieUid, ownerDocId);
+
+      const { ownerName, ownerEmail } = getOwnerNameEmailForSend(x);
+      const ownerEmailLower = normalizeEmail(ownerEmail);
+
+      const homeLabel = `${String(x.homeName || "Logement").trim()} • ${String(x.homeCity || "").trim()}`.trim();
+
+      await setDoc(doc(db,"threads", threadId), {
+        conciergerieUid,
+        ownerDocId,
+        ownerUid: "",
+
+        homeId: String(x.homeId || "").trim() || "",
+        homeLabel: homeLabel || String(x.homeName||"Logement").trim(),
+
+        ownerName: ownerName || "Propriétaire",
+        ownerEmailLower,
+
+        lastText: String(x.invoiceNumber || "Document").trim() ? `Facture ${String(x.invoiceNumber).trim()}` : "Document envoyé.",
+        lastAt: serverTimestamp(),
+        createdAt: serverTimestamp(),
+
+        unreadForConciergerie: 0,
+        unreadForOwner: 0,
+
+        flags: { paymentDue:false },
+        closed: false
+      }, { merge:true });
+
+      return threadId;
+    }
+
+    async function uploadAndSend(){
+      hideAlert();
+      if(!currentUser?.uid) return showAlert("Session invalide.");
+      if(!modalItem) return showAlert("Aucune facture sélectionnée.");
+
+      const ownerDocId = getOwnerDocIdForSend(modalItem);
+      if(!ownerDocId){
+        return showAlert("Impossible d’envoyer : ownerDocId/clientOwnerDocId manquant sur cette facture.");
+      }
+
+      const file = mFile.files && mFile.files[0];
+      if(!file) return showAlert("Choisis le fichier PDF.");
+      if(String(file.type||"") !== "application/pdf"){
+        return showAlert("Le fichier doit être un PDF (application/pdf).");
+      }
+
+      const invNum = String(modalItem.invoiceNumber || "").trim() || "FACTURE";
+      const salesDocId = String(modalItem.__kind === "EVENT" ? (modalItem.invoiceDocId || "") : modalItem.id).trim() || String(modalItem.id||"").trim();
+
+      sendDoBtn.disabled = true;
+      sendDoBtn.style.opacity = "0.7";
+
+      try{
+        const threadId = await ensureThreadExists(currentUser.uid, ownerDocId, modalItem);
+
+        const ts = Date.now();
+        const fileName = `${sanitizeFilePart(invNum)}_${ts}.pdf`;
+        const storagePath = `invoices/${currentUser.uid}/${ownerDocId}/${sanitizeFilePart(salesDocId)}/${fileName}`;
+
+        // upload storage
+        await uploadBytes(sRef(storage, storagePath), file, { contentType: "application/pdf" });
+
+        const label = `Facture ${invNum}`;
+        const text = String(mText.value || "").trim() || "Voici votre facture.";
+
+        const at = serverTimestamp();
+
+        await addDoc(collection(db,"threads", threadId, "messages"), {
+          text,
+          at,
+          createdAt: at,
+          senderUid: currentUser.uid,
+          senderRole: "CONCIERGERIE",
+          attachments: [{
+            kind: "INVOICE_PDF",
+            label,
+            salesDocId: salesDocId || "",
+            storagePath,
+            contentType: "application/pdf"
+          }]
+        });
+
+        await updateDoc(doc(db,"threads", threadId), {
+          lastText: text,
+          lastAt: serverTimestamp(),
+          unreadForOwner: increment(1)
+        });
+
+        showAlert("✅ PDF envoyé dans la messagerie propriétaire.", true);
+        setTimeout(hideAlert, 1100);
+        closeSendModal();
+
+      }catch(e){
+        console.error(e);
+        showAlert("⛔ Erreur envoi PDF : " + (e?.message || "inconnue"));
+      }finally{
+        sendDoBtn.disabled = false;
+        sendDoBtn.style.opacity = "1";
+      }
+    }
+
+    sendDoBtn.addEventListener("click", uploadAndSend);
+
     function render(){
       const filtered = getFiltered();
       renderGlobalTotals(filtered);
@@ -557,7 +802,6 @@
         const ttc = totals.ttc;
 
         const hasNum = !!String(x.invoiceNumber||"").trim();
-
         const isEvent = (x.__kind === "EVENT");
 
         // actions sur EVENT désactivées (pages reglement/avoir attendent salesDocuments)
@@ -572,6 +816,9 @@
         const regHref = `reglement.html?docId=${encodeURIComponent(x.id)}`;
         const avoirHref = `avoir.html?fromDocId=${encodeURIComponent(x.id)}`;
         const redoHref  = `facture.html?mode=redo&fromDocId=${encodeURIComponent(x.id)}&fromAvoirId=${encodeURIComponent(linkedAvoirId)}`;
+
+        const ownerDocId = getOwnerDocIdForSend(x);
+        const canSend = !!ownerDocId && hasNum; // on exige un numéro et un ownerDocId
 
         const div = document.createElement("div");
         div.className = "card";
@@ -616,11 +863,14 @@
               <div class="t">Statut</div>
               <div class="v">${badgeForStatus(stDisp)} ${isEvent ? `<span class="badge" title="Facture issue d'un événement">Event</span>` : ``}</div>
               ${linkedAvoirId ? `<div class="t" style="margin-top:4px;">Avoir lié : ${esc(linkedAvoirId)}</div>` : ``}
+              ${!ownerDocId ? `<div class="t" style="margin-top:4px; color:#b3261e;">Envoi impossible: ownerDocId manquant</div>` : ``}
             </div>
 
             <div class="k" style="align-items:flex-end; min-width:280px;">
               <div class="actionsBar">
                 <a class="btn primary" href="${openHref}">Ouvrir</a>
+
+                <button class="btn" type="button" data-action="send" data-id="${esc(x.id)}" ${canSend ? "" : `aria-disabled="true"`}>Envoyer</button>
 
                 <a class="btn" href="${regHref}" ${allowReglement ? "" : `aria-disabled="true"`}>Règlement</a>
 
@@ -631,6 +881,13 @@
             </div>
           </div>
         `;
+
+        // handler bouton envoyer
+        const sendBtn = div.querySelector('button[data-action="send"]');
+        if(sendBtn && canSend){
+          sendBtn.addEventListener("click", ()=> openSendModalForItem(x));
+        }
+
         listBox.appendChild(div);
       }
     }
@@ -672,7 +929,7 @@
     }
 
     async function loadInvoices(uid){
-      // 1) salesDocuments : type == INVOICE (inchangé)
+      // 1) salesDocuments : type == INVOICE
       const qInv = query(
         collection(db, "salesDocuments"),
         where("conciergerieUid", "==", uid),
@@ -685,7 +942,7 @@
       const snap = await getDocs(qInv);
       const main = snap.docs.map(d => ({ __kind:"SALES", id: d.id, ...(d.data()||{}) }));
 
-      // 2) fallback legacy : docType IN [...]
+      // 2) legacy : docType in [...]
       let legacy = [];
       try{
         const qLegacy = query(
@@ -702,8 +959,7 @@
         legacy = [];
       }
 
-      // 3) events : factures créées directement depuis planning (eventId)
-      //    ⚠️ pas de orderBy pour éviter un index; on trie côté client.
+      // 3) events facturés (affichage seulement)
       let eventInvoices = [];
       try{
         const qEv = query(
@@ -715,17 +971,15 @@
 
         eventInvoices = snapE.docs
           .map(d => ({ __kind:"EVENT", id:d.id, ...(d.data()||{}) }))
-          .filter(x => !!String(x?.invoiceNumber||"").trim()); // uniquement les events facturés
+          .filter(x => !!String(x?.invoiceNumber||"").trim());
 
         eventInvoices.sort((a,b)=> createdAtMsForSort(b) - createdAtMsForSort(a));
         eventInvoices = eventInvoices.slice(0,400);
       }catch(e){
-        // si rules/index/problème : on n’empêche pas l’affichage des salesDocuments
         eventInvoices = [];
       }
 
       all = uniqMergeById([...main, ...legacy, ...eventInvoices]);
-      // tri final
       all.sort((a,b)=> createdAtMsForSort(b) - createdAtMsForSort(a));
 
       render();
@@ -736,6 +990,7 @@
 
     onAuthStateChanged(auth, async (user)=>{
       if(!user){ location.href = "login.html?role=conciergerie"; return; }
+      currentUser = user;
 
       helloLine.textContent = "Bonjour,";
       companyLine.textContent = await loadCompanyName(user.uid);
