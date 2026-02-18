@@ -1,3 +1,4 @@
+<!-- docs/owner-messages.html (OWNER — threads/messages alignés ownerDocId) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -30,7 +31,7 @@
     .card{background:#fff;border:1px solid var(--border);border-radius:18px;box-shadow:var(--shadow);padding:14px}
     .cardTitle{font-size:14px;font-weight:1000;margin-bottom:8px}
     .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-    select, textarea{
+    textarea{
       width:100%;
       padding:10px 12px;border-radius:12px;border:1px solid #d3c7ff;font-size:14px;font-weight:700;
       background:#fff;outline:none
@@ -41,7 +42,7 @@
     .btn.primary{background:linear-gradient(90deg,var(--violet),var(--violet2));color:#fff;border:none;box-shadow:0 10px 22px rgba(0,0,0,.1)}
     .btn:disabled{opacity:.6;cursor:not-allowed}
 
-    .alert{display:none;margin-top:8px;padding:10px 12px;border-radius:12px;font-size:12px;font-weight:900;background:#fff;border-left:5px solid #b3261e}
+    .alert{display:none;margin-top:8px;padding:10px 12px;border-radius:12px;font-size:12px;font-weight:900;background:#fff;border-left:5px solid #b3261e;white-space:pre-wrap}
     .alert.ok{border-left-color:#1b8f4d}
 
     .list{display:flex;flex-direction:column;gap:10px;margin-top:10px}
@@ -124,9 +125,9 @@
 import { auth, db } from "./firebase-init.js";
 import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
 import {
-  collection, doc, addDoc, updateDoc, getDocs,
+  collection, doc, getDoc, addDoc, updateDoc, getDocs,
   query, where, onSnapshot,
-  serverTimestamp, increment
+  serverTimestamp, increment, limit
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
 const threadListEl = document.getElementById("threadList");
@@ -148,9 +149,12 @@ function showAlert(el,msg,ok=false){
 function hideAlert(el){
   el.style.display="none";
   el.textContent="";
+  el.classList.remove("ok");
 }
 function esc(s){
-  return String(s??"").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#039;");
+  return String(s??"")
+    .replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;")
+    .replaceAll('"',"&quot;").replaceAll("'","&#039;");
 }
 function fmt(ts){
   try{
@@ -164,6 +168,9 @@ let allThreads=[];
 let activeThreadId=null;
 let unsubThreads=null;
 let unsubMsgs=null;
+
+let ownerDocId="";
+let conciergerieUid="";
 
 function stopMsgs(){
   if(unsubMsgs) unsubMsgs();
@@ -227,7 +234,7 @@ function listenMessages(threadId){
       messagesEl.appendChild(el);
     });
 
-    setTimeout(()=>{ window.scrollTo(0, document.body.scrollHeight); }, 0);
+    setTimeout(()=>{ messagesEl.lastElementChild?.scrollIntoView({behavior:"smooth",block:"end"}); }, 0);
   },(err)=>{
     console.error(err);
     showAlert(alertChat,"Erreur chargement messages : " + (err?.message||"inconnue"));
@@ -254,12 +261,13 @@ msgForm.addEventListener("submit", async (e)=>{
   if(!text) return;
 
   sendBtn.disabled=true;
+  sendBtn.style.opacity="0.7";
   try{
     await addDoc(collection(db,"threads",activeThreadId,"messages"),{
       text,
       at: serverTimestamp(),
       senderUid: currentUser.uid,
-      senderRole: "PROPRIETAIRE",
+      senderRole: "OWNER",
       attachments: []
     });
 
@@ -275,14 +283,25 @@ msgForm.addEventListener("submit", async (e)=>{
     showAlert(alertChat,"Erreur envoi : " + (err?.message||"inconnue"));
   }finally{
     sendBtn.disabled=false;
+    sendBtn.style.opacity="1";
   }
 });
 
 async function newThread(){
   hideAlert(alertThreads);
 
-  // homes appartenant au propriétaire
-  const hs = await getDocs(query(collection(db,"homes"), where("ownerUid","==", currentUser.uid)));
+  if(!ownerDocId || !conciergerieUid){
+    showAlert(alertThreads,"Profil propriétaire incomplet (ownerDocId/conciergerieUid manquant).",false);
+    return;
+  }
+
+  // homes appartenant au propriétaire (clé stable)
+  const hs = await getDocs(query(
+    collection(db,"homes"),
+    where("conciergerieUid","==", conciergerieUid),
+    where("ownerDocId","==", ownerDocId),
+    limit(2000)
+  ));
   const homes = hs.docs.map(d=>({id:d.id, ...d.data()}));
 
   if(!homes.length){
@@ -290,19 +309,16 @@ async function newThread(){
     return;
   }
 
-  const list = homes.map((h,i)=>`${i+1}. ${h.name || h.label || h.id} (${h.city||""})`).join("\n");
+  homes.sort((a,b)=>(b.createdAt?.seconds??0)-(a.createdAt?.seconds??0));
+
+  const list = homes.map((h,i)=>`${i+1}. ${(h.name||h.label||h.id)} (${h.homeCity||h.city||""})`).join("\n");
   const pickStr = prompt("Choisis un logement (numéro) :\n\n" + list);
   if(!pickStr) return;
   const idx = Number(pickStr)-1;
   const chosen = homes[idx];
   if(!chosen){ alert("Numéro invalide."); return; }
 
-  if(!chosen.conciergerieUid){
-    alert("Logement sans conciergerieUid. Impossible.");
-    return;
-  }
-
-  // éviter les doublons : si un thread existe déjà pour ce homeId, on l’ouvre
+  // éviter doublons
   const existing = allThreads.find(t=>t.homeId===chosen.id);
   if(existing){ openThread(existing.id); return; }
 
@@ -310,18 +326,27 @@ async function newThread(){
     const ownerEmailLower = String(currentUser.email||"").toLowerCase();
     const ownerName = prompt("Ton nom (affiché à la conciergerie) :", "Propriétaire") || "Propriétaire";
 
+    const homeLabel = `${(chosen.name || chosen.label || "Logement")} • ${(chosen.homeCity || chosen.city || "")}`.trim();
+
     const threadRef = await addDoc(collection(db,"threads"),{
-      conciergerieUid: String(chosen.conciergerieUid),
-      ownerUid: currentUser.uid,
+      conciergerieUid: String(conciergerieUid),
+
+      ownerDocId: String(ownerDocId),   // 🔑 clé stable
+      ownerUid: currentUser.uid,        // bonus (utile mais pas clé)
+
       homeId: chosen.id,
-      homeLabel: `${chosen.name || chosen.label || "Logement"} • ${chosen.city || ""}`.trim(),
+      homeLabel,
+
       ownerName: String(ownerName).trim(),
       ownerEmailLower,
+
       lastText: "Conversation créée.",
       lastAt: serverTimestamp(),
       createdAt: serverTimestamp(),
+
       unreadForConciergerie: 0,
       unreadForOwner: 0,
+
       flags: { paymentDue:false },
       closed: false
     });
@@ -330,7 +355,7 @@ async function newThread(){
       text:"Conversation créée.",
       at: serverTimestamp(),
       senderUid: currentUser.uid,
-      senderRole: "PROPRIETAIRE",
+      senderRole: "OWNER",
       attachments: []
     });
 
@@ -344,7 +369,14 @@ async function newThread(){
 newThreadBtn.addEventListener("click", newThread);
 
 function startThreadsListener(){
-  const q = query(collection(db,"threads"), where("ownerUid","==", currentUser.uid));
+  if(unsubThreads) unsubThreads();
+
+  const q = query(
+    collection(db,"threads"),
+    where("ownerDocId","==", ownerDocId),
+    where("conciergerieUid","==", conciergerieUid)
+  );
+
   unsubThreads = onSnapshot(q,(snap)=>{
     allThreads = snap.docs.map(d=>({id:d.id, ...d.data()}));
     hideAlert(alertThreads);
@@ -360,13 +392,30 @@ function startThreadsListener(){
   });
 }
 
-onAuthStateChanged(auth,(user)=>{
+onAuthStateChanged(auth, async (user)=>{
   if(!user){
     location.href="login.html?role=proprietaire";
     return;
   }
   currentUser=user;
-  if(unsubThreads) unsubThreads();
+
+  // charge users/{uid} pour ownerDocId + conciergerieUid
+  try{
+    const us = await getDoc(doc(db,"users", user.uid));
+    const ud = us.exists() ? (us.data()||{}) : {};
+    ownerDocId = String(ud.ownerDocId || "").trim();
+    conciergerieUid = String(ud.conciergerieUid || "").trim();
+  }catch(e){
+    ownerDocId=""; conciergerieUid="";
+  }
+
+  if(!ownerDocId || !conciergerieUid){
+    showAlert(alertThreads,"Profil incomplet : ownerDocId / conciergerieUid manquant. Réouvre le lien d’invitation ou contacte la conciergerie.",false);
+    allThreads = [];
+    renderThreads();
+    return;
+  }
+
   stopMsgs();
   activeThreadId=null;
   allThreads=[];
