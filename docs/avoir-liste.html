@@ -1,4 +1,4 @@
-<!-- docs/avoir-liste.html (FINAL — liste des avoirs type:"CREDIT", calquée sur factures-liste) -->
+<!-- docs/avoirs-liste.html (FINAL — salesDocuments type=CREDIT_NOTE, ouvre avoir.html, aperçu via avoir-apercu.html) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -22,7 +22,6 @@
     body{ margin:0; background:linear-gradient(180deg,var(--bg1) 0%,var(--bg2) 80%); color:var(--text); }
 
     .page{ min-height:100vh; display:flex; flex-direction:column; align-items:center; padding:16px 16px 32px; padding-bottom:96px; }
-
     .topbar{
       width:100%; max-width:980px;
       position:sticky; top:0; z-index:10;
@@ -39,7 +38,6 @@
       cursor:pointer; box-shadow:0 3px 10px rgba(0,0,0,.06);
       white-space:nowrap;
     }
-
     .logo-title{ display:flex; justify-content:center; align-items:center; gap:10px; margin-top:10px; margin-bottom:6px; text-align:center; }
     .logo-icon{
       width:44px;height:44px;border-radius:50%;
@@ -55,7 +53,6 @@
     .companyLine{ margin-top:4px; font-size:13px; color:var(--muted); font-weight:900; text-align:center; }
 
     .wrap{ width:100%; max-width:980px; margin-top:14px; display:flex; flex-direction:column; gap:12px; min-width:0; }
-
     .card{
       background: rgba(255,255,255,0.86);
       border:1px solid var(--border);
@@ -65,7 +62,6 @@
       backdrop-filter: blur(10px);
       min-width:0;
     }
-
     .alert{
       display:none;
       padding:10px 12px;
@@ -149,8 +145,8 @@
       color:#333;
       white-space:nowrap;
     }
-    .badge.ok{ border-color: rgba(27,143,77,0.35); color: var(--ok); }
     .badge.bad{ border-color: rgba(179,38,30,0.30); color: var(--bad); }
+    .badge.ok{ border-color: rgba(27,143,77,0.35); color: var(--ok); }
 
     .line6{
       display:grid;
@@ -178,7 +174,6 @@
       background:#fff;
       color:var(--violet);
     }
-
     .row{
       display:flex;
       gap:10px;
@@ -261,6 +256,7 @@
           <select class="select" id="filterStatus">
             <option value="ALL">Tous</option>
             <option value="ISSUED">Émis</option>
+            <option value="DRAFT">Brouillons</option>
             <option value="MISSING">Sans statut</option>
           </select>
 
@@ -271,7 +267,7 @@
         </div>
 
         <div style="margin-top:10px; font-size:12px; color:#666; font-weight:850;">
-          Un avoir est créé depuis une facture (bouton “Avoir” dans la liste des factures).
+          Un avoir reprend une facture existante. Il est rattaché à la facture source.
         </div>
       </div>
 
@@ -302,6 +298,7 @@
     const searchInput = document.getElementById("searchInput");
     const listBox = document.getElementById("listBox");
 
+    let currentUser = null;
     let all = [];
 
     function showAlert(msg, ok=false){
@@ -342,37 +339,55 @@
       }catch{ return "—"; }
     }
 
-    function getStatusRaw(x){
+    function createdAtMsForSort(x){
+      try{
+        if(x?.createdAt?.toDate?.()) return x.createdAt.toDate().getTime();
+        if(typeof x?.createdAtMs === "number") return x.createdAtMs;
+        if(typeof x?.snapAtMs === "number") return x.snapAtMs;
+        const d = new Date(String(x?.createdAt||""));
+        if(!isNaN(d.getTime())) return d.getTime();
+      }catch{}
+      return 0;
+    }
+
+    function getCreditNumber(x){
+      const n = String(x?.creditNumber || x?.avoirNumber || x?.creditNoteNumber || "").trim();
+      return n || "—";
+    }
+    function getCreditStatusRaw(x){
       return String(x?.creditStatus||"").toUpperCase().trim();
     }
-    function getStatusDisplay(x){
-      const raw = getStatusRaw(x);
+    function getCreditStatusDisplay(x){
+      const raw = getCreditStatusRaw(x);
+      const hasNum = !!String(x?.creditNumber||"").trim();
+      if(hasNum && (!raw || raw === "DRAFT")) return "ISSUED";
       return raw || "MISSING";
     }
     function badgeForStatus(display){
       const s = String(display||"").toUpperCase().trim();
-      if(s === "ISSUED") return `<span class="badge ok">Émis</span>`;
+      if(s === "ISSUED") return `<span class="badge bad">Émis</span>`;
+      if(s === "DRAFT") return `<span class="badge">Brouillon</span>`;
       return `<span class="badge bad">Sans statut</span>`;
     }
 
     function matchesFilter(item){
       const f = filterStatus.value;
-      const disp = getStatusDisplay(item);
-      const raw = getStatusRaw(item);
+      const disp = getCreditStatusDisplay(item);
+      const raw = getCreditStatusRaw(item);
       if(f === "ALL") return true;
       if(f === "MISSING") return !raw;
       return disp === f;
     }
-
     function matchesSearch(item){
       const q = (searchInput.value||"").trim().toLowerCase();
       if(!q) return true;
 
       const hay = [
-        item.creditNumber, item.fromInvoiceNumber, item.quoteNumber,
+        item.creditNumber, item.avoirNumber,
+        item.fromInvoiceNumber, item.invoiceNumber,
         item.clientName, item.clientEmail,
-        item.homeName, item.homeCity, item.homeAddress, item.homeZip,
-        item.creditReason
+        item.ownerName, item.ownerEmail,
+        item.homeName, item.homeCity, item.homeAddress, item.homeZip
       ].filter(Boolean).join(" ").toLowerCase();
 
       return hay.includes(q);
@@ -382,12 +397,39 @@
       return all.filter(e => matchesFilter(e) && matchesSearch(e));
     }
 
-    function getCreatedAt(x){
-      if(x?.createdAt?.toDate?.()) return x.createdAt.toDate().toLocaleDateString("fr-FR");
-      if(x?.createdAt) return fmtDateFR(x.createdAt);
-      if(x?.createdAtMs) return fmtDateFR(new Date(Number(x.createdAtMs)));
-      if(x?.snapAtMs) return fmtDateFR(new Date(Number(x.snapAtMs)));
-      return "—";
+    function computeHT(lines){
+      if(!Array.isArray(lines)) return 0;
+      return lines.reduce((sum,l)=> sum + (Number(l?.qty)||0) * (Number(l?.unitPrice)||0), 0);
+    }
+    function computeTotalsFromLines(lines){
+      const ht = computeHT(lines);
+      const tva = Number(lines?.__tva || 0) || 0;
+      return { ht, tva, ttc: ht + tva };
+    }
+
+    async function loadCompanyName(uid){
+      try{
+        const snap = await getDoc(doc(db, "users", uid));
+        const data = snap.exists() ? (snap.data()||{}) : {};
+        const name = String(data?.businessProfile?.companyName || "").trim();
+        return name || "Conciergerie";
+      }catch{ return "Conciergerie"; }
+    }
+
+    async function loadCredits(uid){
+      const qCred = query(
+        collection(db, "salesDocuments"),
+        where("conciergerieUid", "==", uid),
+        where("type", "==", "CREDIT_NOTE"),
+        where("listable", "==", true),
+        orderBy("createdAt", "desc"),
+        limit(500)
+      );
+
+      const snap = await getDocs(qCred);
+      all = snap.docs.map(d => ({ id:d.id, ...(d.data()||{}) }));
+      all.sort((a,b)=> createdAtMsForSort(b) - createdAtMsForSort(a));
+      render();
     }
 
     function render(){
@@ -406,25 +448,22 @@
       }
 
       for(const x of filtered){
-        const created = getCreatedAt(x);
-        const creditNum = String(x.creditNumber || "—").trim();
-        const invRef = String(x.fromInvoiceNumber || "—").trim();
+        const created = x?.createdAt ? fmtDateFR(x.createdAt) : "—";
+        const num = getCreditNumber(x);
 
         const client = String(x.clientName || x.ownerName || "—").trim();
         const home = String(x.homeName || "—").trim();
 
-        const period = (x.arrivalDateKey || x.departureDateKey)
-          ? `${fmtDateFR(x.arrivalDateKey)} → ${fmtDateFR(x.departureDateKey)}`
-          : "—";
+        const fromInv = String(x.fromInvoiceNumber || x.invoiceNumber || x.quoteNumber || "—").trim();
 
-        const stDisp = getStatusDisplay(x);
+        const ttcStored = Number(x.totalTTC);
+        const totals = Number.isFinite(ttcStored) ? { ttc: ttcStored } : computeTotalsFromLines(x.lines);
+        const ttc = totals.ttc;
 
-        const ttc = Number(x.totalTTC);
-        const total = Number.isFinite(ttc) ? ttc : 0;
+        const stDisp = getCreditStatusDisplay(x);
 
         const openHref = `avoir.html?docId=${encodeURIComponent(x.id)}`;
         const previewHref = `avoir-apercu.html?docId=${encodeURIComponent(x.id)}`;
-        const factureHref = x.fromDocId ? `facture.html?docId=${encodeURIComponent(x.fromDocId)}` : "#";
 
         const div = document.createElement("div");
         div.className = "card";
@@ -436,12 +475,16 @@
             </div>
 
             <div class="cell">
-              <div class="t">N°</div>
+              <div class="t">N° avoir</div>
               <div class="v">
                 <span class="tag">AV</span>
-                <span style="margin-left:6px;">${esc(creditNum)}</span>
+                <span style="margin-left:6px;">${esc(num)}</span>
               </div>
-              <div class="t" style="margin-top:4px;">Facture : ${esc(invRef)}</div>
+            </div>
+
+            <div class="cell">
+              <div class="t">Facture source</div>
+              <div class="v ellipsis" title="${esc(fromInv)}">${esc(fromInv)}</div>
             </div>
 
             <div class="cell">
@@ -454,14 +497,9 @@
               <div class="v ellipsis" title="${esc(home)}">${esc(home)}</div>
             </div>
 
-            <div class="cell">
-              <div class="t">Période</div>
-              <div class="v ellipsis" title="${esc(period)}">${esc(period)}</div>
-            </div>
-
             <div class="cell" style="text-align:right;">
               <div class="t">Total TTC</div>
-              <div class="v">${fmtMoney(total)}</div>
+              <div class="v">${fmtMoney(ttc)}</div>
             </div>
           </div>
 
@@ -469,14 +507,12 @@
             <div class="k">
               <div class="t">Statut</div>
               <div class="v">${badgeForStatus(stDisp)}</div>
-              <div class="t" style="margin-top:4px;">Motif : ${esc(String(x.creditReason || "—"))}</div>
             </div>
 
-            <div class="k" style="align-items:flex-end; min-width:280px;">
+            <div class="k" style="align-items:flex-end; min-width:260px;">
               <div class="actionsBar">
                 <a class="btn primary" href="${openHref}">Ouvrir</a>
                 <a class="btn" href="${previewHref}">Aperçu</a>
-                <a class="btn" href="${factureHref}" ${x.fromDocId ? "" : `aria-disabled="true"`}>Facture</a>
               </div>
             </div>
           </div>
@@ -485,36 +521,12 @@
       }
     }
 
-    async function loadCompanyName(uid){
-      try{
-        const snap = await getDoc(doc(db, "users", uid));
-        const data = snap.exists() ? (snap.data()||{}) : {};
-        const name = String(data?.businessProfile?.companyName || "").trim();
-        return name || "Conciergerie";
-      }catch{
-        return "Conciergerie";
-      }
-    }
-
-    async function loadCredits(uid){
-      const qC = query(
-        collection(db, "salesDocuments"),
-        where("conciergerieUid", "==", uid),
-        where("type", "==", "CREDIT"),
-        where("listable", "==", true),
-        orderBy("createdAt", "desc"),
-        limit(400)
-      );
-      const snap = await getDocs(qC);
-      all = snap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
-      render();
-    }
-
     filterStatus.addEventListener("change", render);
     searchInput.addEventListener("input", render);
 
     onAuthStateChanged(auth, async (user)=>{
       if(!user){ location.href = "login.html?role=conciergerie"; return; }
+      currentUser = user;
 
       helloLine.textContent = "Bonjour,";
       companyLine.textContent = await loadCompanyName(user.uid);
