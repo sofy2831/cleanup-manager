@@ -268,6 +268,9 @@
     }
 
     async function ensureThread(){
+      if(!conciergerieUid || !ownerDocId){
+        throw new Error("Profil incomplet (conciergerieUid/ownerDocId manquant).");
+      }
       if(threadId) return threadId;
 
       const tid = stableThreadId(conciergerieUid, ownerDocId);
@@ -277,13 +280,17 @@
       if(!snap.exists()){
         const meta = await loadOwnerMeta(ownerDocId);
 
-        // ✅ conforme rules threads create
         await setDoc(tRef, {
           conciergerieUid,
           ownerDocId,
           ownerUid: currentUser.uid,
+
           ownerName: meta.ownerName,
           ownerEmailLower: meta.ownerEmailLower,
+
+          homeCount: 0,
+          homeNames: [],
+
           lastText: "",
           lastAt: serverTimestamp(),
           createdAt: serverTimestamp(),
@@ -318,7 +325,7 @@
       if(unsubMessages) unsubMessages();
 
       const tid = await ensureThread();
-      threadHint.textContent = ""; // on cache, ça ne regarde pas l’utilisateur
+      threadHint.textContent = "";
 
       const q = query(
         collection(db, "threads", tid, "messages"),
@@ -336,7 +343,6 @@
           });
         }
 
-        // owner lit => unreadForOwner = 0
         try{ await updateDoc(doc(db,"threads", tid), { unreadForOwner: 0 }); }catch(_){}
 
         chatBox.scrollTop = chatBox.scrollHeight + 9999;
@@ -354,7 +360,6 @@
       try{
         const tid = await ensureThread();
 
-        // ✅ rules messages create: text + senderUid + senderRole + at(timestamp)
         await addDoc(collection(db,"threads", tid, "messages"), {
           text,
           at: serverTimestamp(),
