@@ -1,4 +1,4 @@
-<!-- docs/owner-messages.html (FINAL — propriétaire : lecture + envoi messages + téléchargement pièces jointes PDF Storage, compatible rules threads/messages) -->
+<!-- docs/owner-messages.html (FINAL — propriétaire : lecture + envoi messages + pièces jointes Storage, COMPAT rules threads/messages avec champ "at") -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -200,7 +200,7 @@
         </div>
 
         <div class="tiny" style="margin-top:10px;">
-          Les factures arrivent ici en PDF. Tu peux les télécharger depuis le message.
+          Les factures peuvent arriver ici en PDF (pièce jointe). Tu peux les télécharger depuis le message.
         </div>
       </section>
     </div>
@@ -267,6 +267,11 @@
     let threadId = "";
     let unsubMessages = null;
 
+    // ✅ optionnel : threadId stable (si tu décides d’unifier)
+    function stableThreadId(conciergerieUid, ownerDocId){
+      return `t_${conciergerieUid}_${ownerDocId}`;
+    }
+
     async function loadOwnerDocSafe(ownerDocId){
       try{
         const snap = await getDoc(doc(db,"owners", ownerDocId));
@@ -282,8 +287,15 @@
     }
 
     async function findExistingThreadId(){
-      // On cherche un thread existant (créé par conciergerie ou par owner)
-      // IMPORTANT: on ne force PAS un docId stable, car conciergerie.html fait addDoc() (id aléatoire).
+      // 1) si un thread stable existe déjà, on le prend (pas d’index requis)
+      const st = stableThreadId(conciergerieUid, ownerDocId);
+      try{
+        const s = await getDoc(doc(db,"threads", st));
+        if(s.exists()) return st;
+      }catch(_){}
+
+      // 2) sinon, chercher un thread créé avec addDoc() (id aléatoire)
+      // ⚠️ Cette requête peut demander un index composite (conciergerieUid + ownerUid).
       const q1 = query(
         collection(db,"threads"),
         where("conciergerieUid","==", conciergerieUid),
@@ -293,7 +305,7 @@
       const s1 = await getDocs(q1);
       if(!s1.empty) return s1.docs[0].id;
 
-      // fallback : si conciergerie avait mis ownerDocId mais ownerUid absent (ancien), on tente par ownerDocId
+      // fallback : par ownerDocId (si ownerUid pas posé sur vieux threads)
       const q2 = query(
         collection(db,"threads"),
         where("conciergerieUid","==", conciergerieUid),
@@ -309,28 +321,25 @@
     async function ensureThread(){
       if(threadId) return threadId;
 
-      // 1) trouver thread existant
       const found = await findExistingThreadId();
       if(found){
         threadId = found;
         return threadId;
       }
 
-      // 2) sinon créer un thread conforme à tes rules (threads create exige ownerUid + ownerEmailLower + ownerName + lastText + closed + unread…)
+      // sinon : on crée un thread STABLE (recommandé pour éviter les indexes)
       const od = await loadOwnerDocSafe(ownerDocId);
       const ownerName = String(od?.fullname || "Propriétaire").trim();
       const ownerEmailLower = String(od?.emailLower || "").trim().toLowerCase();
 
-      // lastText doit être string (rules), même vide OK si tu le veux
-      const threadRef = await addDoc(collection(db,"threads"), {
-        conciergerieUid: conciergerieUid,
-        ownerDocId: ownerDocId,
-        ownerUid: currentUser.uid,
-        ownerName: ownerName,
-        ownerEmailLower: ownerEmailLower,
+      const stId = stableThreadId(conciergerieUid, ownerDocId);
 
-        homeId: "",            // optionnel
-        homeLabel: "",         // optionnel
+      await setDoc(doc(db,"threads", stId), {
+        conciergerieUid,
+        ownerDocId,
+        ownerUid: currentUser.uid,
+        ownerName,
+        ownerEmailLower,
 
         lastText: "Conversation créée.",
         lastAt: serverTimestamp(),
@@ -338,15 +347,11 @@
 
         unreadForConciergerie: 0,
         unreadForOwner: 0,
-
-        flags: { paymentDue:false },
         closed: false
-      });
+      }, { merge:true });
 
-      threadId = threadRef.id;
-
-      // message système initial
-      await addDoc(collection(db,"threads", threadId, "messages"), {
+      // message initial (rules = champ "at", pas "createdAt")
+      await addDoc(collection(db,"threads", stId, "messages"), {
         text: "Conversation créée.",
         at: serverTimestamp(),
         senderUid: currentUser.uid,
@@ -354,6 +359,7 @@
         attachments: []
       });
 
+      threadId = stId;
       return threadId;
     }
 
@@ -412,10 +418,8 @@
 
     async function subscribeMessages(){
       if(unsubMessages) unsubMessages();
-      chatBox.innerHTML = `<div class="tiny">Chargement…</div>`;
 
       const tid = await ensureThread();
-
       threadHint.textContent = `threadId: ${tid}`;
 
       const q = query(
@@ -435,10 +439,8 @@
           });
         }
 
-        // on remet unreadForOwner à 0 dès que le owner lit
-        try{
-          await updateDoc(doc(db,"threads", tid), { unreadForOwner: 0 });
-        }catch(_){}
+        // owner lit => unreadForOwner = 0
+        try{ await updateDoc(doc(db,"threads", tid), { unreadForOwner: 0 }); }catch(_){}
 
         chatBox.scrollTop = chatBox.scrollHeight + 9999;
       }, (err)=>{
@@ -455,6 +457,7 @@
       try{
         const tid = await ensureThread();
 
+        // ✅ rules: text (string) + senderUid + senderRole + at(timestamp)
         await addDoc(collection(db,"threads", tid, "messages"), {
           text,
           at: serverTimestamp(),
@@ -463,6 +466,7 @@
           attachments: []
         });
 
+        // update thread + unread conciergerie
         await updateDoc(doc(db,"threads", tid), {
           lastAt: serverTimestamp(),
           lastText: text,
@@ -500,9 +504,8 @@
           return;
         }
 
-        threadId = ""; // recalcul / recherche
+        threadId = "";
         await subscribeMessages();
-
       }catch(e){
         showAlert("Erreur chargement : " + (e?.message || "inconnue"));
       }
