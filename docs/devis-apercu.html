@@ -1,4 +1,4 @@
-<!-- docs/devis-apercu.html (FINAL — draft=1 sans Firestore + quote fields + retour origin) -->
+<!-- docs/devis-apercu.html (FINAL — draft=1 sans lecture Firestore salesDocuments + quote fields + retour origin) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -402,6 +402,7 @@
           <h3>Paiement</h3>
           <div class="line" id="payMode">Mode : —</div>
           <div class="line" id="payTerm">Délai : —</div>
+          <div class="line" id="bankLine" style="display:none;">Virement : —</div>
         </div>
       </div>
 
@@ -480,6 +481,7 @@
 
     const payModeEl = document.getElementById("payMode");
     const payTermEl = document.getElementById("payTerm");
+    const bankLineEl = document.getElementById("bankLine");
 
     const cond1 = document.getElementById("cond1");
     const cond2 = document.getElementById("cond2");
@@ -561,14 +563,16 @@
       return "Pénalités de retard : 3 fois le taux d’intérêt légal en vigueur.";
     }
 
-    function applyCompanySignature({ userSignatureName, bsSignatureName, fallbackCompanyName }){
-      const name =
-        String(userSignatureName || "").trim() ||
-        String(bsSignatureName || "").trim() ||
-        String(fallbackCompanyName || "").trim() ||
-        "Conciergerie";
-      sigCompanyTextEl.textContent = name;
+    function refreshClientSigState(){
+      const choice = document.querySelector('input[name="acceptChoice"]:checked')?.value || "";
+      sigClientTextEl.classList.remove("dim","ok","no");
+      if(choice === "ACCEPTE") sigClientTextEl.classList.add("ok");
+      else if(choice === "REFUSE") sigClientTextEl.classList.add("no");
+      else sigClientTextEl.classList.add("dim");
     }
+    document.querySelectorAll('input[name="acceptChoice"]').forEach(r=>{
+      r.addEventListener("change", refreshClientSigState);
+    });
 
     function applyBusinessSnapshot(bs){
       const companyName = String(bs?.companyName || "Conciergerie").trim();
@@ -596,6 +600,7 @@
       }
 
       soc1.textContent = companyName || "Conciergerie";
+
       soc2.textContent = street || "";
       soc2.style.display = street ? "" : "none";
 
@@ -610,6 +615,7 @@
       soc4.textContent = line4 || "";
       soc4.style.display = line4 ? "" : "none";
 
+      // footer
       const footerParts = [];
       footerParts.push(companyName || "Conciergerie");
       if(street) footerParts.push(street);
@@ -621,16 +627,13 @@
       return bs || {};
     }
 
-    function refreshClientSigState(){
-      const choice = document.querySelector('input[name="acceptChoice"]:checked')?.value || "";
-      sigClientTextEl.classList.remove("dim","ok","no");
-      if(choice === "ACCEPTE") sigClientTextEl.classList.add("ok");
-      else if(choice === "REFUSE") sigClientTextEl.classList.add("no");
-      else sigClientTextEl.classList.add("dim");
+    function applyCompanySignature(bs){
+      const name =
+        String(bs?.signatureName || "").trim() ||
+        String(bs?.companyName || "").trim() ||
+        "Conciergerie";
+      sigCompanyTextEl.textContent = name;
     }
-    document.querySelectorAll('input[name="acceptChoice"]').forEach(r=>{
-      r.addEventListener("change", refreshClientSigState);
-    });
 
     function renderClient(d){
       const name  = String(d?.clientName || "").trim();
@@ -655,9 +658,8 @@
       cli3.textContent = line3 || "";
       cli3.style.display = line3 ? "" : "none";
 
-      const line4 = [phone].filter(Boolean).join(" • ");
-      cli4.textContent = line4 || "";
-      cli4.style.display = line4 ? "" : "none";
+      cli4.textContent = phone || "";
+      cli4.style.display = phone ? "" : "none";
 
       sigClientTextEl.textContent = name || "—";
       refreshClientSigState();
@@ -677,7 +679,7 @@
       }else{
         for(const l of arr){
           const qty = Number(l?.qty)||0;
-          const unit = String(l?.unit || "").trim(); // optionnel
+          const unit = String(l?.unit || "").trim();
           const up = Number(l?.unitPrice)||0;
           const ht = qty * up;
           const tva = vatEnabled ? (ht * vatRate) : 0;
@@ -696,32 +698,14 @@
         }
       }
 
-      // Totaux : si tu as totalTTC stocké, on l’utilise, sinon recalcul
-      const storedTtc = Number(d?.totalTTC);
-      const storedHt  = Number(d?.totalHT);
-      const storedTva = Number(d?.totalTVA);
+      const totals = computeTotals(arr, vatEnabled, vatRate);
+      totalTtcEl.textContent = money(totals.ttc);
 
-      if(Number.isFinite(storedTtc) && storedTtc >= 0){
-        totalTtcEl.textContent = money(storedTtc);
-
-        if(vatEnabled){
-          const ht  = Number.isFinite(storedHt) ? storedHt : computeTotals(arr, vatEnabled, vatRate).ht;
-          const tva = Number.isFinite(storedTva) ? storedTva : computeTotals(arr, vatEnabled, vatRate).tva;
-          tvaLineEl.textContent = `HT ${money(ht)} • TVA ${Math.round(vatRate*100)}% ${money(tva)}`;
-        }else{
-          const ex = String(bs?.tvaExemptionText || "").trim();
-          tvaLineEl.textContent = ex || "TVA non applicable (art. 293B CGI)";
-        }
+      if(vatEnabled){
+        tvaLineEl.textContent = `HT ${money(totals.ht)} • TVA ${Math.round(vatRate*100)}% ${money(totals.tva)}`;
       }else{
-        const totals = computeTotals(arr, vatEnabled, vatRate);
-        totalTtcEl.textContent = money(totals.ttc);
-
-        if(vatEnabled){
-          tvaLineEl.textContent = `HT ${money(totals.ht)} • TVA ${Math.round(vatRate*100)}% ${money(totals.tva)}`;
-        }else{
-          const ex = String(bs?.tvaExemptionText || "").trim();
-          tvaLineEl.textContent = ex || "TVA non applicable (art. 293B CGI)";
-        }
+        const ex = String(bs?.tvaExemptionText || "").trim();
+        tvaLineEl.textContent = ex || "TVA non applicable (art. 293B CGI)";
       }
     }
 
@@ -754,24 +738,50 @@
       payModeEl.textContent = `Mode : ${modeLabel(mode)}`;
       payTermEl.textContent = `Délai : ${termLabel(term)}`;
 
-      // Annulation affichable/masquable
+      // banque (afficher seulement si virement + infos présentes)
+      const bank = bs?.bank || {};
+      const iban = String(bank?.iban || "").trim();
+      const bic  = String(bank?.bic || "").trim();
+      const holder = String(bank?.holder || "").trim();
+      const bankName = String(bank?.bankName || bank?.name || "").trim();
+      const bankBits = [];
+      if(holder) bankBits.push(holder);
+      if(bankName) bankBits.push(bankName);
+      if(iban) bankBits.push("IBAN " + iban);
+      if(bic) bankBits.push("BIC " + bic);
+
+      if(mode === "VIREMENT" && bankBits.length){
+        bankLineEl.style.display = "";
+        bankLineEl.textContent = "Virement : " + bankBits.join(" • ");
+      }else{
+        bankLineEl.style.display = "none";
+        bankLineEl.textContent = "";
+      }
+
+      const offerDays = Number.isFinite(Number(d?.quoteOfferValidityDays)) ? Number(d.quoteOfferValidityDays) : 30;
+      cond1.innerHTML = `<b>Validité de l’offre</b> : ${esc(String(offerDays))} jours`;
+
       const showCancel = (typeof d?.quoteShowCancellation === "boolean") ? d.quoteShowCancellation : true;
       const cancelPct = Number.isFinite(Number(bs?.conditions?.cancellationPercent))
         ? Number(bs.conditions.cancellationPercent)
         : 30;
 
-      const offerDays = Number.isFinite(Number(d?.quoteOfferValidityDays)) ? Number(d.quoteOfferValidityDays) : 30;
-      cond1.innerHTML = `<b>Validité de l’offre</b> : ${esc(String(offerDays))} jours`;
-
       if(showCancel){
         cond2.style.display = "";
-        cond2.innerHTML = `<b>Annulation</b> : ${esc(String(cancelPct))} % du montant en cas d’annulation moins de 48 h avant l’intervention.`;
+        cond2.innerHTML = `<b>Annulation</b> : ${esc(String(cancelPct))}% du montant peuvent être retenus selon conditions.`;
       }else{
         cond2.style.display = "none";
         cond2.textContent = "";
       }
 
-      cond3.innerHTML = `&nbsp;`;
+      // cond3 = texte TVA (utile sur devis imprimé)
+      if(!!bs?.vat?.enabled){
+        const r = Number.isFinite(Number(bs?.vat?.rate)) ? Number(bs.vat.rate) : 0;
+        cond3.innerHTML = `<b>TVA</b> : ${esc(String(Math.round(r*100)))}% (si applicable)`;
+      }else{
+        const ex = String(bs?.tvaExemptionText || "").trim();
+        cond3.innerHTML = `<b>TVA</b> : ${esc(ex || "non applicable (art. 293B CGI)")}`;
+      }
     }
 
     function renderPenalty(d){
@@ -805,7 +815,8 @@
         return;
       }
       if(isDraftPreview){
-        backLink.href = "devis.html?mode=create";
+        // on revient au devis (si docId existe, on le garde)
+        backLink.href = docId ? `devis.html?docId=${encodeURIComponent(docId)}` : "devis.html";
         return;
       }
       backLink.href = docId ? `devis.html?docId=${encodeURIComponent(docId)}` : "devis-liste.html";
@@ -827,6 +838,7 @@
       try{
         // 1) source data
         if(isDraftPreview){
+          // ✅ draft = sessionStorage, pas de lecture salesDocuments
           const draft = loadDraftFromSession();
           if(!draft){
             showError("Aperçu brouillon introuvable (sessionStorage.quoteDraftPreview).");
@@ -852,42 +864,12 @@
           }
         }
 
-        // 2) user profile (signatureName racine)
-        let userSignatureName = "";
-        let profile = {};
-        try{
-          const uSnap = await getDoc(doc(db, "users", user.uid));
-          if(uSnap.exists()){
-            profile = uSnap.data() || {};
-            userSignatureName = String(profile?.signatureName || "").trim();
-          }
-        }catch(e){}
+        // 2) business snapshot (priorité : doc.businessSnapshot)
+        const bs = (docData?.businessSnapshot || {});
+        const appliedBs = applyBusinessSnapshot(bs);
+        applyCompanySignature(appliedBs);
 
-        // 3) business snapshot
-        const bs = docData?.businessSnapshot || profile?.businessProfile || {};
-        const appliedBs = applyBusinessSnapshot({
-          companyName: bs?.companyName || profile?.businessProfile?.companyName || "Conciergerie",
-          logoUrl: bs?.logoUrl || profile?.businessProfile?.logoUrl || "",
-          address: bs?.address || profile?.businessProfile?.address || {},
-          registration: bs?.registration || profile?.businessProfile?.registration || {},
-          contact: bs?.contact || profile?.businessProfile?.contact || {
-            email: profile?.businessProfile?.billingEmail || profile?.email || "",
-            phone: profile?.businessProfile?.phone || ""
-          },
-          vat: bs?.vat || profile?.businessProfile?.vat || {},
-          tvaExemptionText: bs?.tvaExemptionText || profile?.businessProfile?.tvaExemptionText || "",
-          conditions: bs?.conditions || profile?.businessProfile?.conditions || {},
-          signatureName: bs?.signatureName || profile?.businessProfile?.registration?.signatureName || ""
-        });
-
-        // signature: user.signatureName -> bs.signatureName -> companyName
-        applyCompanySignature({
-          userSignatureName,
-          bsSignatureName: String(appliedBs?.signatureName || "").trim(),
-          fallbackCompanyName: String(appliedBs?.companyName || "Conciergerie").trim()
-        });
-
-        // 4) render
+        // 3) render
         renderDocHeader(docData);
         renderClient(docData);
         renderLines(docData, appliedBs || {});
