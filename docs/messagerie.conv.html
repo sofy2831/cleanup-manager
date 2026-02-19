@@ -1,4 +1,4 @@
-<!-- docs/messagerie.conv.html (FINAL — conciergerie : conversation thread + logements propriétaire, SANS PDF/attachments) -->
+<!-- docs/messagerie.conv.html (FINAL — conciergerie : conversation thread + logements propriétaire, SANS PDF/attachments, SANS création thread) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -70,6 +70,10 @@
       background:#fff;
       color:var(--violet);
     }
+    .tag.bad{
+      border-color: rgba(179,38,30,0.25);
+      color: var(--bad);
+    }
 
     .homesBox{
       margin-top:10px;
@@ -121,6 +125,7 @@
       box-shadow:0 10px 22px rgba(0,0,0,0.10);
       text-decoration:none; display:inline-flex; align-items:center; justify-content:center;
     }
+    .btnMini:disabled{ opacity:.6; cursor:not-allowed; }
 
     .composer{
       margin-top:10px;
@@ -184,7 +189,7 @@
   <div class="page">
     <div class="topbar">
       <a class="pill" href="messagerie.html">← Messagerie</a>
-      <button class="pill" id="toggleHomesBtn" type="button">Logements</button>
+      <button class="pill" id="toggleHomesBtn" type="button" disabled>Logements</button>
     </div>
 
     <div class="wrap">
@@ -206,8 +211,8 @@
         <div class="chat" id="chatBox"></div>
 
         <div class="composer">
-          <textarea id="msgInput" placeholder="Écrire un message…"></textarea>
-          <button class="btnMini" id="sendBtn" type="button">Envoyer</button>
+          <textarea id="msgInput" placeholder="Écrire un message…" disabled></textarea>
+          <button class="btnMini" id="sendBtn" type="button" disabled>Envoyer</button>
         </div>
       </section>
     </div>
@@ -225,7 +230,7 @@
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
-      doc, getDoc, setDoc, updateDoc,
+      doc, getDoc, updateDoc,
       addDoc, collection, query, where,
       orderBy, limit, onSnapshot, serverTimestamp, increment, getDocs
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
@@ -267,7 +272,6 @@
         return d.toLocaleString("fr-FR");
       }catch{ return ""; }
     }
-
     function getParam(name){
       const u = new URL(location.href);
       return u.searchParams.get(name) || "";
@@ -278,7 +282,13 @@
     let thread = null;
     let unsubMsgs = null;
 
+    function setComposerEnabled(enabled){
+      msgInput.disabled = !enabled;
+      sendBtn.disabled = !enabled;
+    }
+
     toggleHomesBtn.onclick = ()=>{
+      if(toggleHomesBtn.disabled) return;
       homesBox.style.display = (!homesBox.style.display || homesBox.style.display === "none") ? "block" : "none";
     };
 
@@ -333,7 +343,7 @@
           pill.textContent = n;
           homesList.appendChild(pill);
         }
-      }catch(e){
+      }catch(_){
         homesList.innerHTML = `<span class="homePill">Impossible de charger les logements</span>`;
       }
     }
@@ -350,9 +360,13 @@
 
       unsubMsgs = onSnapshot(qMsgs, (snap)=>{
         chatBox.innerHTML = "";
-        snap.forEach(d=>{
-          chatBox.appendChild(renderMessage(d.data() || {}));
-        });
+        if(snap.empty){
+          chatBox.innerHTML = `<div class="meta">Aucun message.</div>`;
+        }else{
+          snap.forEach(d=>{
+            chatBox.appendChild(renderMessage(d.data() || {}));
+          });
+        }
         chatBox.scrollTop = chatBox.scrollHeight + 9999;
       }, (err)=>{
         showAlert("Erreur messages : " + (err?.message || "inconnue"));
@@ -360,17 +374,30 @@
     }
 
     async function loadThreadHeader(){
+      hideAlert();
+      setComposerEnabled(false);
+      toggleHomesBtn.disabled = true;
+      homesBox.style.display = "none";
+
       const tRef = doc(db,"threads", threadId);
       const snap = await getDoc(tRef);
 
       if(!snap.exists()){
         titleLine.textContent = "Conversation";
-        subLine.innerHTML = `<span class="tag">Thread introuvable</span>`;
-        showAlert("Thread introuvable. Reviens à la messagerie et recrée la conversation si besoin.");
+        subLine.innerHTML = `<span class="tag bad">Conversation indisponible</span>`;
+        showAlert("Conversation indisponible. Soit le propriétaire n’a pas encore accepté l’invitation, soit le thread a été supprimé.");
         return false;
       }
 
       thread = { id: snap.id, ...(snap.data()||{}) };
+
+      // 🔒 Sécurité : le thread doit appartenir à la conciergerie connectée
+      if(String(thread.conciergerieUid || "") !== String(currentUser.uid || "")){
+        titleLine.textContent = "Conversation";
+        subLine.innerHTML = `<span class="tag bad">Accès refusé</span>`;
+        showAlert("Accès refusé : ce thread n’appartient pas à cette conciergerie.");
+        return false;
+      }
 
       const ownerName = String(thread.ownerName || "Propriétaire").trim();
       const mail = String(thread.ownerEmailLower || "").trim();
@@ -380,12 +407,23 @@
       subLine.innerHTML = `
         ${mail ? `<span class="tag">${esc(mail)}</span>` : ``}
         <span class="tag">${Number.isFinite(hc) ? hc : 0} logement(s)</span>
+        ${thread.closed ? `<span class="tag bad">Clôturé</span>` : ``}
       `;
 
       // reset unread conciergerie
       try{ await updateDoc(doc(db,"threads",threadId), { unreadForConciergerie: 0 }); }catch(_){}
 
+      toggleHomesBtn.disabled = false;
       await loadHomesForOwner(thread.conciergerieUid, thread.ownerDocId);
+
+      // composer : désactivé si thread clôturé
+      setComposerEnabled(!thread.closed);
+      if(thread.closed){
+        msgInput.placeholder = "Conversation clôturée";
+      }else{
+        msgInput.placeholder = "Écrire un message…";
+      }
+
       return true;
     }
 
@@ -396,9 +434,16 @@
 
       sendBtn.disabled = true;
       try{
-        // on refuse d’envoyer si thread inexistant
-        const ok = await getDoc(doc(db,"threads", threadId));
-        if(!ok.exists()) throw new Error("Thread introuvable.");
+        const tSnap = await getDoc(doc(db,"threads", threadId));
+        if(!tSnap.exists()) throw new Error("Conversation indisponible.");
+        const t = tSnap.data() || {};
+
+        if(String(t.conciergerieUid||"") !== String(currentUser.uid||"")){
+          throw new Error("Accès refusé.");
+        }
+        if(!!t.closed){
+          throw new Error("Conversation clôturée.");
+        }
 
         await addDoc(collection(db,"threads", threadId, "messages"), {
           text,
@@ -407,11 +452,11 @@
           senderUid: currentUser.uid
         });
 
-        await setDoc(doc(db,"threads", threadId), {
+        await updateDoc(doc(db,"threads", threadId), {
           lastAt: serverTimestamp(),
           lastText: text,
           unreadForOwner: increment(1)
-        }, { merge:true });
+        });
 
         msgInput.value = "";
       }catch(e){
