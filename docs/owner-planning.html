@@ -1,4 +1,4 @@
-<!-- docs/owner-planning.html (OWNER — planning: events only + calendrier points + liste) -->
+<!-- docs/owner-planning.html (OWNER — planning: events only + calendrier points + liste — SAFE RULES via homeId IN) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -97,7 +97,6 @@
     }
     .alert.ok{ border-left-color: var(--ok); }
 
-    /* ===== Calendrier ===== */
     .calHead{
       display:flex; align-items:center; justify-content:space-between; gap:10px;
       margin-top:10px;
@@ -175,12 +174,7 @@
       gap:4px;
       align-items:center;
     }
-    .dot{
-      width:7px; height:7px;
-      border-radius:50%;
-      background: var(--violet-main);
-      opacity:.9;
-    }
+    .dot{ width:7px; height:7px; border-radius:50%; background: var(--violet-main); opacity:.9; }
     .dot.res{ background:#111; }
     .dot.mis{ background: var(--violet-main); }
     .dot.dep{ background:#FF3B3B; }
@@ -196,7 +190,6 @@
       line-height:1;
     }
 
-    /* ===== Liste ===== */
     .list{ display:flex; flex-direction:column; gap:10px; margin-top:12px; }
     .item{
       background:#fff;
@@ -220,23 +213,10 @@
       white-space:pre-wrap;
       line-height:1.35;
     }
-    .tagRow{ display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
-    .tag{
-      display:inline-flex; align-items:center; gap:6px;
-      padding:3px 10px;
-      border-radius:999px;
-      background:rgba(122,92,255,0.10);
-      color:#4b2cff;
-      font-size:11px;
-      font-weight:1000;
-    }
-    .tag.ok{ background:rgba(27,143,77,0.12); color:var(--ok); }
-    .tag.bad{ background:rgba(179,38,30,0.10); color:var(--bad); }
 
     .emptyBox{ display:none; }
     .tiny{ font-size:12px; font-weight:900; color:var(--muted); line-height:1.35; margin-top:8px; }
 
-      /* Bottom nav (4 onglets) */
     .bottom-nav{
       position:fixed; left:50%; transform:translateX(-50%); bottom:0;
       width:calc(100% - 20px); max-width:980px;
@@ -294,7 +274,6 @@
 
       <div class="alert" id="alertBox"></div>
 
-      <!-- Calendrier -->
       <div class="calHead">
         <button class="calBtn" id="prevMonthBtn" type="button">←</button>
         <div class="calTitle" id="calTitle">—</div>
@@ -307,7 +286,6 @@
         <div class="gridCal" id="calGrid"></div>
       </div>
 
-      <!-- Liste -->
       <div class="list" id="planningList"></div>
 
       <div class="item emptyBox" id="emptyBox">
@@ -333,12 +311,10 @@
 import { auth, db } from "./firebase-init.js";
 import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
 import {
-  collection, query, where, orderBy, onSnapshot
+  collection, query, where, orderBy, limit, onSnapshot
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
-/* ======================
-   Helpers
-====================== */
+/* Helpers */
 function pad2(n){ return String(n).padStart(2,"0"); }
 function toKey(d){ return d.getFullYear()+"-"+pad2(d.getMonth()+1)+"-"+pad2(d.getDate()); }
 function isDateKey(s){ return /^\d{4}-\d{2}-\d{2}$/.test(String(s||"")); }
@@ -356,10 +332,13 @@ function esc(s){
     .replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;")
     .replaceAll('"',"&quot;").replaceAll("'","&#039;");
 }
+function chunk(arr, size){
+  const out = [];
+  for(let i=0;i<arr.length;i+=size) out.push(arr.slice(i,i+size));
+  return out;
+}
 
-/* ======================
-   UI
-====================== */
+/* UI */
 const homeSelect   = document.getElementById("homeSelect");
 const rangeSelect  = document.getElementById("rangeSelect");
 const subtitleLine = document.getElementById("subtitleLine");
@@ -383,26 +362,83 @@ function hideAlert(){
   alertBox.classList.remove("ok");
 }
 
-/* ======================
-   State
-====================== */
+/* State */
 let currentUser = null;
 
 let homes = [];
 let homesById = new Map();
+let ownedHomeIds = [];
 
 let unsubHomes = null;
-let unsubEvents = null;
+let unsubEventChunks = [];
 
-let events = [];              // liste filtrée période/home
-let eventsByDate = new Map(); // dateKey -> {arr, dep, misCount, resCount, items:[]}
+let events = [];
+let eventsMap = new Map();      // eventId -> event
+let eventsByDate = new Map();   // dateKey -> {arr, dep, mis, res, itemsCount}
 
-let viewMonth = new Date();   // mois affiché calendrier
+/* Month view */
+let viewMonth = new Date();
 viewMonth = new Date(viewMonth.getFullYear(), viewMonth.getMonth(), 1);
 
-/* ======================
-   Home filter
-====================== */
+/* Business */
+function computeRangeKeys(){
+  const days = Number(rangeSelect.value || "30");
+  const d0 = new Date();
+  const d1 = new Date(d0.getTime() + days*24*60*60*1000);
+  return { minKey: toKey(d0), maxKey: toKey(d1) };
+}
+
+function classifyEvent(e){
+  const mt = Array.isArray(e.missionTypes) ? e.missionTypes.map(x=>String(x||"").toUpperCase()) : [];
+  const source = String(e.source||"").toLowerCase();
+  const isReservation = (source === "ical") || (!!e.arrivalDateKey && !!e.departureDateKey);
+  const hasMissions = mt.length > 0;
+  return { isReservation, hasMissions, mt };
+}
+
+function rebuildMaps(){
+  eventsByDate = new Map();
+
+  const addBucket = (dateKey)=>{
+    if(!isDateKey(dateKey)) return null;
+    if(!eventsByDate.has(dateKey)){
+      eventsByDate.set(dateKey, { arr:0, dep:0, mis:0, res:0, itemsCount:0 });
+    }
+    return eventsByDate.get(dateKey);
+  };
+
+  for(const e of events){
+    const dk = String(e.dateKey || e.arrivalDateKey || "").trim();
+    const { isReservation, hasMissions } = classifyEvent(e);
+
+    // liste (itemsCount)
+    if(isDateKey(dk)){
+      const b = addBucket(dk);
+      if(b) b.itemsCount++;
+    }
+
+    if(isReservation){
+      if(isDateKey(e.arrivalDateKey)){
+        const b = addBucket(String(e.arrivalDateKey));
+        if(b) b.arr++;
+      }
+      if(isDateKey(e.departureDateKey)){
+        const b = addBucket(String(e.departureDateKey));
+        if(b) b.dep++;
+      }
+      if(!isDateKey(e.arrivalDateKey) && !isDateKey(e.departureDateKey) && isDateKey(dk)){
+        const b = addBucket(dk);
+        if(b) b.res++;
+      }
+    }
+
+    if(hasMissions && isDateKey(dk)){
+      const b = addBucket(dk);
+      if(b) b.mis++;
+    }
+  }
+}
+
 function fillHomes(){
   homeSelect.innerHTML = "";
 
@@ -426,82 +462,12 @@ function fillHomes(){
     homeSelect.appendChild(opt);
   }
 
-  // si ?homeId=... => on le sélectionne, sinon all
   const p = new URLSearchParams(location.search);
   const forced = (p.get("homeId") || "").trim();
   if(forced && homesById.has(forced)){
     homeSelect.value = forced;
   }else{
     homeSelect.value = "__all__";
-  }
-}
-
-/* ======================
-   Planning: listen events (source unique)
-====================== */
-function computeRangeKeys(){
-  const days = Number(rangeSelect.value || "30");
-  const d0 = new Date();
-  const d1 = new Date(d0.getTime() + days*24*60*60*1000);
-  return { minKey: toKey(d0), maxKey: toKey(d1) };
-}
-
-function classifyEvent(e){
-  // On se base sur tes champs existants : source / missionTypes / arrivalDateKey / departureDateKey / dateKey
-  const mt = Array.isArray(e.missionTypes) ? e.missionTypes.map(x=>String(x||"").toUpperCase()) : [];
-  const source = String(e.source||"").toLowerCase();
-
-  const isReservation = (source === "ical") || (!!e.arrivalDateKey && !!e.departureDateKey);
-  const hasMissions = mt.length > 0;
-
-  return { isReservation, hasMissions, mt };
-}
-
-function addToDateBucket(dateKey, kind, ev){
-  if(!isDateKey(dateKey)) return;
-
-  if(!eventsByDate.has(dateKey)){
-    eventsByDate.set(dateKey, { arr:0, dep:0, mis:0, res:0, items:[] });
-  }
-  const b = eventsByDate.get(dateKey);
-
-  if(kind === "arr") b.arr++;
-  if(kind === "dep") b.dep++;
-  if(kind === "mis") b.mis++;
-  if(kind === "res") b.res++;
-
-  if(ev) b.items.push(ev);
-}
-
-function rebuildMaps(){
-  eventsByDate = new Map();
-
-  for(const e of events){
-    const dateKey = String(e.dateKey || e.arrivalDateKey || "").trim();
-
-    const { isReservation, hasMissions, mt } = classifyEvent(e);
-
-    // Réservation: point arrivée + départ (pas tous les jours)
-    if(isReservation){
-      if(isDateKey(e.arrivalDateKey)) addToDateBucket(String(e.arrivalDateKey), "arr", null);
-      if(isDateKey(e.departureDateKey)) addToDateBucket(String(e.departureDateKey), "dep", null);
-
-      // si pas d’arrivée/départ bien renseignés, on met au moins un point "res" le dateKey
-      if(!isDateKey(e.arrivalDateKey) && !isDateKey(e.departureDateKey) && isDateKey(dateKey)){
-        addToDateBucket(dateKey, "res", null);
-      }
-    }
-
-    // Missions: point sur le jour de mission (dateKey)
-    if(hasMissions && isDateKey(dateKey)){
-      // 1 point "mis" (même si 3 missions, on le gardera sobre)
-      addToDateBucket(dateKey, "mis", null);
-    }
-
-    // Liste: on stocke l’événement dans son dateKey (pour affichage)
-    if(isDateKey(dateKey)){
-      addToDateBucket(dateKey, "list", e); // "list" n'impacte pas les compteurs
-    }
   }
 }
 
@@ -514,30 +480,36 @@ function renderList(){
     return;
   }
 
-  // group par dateKey
+  const chosen = homeSelect.value;
+  let filtered = events.slice();
+  if(chosen && chosen !== "__all__"){
+    filtered = filtered.filter(e => String(e.homeId||"") === String(chosen));
+  }
+
+  if(!filtered.length){
+    emptyBox.style.display = "block";
+    return;
+  }
+
+  // group by dateKey
   const groups = new Map();
-  for(const e of events){
+  for(const e of filtered){
     const dk = String(e.dateKey || e.arrivalDateKey || "").trim();
     if(!isDateKey(dk)) continue;
     if(!groups.has(dk)) groups.set(dk, []);
     groups.get(dk).push(e);
   }
 
-  // dates triées
   const dates = Array.from(groups.keys()).sort((a,b)=> a.localeCompare(b));
 
   for(const dk of dates){
-    const block = document.createElement("div");
-    block.className = "item";
-
     const dayItems = groups.get(dk) || [];
     dayItems.sort((a,b)=>{
-      const at = String(a.time||a.arrivalTime||"");
-      const bt = String(b.time||b.arrivalTime||"");
+      const at = String(a.time||a.arrivalTime||a.departureTime||"");
+      const bt = String(b.time||b.arrivalTime||b.departureTime||"");
       return (dk+" "+at).localeCompare(dk+" "+bt);
     });
 
-    // résumé lisible
     const lines = [];
     for(const e of dayItems){
       const homeName = e.homeName || (homesById.get(e.homeId||"")?.name) || "Logement";
@@ -549,12 +521,7 @@ function renderList(){
       let label = "Événement";
       if(isReservation && !hasMissions) label = "Réservation";
       if(hasMissions){
-        // on garde propre et court
-        const map = {
-          "CHECKIN":"Check-in",
-          "CHECKOUT":"Check-out",
-          "MENAGE":"Ménage"
-        };
+        const map = { "CHECKIN":"Check-in", "CHECKOUT":"Check-out", "MENAGE":"Ménage" };
         const nice = mt.map(x=> map[x] || x).join(" • ");
         label = nice || "Intervention";
       }
@@ -563,6 +530,8 @@ function renderList(){
       lines.push(`${time ? (time+" — ") : ""}${label}${extra}\n${homeName}${city ? (" • "+city) : ""}`);
     }
 
+    const block = document.createElement("div");
+    block.className = "item";
     block.innerHTML = `
       <div class="meta">
         <span>${esc(fmtDateKey(dk))}</span>
@@ -570,59 +539,43 @@ function renderList(){
       </div>
       <p class="msg">${esc(lines.join("\n\n"))}</p>
     `;
-
     planningList.appendChild(block);
   }
 }
 
-/* ======================
-   Calendar render
-====================== */
-function clearCalendar(){
-  calGrid.innerHTML = "";
-}
-
-function dateKeyFromYMD(y,m,d){
-  // m: 0-11
-  return `${y}-${pad2(m+1)}-${pad2(d)}`;
-}
+function clearCalendar(){ calGrid.innerHTML = ""; }
+function dateKeyFromYMD(y,m,d){ return `${y}-${pad2(m+1)}-${pad2(d)}`; }
 
 function renderCalendar(){
   calTitle.textContent = monthLabel(viewMonth);
   clearCalendar();
 
-  const today = new Date();
-  const todayKey = toKey(today);
+  const todayKey = toKey(new Date());
 
-  // lundi = 0
   const first = new Date(viewMonth.getFullYear(), viewMonth.getMonth(), 1);
   const last  = new Date(viewMonth.getFullYear(), viewMonth.getMonth()+1, 0);
-
-  const firstDow = (first.getDay() + 6) % 7; // 0..6 (Mon..Sun)
+  const firstDow = (first.getDay() + 6) % 7; // Mon..Sun
   const daysInMonth = last.getDate();
-
-  // jours du mois précédent à afficher
   const prevLast = new Date(viewMonth.getFullYear(), viewMonth.getMonth(), 0).getDate();
 
-  const cells = 42; // 6 semaines
+  const cells = 42;
   for(let i=0;i<cells;i++){
     const cell = document.createElement("div");
     cell.className = "day";
 
-    let dNum, y, m, muted = false;
-
+    let dNum, y, m, muted=false;
     if(i < firstDow){
       dNum = prevLast - (firstDow - 1 - i);
       y = viewMonth.getFullYear();
       m = viewMonth.getMonth()-1;
-      if(m < 0){ m = 11; y--; }
-      muted = true;
+      if(m < 0){ m=11; y--; }
+      muted=true;
     }else if(i >= firstDow + daysInMonth){
       dNum = (i - (firstDow + daysInMonth)) + 1;
       y = viewMonth.getFullYear();
       m = viewMonth.getMonth()+1;
-      if(m > 11){ m = 0; y++; }
-      muted = true;
+      if(m > 11){ m=0; y++; }
+      muted=true;
     }else{
       dNum = (i - firstDow) + 1;
       y = viewMonth.getFullYear();
@@ -637,36 +590,30 @@ function renderCalendar(){
     cell.dataset.dateKey = dk;
     cell.innerHTML = `<div class="dayNum">${dNum}</div>`;
 
-    // dots
     const b = eventsByDate.get(dk);
     if(b){
       const dots = document.createElement("div");
       dots.className = "dots";
 
-      // règle sobre: max 3 marqueurs
       if(b.arr > 0) dots.appendChild(Object.assign(document.createElement("span"), { className:"dot arr" }));
       if(b.dep > 0) dots.appendChild(Object.assign(document.createElement("span"), { className:"dot dep" }));
       if(b.mis > 0) dots.appendChild(Object.assign(document.createElement("span"), { className:"dot mis" }));
       if(b.res > 0 && b.arr===0 && b.dep===0) dots.appendChild(Object.assign(document.createElement("span"), { className:"dot res" }));
 
-      // si trop d’infos ce jour-là, on affiche +N
-      const totalMarks = (b.arr>0?1:0) + (b.dep>0?1:0) + (b.mis>0?1:0) + ((b.res>0 && b.arr===0 && b.dep===0)?1:0);
-      const extra = (b.items?.length || 0);
-      if(extra > 2){
+      if((b.itemsCount || 0) > 3){
         const more = document.createElement("span");
         more.className = "dot more";
-        more.textContent = "+" + String(extra);
+        more.textContent = "+" + String(b.itemsCount);
         dots.appendChild(more);
       }
 
       cell.appendChild(dots);
     }
 
-    // clic => scroll vers la date dans la liste
     cell.addEventListener("click", ()=>{
-      const target = dk;
-      // si pas dans période/list => juste ignore
-      const el = Array.from(planningList.querySelectorAll(".item")).find(x => x.textContent.includes(fmtDateKey(target)));
+      const target = fmtDateKey(dk);
+      const el = Array.from(planningList.querySelectorAll(".item"))
+        .find(x => x.textContent.includes(target));
       if(el) el.scrollIntoView({ behavior:"smooth", block:"start" });
     });
 
@@ -674,12 +621,113 @@ function renderCalendar(){
   }
 }
 
-/* ======================
-   Firestore listeners
-====================== */
+/* Firestore listeners */
+function stopEventListeners(){
+  for(const u of unsubEventChunks){ try{ u(); }catch(_){ } }
+  unsubEventChunks = [];
+  eventsMap = new Map();
+  events = [];
+  eventsByDate = new Map();
+}
+
+function refreshSubtitle(){
+  const { minKey, maxKey } = computeRangeKeys();
+  const chosen = homeSelect.value || "__all__";
+  const titleHome = (chosen === "__all__")
+    ? "Tous les logements"
+    : (homesById.get(chosen)?.name || "Logement");
+  subtitleLine.textContent = `${titleHome} • ${fmtDateKey(minKey)} → ${fmtDateKey(maxKey)}`;
+}
+
+function listenEventsByHomeIds(){
+  stopEventListeners();
+  hideAlert();
+
+  if(!currentUser) return;
+  if(!ownedHomeIds.length){
+    refreshSubtitle();
+    renderCalendar();
+    renderList();
+    return;
+  }
+
+  const { minKey, maxKey } = computeRangeKeys();
+  refreshSubtitle();
+
+  const chosen = homeSelect.value || "__all__";
+  const idsToUse = (chosen !== "__all__")
+    ? [String(chosen)]
+    : ownedHomeIds.slice();
+
+  // Firestore "in" max = 10
+  const chunks = chunk(idsToUse, 10);
+
+  // Safety : si 0 => rien
+  if(!chunks.length){
+    renderCalendar();
+    renderList();
+    return;
+  }
+
+  for(const ids of chunks){
+    const qEvents = query(
+      collection(db,"events"),
+      where("homeId","in", ids),
+      where("dateKey", ">=", minKey),
+      where("dateKey", "<=", maxKey),
+      orderBy("dateKey","asc"),
+      limit(800)
+    );
+
+    const unsub = onSnapshot(qEvents, (snap)=>{
+      // merge by id (stable)
+      // On reconstruit sur chaque snapshot chunk : simple MVP
+      // (Si perf devient un sujet, on passe en docChanges)
+      const seenIds = new Set(snap.docs.map(d=>d.id));
+      // purge des ids de ce chunk qui ne sont plus là
+      for(const [eid, ev] of eventsMap.entries()){
+        if(ids.includes(String(ev.homeId||"")) && !seenIds.has(eid)){
+          eventsMap.delete(eid);
+        }
+      }
+      // upsert
+      for(const d of snap.docs){
+        eventsMap.set(d.id, { id:d.id, ...(d.data()||{}) });
+      }
+
+      events = Array.from(eventsMap.values());
+
+      // tri stable
+      events.sort((a,b)=>{
+        const ak = (a.dateKey||"") + " " + String(a.time||a.arrivalTime||"");
+        const bk = (b.dateKey||"") + " " + String(b.time||b.arrivalTime||"");
+        return ak.localeCompare(bk);
+      });
+
+      rebuildMaps();
+      renderCalendar();
+      renderList();
+    }, (err)=>{
+      console.error(err);
+      const m = String(err?.message||"").toLowerCase();
+      if(m.includes("permission")){
+        showAlert("Accès au planning refusé (droits).", false);
+      }else if(m.includes("index")){
+        showAlert("Index Firestore manquant pour le planning (homeId IN + dateKey).", false);
+      }else{
+        showAlert("Erreur chargement planning.", false);
+      }
+    });
+
+    unsubEventChunks.push(unsub);
+  }
+}
+
 function listenHomes(uid){
   if(unsubHomes) unsubHomes();
 
+  // Ici : on part du principe que tes homes ont ownerUid, ou à défaut ownerDocId/conciergerieUid.
+  // Pour être stable, on écoute ownerUid (car côté OWNER c'est propre).
   const qh = query(
     collection(db,"homes"),
     where("ownerUid","==", uid)
@@ -687,94 +735,21 @@ function listenHomes(uid){
 
   unsubHomes = onSnapshot(qh, (snap)=>{
     homes = snap.docs.map(d=>({ id:d.id, ...(d.data()||{}) }));
-    homes.sort((a,b)=> (a.name||"").localeCompare(b.name||""));
+    homes.sort((a,b)=> (String(a.name||"")).localeCompare(String(b.name||"")));
     homesById = new Map(homes.map(h=>[h.id,h]));
+    ownedHomeIds = homes.map(h=>h.id);
 
     fillHomes();
-    refreshPlanning(); // relance events après homes
+    listenEventsByHomeIds();
   }, (err)=>{
     console.error(err);
-    showAlert("Impossible de charger tes logements pour le moment.", false);
+    showAlert("Impossible de charger tes logements.", false);
   });
 }
 
-function listenEvents(uid, minKey, maxKey, homeIdOrAll){
-  if(unsubEvents) unsubEvents();
-  hideAlert();
-
-  // Query: events ownerUid + dateKey range
-  // ⚠️ nécessite souvent un index composite (ownerUid + dateKey)
-  let qe = query(
-    collection(db,"events"),
-    where("ownerUid","==", uid),
-    where("dateKey", ">=", minKey),
-    where("dateKey", "<=", maxKey),
-    orderBy("dateKey","asc")
-  );
-
-  // filtre logement côté client (évite index homeId)
-  unsubEvents = onSnapshot(qe, (snap)=>{
-    let items = snap.docs.map(d=>({ id:d.id, ...(d.data()||{}) }));
-
-    if(homeIdOrAll && homeIdOrAll !== "__all__"){
-      items = items.filter(x => String(x.homeId||"") === String(homeIdOrAll));
-    }
-
-    // tri stable : dateKey + time
-    items.sort((a,b)=>{
-      const ak = (a.dateKey||"") + " " + String(a.time||a.arrivalTime||"");
-      const bk = (b.dateKey||"") + " " + String(b.time||b.arrivalTime||"");
-      return ak.localeCompare(bk);
-    });
-
-    events = items;
-
-    // subtitle
-    const chosen = homeSelect.value;
-    const titleHome = (chosen === "__all__")
-      ? "Tous les logements"
-      : (homesById.get(chosen)?.name || "Logement");
-    subtitleLine.textContent = `${titleHome} • ${fmtDateKey(minKey)} → ${fmtDateKey(maxKey)}`;
-
-    rebuildMaps();
-    renderCalendar();
-    renderList();
-  }, (err)=>{
-    console.error(err);
-    const m = String(err?.message||"");
-    if(m.toLowerCase().includes("permission")){
-      showAlert("Accès au planning indisponible pour le moment.", false);
-    }else if(m.toLowerCase().includes("index")){
-      showAlert("Configuration en cours (index de données). Réessaie dans 1 minute.", false);
-    }else{
-      showAlert("Erreur de chargement du planning.", false);
-    }
-  });
-}
-
-function refreshPlanning(){
-  if(!currentUser) return;
-  if(!homes.length){
-    events = [];
-    eventsByDate = new Map();
-    subtitleLine.textContent = "Aucun logement rattaché pour le moment.";
-    renderCalendar();
-    renderList();
-    return;
-  }
-  const { minKey, maxKey } = computeRangeKeys();
-  listenEvents(currentUser.uid, minKey, maxKey, homeSelect.value || "__all__");
-}
-
-/* ======================
-   Events UI handlers
-====================== */
-homeSelect.addEventListener("change", ()=>{
-  refreshPlanning();
-});
-rangeSelect.addEventListener("change", ()=>{
-  refreshPlanning();
-});
+/* UI handlers */
+homeSelect.addEventListener("change", ()=> listenEventsByHomeIds());
+rangeSelect.addEventListener("change", ()=> listenEventsByHomeIds());
 
 prevMonthBtn.addEventListener("click", ()=>{
   viewMonth = new Date(viewMonth.getFullYear(), viewMonth.getMonth()-1, 1);
@@ -785,9 +760,7 @@ nextMonthBtn.addEventListener("click", ()=>{
   renderCalendar();
 });
 
-/* ======================
-   Boot
-====================== */
+/* Boot */
 onAuthStateChanged(auth, (user)=>{
   if(!user){
     location.href="login.html?role=proprietaire";
@@ -795,13 +768,10 @@ onAuthStateChanged(auth, (user)=>{
   }
   currentUser = user;
 
-  // homes -> then events
-  listenHomes(user.uid);
-
-  // first paint calendar even before data
   renderCalendar();
+  listenHomes(user.uid);
+  refreshSubtitle();
 });
 </script>
 </body>
 </html>
-
