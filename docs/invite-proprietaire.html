@@ -1,4 +1,4 @@
-<!-- docs/invite-proprietaire.html (FINAL STABLE — 2 modes + ownerUid/auth.uid + ownerDocId + auto-link homes + merge clients + thread auto à l’acceptation + redirect profil obligatoire) -->
+<!-- docs/invite-proprietaire.html (FINAL STABLE — 2 modes + ownerUid/auth.uid + ownerDocId + auto-link homes + merge clients + thread create on accept) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -379,7 +379,6 @@
       collection, query, where, getDocs, writeBatch
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
-    // ---------- utils ----------
     function getParam(name){
       return (new URLSearchParams(location.search).get(name) || "").trim();
     }
@@ -416,12 +415,6 @@
       el.innerHTML = "";
     }
 
-    // ✅ threadId stable
-    function makeThreadId(conciergerieUid, ownerDocId){
-      return `t_${String(conciergerieUid)}_${String(ownerDocId)}`;
-    }
-
-    // ---------- UI refs ----------
     const badgeLine = document.getElementById("badgeLine");
     const pageSubtitle = document.getElementById("pageSubtitle");
     const backLink = document.getElementById("backLink");
@@ -456,19 +449,16 @@
     const homeHint = document.getElementById("homeHint");
     const homeHintName = document.getElementById("homeHintName");
 
-    // ---------- params ----------
-    const token = getParam("token");                 // mode owner
-    const homeIdParam  = getParam("homeId");         // optionnel: inviter depuis un logement
-    const fromParam    = getParam("from");           // retour optionnel
+    const token = getParam("token");
+    const homeIdParam  = getParam("homeId");
+    const fromParam    = getParam("from");
     const prefillEmail = normalizeEmail(getParam("email"));
     const prefillName  = (getParam("name") || "").trim();
 
-    // conserver token si "j'ai déjà un accès"
     alreadyLink.href = token
       ? ("login.html?role=proprietaire&token=" + encodeURIComponent(token))
       : "login.html?role=proprietaire";
 
-    // ---------- guard conciergerie ----------
     const FREE_EMAILS = new Set(["mathilde.debout31@gmail.com","s.dumas974@gmail.com"]);
     async function guardConciergerie(user){
       const email = (user.email || "").toLowerCase();
@@ -481,7 +471,6 @@
       }catch(e){ return false; }
     }
 
-    // ---------- helpers ----------
     async function attachInviteToHomeIfProvided(conciergerieUid, tokenValue, emailLower){
       if(!homeIdParam) return;
       try{
@@ -506,7 +495,6 @@
       }
     }
 
-    // homes: ownerUid = auth.uid ; ownerDocId = owners/{ownerDocId}
     async function autoLinkHomesForOwner(conciergerieUid, emailLower, tokenValue, ownerDocId, ownerUid){
       const qH = query(
         collection(db, "homes"),
@@ -516,12 +504,17 @@
       );
 
       const snap = await getDocs(qH);
-      if(snap.empty) return 0;
+      if(snap.empty) return { count:0, names:[] };
 
       const batch = writeBatch(db);
       let count = 0;
+      const names = [];
 
       snap.docs.forEach(d=>{
+        const h = d.data() || {};
+        const nm = String(h.name || h.label || h.homeName || d.id).trim();
+        if(nm) names.push(nm);
+
         batch.update(d.ref, {
           ownerUid: String(ownerUid),
           ownerDocId: String(ownerDocId),
@@ -534,7 +527,7 @@
       });
 
       await batch.commit();
-      return count;
+      return { count, names };
     }
 
     function profileRedirectUrl(){
@@ -544,9 +537,7 @@
       return "profil-proprietaire.html?" + p.toString();
     }
 
-    // ---- clients merge (source de vérité commerciale “client”) ----
     async function upsertClient(ownerDocId, conciergerieUid, payload){
-      // docId = ownerDocId (simple & stable)
       const ref = doc(db, "clients", String(ownerDocId));
       await setDoc(ref, {
         ownerDocId: String(ownerDocId),
@@ -555,6 +546,37 @@
         updatedAt: serverTimestamp(),
         ...payload
       }, { merge:true });
+    }
+
+    function stableThreadId(conciergerieUid, ownerDocId){
+      return `t_${conciergerieUid}_${ownerDocId}`;
+    }
+
+    async function ensureThreadOnAccept(conciergerieUid, ownerDocId, ownerUid, meta, homeNames){
+      const tid = stableThreadId(conciergerieUid, ownerDocId);
+      const tRef = doc(db, "threads", tid);
+
+      // on merge pour éviter d’écraser si déjà créé
+      await setDoc(tRef, {
+        conciergerieUid: String(conciergerieUid),
+        ownerDocId: String(ownerDocId),
+        ownerUid: String(ownerUid),
+
+        ownerName: String(meta?.ownerName || "Propriétaire").trim(),
+        ownerEmailLower: String(meta?.ownerEmailLower || "").trim().toLowerCase(),
+
+        homeCount: Number(homeNames?.length || 0),
+        homeNames: Array.isArray(homeNames) ? homeNames.slice(0,50) : [],
+
+        lastText: "",
+        lastAt: serverTimestamp(),
+        createdAt: serverTimestamp(),
+        unreadForConciergerie: 0,
+        unreadForOwner: 0,
+        closed: false
+      }, { merge:true });
+
+      return tid;
     }
 
     // ---------- MODE OWNER ----------
@@ -659,7 +681,6 @@
 
         badgeLine.textContent = "Finalisation du rattachement…";
 
-        // users/{uid}
         await setDoc(doc(db, "users", user.uid), {
           uid: user.uid,
           role: "proprietaire",
@@ -673,7 +694,6 @@
           updatedAt: serverTimestamp()
         }, { merge:true });
 
-        // owners/{ownerDocId}
         await setDoc(doc(db, "owners", ownerDocId), {
           ownerDocId,
           conciergerieUid,
@@ -689,7 +709,6 @@
           updatedAt: serverTimestamp()
         }, { merge:true });
 
-        // ✅ clients/{ownerDocId} (merge)
         await upsertClient(ownerDocId, conciergerieUid, {
           status: "ACTIVE",
           isActive: true,
@@ -701,39 +720,22 @@
           acceptedAt: serverTimestamp()
         });
 
-        // invites/{token}
         await updateDoc(doc(db, "invites", token), {
           status: "accepted",
           usedAt: serverTimestamp(),
           usedOwnerUid: user.uid
         });
 
-        // homes auto-link
-        const linkedCount = await autoLinkHomesForOwner(conciergerieUid, userEmail, token, ownerDocId, user.uid);
+        const linkRes = await autoLinkHomesForOwner(conciergerieUid, userEmail, token, ownerDocId, user.uid);
 
-        // ✅ thread créé UNIQUEMENT ici (après acceptation)
-        try{
-          const tid = makeThreadId(conciergerieUid, ownerDocId);
-          await setDoc(doc(db,"threads", tid), {
-            conciergerieUid,
-            ownerDocId,
-            ownerUid: user.uid,
-            ownerName: fullname || "Propriétaire",
-            ownerEmailLower: userEmail,
-            homeCount: linkedCount || 0,
-            homeNames: [],
-            lastText: "",
-            lastAt: serverTimestamp(),
-            createdAt: serverTimestamp(),
-            unreadForConciergerie: 0,
-            unreadForOwner: 0,
-            closed: false
-          }, { merge:true });
-        }catch(e){
-          console.warn("thread create fail:", e?.message || e);
-        }
+        // ✅ Thread créé ici (à l’acceptation)
+        const meta = {
+          ownerName: fullname || "Propriétaire",
+          ownerEmailLower: userEmail
+        };
+        await ensureThreadOnAccept(conciergerieUid, ownerDocId, user.uid, meta, linkRes.names);
 
-        showAlert(alertOwner, `✅ Compte lié. Logements liés : ${linkedCount}. Redirection profil…`, true);
+        showAlert(alertOwner, `✅ Compte lié. Logements liés : ${linkRes.count}. Redirection profil…`, true);
         setTimeout(()=> location.replace(profileRedirectUrl()), 650);
 
       }catch(err){
@@ -895,7 +897,6 @@
           try{
             const t = randToken(24);
 
-            // owners doc (source de vérité ownerDocId)
             const ownerRef = doc(collection(db, "owners"));
             const ownerDocId = ownerRef.id;
 
@@ -916,7 +917,6 @@
               updatedAt: serverTimestamp()
             }, { merge:true });
 
-            // ✅ clients/{ownerDocId} (INVITED)
             await upsertClient(ownerDocId, user.uid, {
               status: "INVITED",
               isActive: true,
@@ -930,7 +930,6 @@
               createdAt: serverTimestamp()
             });
 
-            // invite doc
             await setDoc(doc(db, "invites", t), {
               token: t,
               email,
@@ -945,7 +944,6 @@
 
             await attachInviteToHomeIfProvided(user.uid, t, email);
 
-            // URL
             const base = `${location.origin}${location.pathname}`;
             const url = `${base}?token=${encodeURIComponent(t)}`;
             inviteLink.textContent = url;
@@ -983,7 +981,6 @@
       });
     }
 
-    // ---------- BOOT ----------
     if(token){
       ownerCard.classList.remove("hidden");
       conciergerieCard.classList.add("hidden");
