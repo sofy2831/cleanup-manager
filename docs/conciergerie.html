@@ -1,4 +1,4 @@
-<!-- docs/conciergerie.html (FINAL — 1 seul bouton dashboard -> recouvrement.html?scope=TODO, recouvrement gère TODAY/LATE) -->
+<!-- docs/conciergerie.html (FINAL — badge Recouvrement cliquable + bouton Boutique -> catalogue.html) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -162,6 +162,8 @@
       margin-right:6px;
       transform: translateY(-1px);
     }
+    .stat.clickable{ cursor:pointer; }
+    .stat.clickable:hover{ border-color: rgba(122,92,255,0.35); }
 
     .alert{
       width:100%;
@@ -426,12 +428,12 @@
         </div>
       </div>
 
-      <!-- ✅ Recouvrement (badge) -->
-      <div class="stat">
+      <!-- ✅ Recouvrement (badge cliquable avec libellé) -->
+      <div class="stat clickable" id="statRecouvrementCard" title="Ouvrir le recouvrement">
         <div class="label">Recouvrement<br>(à faire)</div>
         <div class="value">
           <span id="statRecouvrement">—</span>
-          <span class="mini-badge warn" id="statRecouvrementHint">relances</span>
+          <span class="mini-badge warn" id="statRecouvrementHint">impayés</span>
         </div>
       </div>
     </section>
@@ -453,24 +455,15 @@
 
       <div class="card">
         <h2>Comptabilité</h2>
-        <p>Devis • Factures • Règlements • Export CSV.</p>
+        <p>Ventes • paiements & retards • journaux • export CSV.</p>
         <a class="cta" href="compta.html">Comptabilité</a>
       </div>
 
-      <!-- ✅ Recouvrement: 1 SEUL bouton -->
+      <!-- ✅ Remplace le bouton Recouvrement par Boutique -->
       <div class="card">
-        <h2>
-          Recouvrement
-          <span class="mini-badge warn" id="recBadge">—</span>
-        </h2>
-        <p>Relances à envoyer, delai depassés.</p>
-
-        <a class="cta" id="btnRecTodo" href="recouvrement.html?scope=TODO"> Recouvrement</a>
-
-        <div style="font-size:12px;color:#666;font-weight:800;line-height:1.35;">
-          <span id="recLine1">—</span><br>
-          <span id="recLine2">—</span>
-        </div>
+        <h2>Boutique</h2>
+        <p>Catalogue kits / consommables (préparation commande).</p>
+        <a class="cta" href="catalogue.html">Boutique</a>
       </div>
 
       <div class="card">
@@ -548,12 +541,10 @@
     const statHomesNoAccount = document.getElementById("statHomesNoAccount");
     const statAgents = document.getElementById("statAgents");
 
-    // ✅ Recouvrement widgets
+    // ✅ Recouvrement badge cliquable
+    const statRecouvrementCard = document.getElementById("statRecouvrementCard");
     const statRecouvrement = document.getElementById("statRecouvrement");
     const statRecouvrementHint = document.getElementById("statRecouvrementHint");
-    const recBadge = document.getElementById("recBadge");
-    const recLine1 = document.getElementById("recLine1");
-    const recLine2 = document.getElementById("recLine2");
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -648,7 +639,7 @@
       setStat(statAgents, agents.size);
     }
 
-    // ✅ Recouvrement: compter les factures à faire (TODAY + LATE)
+    // ✅ Recouvrement: compteur simple (TODAY + LATE) basé sur salesDocuments
     function toMillis(v){
       try{
         if(!v) return 0;
@@ -683,7 +674,6 @@
     async function loadRecouvrementTodo(user){
       const uid = user.uid;
 
-      // Dashboard = rapide : on limite et on filtre côté client
       const qInv = query(
         collection(db, "salesDocuments"),
         where("conciergerieUid", "==", uid),
@@ -693,11 +683,9 @@
       const snap = await getDocs(qInv);
       const docs = snap.docs.map(d => ({ id:d.id, ...(d.data()||{}) }));
 
-      // garder seulement factures
       const invoices = docs.filter(x=>{
         const listable = (x?.listable !== false);
         if(!listable) return false;
-
         const type = String(x?.type || "").toUpperCase().trim();
         const docType = String(x?.docType || "").toUpperCase().trim();
         return (type === "INVOICE" || docType === "INVOICE_EVENT" || docType === "INVOICE");
@@ -715,7 +703,7 @@
         if(!isActionable(inv)) continue;
 
         const ms = getNextActionAtMs(inv);
-        if(!ms) continue; // pas planifié => pas un "to-do" auto
+        if(!ms) continue;
         if(ms <= now) late++;
         else if(ms <= eod) today++;
       }
@@ -723,18 +711,23 @@
       const total = today + late;
       setStat(statRecouvrement, total);
 
-      recBadge.textContent = total === 0 ? "0" : String(total);
-      recLine1.textContent = `Aujourd’hui : ${today} • En retard : ${late}`;
-      recLine2.textContent = total ? "Ouvre Recouvrement pour traiter et marquer “envoyée”." : "Rien à faire (pour le moment).";
-
-      if(late > 0){
-        statRecouvrementHint.textContent = "retard";
+      // libellé explicite
+      if(total === 0){
+        statRecouvrementHint.textContent = "impayés : 0";
+        statRecouvrementHint.classList.remove("bad");
+      }else if(late > 0){
+        statRecouvrementHint.textContent = `retards : ${late}`;
         statRecouvrementHint.classList.add("bad");
       }else{
-        statRecouvrementHint.textContent = "relances";
+        statRecouvrementHint.textContent = `aujourd’hui : ${today}`;
         statRecouvrementHint.classList.remove("bad");
       }
     }
+
+    // click recouvrement badge -> recouvrement.html?scope=TODO
+    statRecouvrementCard.addEventListener("click", ()=>{
+      location.href = "recouvrement.html?scope=TODO";
+    });
 
     logoutBtn.addEventListener("click", async ()=>{
       await signOut(auth);
@@ -772,9 +765,7 @@
         await loadRecouvrementTodo(user);
       }catch(e){
         setStat(statRecouvrement, NaN);
-        recBadge.textContent = "—";
-        recLine1.textContent = "Impossible de charger le recouvrement.";
-        recLine2.textContent = "";
+        statRecouvrementHint.textContent = "impayés : —";
       }
     });
   </script>
