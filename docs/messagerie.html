@@ -1,4 +1,4 @@
-<!-- docs/messagerie.html (INBOX — conciergerie : liste des propriétaires / threads) -->
+<!-- docs/messagerie.html (FINAL — INBOX conciergerie : threads stables 1/propriétaire + création via modale) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -189,6 +189,45 @@
       .bottom-nav a{ font-size: 13px; padding: 12px 12px; }
       .page{ padding-bottom: 32px; }
     }
+
+    /* MODAL */
+    .modalOverlay{
+      position:fixed; inset:0; z-index:1000;
+      display:none; align-items:center; justify-content:center;
+      background:rgba(0,0,0,0.35);
+      padding:16px;
+    }
+    .modal{
+      width:100%; max-width:520px;
+      background:#fff;
+      border:1px solid rgba(122,92,255,0.18);
+      border-radius:18px;
+      box-shadow:0 24px 60px rgba(0,0,0,0.18);
+      padding:14px;
+    }
+    .modalHead{ display:flex; justify-content:space-between; align-items:center; gap:10px; }
+    .modalHead h2{ margin:0; font-size:16px; font-weight:1000; }
+    .xBtn{
+      border:none; background:#fff;
+      border:1px solid rgba(122,92,255,0.25);
+      border-radius:999px; padding:8px 10px;
+      cursor:pointer; font-weight:1000; color:var(--violet);
+    }
+    .form{ margin-top:10px; display:flex; flex-direction:column; gap:10px; }
+    .field{ display:flex; flex-direction:column; gap:6px; }
+    .label{ font-size:12px; font-weight:950; color:#333; }
+    .inp{
+      width:100%;
+      padding:10px 12px;
+      border-radius:14px;
+      border:1px solid rgba(122,92,255,0.25);
+      outline:none;
+      font-size:13px;
+      font-weight:900;
+    }
+    .inp:focus{ border-color:var(--violet); box-shadow:0 0 0 2px rgba(122,92,255,.12); }
+    .hint{ font-size:11px; font-weight:850; color:#666; line-height:1.3; }
+    .modalFoot{ display:flex; gap:10px; justify-content:flex-end; margin-top:12px; }
   </style>
 </head>
 
@@ -236,6 +275,39 @@
     <a class="active" href="messagerie.html">Messages</a>
   </nav>
 
+  <!-- MODAL -->
+  <div class="modalOverlay" id="modalOverlay" role="dialog" aria-modal="true" aria-label="Nouvelle conversation">
+    <div class="modal">
+      <div class="modalHead">
+        <h2>Nouvelle conversation</h2>
+        <button class="xBtn" id="closeModalBtn" type="button">✕</button>
+      </div>
+
+      <div class="form">
+        <div class="field">
+          <div class="label">Nom du propriétaire</div>
+          <input class="inp" id="mOwnerName" type="text" placeholder="Ex : Jean Dupont" />
+        </div>
+
+        <div class="field">
+          <div class="label">Email (optionnel)</div>
+          <input class="inp" id="mOwnerEmail" type="email" placeholder="Ex : jean@email.com" />
+        </div>
+
+        <div class="field">
+          <div class="label">Identifiant propriétaire</div>
+          <input class="inp" id="mOwnerDocId" type="text" placeholder="Ex : o_12345" />
+          <div class="hint">Clé unique (ownerDocId). Cette info sert à générer le fil stable.</div>
+        </div>
+
+        <div class="modalFoot">
+          <button class="btn" id="cancelBtn" type="button">Annuler</button>
+          <button class="btn primary" id="createBtn" type="button">Créer</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script type="module">
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
@@ -250,6 +322,14 @@
     const searchInput = document.getElementById("searchInput");
     const threadList = document.getElementById("threadList");
     const newBtn = document.getElementById("newBtn");
+
+    const modalOverlay = document.getElementById("modalOverlay");
+    const closeModalBtn = document.getElementById("closeModalBtn");
+    const cancelBtn = document.getElementById("cancelBtn");
+    const createBtn = document.getElementById("createBtn");
+    const mOwnerName = document.getElementById("mOwnerName");
+    const mOwnerEmail = document.getElementById("mOwnerEmail");
+    const mOwnerDocId = document.getElementById("mOwnerDocId");
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -299,6 +379,22 @@
       }
     }
 
+    function openModal(){
+      mOwnerName.value = "";
+      mOwnerEmail.value = "";
+      mOwnerDocId.value = "";
+      modalOverlay.style.display = "flex";
+      setTimeout(()=> mOwnerName.focus(), 50);
+    }
+    function closeModal(){
+      modalOverlay.style.display = "none";
+    }
+
+    modalOverlay.addEventListener("click", (e)=>{ if(e.target === modalOverlay) closeModal(); });
+    closeModalBtn.addEventListener("click", closeModal);
+    cancelBtn.addEventListener("click", closeModal);
+    newBtn.addEventListener("click", openModal);
+
     function render(){
       const q = String(searchInput.value || "").trim().toLowerCase();
       threadList.innerHTML = "";
@@ -327,8 +423,8 @@
         const ownerName = String(t.ownerName || "Propriétaire").trim();
         const last = String(t.lastText || "").trim();
         const meta = [
-          t.homeCount ? `${Number(t.homeCount)} logement(s)` : "",
-          t.lastAt ? fmtTs(t.lastAt) : ""
+          (Number(t.homeCount || 0) ? `${Number(t.homeCount || 0)} logement(s)` : ""),
+          (t.lastAt ? fmtTs(t.lastAt) : "")
         ].filter(Boolean).join(" • ");
 
         const row = document.createElement("div");
@@ -351,28 +447,29 @@
       }
     }
 
+    searchInput.addEventListener("input", render);
+
     async function createNewThread(){
       hideAlert();
 
-      // ✅ UI simple et propre (pas d’IDs internes affichés)
-      const ownerName = prompt("Nom du propriétaire :");
-      if(!ownerName) return;
+      const ownerName = String(mOwnerName.value || "").trim();
+      const ownerEmailLower = String(mOwnerEmail.value || "").trim().toLowerCase();
+      const ownerDocId = String(mOwnerDocId.value || "").trim();
 
-      const ownerEmail = prompt("Email du propriétaire (optionnel) :") || "";
-      const ownerDocId = prompt("ownerDocId (clé unique propriétaire) :");
-      if(!ownerDocId) return;
+      if(!ownerName) return showAlert("Nom propriétaire obligatoire.");
+      if(!ownerDocId) return showAlert("Identifiant propriétaire obligatoire.");
 
-      const tid = makeThreadId(currentUser.uid, String(ownerDocId).trim());
+      const tid = makeThreadId(currentUser.uid, ownerDocId);
       const tRef = doc(db,"threads",tid);
 
       try{
         await setDoc(tRef, {
           conciergerieUid: currentUser.uid,
-          ownerDocId: String(ownerDocId).trim(),
+          ownerDocId,
           ownerUid: "",
 
-          ownerName: String(ownerName).trim(),
-          ownerEmailLower: String(ownerEmail || "").trim().toLowerCase(),
+          ownerName,
+          ownerEmailLower,
 
           homeCount: 0,
           homeNames: [],
@@ -385,14 +482,13 @@
           closed: false
         }, { merge:true });
 
+        closeModal();
         location.href = `messagerie.conv.html?threadId=${encodeURIComponent(tid)}`;
       }catch(e){
         showAlert("Erreur création conversation : " + (e?.message || "erreur"));
       }
     }
-
-    searchInput.addEventListener("input", render);
-    newBtn.addEventListener("click", createNewThread);
+    createBtn.addEventListener("click", createNewThread);
 
     onAuthStateChanged(auth, async (user)=>{
       if(!user){ location.href = "login.html?role=conciergerie"; return; }
@@ -404,13 +500,13 @@
       allThreads = [];
       render();
 
-      const q = query(
+      const qThreads = query(
         collection(db,"threads"),
         where("conciergerieUid","==", user.uid),
         orderBy("lastAt","desc")
       );
 
-      unsub = onSnapshot(q, (snap)=>{
+      unsub = onSnapshot(qThreads, (snap)=>{
         allThreads = snap.docs.map(d=>({ id:d.id, ...(d.data()||{}) }));
         render();
       }, (err)=>{
