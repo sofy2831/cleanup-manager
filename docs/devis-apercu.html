@@ -1,4 +1,4 @@
-<!-- docs/devis-apercu.html (FINAL FIX — businessProfile + users.address/contact compatibles + ownerDocId prioritaire) -->
+<!-- docs/devis-apercu.html (FINAL — draft=1 sans Firestore + quote fields + retour origin) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -283,7 +283,7 @@
     }
 
     @media print{
-      .topbar, .bottom-nav, .actions, button{ display:none !important; }
+      .topbar, button{ display:none !important; }
       body{ background:#fff !important; }
       @page{ margin: 8mm; }
 
@@ -331,7 +331,7 @@
 <body>
   <div class="wrap">
     <div class="topbar">
-      <a class="pill" id="backLink" href="devis-event.html?eventId">← Retour</a>
+      <a class="pill" id="backLink" href="#">← Retour</a>
       <button class="pill primary" id="printBtn" type="button">Imprimer / PDF</button>
     </div>
 
@@ -373,13 +373,8 @@
           <div class="line" id="cliLine1">—</div>
           <div class="line" id="cliLine2"></div>
           <div class="line" id="cliLine3"></div>
+          <div class="line mut" id="cliLine4"></div>
         </div>
-      </div>
-
-      <div class="sectionTitle">Logement & période</div>
-      <div class="box">
-        <div class="line" id="homeLine1">—</div>
-        <div class="line" id="homeLine2">—</div>
       </div>
 
       <table aria-label="Lignes devis">
@@ -413,11 +408,11 @@
       <div class="sectionTitle">Conditions</div>
       <div class="box">
         <div class="line" id="cond1">—</div>
-        <div class="line" id="cond2">—</div>
+        <div class="line" id="cond2" style="display:none;"></div>
         <div class="line" id="cond3">—</div>
       </div>
 
-      <div class="sectionTitle" id="penSectionTitle">Pénalités</div>
+      <div class="sectionTitle" id="penTitle">Pénalités</div>
       <div class="box" id="penBox">
         <div class="line" id="penaltyText">—</div>
       </div>
@@ -450,11 +445,11 @@
   <script type="module">
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-    import { doc, getDoc, collection, query, where, getDocs, limit } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import { doc, getDoc } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
+    const backLink = document.getElementById("backLink");
     const alertBox = document.getElementById("alertBox");
     const printBtn = document.getElementById("printBtn");
-    const backLink = document.getElementById("backLink");
 
     const logoImg = document.getElementById("logoImg");
     const logoFallback = document.getElementById("logoFallback");
@@ -473,12 +468,10 @@
     const cli1 = document.getElementById("cliLine1");
     const cli2 = document.getElementById("cliLine2");
     const cli3 = document.getElementById("cliLine3");
-
-    const homeLine1 = document.getElementById("homeLine1");
-    const homeLine2 = document.getElementById("homeLine2");
+    const cli4 = document.getElementById("cliLine4");
 
     const sigCompanyTextEl = document.getElementById("sigCompanyText");
-    const sigClientTextEl = document.getElementById("sigClientText");
+    const sigClientTextEl  = document.getElementById("sigClientText");
 
     const linesBody = document.getElementById("linesBody");
 
@@ -492,11 +485,15 @@
     const cond2 = document.getElementById("cond2");
     const cond3 = document.getElementById("cond3");
 
+    const penTitle = document.getElementById("penTitle");
+    const penBox   = document.getElementById("penBox");
     const penaltyTextEl = document.getElementById("penaltyText");
-    const penSectionTitle = document.getElementById("penSectionTitle");
-    const penBox = document.getElementById("penBox");
 
     const footerEl = document.getElementById("footer");
+
+    // ===== state =====
+    let docData = null;
+    let isDraftPreview = false;
 
     function showError(msg){
       alertBox.style.display = "block";
@@ -530,11 +527,12 @@
       return d;
     }
     function termLabel(term){
-      if(term === "RECEPTION") return "À réception";
-      if(term === "8J") return "8 jours";
-      if(term === "15J") return "15 jours";
-      if(term === "30J") return "30 jours";
-      if(term === "45J") return "45 jours";
+      const t = String(term||"").toUpperCase();
+      if(t === "RECEPTION") return "À réception";
+      if(t === "8J") return "8 jours";
+      if(t === "15J") return "15 jours";
+      if(t === "30J") return "30 jours";
+      if(t === "45J") return "45 jours";
       return term || "—";
     }
     function modeLabel(mode){
@@ -543,23 +541,6 @@
       if(m === "ESPECES") return "Espèces";
       if(m === "CHEQUE") return "Chèque";
       return mode || "—";
-    }
-    function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
-
-    function fmtDateFR(x){
-      if(!x) return "—";
-      try{
-        if(x?.toDate?.()) return x.toDate().toLocaleDateString("fr-FR");
-        if(x instanceof Date) return isNaN(x.getTime()) ? "—" : x.toLocaleDateString("fr-FR");
-        const s = String(x).trim();
-        if(!s) return "—";
-        if(/^\d{2}\/\d{2}\/\d{4}$/.test(s)) return s;
-        const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
-        if(m) return `${m[3]}/${m[2]}/${m[1]}`;
-        const d = new Date(s);
-        if(!isNaN(d.getTime())) return d.toLocaleDateString("fr-FR");
-        return "—";
-      }catch{ return "—"; }
     }
 
     function computeTotals(linesArr, vatEnabled, vatRate){
@@ -577,47 +558,33 @@
       if(m === "B2B"){
         return "Pénalités de retard : 3 fois le taux d’intérêt légal en vigueur + indemnité forfaitaire de recouvrement de 40 €.";
       }
-      if(m === "B2C"){
-        return "Pénalités de retard : 3 fois le taux d’intérêt légal en vigueur.";
-      }
-      return "";
+      return "Pénalités de retard : 3 fois le taux d’intérêt légal en vigueur.";
     }
 
-    function getStayPeriod(d){
-      const a0 = d?.arrivalDateKey;
-      const b0 = d?.departureDateKey;
-      const fa = fmtDateFR(a0);
-      const fb = fmtDateFR(b0);
-
-      if(fa !== "—" && fb !== "—") return `Du ${fa} au ${fb}`;
-      if(fa !== "—" && fb === "—") return `À partir du ${fa}`;
-      if(fa === "—" && fb !== "—") return `Jusqu’au ${fb}`;
-      return "—";
+    function applyCompanySignature({ userSignatureName, bsSignatureName, fallbackCompanyName }){
+      const name =
+        String(userSignatureName || "").trim() ||
+        String(bsSignatureName || "").trim() ||
+        String(fallbackCompanyName || "").trim() ||
+        "Conciergerie";
+      sigCompanyTextEl.textContent = name;
     }
 
-    // ✅ compat: businessProfile + users.address + users.contact
-    function applyBusinessProfile(profile){
-      const bp = (profile?.businessProfile || {});
-      const addr = (profile?.address || bp.address || {});
-      const ctc  = (profile?.contact || {});
+    function applyBusinessSnapshot(bs){
+      const companyName = String(bs?.companyName || "Conciergerie").trim();
+      const logoUrl = String(bs?.logoUrl || "").trim();
 
-      const companyName = String(bp.companyName || profile?.fullname || "Conciergerie").trim();
+      const street = String(bs?.address?.street || "").trim();
+      const zip = String(bs?.address?.zip || "").trim();
+      const city = String(bs?.address?.city || "").trim();
+
+      const siret = String(bs?.registration?.siret || "").trim();
+      const ape   = String(bs?.registration?.ape || "").trim();
+
+      const email = String(bs?.contact?.email || "").trim();
+      const phone = String(bs?.contact?.phone || "").trim();
+
       companyNameEl.textContent = companyName || "Conciergerie";
-
-      const sigName = String(bp.signatureName || profile?.signatureName || companyName || "Conciergerie").trim();
-      sigCompanyTextEl.textContent = sigName || "Conciergerie";
-
-      const logoUrl = String(bp.logoUrl || ctc.logoUrl || "").trim();
-
-      const street = String(addr.street || "").trim();
-      const zip = String(addr.zip || "").trim();
-      const city = String(addr.city || "").trim();
-
-      const siret = String(bp.registration?.siret || profile?.siret || "").trim();
-      const ape   = String(bp.registration?.ape || "").trim();
-
-      const email = String(ctc.email || bp.billingEmail || profile?.email || "").trim();
-      const phone = String(ctc.phone || bp.phone || profile?.phone || "").trim();
 
       if(logoUrl){
         logoImg.src = logoUrl;
@@ -630,11 +597,18 @@
 
       soc1.textContent = companyName || "Conciergerie";
       soc2.textContent = street || "";
-      soc3.textContent = [zip, city].filter(Boolean).join(" ") || "";
-      soc4.textContent = [
-        [siret ? `SIRET ${siret}` : "", ape ? `APE ${ape}` : ""].filter(Boolean).join(" • "),
-        [email, phone].filter(Boolean).join(" • ")
-      ].filter(Boolean).join(" • ");
+      soc2.style.display = street ? "" : "none";
+
+      const cityLine = [zip, city].filter(Boolean).join(" ");
+      soc3.textContent = cityLine || "";
+      soc3.style.display = cityLine ? "" : "none";
+
+      const idLine = [siret ? `SIRET ${siret}` : "", ape ? `APE ${ape}` : ""].filter(Boolean).join(" • ");
+      const contactLine = [email, phone].filter(Boolean).join(" • ");
+      const line4 = [idLine, contactLine].filter(Boolean).join(" • ");
+
+      soc4.textContent = line4 || "";
+      soc4.style.display = line4 ? "" : "none";
 
       const footerParts = [];
       footerParts.push(companyName || "Conciergerie");
@@ -644,7 +618,7 @@
       if(email || phone) footerParts.push([email, phone].filter(Boolean).join(" • "));
       footerEl.innerHTML = footerParts.map(x=>esc(x)).join(" • ");
 
-      return bp;
+      return bs || {};
     }
 
     function refreshClientSigState(){
@@ -658,135 +632,43 @@
       r.addEventListener("change", refreshClientSigState);
     });
 
-    function renderDocHeader(eventData){
-      docTitleEl.textContent = `DEVIS N° ${eventData?.quoteNumber || "—"}`;
+    function renderClient(d){
+      const name  = String(d?.clientName || "").trim();
+      const email = String(d?.clientEmail || "").trim();
 
-      const created = new Date();
-      const offerDays = Number.isFinite(Number(eventData?.quoteOfferValidityDays)) ? Number(eventData.quoteOfferValidityDays) : 30;
-      const until = addDays(created, offerDays);
+      const a1 = String(d?.clientAddress1 || "").trim();
+      const a2 = String(d?.clientAddress2 || "").trim();
 
-      metaRightEl.innerHTML = `
-        <div><b>Émis le</b> ${esc(ddmmyyyy(created))}</div>
-        <div><b>Valable jusqu’au</b> ${esc(ddmmyyyy(until))}</div>
-      `;
-      docMetaEl.textContent = `Émis le ${ddmmyyyy(created)} • Valable jusqu’au ${ddmmyyyy(until)}`;
-    }
+      const zip = String(d?.clientZip || "").trim();
+      const city = String(d?.clientCity || "").trim();
 
-    function renderHomeAndPeriod(d){
-      const homeName = String(d?.homeName || "").trim();
-      const homeAddr = String(d?.homeAddress || "").trim();
-      const homeZip  = String(d?.homeZip || "").trim();
-      const homeCity = String(d?.homeCity || "").trim();
-      const fullAddr = [homeAddr, [homeZip, homeCity].filter(Boolean).join(" ")].filter(Boolean).join(" • ");
-
-      homeLine1.textContent = `${homeName ? (homeName + " • ") : ""}${fullAddr || "Adresse : —"}`;
-      homeLine2.textContent = `Période : ${getStayPeriod(d)}`;
-    }
-
-    async function lookupOwnerByEmailInOwners(conciergerieUid, emailLower){
-      if(!emailLower) return null;
-
-      const qO = query(
-        collection(db,"owners"),
-        where("conciergerieUid", "==", String(conciergerieUid)),
-        where("emailLower", "==", emailLower),
-        where("isActive", "==", true),
-        limit(1)
-      );
-
-      const snap = await getDocs(qO);
-      if(snap.empty) return null;
-
-      const doc0 = snap.docs[0];
-      const o = doc0.data() || {};
-      return {
-        docId: doc0.id,
-        email: normalizeEmail(o.email || emailLower),
-        fullname: (o.fullname || o.displayName || "").trim(),
-        address1: (o.address1 || o.address || "").toString().trim(),
-        address2: (o.address2 || "").toString().trim(),
-        zip: (o.zip || "").toString().trim(),
-        city: (o.city || "").toString().trim(),
-        phone: (o.phone || "").toString().trim(),
-      };
-    }
-
-    // ✅ ownerDocId prioritaire (owners/{docId})
-    async function loadOwnerForEvent(conciergerieUid, d){
-      const ownerDocId = String(d?.ownerDocId || "").trim() || String(d?.ownerUid || "").trim(); // fallback, au cas où legacy
-
-      if(ownerDocId){
-        try{
-          const snap = await getDoc(doc(db,"owners", ownerDocId));
-          if(snap.exists()){
-            const o = snap.data() || {};
-            if(String(o.conciergerieUid||"") === String(conciergerieUid)){
-              return {
-                docId: snap.id,
-                fullname: (o.fullname || o.displayName || "").trim(),
-                email: normalizeEmail(o.email || ""),
-                phone: (o.phone || "").toString().trim(),
-                address1: (o.address1 || o.address || "").toString().trim(),
-                address2: (o.address2 || "").toString().trim(),
-                zip: (o.zip || "").toString().trim(),
-                city: (o.city || "").toString().trim(),
-              };
-            }
-          }
-        }catch(e){ /* ignore */ }
-      }
-
-      const ownerEmail = normalizeEmail(d?.ownerEmail || "");
-      if(ownerEmail){
-        try{ return await lookupOwnerByEmailInOwners(conciergerieUid, ownerEmail); }
-        catch(e){ return null; }
-      }
-      return null;
-    }
-
-    function ownerSnapshotFromEvent(d){
-      return {
-        fullname: String(d?.ownerName || "").trim(),
-        email: String(d?.ownerEmail || "").trim(),
-        phone: String(d?.ownerPhone || "").trim(),
-        address1: String(d?.ownerAddress1 || "").trim(),
-        address2: String(d?.ownerAddress2 || "").trim(),
-        zip: String(d?.ownerZip || "").trim(),
-        city: String(d?.ownerCity || "").trim(),
-      };
-    }
-
-    function renderClientHeader(ownerFromOwners, d){
-      const o = ownerFromOwners || null;
-      const s = ownerSnapshotFromEvent(d);
-
-      const name = (o?.fullname || s.fullname || "—").trim();
-      const a1 = (o?.address1 || s.address1 || "").trim();
-      const a2 = (o?.address2 || s.address2 || "").trim();
-      const zip = (o?.zip || s.zip || "").trim();
-      const city = (o?.city || s.city || "").trim();
-      const email = (o?.email || s.email || "").trim();
-      const phone = (o?.phone || s.phone || "").trim();
+      const phone = String(d?.clientPhone || "").trim();
 
       cli1.textContent = name || "—";
 
-      cli2.textContent = a1 || "";
-      cli2.style.display = a1 ? "" : "none";
+      const line2 = [a1, a2].filter(Boolean).join(" ");
+      cli2.textContent = line2 || "";
+      cli2.style.display = line2 ? "" : "none";
 
-      const l3 = [a2, [zip, city].filter(Boolean).join(" ")].filter(Boolean).join(" • ");
-      const l4 = [email, phone].filter(Boolean).join(" • ");
-      cli3.textContent = [l3, l4].filter(Boolean).join(" • ") || "";
+      const cityLine = [zip, city].filter(Boolean).join(" ");
+      const line3 = [cityLine, email].filter(Boolean).join(" • ");
+      cli3.textContent = line3 || "";
+      cli3.style.display = line3 ? "" : "none";
+
+      const line4 = [phone].filter(Boolean).join(" • ");
+      cli4.textContent = line4 || "";
+      cli4.style.display = line4 ? "" : "none";
 
       sigClientTextEl.textContent = name || "—";
       refreshClientSigState();
     }
 
-    function renderLines(eventData, businessProfile){
-      const arr = Array.isArray(eventData?.lines) ? eventData.lines : [];
+    function renderLines(d, bs){
+      const arr = Array.isArray(d?.lines) ? d.lines : [];
       linesBody.innerHTML = "";
 
-      const vatEnabled = !!businessProfile?.vat?.enabled;
-      const vatRate = Number.isFinite(Number(businessProfile?.vat?.rate)) ? Number(businessProfile.vat.rate) : 0;
+      const vatEnabled = !!bs?.vat?.enabled;
+      const vatRate = Number.isFinite(Number(bs?.vat?.rate)) ? Number(bs.vat.rate) : 0;
 
       if(!arr.length){
         const tr = document.createElement("tr");
@@ -795,6 +677,7 @@
       }else{
         for(const l of arr){
           const qty = Number(l?.qty)||0;
+          const unit = String(l?.unit || "").trim(); // optionnel
           const up = Number(l?.unitPrice)||0;
           const ht = qty * up;
           const tva = vatEnabled ? (ht * vatRate) : 0;
@@ -805,7 +688,7 @@
           const tr = document.createElement("tr");
           tr.innerHTML = `
             <td>${esc(label)}</td>
-            <td class="right">${esc(String(qty))}</td>
+            <td class="right">${esc(String(qty))}${unit ? " " + esc(unit) : ""}</td>
             <td class="right">${esc(money(up))}</td>
             <td class="right">${esc(money(ttc))}</td>
           `;
@@ -813,60 +696,119 @@
         }
       }
 
-      const totals = computeTotals(arr, vatEnabled, vatRate);
-      totalTtcEl.textContent = money(totals.ttc);
+      // Totaux : si tu as totalTTC stocké, on l’utilise, sinon recalcul
+      const storedTtc = Number(d?.totalTTC);
+      const storedHt  = Number(d?.totalHT);
+      const storedTva = Number(d?.totalTVA);
 
-      if(vatEnabled){
-        tvaLineEl.textContent = `HT ${money(totals.ht)} • TVA ${Math.round(vatRate*100)}% ${money(totals.tva)}`;
+      if(Number.isFinite(storedTtc) && storedTtc >= 0){
+        totalTtcEl.textContent = money(storedTtc);
+
+        if(vatEnabled){
+          const ht  = Number.isFinite(storedHt) ? storedHt : computeTotals(arr, vatEnabled, vatRate).ht;
+          const tva = Number.isFinite(storedTva) ? storedTva : computeTotals(arr, vatEnabled, vatRate).tva;
+          tvaLineEl.textContent = `HT ${money(ht)} • TVA ${Math.round(vatRate*100)}% ${money(tva)}`;
+        }else{
+          const ex = String(bs?.tvaExemptionText || "").trim();
+          tvaLineEl.textContent = ex || "TVA non applicable (art. 293B CGI)";
+        }
       }else{
-        const ex = String(businessProfile?.tvaExemptionText || "").trim();
-        tvaLineEl.textContent = ex || "TVA non applicable (art. 293B CGI)";
+        const totals = computeTotals(arr, vatEnabled, vatRate);
+        totalTtcEl.textContent = money(totals.ttc);
+
+        if(vatEnabled){
+          tvaLineEl.textContent = `HT ${money(totals.ht)} • TVA ${Math.round(vatRate*100)}% ${money(totals.tva)}`;
+        }else{
+          const ex = String(bs?.tvaExemptionText || "").trim();
+          tvaLineEl.textContent = ex || "TVA non applicable (art. 293B CGI)";
+        }
       }
     }
 
-    function renderPaymentAndConditions(eventData, businessProfile){
-      const mode = String(eventData?.quotePaymentMode || "VIREMENT").toUpperCase();
-      const term = String(eventData?.quotePaymentTerm || "RECEPTION").toUpperCase();
+    function getCreatedDate(d){
+      try{
+        if(d?.createdAt?.toDate?.()) return d.createdAt.toDate();
+      }catch{}
+      return new Date();
+    }
+
+    function renderDocHeader(d){
+      const qn = String(d?.quoteNumber || "").trim();
+      docTitleEl.textContent = qn ? `DEVIS N° ${qn}` : `DEVIS N° — (BROUILLON)`;
+
+      const created = getCreatedDate(d);
+      const offerDays = Number.isFinite(Number(d?.quoteOfferValidityDays)) ? Number(d.quoteOfferValidityDays) : 30;
+      const until = addDays(created, offerDays);
+
+      metaRightEl.innerHTML = `
+        <div><b>Émis le</b> ${esc(ddmmyyyy(created))}</div>
+        <div><b>Valable jusqu’au</b> ${esc(ddmmyyyy(until))}</div>
+      `;
+      docMetaEl.textContent = `Émis le ${ddmmyyyy(created)} • Valable jusqu’au ${ddmmyyyy(until)}`;
+    }
+
+    function renderPaymentAndConditions(d, bs){
+      const mode = String(d?.quotePaymentMode || "VIREMENT").toUpperCase();
+      const term = String(d?.quotePaymentTerm || "RECEPTION").toUpperCase();
 
       payModeEl.textContent = `Mode : ${modeLabel(mode)}`;
       payTermEl.textContent = `Délai : ${termLabel(term)}`;
 
-      const created = new Date();
-      const offerDays = Number.isFinite(Number(eventData?.quoteOfferValidityDays)) ? Number(eventData.quoteOfferValidityDays) : 30;
-      const offerUntil = addDays(created, offerDays);
-
-      const cancelPct = Number.isFinite(Number(businessProfile?.conditions?.cancellationPercent))
-        ? Number(businessProfile.conditions.cancellationPercent)
+      // Annulation affichable/masquable
+      const showCancel = (typeof d?.quoteShowCancellation === "boolean") ? d.quoteShowCancellation : true;
+      const cancelPct = Number.isFinite(Number(bs?.conditions?.cancellationPercent))
+        ? Number(bs.conditions.cancellationPercent)
         : 30;
 
-      cond1.innerHTML = `<b>Validité de l’offre</b> : ${esc(ddmmyyyy(offerUntil))}`;
-      cond2.innerHTML = `<b>Échéance de paiement</b> : ${esc(termLabel(term))}`;
-      cond3.innerHTML = `<b>Annulation</b> : ${esc(String(cancelPct))} % du montant en cas d’annulation moins de 48 h avant l’intervention.`;
+      const offerDays = Number.isFinite(Number(d?.quoteOfferValidityDays)) ? Number(d.quoteOfferValidityDays) : 30;
+      cond1.innerHTML = `<b>Validité de l’offre</b> : ${esc(String(offerDays))} jours`;
+
+      if(showCancel){
+        cond2.style.display = "";
+        cond2.innerHTML = `<b>Annulation</b> : ${esc(String(cancelPct))} % du montant en cas d’annulation moins de 48 h avant l’intervention.`;
+      }else{
+        cond2.style.display = "none";
+        cond2.textContent = "";
+      }
+
+      cond3.innerHTML = `&nbsp;`;
     }
 
-    function renderPenalty(eventData){
-      const explicit = String(eventData?.quotePenaltyText || "").trim();
-      const mode = String(eventData?.quotePenaltyMode || "").trim().toUpperCase();
+    function renderPenalty(d){
+      const storedText = String(d?.quotePenaltyText || "").trim();
+      if(storedText){
+        penaltyTextEl.textContent = storedText;
+      }else{
+        const mode = String(d?.quotePenaltyMode || "B2C").toUpperCase();
+        penaltyTextEl.textContent = getPenaltyTemplate(mode);
+      }
+      penTitle.style.display = "";
+      penBox.style.display = "";
+    }
 
-      if(explicit){
-        penaltyTextEl.textContent = explicit;
-        penSectionTitle.style.display = "";
-        penBox.style.display = "";
+    function loadDraftFromSession(){
+      try{
+        const raw = sessionStorage.getItem("quoteDraftPreview");
+        if(!raw) return null;
+        const draft = JSON.parse(raw);
+        if(!draft || typeof draft !== "object") return null;
+        return draft;
+      }catch{
+        return null;
+      }
+    }
+
+    function setBackLink(docId){
+      const origin = getParam("origin");
+      if(origin){
+        backLink.href = origin;
         return;
       }
-
-      if(mode){
-        const tpl = getPenaltyTemplate(mode);
-        if(tpl){
-          penaltyTextEl.textContent = tpl;
-          penSectionTitle.style.display = "";
-          penBox.style.display = "";
-          return;
-        }
+      if(isDraftPreview){
+        backLink.href = "devis.html?mode=create";
+        return;
       }
-
-      penSectionTitle.style.display = "none";
-      penBox.style.display = "none";
+      backLink.href = docId ? `devis.html?docId=${encodeURIComponent(docId)}` : "devis-liste.html";
     }
 
     printBtn.addEventListener("click", ()=> window.print());
@@ -877,40 +819,80 @@
         return;
       }
 
-      const eventId = getParam("eventId");
-      if(!eventId){
-        showError("eventId manquant.");
-        return;
-      }
+      const docId = getParam("docId");
+      isDraftPreview = (getParam("draft") === "1");
 
-      backLink.href = `devis-event.html?eventId=${encodeURIComponent(eventId)}`;
+      setBackLink(docId);
 
       try{
-        const eventRef = doc(db, "events", eventId);
-        const es = await getDoc(eventRef);
-        if(!es.exists()){
-          showError("Devis introuvable (event).");
-          return;
+        // 1) source data
+        if(isDraftPreview){
+          const draft = loadDraftFromSession();
+          if(!draft){
+            showError("Aperçu brouillon introuvable (sessionStorage.quoteDraftPreview).");
+            return;
+          }
+          docData = { ...draft };
+        }else{
+          if(!docId){
+            showError("docId manquant (hors draft=1).");
+            return;
+          }
+          const snap = await getDoc(doc(db, "salesDocuments", docId));
+          if(!snap.exists()){
+            showError("Devis introuvable.");
+            return;
+          }
+          docData = { id: snap.id, ...(snap.data()||{}) };
+
+          // sécurité conciergerie
+          if(String(docData.conciergerieUid||"") && String(docData.conciergerieUid) !== String(user.uid)){
+            showError("Accès refusé (document d’une autre conciergerie).");
+            return;
+          }
         }
-        const eventData = { id: es.id, ...(es.data()||{}) };
 
-        if(eventData.conciergerieUid && eventData.conciergerieUid !== user.uid){
-          showError("Accès refusé (event d’une autre conciergerie).");
-          return;
-        }
+        // 2) user profile (signatureName racine)
+        let userSignatureName = "";
+        let profile = {};
+        try{
+          const uSnap = await getDoc(doc(db, "users", user.uid));
+          if(uSnap.exists()){
+            profile = uSnap.data() || {};
+            userSignatureName = String(profile?.signatureName || "").trim();
+          }
+        }catch(e){}
 
-        const userSnap = await getDoc(doc(db,"users", user.uid));
-        const profile = userSnap.exists() ? (userSnap.data()||{}) : {};
-        const bp = applyBusinessProfile(profile);
+        // 3) business snapshot
+        const bs = docData?.businessSnapshot || profile?.businessProfile || {};
+        const appliedBs = applyBusinessSnapshot({
+          companyName: bs?.companyName || profile?.businessProfile?.companyName || "Conciergerie",
+          logoUrl: bs?.logoUrl || profile?.businessProfile?.logoUrl || "",
+          address: bs?.address || profile?.businessProfile?.address || {},
+          registration: bs?.registration || profile?.businessProfile?.registration || {},
+          contact: bs?.contact || profile?.businessProfile?.contact || {
+            email: profile?.businessProfile?.billingEmail || profile?.email || "",
+            phone: profile?.businessProfile?.phone || ""
+          },
+          vat: bs?.vat || profile?.businessProfile?.vat || {},
+          tvaExemptionText: bs?.tvaExemptionText || profile?.businessProfile?.tvaExemptionText || "",
+          conditions: bs?.conditions || profile?.businessProfile?.conditions || {},
+          signatureName: bs?.signatureName || profile?.businessProfile?.registration?.signatureName || ""
+        });
 
-        const ownerFromOwners = await loadOwnerForEvent(user.uid, eventData);
-        renderClientHeader(ownerFromOwners, eventData);
+        // signature: user.signatureName -> bs.signatureName -> companyName
+        applyCompanySignature({
+          userSignatureName,
+          bsSignatureName: String(appliedBs?.signatureName || "").trim(),
+          fallbackCompanyName: String(appliedBs?.companyName || "Conciergerie").trim()
+        });
 
-        renderDocHeader(eventData);
-        renderHomeAndPeriod(eventData);
-        renderLines(eventData, bp || {});
-        renderPaymentAndConditions(eventData, bp || {});
-        renderPenalty(eventData);
+        // 4) render
+        renderDocHeader(docData);
+        renderClient(docData);
+        renderLines(docData, appliedBs || {});
+        renderPaymentAndConditions(docData, appliedBs || {});
+        renderPenalty(docData);
 
       }catch(e){
         console.error(e);
@@ -920,5 +902,3 @@
   </script>
 </body>
 </html>
-
-
