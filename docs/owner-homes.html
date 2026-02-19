@@ -171,7 +171,6 @@
       color:#333;
     }
 
-    /* Bottom nav (4 onglets) */
     .bottom-nav{
       position:fixed; left:50%; transform:translateX(-50%); bottom:0;
       width:calc(100% - 20px); max-width:980px;
@@ -207,7 +206,6 @@
 
   <div class="wrap">
 
-    <!-- AJOUT LOGEMENT -->
     <div class="card">
       <h1>Ajouter un logement</h1>
       <div class="subtitle">Demande d’ajout à transmettre à la conciergerie</div>
@@ -238,7 +236,6 @@
       </div>
     </div>
 
-    <!-- LISTE LOGEMENTS -->
     <div class="card">
       <h1>Mes logements</h1>
 
@@ -280,7 +277,7 @@ const homeMsg  = document.getElementById("homeMsg");
 
 function showAlert(msg, ok=false){
   alertBox.style.display="block";
-  alertBox.classList.toggle("ok",ok);
+  alertBox.classList.toggle("ok",!!ok);
   alertBox.textContent=msg;
 }
 function hideAlert(){ alertBox.style.display="none"; alertBox.classList.remove("ok"); alertBox.textContent=""; }
@@ -303,7 +300,7 @@ onAuthStateChanged(auth, async (user)=>{
     return;
   }
 
-  // 🔑 Source de vérité : users/{uid}.ownerDocId + conciergerieUid
+  // Source de vérité
   let ownerDocId = "";
   let conciergerieUid = "";
 
@@ -312,17 +309,14 @@ onAuthStateChanged(auth, async (user)=>{
     const ud = us.exists() ? (us.data()||{}) : {};
     ownerDocId = String(ud.ownerDocId || "").trim();
     conciergerieUid = String(ud.conciergerieUid || "").trim();
-  }catch(e){
-    // si ça rate, on retombe sur fallback ownerUid
-  }
+  }catch(_){}
 
-  // stop old listener
   if(unsubHomes) unsubHomes();
   unsubHomes = null;
 
-  // ✅ Query principale (stable) : homes.ownerDocId == users.ownerDocId, et même conciergerieUid
-  // 🔁 Fallback compat : homes.ownerUid == auth.uid (anciens docs)
-  const q = (ownerDocId && conciergerieUid)
+  // Query principale : homes liés via ownerDocId + conciergerieUid
+  // Fallback : homes.ownerUid == auth.uid (anciens docs)
+  const qHomes = (ownerDocId && conciergerieUid)
     ? query(
         collection(db,"homes"),
         where("conciergerieUid","==", conciergerieUid),
@@ -333,7 +327,7 @@ onAuthStateChanged(auth, async (user)=>{
         where("ownerUid","==", user.uid)
       );
 
-  unsubHomes = onSnapshot(q, (snap)=>{
+  unsubHomes = onSnapshot(qHomes, (snap)=>{
     homesList.innerHTML="";
     if(snap.empty){
       emptyHomes.style.display="block";
@@ -345,7 +339,7 @@ onAuthStateChanged(auth, async (user)=>{
     rows.sort((a,b)=> (b.createdAt?.seconds ?? 0) - (a.createdAt?.seconds ?? 0));
 
     for(const h of rows){
-      const name = h.name || h.label || "Logement";
+      const name = h.name || h.label || h.homeName || "Logement";
       const city = h.homeCity || h.city || "";
       const type = h.homeType || h.type || "";
       const addr = h.homeAddress || h.address || "Adresse non renseignée";
@@ -356,29 +350,36 @@ onAuthStateChanged(auth, async (user)=>{
       el.innerHTML=`
         <div class="meta">
           <span>${esc(name)}${city ? " • " + esc(city) : ""}${cp ? " (" + esc(cp) + ")" : ""}</span>
-          <span>${esc(type)}</span>
+          <span>${esc(type || "—")}</span>
         </div>
         <p class="msg">${esc(addr)}</p>
       `;
       homesList.appendChild(el);
     }
+  }, (err)=>{
+    console.error(err);
+    showAlert("Impossible de charger tes logements.", false);
   });
 
-  // Demande ajout logement (request routable conciergerie)
+  // Demande ajout logement (routage conciergerie)
   sendBtn.onclick = async ()=>{
     hideAlert();
-    if(!homeName.value.trim() || !homeCity.value.trim()){
-      return showAlert("Nom et ville requis.");
+
+    if(!ownerDocId || !conciergerieUid){
+      return showAlert("Ton compte n’est pas encore rattaché correctement (ownerDocId/conciergerieUid manquant). Reviens sur Profil puis Enregistrer.", false);
     }
+
+    if(!homeName.value.trim() || !homeCity.value.trim()){
+      return showAlert("Nom et ville requis.", false);
+    }
+
     lock(sendBtn,true);
     try{
       await addDoc(collection(db,"requests"),{
-        // routage
-        conciergerieUid: conciergerieUid || "",
-        ownerDocId: ownerDocId || "",
+        conciergerieUid,
+        ownerDocId,
         ownerUid: user.uid,
         ownerEmail: user.email || "",
-
         type:"add_home",
         title:`Ajout logement – ${homeName.value.trim()}`,
         message:(homeMsg.value||"").trim(),
@@ -390,9 +391,11 @@ onAuthStateChanged(auth, async (user)=>{
         status:"pending",
         createdAt:serverTimestamp()
       });
+
       showAlert("✅ Demande envoyée.",true);
       homeName.value=""; homeCity.value=""; homeMsg.value=""; homeType.value="Studio";
     }catch(e){
+      console.error(e);
       showAlert("Erreur : "+(e?.message||"inconnue"));
     }finally{
       lock(sendBtn,false);
