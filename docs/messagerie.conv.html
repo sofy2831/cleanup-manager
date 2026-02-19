@@ -1,4 +1,4 @@
-<!-- docs/messagerie.conv.html (FINAL — conciergerie : conversation thread + logements propriétaire) -->
+<!-- docs/messagerie.conv.html (FINAL — conciergerie : conversation thread + logements propriétaire, SANS PDF/attachments) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -113,16 +113,6 @@
     .meta{ font-size:11px; color:#666; font-weight:900; margin-bottom:6px; }
     .text{ font-size:13px; font-weight:850; white-space:pre-wrap; }
 
-    .attBox{ margin-top:8px; display:flex; flex-direction:column; gap:8px; }
-    .att{
-      display:flex; justify-content:space-between; gap:10px; align-items:center;
-      padding:10px; border-radius:14px; background:rgba(122,92,255,0.10);
-      border:1px solid rgba(122,92,255,0.18);
-    }
-    .att .l{ min-width:0; display:flex; flex-direction:column; gap:2px; }
-    .att .l b{ font-size:12px; font-weight:1000; color:#111; }
-    .att .l span{ font-size:11px; font-weight:900; color:#555; }
-
     .btnMini{
       border:none; border-radius:999px;
       padding:9px 10px; font-size:12px; font-weight:900;
@@ -232,14 +222,13 @@
   </nav>
 
   <script type="module">
-    import { auth, db, storage } from "./firebase-init.js";
+    import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
       doc, getDoc, setDoc, updateDoc,
       addDoc, collection, query, where,
       orderBy, limit, onSnapshot, serverTimestamp, increment, getDocs
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
-    import { ref as sRef, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js";
 
     const alertBox = document.getElementById("alertBox");
     const titleLine = document.getElementById("titleLine");
@@ -303,47 +292,14 @@
       const me = isMe(m);
       const div = document.createElement("div");
       div.className = "msg" + (me ? " me" : "");
-      const meta = `${me ? "Conciergerie" : "Propriétaire"} • ${fmtTs(m.at)}`; // ✅ rules: at
+      const meta = `${me ? "Conciergerie" : "Propriétaire"} • ${fmtTs(m.at)}`;
 
       const text = String(m.text || "").trim();
-      const atts = Array.isArray(m.attachments) ? m.attachments : [];
 
       div.innerHTML = `
         <div class="meta">${esc(meta)}</div>
-        <div class="text">${esc(text || (atts.length ? "" : "—"))}</div>
-        <div class="attBox"></div>
+        <div class="text">${esc(text || "—")}</div>
       `;
-
-      const attBox = div.querySelector(".attBox");
-      if(atts.length){
-        for(const a of atts){
-          const kind = String(a?.kind || "").toUpperCase();
-          const label = String(a?.label || "Pièce jointe").trim();
-          const path  = String(a?.storagePath || "").trim();
-          const ct    = String(a?.contentType || "").trim();
-
-          const row = document.createElement("div");
-          row.className = "att";
-          row.innerHTML = `
-            <div class="l">
-              <b>${esc(label)}</b>
-              <span>${esc(kind || "FILE")}${ct ? " • " + esc(ct) : ""}</span>
-            </div>
-            <button class="btnMini" type="button">Télécharger</button>
-          `;
-          row.querySelector("button").onclick = async ()=>{
-            if(!path) return showAlert("storagePath manquant sur cette pièce jointe.");
-            try{
-              const url = await getDownloadURL(sRef(storage, path));
-              window.open(url, "_blank");
-            }catch(e){
-              showAlert("Téléchargement impossible : " + (e?.message || "erreur"));
-            }
-          };
-          attBox.appendChild(row);
-        }
-      }
-
       return div;
     }
 
@@ -388,15 +344,14 @@
 
       const qMsgs = query(
         collection(db,"threads", threadId, "messages"),
-        orderBy("at","asc"),          // ✅ rules: at
+        orderBy("at","asc"),
         limit(400)
       );
 
       unsubMsgs = onSnapshot(qMsgs, (snap)=>{
         chatBox.innerHTML = "";
         snap.forEach(d=>{
-          const m = d.data() || {};
-          chatBox.appendChild(renderMessage(m));
+          chatBox.appendChild(renderMessage(d.data() || {}));
         });
         chatBox.scrollTop = chatBox.scrollHeight + 9999;
       }, (err)=>{
@@ -404,40 +359,17 @@
       });
     }
 
-    async function ensureThreadExists(){
-      const tRef = doc(db,"threads", threadId);
-      const snap = await getDoc(tRef);
-      if(snap.exists()){
-        thread = { id: threadId, ...(snap.data()||{}) };
-        return;
-      }
-      // ⚠️ Thread absent : création minimaliste (si tu veux éviter les threads vides, supprime ce bloc)
-      await setDoc(tRef, {
-        conciergerieUid: currentUser.uid,
-        ownerDocId: "",
-        ownerUid: "",
-        ownerName: "Propriétaire",
-        ownerEmailLower: "",
-        homeCount: 0,
-        homeNames: [],
-        lastText: "",
-        lastAt: serverTimestamp(),
-        createdAt: serverTimestamp(),
-        unreadForConciergerie: 0,
-        unreadForOwner: 0,
-        closed: false
-      }, { merge:true });
-      thread = { id: threadId, conciergerieUid: currentUser.uid };
-    }
-
     async function loadThreadHeader(){
       const tRef = doc(db,"threads", threadId);
       const snap = await getDoc(tRef);
+
       if(!snap.exists()){
         titleLine.textContent = "Conversation";
         subLine.innerHTML = `<span class="tag">Thread introuvable</span>`;
-        return;
+        showAlert("Thread introuvable. Reviens à la messagerie et recrée la conversation si besoin.");
+        return false;
       }
+
       thread = { id: snap.id, ...(snap.data()||{}) };
 
       const ownerName = String(thread.ownerName || "Propriétaire").trim();
@@ -453,8 +385,8 @@
       // reset unread conciergerie
       try{ await updateDoc(doc(db,"threads",threadId), { unreadForConciergerie: 0 }); }catch(_){}
 
-      // logements (source of truth = homes)
       await loadHomesForOwner(thread.conciergerieUid, thread.ownerDocId);
+      return true;
     }
 
     sendBtn.onclick = async ()=>{
@@ -464,15 +396,15 @@
 
       sendBtn.disabled = true;
       try{
-        await ensureThreadExists();
+        // on refuse d’envoyer si thread inexistant
+        const ok = await getDoc(doc(db,"threads", threadId));
+        if(!ok.exists()) throw new Error("Thread introuvable.");
 
-        // ✅ IMPORTANT: rules attendent "at" (timestamp)
         await addDoc(collection(db,"threads", threadId, "messages"), {
           text,
           at: serverTimestamp(),
           senderRole: "CONCIERGERIE",
-          senderUid: currentUser.uid,
-          attachments: []
+          senderUid: currentUser.uid
         });
 
         await setDoc(doc(db,"threads", threadId), {
@@ -506,8 +438,8 @@
         return;
       }
 
-      await loadThreadHeader();
-      subscribeMessages();
+      const ok = await loadThreadHeader();
+      if(ok) subscribeMessages();
     });
   </script>
 </body>
