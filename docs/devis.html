@@ -1,5 +1,4 @@
-<!-- docs/devis.html (FINAL — PROSPECT: salesDocuments ONLY, 1 grille 4 blocs alignés, société aérée,
-     numéro au clic Enregistrer (sinon BROUILLON), coordonnées bancaires profil, aperçu -> devis-apercu.html) -->
+<!-- docs/devis.html (FINAL — Aperçu: sessionStorage + origin + docId garanti, Enregistrer: numéro devis) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -71,7 +70,6 @@
       display:flex; gap:10px; align-items:center; white-space:nowrap;
     }
 
-    /* ✅ 1 SEULE GRILLE POUR LES 4 BLOCS */
     .grid4{
       width:100%;
       max-width:1100px;
@@ -110,7 +108,6 @@
     .headTitle{ font-weight:1000; font-size:11.5px; color:#555; letter-spacing:.2px; }
     .headMain{ font-weight:1000; font-size:13.5px; color:#111; margin-top:2px; }
 
-    /* ✅ Société aérée */
     .headLines{ margin-top:8px; font-size:12px; color:#222; font-weight:850; line-height:1.5; }
     .headLines .bizLine{ margin:2px 0; }
     .headLines .mut{ color:#666; font-weight:900; }
@@ -172,7 +169,6 @@
     .totals .r{ display:flex; justify-content:space-between; gap:10px; align-items:center; }
     .totals .mut{ font-weight:900; color:#666; font-size:11.5px; line-height:1.25; }
 
-    /* ✅ Aération du bloc client */
     label{ display:block; font-size:11.8px; font-weight:1000; color:#333; margin:12px 0 6px; text-align:left; }
     input, textarea, select{
       width:100%; padding:10px 12px; border-radius:12px; border:1px solid #D3C7FF; font-size:13px; outline:none;
@@ -453,7 +449,6 @@
 
         <div class="divider"></div>
 
-        <!-- ✅ Coordonnées bancaires (profil conciergerie) -->
         <div class="card-title" style="font-size:13px; margin-bottom:6px;">
           <span>Coordonnées bancaires</span>
           <span class="small">IBAN/BIC</span>
@@ -1099,7 +1094,6 @@
         type: "QUOTE",
         docType: "QUOTE_FREE",
 
-        // ✅ brouillon = pas de numéro
         quoteNumber: "",
         quoteStatus: "DRAFT",
         commercialStatus: "DEVIS",
@@ -1148,7 +1142,6 @@
         throw new Error("Ajoute au moins une ligne au devis.");
       }
 
-      // ✅ numéro UNIQUEMENT si Enregistrer (makeListable)
       let nextQuoteNumber = String(quoteData?.quoteNumber || "").trim();
       if(makeListable && !nextQuoteNumber){
         const year = new Date().getFullYear();
@@ -1202,6 +1195,52 @@
       renderRecap();
     }
 
+    // ✅ IMPORTANT : snapshot complet pour l'aperçu (sessionStorage)
+    function buildDraftPreviewObject(){
+      const client = readClientInputs();
+      const bs = buildBusinessSnapshotFromProfile();
+
+      return {
+        conciergerieUid: currentUser.uid,
+        businessSnapshot: bs,
+
+        type: "QUOTE",
+        docType: "QUOTE_FREE",
+
+        quoteNumber: String(quoteData?.quoteNumber || "").trim(),
+        quoteStatus: String(quoteData?.quoteStatus || "DRAFT").trim(),
+
+        clientName: client.clientName,
+        clientEmail: client.clientEmail,
+        clientAddress1: client.clientAddress1,
+        clientAddress2: client.clientAddress2,
+        clientZip: client.clientZip,
+        clientCity: client.clientCity,
+
+        lines: lines.map(l => ({
+          label: String(l.label||"").trim(),
+          ref: String(l.ref||"").trim(),
+          qty: Number(l.qty)||0,
+          unit: String(l.unit||"unité").trim(),
+          unitPrice: Number(l.unitPrice)||0,
+          note: String(l.note||"").trim(),
+          clientNote: String(l.clientNote||"").trim(),
+          suggestedPrice: String(l.suggestedPrice||"").trim()
+        })),
+
+        quotePaymentTerm: paymentTermEl.value,
+        quotePaymentMode: (getSelectedPayMode() || "VIREMENT"),
+        quoteOfferValidityDays: Math.max(0, parseInt(offerValidityDaysEl.value || "30", 10) || 30),
+
+        quotePenaltyMode: getSelectedPenaltyMode() || "B2C",
+        quotePenaltyText: (penaltyTextEl.value || getPenaltyTemplate(getSelectedPenaltyMode() || "B2C")).trim(),
+
+        quotePrivateNote: (privateNoteEl.value || "").trim(),
+
+        createdAt: new Date().toISOString()
+      };
+    }
+
     saveBtn.addEventListener("click", async ()=>{
       hideAlert();
       lockUI(true);
@@ -1216,15 +1255,28 @@
       }
     });
 
+    // ✅ Aperçu : docId garanti + snapshot sessionStorage + origin pour retour sans reset
     previewBtn.addEventListener("click", async ()=>{
       hideAlert();
       lockUI(true);
       try{
+        // 1) docId garanti (retour propre + fallback Firestore possible)
+        await createNewDocIfNeeded();
+
+        // 2) snapshot EXACT pour l'aperçu
+        const draft = buildDraftPreviewObject();
+        sessionStorage.setItem("quoteDraftPreview", JSON.stringify(draft));
+
+        // 3) on persiste le brouillon (pour conserver l'état au retour)
         await saveToFirestore({ requireLines:false, makeListable:false });
+
+        // 4) navigation vers aperçu
         const u = new URL("devis-apercu.html", location.href);
-        u.searchParams.set("docId", docId);
         u.searchParams.set("draft", "1");
+        u.searchParams.set("docId", docId);
+        u.searchParams.set("origin", location.pathname + location.search);
         location.href = u.toString();
+
       }catch(e){
         console.error(e);
         showAlert("⛔ " + (e?.message || "Impossible d’ouvrir l’aperçu."), false);
@@ -1283,4 +1335,3 @@
   </script>
 </body>
 </html>
-
