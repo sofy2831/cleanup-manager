@@ -1,4 +1,4 @@
-<!-- docs/devis-apercu.html (FINAL — draft=1 sans lecture Firestore salesDocuments + quote fields + retour origin) -->
+<!-- docs/devis-apercu.html (FINAL — draft=1: sessionStorage prioritaire + fallback Firestore, retour origin, bankLine virement) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -454,7 +454,6 @@
 
     const logoImg = document.getElementById("logoImg");
     const logoFallback = document.getElementById("logoFallback");
-
     const companyNameEl = document.getElementById("companyName");
 
     const docTitleEl = document.getElementById("docTitle");
@@ -475,7 +474,6 @@
     const sigClientTextEl  = document.getElementById("sigClientText");
 
     const linesBody = document.getElementById("linesBody");
-
     const totalTtcEl = document.getElementById("totalTtc");
     const tvaLineEl  = document.getElementById("tvaLine");
 
@@ -493,7 +491,6 @@
 
     const footerEl = document.getElementById("footer");
 
-    // ===== state =====
     let docData = null;
     let isDraftPreview = false;
 
@@ -615,7 +612,6 @@
       soc4.textContent = line4 || "";
       soc4.style.display = line4 ? "" : "none";
 
-      // footer
       const footerParts = [];
       footerParts.push(companyName || "Conciergerie");
       if(street) footerParts.push(street);
@@ -710,9 +706,15 @@
     }
 
     function getCreatedDate(d){
+      // draft: on accepte Date string/Date
       try{
         if(d?.createdAt?.toDate?.()) return d.createdAt.toDate();
       }catch{}
+      if(d?.createdAt instanceof Date) return d.createdAt;
+      if(typeof d?.createdAt === "string"){
+        const dt = new Date(d.createdAt);
+        if(!Number.isNaN(dt.getTime())) return dt;
+      }
       return new Date();
     }
 
@@ -814,11 +816,7 @@
         backLink.href = origin;
         return;
       }
-      if(isDraftPreview){
-        // on revient au devis (si docId existe, on le garde)
-        backLink.href = docId ? `devis.html?docId=${encodeURIComponent(docId)}` : "devis.html";
-        return;
-      }
+      // fallback propre
       backLink.href = docId ? `devis.html?docId=${encodeURIComponent(docId)}` : "devis-liste.html";
     }
 
@@ -836,15 +834,30 @@
       setBackLink(docId);
 
       try{
-        // 1) source data
+        // ===== source data =====
         if(isDraftPreview){
-          // ✅ draft = sessionStorage, pas de lecture salesDocuments
+          // 1) priorité sessionStorage (exactement ce que tu avais sur devis.html)
           const draft = loadDraftFromSession();
-          if(!draft){
-            showError("Aperçu brouillon introuvable (sessionStorage.quoteDraftPreview).");
-            return;
+          if(draft){
+            docData = { ...draft };
+          }else{
+            // 2) fallback Firestore si sessionStorage vide
+            if(!docId){
+              showError("Aperçu brouillon introuvable (sessionStorage) et docId manquant.");
+              return;
+            }
+            const snap = await getDoc(doc(db, "salesDocuments", docId));
+            if(!snap.exists()){
+              showError("Devis introuvable (fallback Firestore).");
+              return;
+            }
+            docData = { id: snap.id, ...(snap.data()||{}) };
+
+            if(String(docData.conciergerieUid||"") && String(docData.conciergerieUid) !== String(user.uid)){
+              showError("Accès refusé (document d’une autre conciergerie).");
+              return;
+            }
           }
-          docData = { ...draft };
         }else{
           if(!docId){
             showError("docId manquant (hors draft=1).");
@@ -857,19 +870,18 @@
           }
           docData = { id: snap.id, ...(snap.data()||{}) };
 
-          // sécurité conciergerie
           if(String(docData.conciergerieUid||"") && String(docData.conciergerieUid) !== String(user.uid)){
             showError("Accès refusé (document d’une autre conciergerie).");
             return;
           }
         }
 
-        // 2) business snapshot (priorité : doc.businessSnapshot)
+        // ===== business snapshot =====
         const bs = (docData?.businessSnapshot || {});
         const appliedBs = applyBusinessSnapshot(bs);
         applyCompanySignature(appliedBs);
 
-        // 3) render
+        // ===== render =====
         renderDocHeader(docData);
         renderClient(docData);
         renderLines(docData, appliedBs || {});
