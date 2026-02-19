@@ -1,4 +1,4 @@
-<!-- docs/factures-liste.html (PATCHED — bouton "Envoyer" -> upload PDF Storage + push message (attachments) dans thread stable t_<conciergerieUid>_<ownerDocId>) -->
+<!-- docs/factures-liste.html (FINAL — salesDocuments only + bouton "Envoyer" = upload PDF Storage + message thread stable t_<conciergerieUid>_<ownerDocId> + status SENT) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -137,10 +137,6 @@
       background:linear-gradient(90deg,var(--violet),var(--violet2));
       color:#fff; border-color:transparent;
       box-shadow:0 12px 24px rgba(0,0,0,0.10);
-    }
-    .btn.danger{
-      color:#b3261e;
-      border-color: rgba(179,38,30,0.25);
     }
     .btn[aria-disabled="true"]{ opacity:.45; pointer-events:none; }
 
@@ -299,7 +295,7 @@
         </div>
 
         <div style="margin-top:10px; font-size:12px; color:#666; font-weight:850;">
-          Création d’une facture : via un devis ou directement depuis le planning. Règlement possible partiel ou total.
+          Factures issues des <b>salesDocuments</b> (type INVOICE). Envoi possible via messagerie (PDF upload + message).
         </div>
       </div>
 
@@ -330,7 +326,7 @@
       </div>
 
       <div style="margin-top:10px; font-size:12px; color:#444; font-weight:850;">
-        Email automatique : <b>pas possible côté client</b> (il faut une Cloud Function). Ici on fait le “simple” : <b>PDF envoyé dans la messagerie propriétaire</b>.
+        Email automatique : <b>non</b> (Cloud Function). Ici : <b>PDF envoyé dans la messagerie propriétaire</b>.
       </div>
 
       <div style="margin-top:12px; display:grid; gap:10px;">
@@ -408,7 +404,7 @@
     let vatEnabled = false;
     let vatRate = 0;
 
-    // state modal
+    // modal state
     let modalItem = null;
 
     function showAlert(msg, ok=false){
@@ -448,7 +444,6 @@
         return "—";
       }catch{ return "—"; }
     }
-
     function normalizeEmail(s){ return String(s||"").trim().toLowerCase(); }
 
     function computeHT(lines){
@@ -469,14 +464,12 @@
       const n = String(x?.invoiceNumber || "").trim();
       return n || "—";
     }
-
     function getInvoiceStatusDisplay(x){
       const raw = getInvoiceStatusRaw(x);
       const hasNum = !!String(x?.invoiceNumber||"").trim();
       if(hasNum && (raw === "" || raw === "DRAFT")) return "ISSUED";
       return raw || "MISSING";
     }
-
     function badgeForStatus(display){
       const s = String(display||"").toUpperCase().trim();
       if(s === "PAID") return `<span class="badge ok">Payée</span>`;
@@ -496,23 +489,20 @@
       if(f === "MISSING") return !raw;
       return disp === f;
     }
-
     function matchesSearch(item){
       const q = (searchInput.value||"").trim().toLowerCase();
       if(!q) return true;
 
       const hay = [
-        item.invoiceNumber, item.quoteNumber,
+        item.invoiceNumber,
         item.clientName, item.clientEmail,
-        item.ownerName, item.ownerEmail,
         item.homeName, item.homeCity, item.homeAddress, item.homeZip,
-        item.invoiceStatus, item.commercialStatus,
-        item.__kind
+        item.invoiceStatus,
+        item.creditNumber, item.creditNoteNumber
       ].filter(Boolean).join(" ").toLowerCase();
 
       return hay.includes(q);
     }
-
     function getFiltered(){
       return all.filter(e => matchesFilter(e) && matchesSearch(e));
     }
@@ -525,8 +515,16 @@
       return "—";
     }
 
-    function getLinkedAvoirId(x){
-      const keys = [ "creditNoteId", "avoirId","creditId","lastCreditId","fromAvoirId","linkedCreditId"];
+    function getLinkedCreditId(x){
+      const keys = ["creditNoteId","avoirId","creditId","lastCreditId","fromAvoirId","linkedCreditId"];
+      for(const k of keys){
+        const v = String(x?.[k] || "").trim();
+        if(v) return v;
+      }
+      return "";
+    }
+    function getLinkedCreditNumber(x){
+      const keys = ["creditNoteNumber","creditNumber","avoirNumber"];
       for(const k of keys){
         const v = String(x?.[k] || "").trim();
         if(v) return v;
@@ -538,7 +536,6 @@
       const n = Number(x?.paidAmount);
       return Number.isFinite(n) ? n : 0;
     }
-
     function isFullyPaid(x, ttc){
       const st = getInvoiceStatusRaw(x);
       if(st === "PAID") return true;
@@ -598,7 +595,7 @@
     }
 
     function getOwnerDocIdForSend(x){
-      // CANON côté salesDocuments: clientOwnerDocId
+      // canon salesDocuments
       const a = String(x?.clientOwnerDocId || "").trim();
       if(a) return a;
       // fallback legacy
@@ -653,10 +650,7 @@
     sendCancelBtn.addEventListener("click", closeSendModal);
     sendModal.addEventListener("click", (e)=>{ if(e.target === sendModal) closeSendModal(); });
 
-    sendGoChatBtn.addEventListener("click", ()=>{
-      // on ouvre la page messagerie (fil sera visible)
-      location.href = "messagerie.html";
-    });
+    sendGoChatBtn.addEventListener("click", ()=>{ location.href = "messagerie.html"; });
 
     async function ensureThreadExists(conciergerieUid, ownerDocId, x){
       const threadId = makeThreadId(conciergerieUid, ownerDocId);
@@ -677,7 +671,7 @@
         ownerName: ownerName || "Propriétaire",
         ownerEmailLower,
 
-        lastText: String(x.invoiceNumber || "Document").trim() ? `Facture ${String(x.invoiceNumber).trim()}` : "Document envoyé.",
+        lastText: String(x.invoiceNumber || "").trim() ? `Facture ${String(x.invoiceNumber).trim()}` : "Document envoyé.",
         lastAt: serverTimestamp(),
         createdAt: serverTimestamp(),
 
@@ -698,7 +692,7 @@
 
       const ownerDocId = getOwnerDocIdForSend(modalItem);
       if(!ownerDocId){
-        return showAlert("Impossible d’envoyer : ownerDocId/clientOwnerDocId manquant sur cette facture.");
+        return showAlert("Impossible d’envoyer : clientOwnerDocId (ownerDocId) manquant sur cette facture.");
       }
 
       const file = mFile.files && mFile.files[0];
@@ -708,7 +702,7 @@
       }
 
       const invNum = String(modalItem.invoiceNumber || "").trim() || "FACTURE";
-      const salesDocId = String(modalItem.__kind === "EVENT" ? (modalItem.invoiceDocId || "") : modalItem.id).trim() || String(modalItem.id||"").trim();
+      const salesDocId = String(modalItem.id || "").trim();
 
       sendDoBtn.disabled = true;
       sendDoBtn.style.opacity = "0.7";
@@ -720,7 +714,6 @@
         const fileName = `${sanitizeFilePart(invNum)}_${ts}.pdf`;
         const storagePath = `invoices/${currentUser.uid}/${ownerDocId}/${sanitizeFilePart(salesDocId)}/${fileName}`;
 
-        // upload storage
         await uploadBytes(sRef(storage, storagePath), file, { contentType: "application/pdf" });
 
         const label = `Facture ${invNum}`;
@@ -737,7 +730,7 @@
           attachments: [{
             kind: "INVOICE_PDF",
             label,
-            salesDocId: salesDocId || "",
+            salesDocId,
             storagePath,
             contentType: "application/pdf"
           }]
@@ -747,6 +740,12 @@
           lastText: text,
           lastAt: serverTimestamp(),
           unreadForOwner: increment(1)
+        });
+
+        // IMPORTANT: marquer la facture envoyée
+        await updateDoc(doc(db,"salesDocuments", salesDocId), {
+          invoiceStatus: "SENT",
+          sentAt: serverTimestamp()
         });
 
         showAlert("✅ PDF envoyé dans la messagerie propriétaire.", true);
@@ -785,7 +784,7 @@
         const created = getCreatedAt(x);
         const invNum = getInvoiceNumber(x);
 
-        const client = String(x.clientName || x.ownerName || "—").trim();
+        const client = String(x.clientName || "—").trim();
         const home = String(x.homeName || "—").trim();
 
         const period = (x.arrivalDateKey || x.departureDateKey)
@@ -795,30 +794,26 @@
         const stDisp = getInvoiceStatusDisplay(x);
         const stRaw = getInvoiceStatusRaw(x);
 
-        const linkedAvoirId = getLinkedAvoirId(x);
+        const linkedCreditId = getLinkedCreditId(x);
+        const linkedCreditNumber = getLinkedCreditNumber(x);
 
         const ttcStored = Number(x.totalTTC);
         const totals = Number.isFinite(ttcStored) ? { ttc: ttcStored } : computeTotalsFromLines(x.lines);
         const ttc = totals.ttc;
 
         const hasNum = !!String(x.invoiceNumber||"").trim();
-        const isEvent = (x.__kind === "EVENT");
 
-        // actions sur EVENT désactivées (pages reglement/avoir attendent salesDocuments)
-        const allowAvoir = !isEvent && hasNum && !["CANCELLED","CREDITED","PAID"].includes(stRaw);
-        const allowRedo = !isEvent && !!linkedAvoirId;
-        const allowReglement = !isEvent && hasNum && !["CANCELLED","CREDITED"].includes(stRaw) && !isFullyPaid(x, ttc);
+        const allowAvoir = hasNum && !["CANCELLED","CREDITED","PAID"].includes(stRaw);
+        const allowRedo = !!linkedCreditId;
+        const allowReglement = hasNum && !["CANCELLED","CREDITED"].includes(stRaw) && !isFullyPaid(x, ttc);
 
-        const openHref = isEvent
-          ? `facture.html?eventId=${encodeURIComponent(x.id)}`
-          : `facture.html?docId=${encodeURIComponent(x.id)}`;
-
-        const regHref = `reglement.html?docId=${encodeURIComponent(x.id)}`;
+        const openHref = `facture.html?docId=${encodeURIComponent(x.id)}`;
+        const regHref  = `reglement.html?docId=${encodeURIComponent(x.id)}`;
         const avoirHref = `avoir.html?fromDocId=${encodeURIComponent(x.id)}`;
-        const redoHref  = `facture.html?mode=redo&fromDocId=${encodeURIComponent(x.id)}&fromAvoirId=${encodeURIComponent(linkedAvoirId)}`;
+        const redoHref  = `facture.html?mode=redo&fromDocId=${encodeURIComponent(x.id)}&fromAvoirId=${encodeURIComponent(linkedCreditId)}`;
 
         const ownerDocId = getOwnerDocIdForSend(x);
-        const canSend = !!ownerDocId && hasNum; // on exige un numéro et un ownerDocId
+        const canSend = !!ownerDocId && hasNum;
 
         const div = document.createElement("div");
         div.className = "card";
@@ -861,16 +856,21 @@
           <div class="row">
             <div class="k">
               <div class="t">Statut</div>
-              <div class="v">${badgeForStatus(stDisp)} ${isEvent ? `<span class="badge" title="Facture issue d'un événement">Event</span>` : ``}</div>
-              ${linkedAvoirId ? `<div class="t" style="margin-top:4px;">Avoir lié : ${esc(linkedAvoirId)}</div>` : ``}
-              ${!ownerDocId ? `<div class="t" style="margin-top:4px; color:#b3261e;">Envoi impossible: ownerDocId manquant</div>` : ``}
+              <div class="v">${badgeForStatus(stDisp)}</div>
+
+              ${(linkedCreditNumber || linkedCreditId) ? `
+                <div class="t" style="margin-top:4px;">
+                  Avoir : ${esc(linkedCreditNumber || linkedCreditId)}
+                </div>` : ``}
+
+              ${!ownerDocId ? `<div class="t" style="margin-top:4px; color:#b3261e;">Envoi impossible: clientOwnerDocId manquant</div>` : ``}
             </div>
 
             <div class="k" style="align-items:flex-end; min-width:280px;">
               <div class="actionsBar">
                 <a class="btn primary" href="${openHref}">Ouvrir</a>
 
-                <button class="btn" type="button" data-action="send" data-id="${esc(x.id)}" ${canSend ? "" : `aria-disabled="true"`}>Envoyer</button>
+                <button class="btn" type="button" data-action="send" ${canSend ? "" : `aria-disabled="true"`}>Envoyer</button>
 
                 <a class="btn" href="${regHref}" ${allowReglement ? "" : `aria-disabled="true"`}>Règlement</a>
 
@@ -882,7 +882,6 @@
           </div>
         `;
 
-        // handler bouton envoyer
         const sendBtn = div.querySelector('button[data-action="send"]');
         if(sendBtn && canSend){
           sendBtn.addEventListener("click", ()=> openSendModalForItem(x));
@@ -929,7 +928,7 @@
     }
 
     async function loadInvoices(uid){
-      // 1) salesDocuments : type == INVOICE
+      // salesDocuments : type == INVOICE
       const qInv = query(
         collection(db, "salesDocuments"),
         where("conciergerieUid", "==", uid),
@@ -940,46 +939,9 @@
       );
 
       const snap = await getDocs(qInv);
-      const main = snap.docs.map(d => ({ __kind:"SALES", id: d.id, ...(d.data()||{}) }));
+      const main = snap.docs.map(d => ({ id: d.id, ...(d.data()||{}) }));
 
-      // 2) legacy : docType in [...]
-      let legacy = [];
-      try{
-        const qLegacy = query(
-          collection(db, "salesDocuments"),
-          where("conciergerieUid", "==", uid),
-          where("docType", "in", ["INVOICE_EVENT","INVOICE"]),
-          where("listable", "==", true),
-          orderBy("createdAt", "desc"),
-          limit(400)
-        );
-        const snapL = await getDocs(qLegacy);
-        legacy = snapL.docs.map(d => ({ __kind:"SALES", id: d.id, ...(d.data()||{}) }));
-      }catch(e){
-        legacy = [];
-      }
-
-      // 3) events facturés (affichage seulement)
-      let eventInvoices = [];
-      try{
-        const qEv = query(
-          collection(db, "events"),
-          where("conciergerieUid", "==", uid),
-          limit(600)
-        );
-        const snapE = await getDocs(qEv);
-
-        eventInvoices = snapE.docs
-          .map(d => ({ __kind:"EVENT", id:d.id, ...(d.data()||{}) }))
-          .filter(x => !!String(x?.invoiceNumber||"").trim());
-
-        eventInvoices.sort((a,b)=> createdAtMsForSort(b) - createdAtMsForSort(a));
-        eventInvoices = eventInvoices.slice(0,400);
-      }catch(e){
-        eventInvoices = [];
-      }
-
-      all = uniqMergeById([...main, ...legacy, ...eventInvoices]);
+      all = uniqMergeById(main);
       all.sort((a,b)=> createdAtMsForSort(b) - createdAtMsForSort(a));
 
       render();
@@ -1006,4 +968,3 @@
   </script>
 </body>
 </html>
-
