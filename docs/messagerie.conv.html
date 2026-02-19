@@ -1,4 +1,4 @@
-<!-- docs/messagerie.conv.html (CONVERSATION — conciergerie : chat + contexte logements propriétaire) -->
+<!-- docs/messagerie.conv.html (FINAL — conciergerie : conversation thread + logements propriétaire) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -237,7 +237,7 @@
     import {
       doc, getDoc, setDoc, updateDoc,
       addDoc, collection, query, where,
-      orderBy, limit, onSnapshot, serverTimestamp, increment
+      orderBy, limit, onSnapshot, serverTimestamp, increment, getDocs
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
     import { ref as sRef, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js";
 
@@ -290,7 +290,7 @@
     let unsubMsgs = null;
 
     toggleHomesBtn.onclick = ()=>{
-      homesBox.style.display = (homesBox.style.display === "none" || !homesBox.style.display) ? "block" : "none";
+      homesBox.style.display = (!homesBox.style.display || homesBox.style.display === "none") ? "block" : "none";
     };
 
     function isMe(m){
@@ -303,7 +303,7 @@
       const me = isMe(m);
       const div = document.createElement("div");
       div.className = "msg" + (me ? " me" : "");
-      const meta = `${me ? "Conciergerie" : "Propriétaire"} • ${fmtTs(m.createdAt)}`;
+      const meta = `${me ? "Conciergerie" : "Propriétaire"} • ${fmtTs(m.at)}`; // ✅ rules: at
 
       const text = String(m.text || "").trim();
       const atts = Array.isArray(m.attachments) ? m.attachments : [];
@@ -352,17 +352,14 @@
       if(!conciergerieUid || !ownerDocId) return;
 
       try{
-        const q = query(
+        const qHomes = query(
           collection(db,"homes"),
           where("conciergerieUid","==", conciergerieUid),
           where("ownerDocId","==", ownerDocId),
           limit(50)
         );
 
-        const snap = await getDoc(doc(db,"_meta","noop")).catch(()=>null); // no-op anti bundler warnings
-        // vraie requête:
-        const { getDocs } = await import("https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js");
-        const hs = await getDocs(q);
+        const hs = await getDocs(qHomes);
 
         const list = hs.docs.map(d=>{
           const h = d.data() || {};
@@ -389,13 +386,13 @@
       if(unsubMsgs) unsubMsgs();
       chatBox.innerHTML = "";
 
-      const q = query(
+      const qMsgs = query(
         collection(db,"threads", threadId, "messages"),
-        orderBy("createdAt","asc"),
+        orderBy("at","asc"),          // ✅ rules: at
         limit(400)
       );
 
-      unsubMsgs = onSnapshot(q, (snap)=>{
+      unsubMsgs = onSnapshot(qMsgs, (snap)=>{
         chatBox.innerHTML = "";
         snap.forEach(d=>{
           const m = d.data() || {};
@@ -414,7 +411,7 @@
         thread = { id: threadId, ...(snap.data()||{}) };
         return;
       }
-      // si thread absent : on le crée minimal
+      // ⚠️ Thread absent : création minimaliste (si tu veux éviter les threads vides, supprime ce bloc)
       await setDoc(tRef, {
         conciergerieUid: currentUser.uid,
         ownerDocId: "",
@@ -438,7 +435,7 @@
       const snap = await getDoc(tRef);
       if(!snap.exists()){
         titleLine.textContent = "Conversation";
-        subLine.innerHTML = `<span class="tag">thread</span> <span class="tag">${esc(threadId)}</span>`;
+        subLine.innerHTML = `<span class="tag">Thread introuvable</span>`;
         return;
       }
       thread = { id: snap.id, ...(snap.data()||{}) };
@@ -456,7 +453,7 @@
       // reset unread conciergerie
       try{ await updateDoc(doc(db,"threads",threadId), { unreadForConciergerie: 0 }); }catch(_){}
 
-      // charger logements (source of truth = homes)
+      // logements (source of truth = homes)
       await loadHomesForOwner(thread.conciergerieUid, thread.ownerDocId);
     }
 
@@ -469,9 +466,10 @@
       try{
         await ensureThreadExists();
 
+        // ✅ IMPORTANT: rules attendent "at" (timestamp)
         await addDoc(collection(db,"threads", threadId, "messages"), {
           text,
-          createdAt: serverTimestamp(),
+          at: serverTimestamp(),
           senderRole: "CONCIERGERIE",
           senderUid: currentUser.uid,
           attachments: []
