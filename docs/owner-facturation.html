@@ -1,4 +1,4 @@
-<!-- docs/owner-facturation.html (COMPLET — Owner lit + accepte/refuse, requests.type="billing", reset unread billing) -->
+<!-- docs/owner-facturation.html (COMPLET — Owner: devis à valider via requests.type="billing" + Historique factures via salesDocuments.ownerVisible=true, reset unread billing) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -176,7 +176,7 @@
     .status.ok{ background:rgba(27,143,77,0.12); color:var(--ok); }
     .status.bad{ background:rgba(179,38,30,0.10); color:var(--bad); }
 
-       /* Bottom nav (4 onglets) */
+    /* Bottom nav (4 onglets) */
     .bottom-nav{
       position:fixed; left:50%; transform:translateX(-50%); bottom:0;
       width:calc(100% - 20px); max-width:980px;
@@ -231,30 +231,29 @@
 
       <section class="card">
         <div class="cardTitle">
-          <span>Historique</span>
+          <span>Historique (factures visibles)</span>
           <span class="tiny" id="historyCount">—</span>
         </div>
         <div class="tiny" style="margin-top:8px;">
-          Devis / factures déjà traités ou simplement disponibles (PDF).
+          Factures rendues visibles par la conciergerie (bouton “Envoyer” côté conciergerie).
         </div>
         <div class="alert" id="alertHistory"></div>
         <div id="historyList" class="list"></div>
 
         <div class="tiny" style="margin-top:10px;">
-          Astuce impression : ouvre le PDF puis “Imprimer” → “Enregistrer en PDF”.
+          Astuce impression : ouvre la facture puis “Imprimer” → “Enregistrer en PDF”.
         </div>
       </section>
     </div>
   </div>
 
-<nav class="bottom-nav">
-  <a href="owner-dashboard.html">Dashboard</a>
-  <a href="owner-planning.html">Planning</a>
-  <a href="owner-homes.html">Logements</a>
-  <a href="owner-messages.html">Messages</a>
-</nav>
-  
- 
+  <nav class="bottom-nav">
+    <a href="owner-dashboard.html">Dashboard</a>
+    <a href="owner-planning.html">Planning</a>
+    <a href="owner-homes.html">Logements</a>
+    <a href="owner-messages.html">Messages</a>
+  </nav>
+
 <script type="module">
   import { auth, db } from "./firebase-init.js";
   import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
@@ -272,9 +271,6 @@
   const alertPending  = document.getElementById("alertPending");
   const alertHistory  = document.getElementById("alertHistory");
 
-  const dotMsgBottom  = document.getElementById("dotMsgBottom");
-  const dotBillBottom = document.getElementById("dotBillBottom");
-
   function showAlert(el, msg, ok=false){
     if(!el) return;
     el.style.display = "block";
@@ -287,27 +283,13 @@
     el.classList.remove("ok");
     el.textContent = "";
   }
-  function setDot(el, n){
-    if(!el) return;
-    if(n > 0){
-      el.style.display = "inline-block";
-      el.textContent = String(n);
-    }else{
-      el.style.display = "none";
-      el.textContent = "0";
-    }
-  }
-
-  function refreshBottomBadgesFromLocal(){
-    const um = Number(localStorage.getItem("cm_owner_unread_messages") || "0");
-    const ub = Number(localStorage.getItem("cm_owner_unread_billing") || "0");
-    setDot(dotMsgBottom, um);
-    setDot(dotBillBottom, ub);
-  }
 
   function resetUnreadBilling(){
     localStorage.setItem("cm_owner_unread_billing", "0");
-    setDot(dotBillBottom, 0);
+  }
+  function refreshBottomBadgesFromLocal(){
+    // (badges optionnels : si tu ajoutes des pastilles plus tard)
+    // on ne fait rien ici pour éviter les null refs.
   }
 
   function esc(s){
@@ -338,6 +320,7 @@
     if(v === "refused") return `<span class="status bad">refusé</span>`;
     if(v === "paid") return `<span class="status ok">payé</span>`;
     if(v === "pending_owner") return `<span class="status">à valider</span>`;
+    if(v === "sent") return `<span class="status">visible</span>`;
     return `<span class="status">${esc(v)}</span>`;
   }
   function docTypeLabel(t){
@@ -359,7 +342,8 @@
 
   // ====== State ======
   let currentUser = null;
-  let unsubBills = null;
+  let unsubRequests = null;
+  let unsubInvoices = null;
 
   async function guardOwnerProfile(user){
     const us = await getDoc(doc(db, "users", user.uid));
@@ -387,8 +371,8 @@
     });
   }
 
-  function renderBillingRow(r, mode="history"){
-    // expected fields:
+  function renderRequestRow(r, mode="history"){
+    // requests expected fields:
     // docType, number, homeName, totalTTC, pdfUrl, status, createdAt
     const type = docTypeLabel(r.docType);
     const number = r.number ? `#${esc(r.number)}` : "—";
@@ -463,12 +447,43 @@
     return el;
   }
 
-  function listenBilling(uid){
-    if(unsubBills) unsubBills();
-    hideAlert(alertPending);
-    hideAlert(alertHistory);
+  function renderInvoiceRow(inv){
+    // salesDocuments expected fields:
+    // type="INVOICE", invoiceNumber, homeName, totalTTC, createdAt, invoiceStatus, ownerVisible
+    const invNum = String(inv.invoiceNumber || "").trim();
+    const number = invNum ? `#${esc(invNum)}` : "—";
+    const home = esc(inv.homeName || "—");
+    const total = money(inv.totalTTC ?? inv.total ?? 0);
+    const when = fmt(inv.createdAt || inv.createdAtMs || inv.snapAtMs);
 
-    // requests: type="billing" + ownerUid + orderBy(createdAt)
+    const st = String(inv.invoiceStatus || (inv.ownerVisible ? "SENT" : "") || "").toLowerCase();
+    const status = st || (inv.ownerVisible ? "sent" : "");
+
+    const el = document.createElement("div");
+    el.className = "item";
+
+    const openHref = `facture.html?docId=${encodeURIComponent(inv.id)}&role=owner`;
+
+    el.innerHTML = `
+      <div class="meta">
+        <span><b>Facture</b> • ${number}</span>
+        <span>${esc(when)} ${statusPill(status)}</span>
+      </div>
+      <p class="msg">Logement : ${home}\nMontant TTC : ${esc(total)}</p>
+      <div class="row">
+        <span></span>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;">
+          <a class="btn primary" href="${openHref}">Ouvrir</a>
+        </div>
+      </div>
+    `;
+    return el;
+  }
+
+  function listenRequests(uid){
+    if(unsubRequests) unsubRequests();
+    hideAlert(alertPending);
+
     const qb = query(
       collection(db, "requests"),
       where("ownerUid", "==", uid),
@@ -476,18 +491,13 @@
       orderBy("createdAt", "desc")
     );
 
-    unsubBills = onSnapshot(qb, (snap)=>{
+    unsubRequests = onSnapshot(qb, (snap)=>{
       const items = snap.docs.map(d => ({ id:d.id, ...(d.data()||{}) }));
 
-      // split
       const pending = items.filter(x => String(x.status||"").toLowerCase() === "pending_owner");
-      const history = items.filter(x => String(x.status||"").toLowerCase() !== "pending_owner");
 
       pendingCount.textContent = String(pending.length);
-      historyCount.textContent = String(history.length);
-
       pendingList.innerHTML = "";
-      historyList.innerHTML = "";
 
       if(!pending.length){
         pendingList.innerHTML = `
@@ -498,24 +508,70 @@
         `;
       }else{
         for(const r of pending){
-          pendingList.appendChild(renderBillingRow(r, "pending"));
+          pendingList.appendChild(renderRequestRow(r, "pending"));
         }
       }
 
-      if(!history.length){
+      // Page ouverte => unread billing = 0
+      resetUnreadBilling();
+      refreshBottomBadgesFromLocal();
+
+    }, (err)=>{
+      console.error(err);
+      const msg = String(err?.message || "");
+      if(msg.toLowerCase().includes("index")){
+        showAlert(
+          alertPending,
+          "⛔ Index Firestore manquant.\n" +
+          "Crée l’index composite: requests (ownerUid ASC, type ASC, createdAt DESC).\n" +
+          "Puis recharge la page.",
+          false
+        );
+      }else if(msg.toLowerCase().includes("permission")){
+        showAlert(
+          alertPending,
+          "⛔ Permission refusée sur requests.\n" +
+          "Rules attendues: read autorisé si ownerUid == auth.uid (et type=='billing').",
+          false
+        );
+      }else{
+        showAlert(alertPending, "Erreur chargement devis : " + msg, false);
+      }
+    });
+  }
+
+  function listenInvoices(uid){
+    if(unsubInvoices) unsubInvoices();
+    hideAlert(alertHistory);
+
+    // Historique = factures visibles
+    const qi = query(
+      collection(db, "salesDocuments"),
+      where("ownerUid", "==", uid),
+      where("type", "==", "INVOICE"),
+      where("ownerVisible", "==", true),
+      orderBy("createdAt", "desc")
+    );
+
+    unsubInvoices = onSnapshot(qi, (snap)=>{
+      const items = snap.docs.map(d => ({ id:d.id, ...(d.data()||{}) }));
+
+      historyCount.textContent = String(items.length);
+      historyList.innerHTML = "";
+
+      if(!items.length){
         historyList.innerHTML = `
           <div class="item">
-            <div class="meta"><span>Aucun historique</span><span>—</span></div>
-            <p class="msg">Les devis/factures traités ou disponibles apparaîtront ici.</p>
+            <div class="meta"><span>Aucune facture</span><span>—</span></div>
+            <p class="msg">Quand la conciergerie rendra une facture visible, elle apparaîtra ici.</p>
           </div>
         `;
       }else{
-        for(const r of history){
-          historyList.appendChild(renderBillingRow(r, "history"));
+        for(const inv of items){
+          historyList.appendChild(renderInvoiceRow(inv));
         }
       }
 
-      // Owner-side: page ouverte => unread billing = 0
       resetUnreadBilling();
       refreshBottomBadgesFromLocal();
 
@@ -526,19 +582,19 @@
         showAlert(
           alertHistory,
           "⛔ Index Firestore manquant.\n" +
-          "Crée l’index composite: requests (ownerUid ASC, type ASC, createdAt DESC).\n" +
+          "Crée l’index composite: salesDocuments (ownerUid ASC, type ASC, ownerVisible ASC, createdAt DESC).\n" +
           "Puis recharge la page.",
           false
         );
       }else if(msg.toLowerCase().includes("permission")){
         showAlert(
           alertHistory,
-          "⛔ Permission refusée sur requests.\n" +
-          "Rules attendues: read autorisé si ownerUid == auth.uid (et type=='billing').",
+          "⛔ Permission refusée sur salesDocuments.\n" +
+          "Rules attendues: read autorisé si ownerUid == auth.uid et ownerVisible==true.",
           false
         );
       }else{
-        showAlert(alertHistory, "Erreur chargement facturation : " + msg, false);
+        showAlert(alertHistory, "Erreur chargement factures : " + msg, false);
       }
     });
   }
@@ -560,7 +616,8 @@
     resetUnreadBilling();
     refreshBottomBadgesFromLocal();
 
-    listenBilling(user.uid);
+    listenRequests(user.uid); // devis à valider
+    listenInvoices(user.uid); // factures visibles
   });
 
   window.addEventListener("focus", ()=>{
@@ -571,9 +628,3 @@
 
 </body>
 </html>
-
-
-
-
-
-
