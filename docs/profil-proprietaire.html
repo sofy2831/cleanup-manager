@@ -1,4 +1,4 @@
-<!-- docs/profil-proprietaire.html (COMPLET + CORRIGÉ — self mode: owners SANS address map (rules OK), delete owners désactivé (rules delete=false), logout vers login owner/conciergerie, compat champs plats) -->
+<!-- docs/profil-proprietaire.html (FIX — self: écrit users + clients(c_owner_*), owners update best-effort sans planter, canon ownerUid/ownerDocId) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -279,7 +279,7 @@
   import { auth, db } from "./firebase-init.js";
   import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
   import {
-    collection, doc, getDoc, setDoc, updateDoc, deleteDoc,
+    collection, doc, getDoc, setDoc, updateDoc,
     serverTimestamp
   } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
@@ -357,7 +357,9 @@
     notes.value = "";
   }
 
-  // Payload unique (form) — pas de map "address" côté owners (rules owner whitelist)
+  function normalizeEmail(s){ return (s||"").trim().toLowerCase(); }
+
+  // Payload unique (form) — champs plats only
   function serializeForm(){
     const fullname = (displayName.value || "").trim();
     const emailStr = (email.value || "").trim();
@@ -372,9 +374,9 @@
     return {
       fullname,
       email: emailStr,
+      emailLower: normalizeEmail(emailStr),
       phone: phoneStr,
 
-      // champs plats (compat + rules owners)
       address1: street,
       address2: addr2,
       zip: z,
@@ -418,7 +420,6 @@
 
     if(conciergerieNav) conciergerieNav.style.display = "none";
 
-    // email = celui du compte
     email.readOnly = true;
     email.value = currentUser?.email || "";
   }
@@ -447,7 +448,7 @@
         email.readOnly = true;
       }
 
-      // 2) owners/{ownerDocId}
+      // 2) owners/{ownerDocId} (read only, best effort)
       if(selfOwnerDocId){
         try{
           const osnap = await getDoc(doc(db,"owners", selfOwnerDocId));
@@ -455,14 +456,15 @@
             applyData(osnap.data() || {});
             ownerIdLine.textContent = "Owner ID : " + selfOwnerDocId;
           }else{
-            showAlert("⚠️ owners/" + selfOwnerDocId + " introuvable. Demande à la conciergerie de régénérer/valider l’invitation.");
+            showAlert("⚠️ owners/" + selfOwnerDocId + " introuvable. Demande à la conciergerie de régénérer l’invitation.");
           }
         }catch(err){
           console.warn(err);
-          showAlert("⚠️ Accès owners refusé. Reconnecte-toi via le lien d’invitation.");
+          showAlert("⚠️ Accès owners refusé. Ce n’est pas bloquant : enregistre quand même, la conciergerie lira via Clients.", false);
+          ownerIdLine.textContent = selfOwnerDocId ? ("Owner ID : " + selfOwnerDocId) : "—";
         }
       }else{
-        showAlert("⚠️ ownerDocId manquant. Reconnecte-toi via le lien d’invitation.");
+        showAlert("⚠️ ownerDocId manquant. Reconnecte-toi via le lien d’invitation.", false);
       }
       return;
     }
@@ -472,7 +474,6 @@
     const returnTo = getParam("returnTo");
     backBtn.href = returnTo ? `${returnTo}.html` : "clients.html";
 
-    // rules owners delete=false → on garde le bouton caché (et donc rien ne casse)
     deleteBtn.style.display = "none";
 
     if(!ownerId){
@@ -525,15 +526,24 @@
       if(isSelfMode()){
         const uid = currentUser.uid;
 
-        // users/{uid} : ok (self update autorisé)
-        const userPayload = {
+        // 0) sanity: ownerDocId / conciergerieUid requis
+        if(!selfOwnerDocId || !selfConciergerieUid){
+          showAlert("⛔ Liaison incomplète (ownerDocId/conciergerieUid manquant). Réouvre le lien d’invitation pour finaliser.", false);
+          return;
+        }
+
+        // 1) users/{uid} : toujours autorisé
+        await setDoc(doc(db, "users", uid), {
           uid,
           role: "proprietaire",
           email: currentUser.email || p.email || "",
+          emailLower: normalizeEmail(currentUser.email || p.email || ""),
           fullname: p.fullname,
           phone: p.phone || "",
 
-          // champs plats
+          conciergerieUid: selfConciergerieUid,
+          ownerDocId: selfOwnerDocId,
+
           address1: p.address1 || "",
           address2: p.address2 || "",
           zip: p.zip || "",
@@ -543,17 +553,50 @@
           siret: p.siret || "",
           vat: p.vat || "",
           notes: p.notes || "",
+
           updatedAt: serverTimestamp()
-        };
-        if(selfConciergerieUid) userPayload.conciergerieUid = selfConciergerieUid;
-        if(selfOwnerDocId) userPayload.ownerDocId = selfOwnerDocId;
+        }, { merge:true });
 
-        await setDoc(doc(db, "users", uid), userPayload, { merge:true });
+        // 2) clients/c_owner_{ownerDocId} : canon pour facturation
+        const clientId = "c_owner_" + selfOwnerDocId;
+        await setDoc(doc(db, "clients", clientId), {
+          clientId,
+          conciergerieUid: selfConciergerieUid,
+          type: "OWNER",
 
-        // owners/{ownerDocId} : ⚠️ rules owner whitelist → PAS de map "address"
-        if(selfOwnerDocId){
+          ownerDocId: selfOwnerDocId,
+          ownerUid: uid,              // ✅ CANON
+          uid,                        // compat
+
+          fullname: p.fullname,
+          email: (currentUser.email || p.email || "").trim(),
+          emailLower: normalizeEmail(currentUser.email || p.email || ""),
+          phone: p.phone || "",
+
+          address1: p.address1 || "",
+          address2: p.address2 || "",
+          zip: p.zip || "",
+          city: p.city || "",
+          country: p.country || "FR",
+
+          siret: p.siret || "",
+          vat: p.vat || "",
+          notes: p.notes || "",
+
+          status: "ACTIVE",
+          isActive: true,
+          updatedAt: serverTimestamp()
+        }, { merge:true });
+
+        // 3) owners/{ownerDocId} : best effort (si rules autorisent)
+        try{
           await updateDoc(doc(db, "owners", selfOwnerDocId), {
+            ownerUid: uid,            // ✅ met à jour si possible
+            uid,                      // compat
+
             fullname: p.fullname,
+            email: (currentUser.email || p.email || "").trim(),
+            emailLower: normalizeEmail(currentUser.email || p.email || ""),
             phone: p.phone || "",
 
             address1: p.address1 || "",
@@ -565,8 +608,14 @@
             siret: p.siret || "",
             vat: p.vat || "",
             notes: p.notes || "",
+
+            status: "ACTIVE",
+            isActive: true,
             updatedAt: serverTimestamp()
           });
+        }catch(e){
+          // pas bloquant : la conciergerie lira via clients/
+          console.warn("owners update denied (ignored):", e?.message || e);
         }
 
         showAlert("✅ Profil enregistré.", true);
@@ -575,7 +624,7 @@
           ? `owner-dashboard.html?token=${encodeURIComponent(token)}`
           : `owner-dashboard.html`;
 
-        setTimeout(()=> location.replace(dashUrl), 350);
+        setTimeout(()=> location.replace(dashUrl), 300);
         return;
       }
 
@@ -583,7 +632,7 @@
       const conciergeriePayload = {
         fullname: p.fullname,
         email: p.email || "",
-        emailLower: (p.email || "").trim().toLowerCase(),
+        emailLower: normalizeEmail(p.email || ""),
         phone: p.phone || "",
 
         address1: p.address1 || "",
@@ -606,7 +655,8 @@
 
         await setDoc(ref, {
           ownerDocId: ownerId,
-          uid: "",             // Auth UID inconnu tant que le proprio n'a pas accepté
+          ownerUid: "",         // vide tant que pas accepté
+          uid: "",              // compat
           status: "INVITED",
           isActive: true,
           ...conciergeriePayload,
@@ -623,7 +673,8 @@
 
     }catch(err){
       console.error(err);
-      showAlert("Erreur enregistrement : " + (err?.message || "inconnue"));
+      const m = String(err?.message || "inconnue");
+      showAlert("Erreur enregistrement : " + m);
     }
   }
 
@@ -645,8 +696,6 @@
   logoutBtn.addEventListener("click", async ()=>{
     await signOut(auth);
     localStorage.removeItem("cm_auth");
-
-    // en mode self → renvoyer vers login owner, sinon conciergerie
     const role = isSelfMode() ? "proprietaire" : "conciergerie";
     location.href = "login.html?role=" + role;
   });
