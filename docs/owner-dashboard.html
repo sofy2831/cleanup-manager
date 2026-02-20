@@ -1,4 +1,4 @@
-<!-- docs/owner-dashboard.html (FINAL — guard ownerDocId+conciergerieUid + unread messages realtime) -->
+<!-- docs/owner-dashboard.html (FINAL — guard ownerDocId+conciergerieUid + unread messages realtime + billing badge from salesDocuments) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -148,7 +148,6 @@
       flex-shrink:0;
     }
 
-    /* Bottom nav (4 onglets) */
     .bottom-nav{
       position:fixed; left:50%; transform:translateX(-50%); bottom:0;
       width:calc(100% - 20px); max-width:980px;
@@ -238,6 +237,7 @@
   const countBill = document.getElementById("countBill");
 
   let unsubThreads = null;
+  let unsubBilling = null;
 
   function setCount(el, n){
     const v = Number(n||0);
@@ -255,7 +255,7 @@
     const ub = Number(localStorage.getItem("cm_owner_unread_billing") || 0);
     setCount(countMsg, um);
     setCount(countBill, ub);
-    alertsLine.textContent = `💬 Messages non lus : ${um}\n🧾 Nouveaux devis/factures : ${ub}`;
+    alertsLine.textContent = `💬 Messages non lus : ${um}\n🧾 Devis/Factures : ${ub}`;
   }
 
   function hardRequireOwnerLinked(userDoc){
@@ -269,6 +269,11 @@
     unsubThreads = null;
   }
 
+  function stopBilling(){
+    if(unsubBilling) unsubBilling();
+    unsubBilling = null;
+  }
+
   function startUnreadThreadsListener(ownerUid){
     stopThreads();
     const q = query(collection(db,"threads"), where("ownerUid","==", String(ownerUid)));
@@ -278,12 +283,25 @@
         const t = d.data() || {};
         totalUnread += Number(t.unreadForOwner || 0);
       });
-
       localStorage.setItem("cm_owner_unread_messages", String(totalUnread));
       refreshBadges();
     }, (err)=>{
       console.warn("threads unread listener:", err?.message || err);
-      // on ne bloque pas le dashboard pour ça
+    });
+  }
+
+  // ✅ simple badge billing: nombre de documents (devis+factures) liés au owner
+  function startBillingBadge(ownerUid){
+    stopBilling();
+    const qb = query(collection(db,"salesDocuments"), where("ownerUid","==", String(ownerUid)));
+    unsubBilling = onSnapshot(qb, (snap)=>{
+      // on met un compteur "il y a X documents", et tu raffineras plus tard (ex: devis à valider)
+      const total = snap.size || 0;
+      localStorage.setItem("cm_owner_unread_billing", String(total));
+      refreshBadges();
+    }, (err)=>{
+      console.warn("billing badge listener:", err?.message || err);
+      // ne pas bloquer le dashboard
     });
   }
 
@@ -299,7 +317,6 @@
       return;
     }
 
-    // init badges
     if(!localStorage.getItem("cm_owner_unread_messages")) localStorage.setItem("cm_owner_unread_messages","0");
     if(!localStorage.getItem("cm_owner_unread_billing")) localStorage.setItem("cm_owner_unread_billing","0");
     refreshBadges();
@@ -308,36 +325,32 @@
       const us = await getDoc(doc(db,"users", user.uid));
       const ud = us.exists()? (us.data()||{}) : {};
 
-      // ✅ GUARD DUR : pas de ownerDocId/conciergerieUid = pas de dashboard
       const link = hardRequireOwnerLinked(ud);
       if(!link.ok){
-        stopThreads();
+        stopThreads(); stopBilling();
         location.replace("profil-proprietaire.html?self=1");
         return;
       }
 
-      // Nom owner depuis owners/{ownerDocId}
       const os = await getDoc(doc(db,"owners", link.ownerDocId));
       const o = os.exists()? (os.data()||{}) : {};
       const name = String(o.fullname || o.displayName || o.legalName || o.company || "").trim();
 
       ownerNameLine.textContent = "Bonjour et bienvenue " + (name ? name : (user.email || "Propriétaire"));
 
-      // ✅ unread messages en temps réel
       startUnreadThreadsListener(user.uid);
 
-      // Facturation : on garde 0 tant que pas branché
-      localStorage.setItem("cm_owner_unread_billing", localStorage.getItem("cm_owner_unread_billing") || "0");
+      // ✅ badge facturation basé sur salesDocuments (robuste, pas besoin de requests)
+      startBillingBadge(user.uid);
+
       refreshBadges();
 
     }catch(e){
       console.error(e);
-      stopThreads();
-      // en cas d’erreur lecture userDoc, on force profil (plus safe)
+      stopThreads(); stopBilling();
       location.replace("profil-proprietaire.html?self=1");
     }
   });
 </script>
 </body>
 </html>
-
