@@ -1,4 +1,4 @@
-<!-- docs/factures-liste.html (FINAL — salesDocuments only + bouton "Envoyer" = upload PDF Storage + message thread stable t_<conciergerieUid>_<ownerDocId> + status SENT) -->
+<!-- docs/factures-liste.html (FINAL — salesDocuments only + bouton "Envoyer" = ownerVisible (facturation propriétaire) + status SENT, NO messagerie, NO PDF upload) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -281,7 +281,7 @@
             <option value="ALL">Toutes</option>
             <option value="DRAFT">Brouillons</option>
             <option value="ISSUED">Émises</option>
-            <option value="SENT">Envoyées</option>
+            <option value="SENT">Visibles propriétaire</option>
             <option value="PAID">Payées</option>
             <option value="CREDITED">Créditées</option>
             <option value="CANCELLED">Annulées</option>
@@ -293,8 +293,6 @@
             <input class="input" id="searchInput" type="search" placeholder="Rechercher (n° facture, client, logement…)" autocomplete="off" />
           </div>
         </div>
-
-     
       </div>
 
       <div class="card" id="globalTotalsCard" style="display:none;">
@@ -315,62 +313,13 @@
     <a href="messagerie.html">Messages</a>
   </nav>
 
-  <!-- Modal envoi PDF -->
-  <div id="sendModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.35); z-index:9999; padding:16px;">
-    <div style="max-width:620px; margin:6vh auto; background:#fff; border-radius:16px; padding:14px; border:1px solid rgba(122,92,255,0.25);">
-      <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
-        <div style="font-weight:1000;">Envoyer la facture au propriétaire (messagerie)</div>
-        <button type="button" id="sendCloseBtn" style="border:none; background:#fff; font-weight:1000; cursor:pointer;">✕</button>
-      </div>
-
-      <div style="margin-top:10px; font-size:12px; color:#444; font-weight:850;">
-        Email automatique : <b>non</b> (Cloud Function). Ici : <b>PDF envoyé dans la messagerie propriétaire</b>.
-      </div>
-
-      <div style="margin-top:12px; display:grid; gap:10px;">
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
-          <div>
-            <div style="font-size:12px; font-weight:1000; color:#333;">Propriétaire</div>
-            <div id="mOwnerName" style="font-weight:1000; margin-top:3px;">—</div>
-            <div id="mOwnerEmail" style="font-weight:900; color:#666; margin-top:2px;">—</div>
-          </div>
-          <div>
-            <div style="font-size:12px; font-weight:1000; color:#333;">Facture</div>
-            <div id="mInvoiceNumber" style="font-weight:1000; margin-top:3px;">—</div>
-            <div id="mHome" style="font-weight:900; color:#666; margin-top:2px;">—</div>
-          </div>
-        </div>
-
-        <div>
-          <div style="font-size:12px; font-weight:1000; color:#333; margin-bottom:4px;">Message (optionnel)</div>
-          <textarea id="mText" rows="2" placeholder="Ex: Voici votre facture. Merci !" style="width:100%; padding:10px 12px; border-radius:12px; border:1px solid #D3C7FF; font-weight:850;"></textarea>
-        </div>
-
-        <div>
-          <div style="font-size:12px; font-weight:1000; color:#333; margin-bottom:4px;">PDF</div>
-          <input id="mFile" type="file" accept="application/pdf" />
-          <div style="font-size:12px; color:#666; font-weight:850; margin-top:4px;">
-            Stockage: invoices/&lt;conciergerieUid&gt;/&lt;ownerDocId&gt;/&lt;salesDocId&gt;/&lt;invoiceNumber&gt;_&lt;timestamp&gt;.pdf
-          </div>
-        </div>
-
-        <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:6px;">
-          <button id="sendCancelBtn" type="button" class="btn">Annuler</button>
-          <button id="sendGoChatBtn" type="button" class="btn">Ouvrir messagerie</button>
-          <button id="sendDoBtn" type="button" class="btn primary">Uploader & Envoyer</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
   <script type="module">
-    import { auth, db, storage } from "./firebase-init.js";
+    import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
       collection, query, where, orderBy, limit, getDocs, doc, getDoc,
-      addDoc, setDoc, updateDoc, serverTimestamp, increment
+      updateDoc, serverTimestamp
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
-    import { ref as sRef, uploadBytes } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js";
 
     const helloLine = document.getElementById("helloLine");
     const companyLine = document.getElementById("companyLine");
@@ -384,26 +333,10 @@
     const globalTotalsBox = document.getElementById("globalTotalsBox");
     const globalTotalsNote = document.getElementById("globalTotalsNote");
 
-    // Modal
-    const sendModal = document.getElementById("sendModal");
-    const sendCloseBtn = document.getElementById("sendCloseBtn");
-    const sendCancelBtn = document.getElementById("sendCancelBtn");
-    const sendDoBtn = document.getElementById("sendDoBtn");
-    const sendGoChatBtn = document.getElementById("sendGoChatBtn");
-    const mOwnerName = document.getElementById("mOwnerName");
-    const mOwnerEmail = document.getElementById("mOwnerEmail");
-    const mInvoiceNumber = document.getElementById("mInvoiceNumber");
-    const mHome = document.getElementById("mHome");
-    const mText = document.getElementById("mText");
-    const mFile = document.getElementById("mFile");
-
     let currentUser = null;
     let all = [];
     let vatEnabled = false;
     let vatRate = 0;
-
-    // modal state
-    let modalItem = null;
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -442,7 +375,6 @@
         return "—";
       }catch{ return "—"; }
     }
-    function normalizeEmail(s){ return String(s||"").trim().toLowerCase(); }
 
     function computeHT(lines){
       if(!Array.isArray(lines)) return 0;
@@ -473,7 +405,7 @@
       if(s === "PAID") return `<span class="badge ok">Payée</span>`;
       if(s === "CANCELLED") return `<span class="badge bad">Annulée</span>`;
       if(s === "CREDITED") return `<span class="badge bad">Créditée</span>`;
-      if(s === "SENT") return `<span class="badge">Envoyée</span>`;
+      if(s === "SENT") return `<span class="badge">Visible propriétaire</span>`;
       if(s === "ISSUED") return `<span class="badge">Émise</span>`;
       if(s === "DRAFT") return `<span class="badge">Brouillon</span>`;
       return `<span class="badge bad">Sans statut</span>`;
@@ -587,179 +519,42 @@
         : `TVA non applicable. Totaux calculés sur les factures affichées.`;
     }
 
-    // ===== thread stable (comme messagerie) =====
-    function makeThreadId(conciergerieUid, ownerDocId){
-      return `t_${String(conciergerieUid||"").trim()}_${String(ownerDocId||"").trim()}`;
-    }
-
-    function getOwnerDocIdForSend(x){
-      // canon salesDocuments
-      const a = String(x?.clientOwnerDocId || "").trim();
+    function getOwnerUid(x){
+      // on s’en sert juste pour vérifier si c’est “envoyable”
+      // (si tu préfères ownerDocId, on changera au besoin)
+      const a = String(x?.ownerUid || "").trim();
       if(a) return a;
-      // fallback legacy
-      const b = String(x?.ownerDocId || x?.clientOwnerId || "").trim();
+      const b = String(x?.clientOwnerUid || "").trim();
       if(b) return b;
       return "";
     }
 
-    function getOwnerNameEmailForSend(x){
-      const ownerName = String(x?.clientName || x?.ownerName || "Propriétaire").trim();
-      const ownerEmail = String(x?.clientEmail || x?.ownerEmail || "").trim();
-      return { ownerName, ownerEmail };
-    }
-
-    function sanitizeFilePart(s){
-      return String(s||"")
-        .replaceAll(" ","_")
-        .replaceAll("/","-")
-        .replaceAll("\\","-")
-        .replaceAll(":","-")
-        .replaceAll("?","")
-        .replaceAll("&","")
-        .replaceAll("#","")
-        .slice(0,80);
-    }
-
-    function openSendModalForItem(x){
-      modalItem = x;
-
-      const invNum = getInvoiceNumber(x);
-      const home = String(x.homeName || "—").trim();
-
-      const { ownerName, ownerEmail } = getOwnerNameEmailForSend(x);
-
-      mOwnerName.textContent = ownerName || "—";
-      mOwnerEmail.textContent = ownerEmail ? ownerEmail : "—";
-      mInvoiceNumber.textContent = invNum;
-      mHome.textContent = home;
-
-      mText.value = `Voici votre facture ${invNum}.`;
-      mFile.value = "";
-
-      sendModal.style.display = "block";
-    }
-
-    function closeSendModal(){
-      sendModal.style.display = "none";
-      modalItem = null;
-    }
-
-    sendCloseBtn.addEventListener("click", closeSendModal);
-    sendCancelBtn.addEventListener("click", closeSendModal);
-    sendModal.addEventListener("click", (e)=>{ if(e.target === sendModal) closeSendModal(); });
-
-    sendGoChatBtn.addEventListener("click", ()=>{ location.href = "messagerie.html"; });
-
-    async function ensureThreadExists(conciergerieUid, ownerDocId, x){
-      const threadId = makeThreadId(conciergerieUid, ownerDocId);
-
-      const { ownerName, ownerEmail } = getOwnerNameEmailForSend(x);
-      const ownerEmailLower = normalizeEmail(ownerEmail);
-
-      const homeLabel = `${String(x.homeName || "Logement").trim()} • ${String(x.homeCity || "").trim()}`.trim();
-
-      await setDoc(doc(db,"threads", threadId), {
-        conciergerieUid,
-        ownerDocId,
-        ownerUid: "",
-
-        homeId: String(x.homeId || "").trim() || "",
-        homeLabel: homeLabel || String(x.homeName||"Logement").trim(),
-
-        ownerName: ownerName || "Propriétaire",
-        ownerEmailLower,
-
-        lastText: String(x.invoiceNumber || "").trim() ? `Facture ${String(x.invoiceNumber).trim()}` : "Document envoyé.",
-        lastAt: serverTimestamp(),
-        createdAt: serverTimestamp(),
-
-        unreadForConciergerie: 0,
-        unreadForOwner: 0,
-
-        flags: { paymentDue:false },
-        closed: false
-      }, { merge:true });
-
-      return threadId;
-    }
-
-    async function uploadAndSend(){
+    async function markAsSentAndVisible(salesDocId){
       hideAlert();
       if(!currentUser?.uid) return showAlert("Session invalide.");
-      if(!modalItem) return showAlert("Aucune facture sélectionnée.");
-
-      const ownerDocId = getOwnerDocIdForSend(modalItem);
-      if(!ownerDocId){
-        return showAlert("Impossible d’envoyer : clientOwnerDocId (ownerDocId) manquant sur cette facture.");
-      }
-
-      const file = mFile.files && mFile.files[0];
-      if(!file) return showAlert("Choisis le fichier PDF.");
-      if(String(file.type||"") !== "application/pdf"){
-        return showAlert("Le fichier doit être un PDF (application/pdf).");
-      }
-
-      const invNum = String(modalItem.invoiceNumber || "").trim() || "FACTURE";
-      const salesDocId = String(modalItem.id || "").trim();
-
-      sendDoBtn.disabled = true;
-      sendDoBtn.style.opacity = "0.7";
 
       try{
-        const threadId = await ensureThreadExists(currentUser.uid, ownerDocId, modalItem);
-
-        const ts = Date.now();
-        const fileName = `${sanitizeFilePart(invNum)}_${ts}.pdf`;
-        const storagePath = `invoices/${currentUser.uid}/${ownerDocId}/${sanitizeFilePart(salesDocId)}/${fileName}`;
-
-        await uploadBytes(sRef(storage, storagePath), file, { contentType: "application/pdf" });
-
-        const label = `Facture ${invNum}`;
-        const text = String(mText.value || "").trim() || "Voici votre facture.";
-
-        const at = serverTimestamp();
-
-        await addDoc(collection(db,"threads", threadId, "messages"), {
-          text,
-          at,
-          createdAt: at,
-          senderUid: currentUser.uid,
-          senderRole: "CONCIERGERIE",
-          attachments: [{
-            kind: "INVOICE_PDF",
-            label,
-            salesDocId,
-            storagePath,
-            contentType: "application/pdf"
-          }]
-        });
-
-        await updateDoc(doc(db,"threads", threadId), {
-          lastText: text,
-          lastAt: serverTimestamp(),
-          unreadForOwner: increment(1)
-        });
-
-        // IMPORTANT: marquer la facture envoyée
         await updateDoc(doc(db,"salesDocuments", salesDocId), {
+          ownerVisible: true,
+          ownerVisibleAt: serverTimestamp(),
           invoiceStatus: "SENT",
           sentAt: serverTimestamp()
         });
 
-        showAlert("✅ PDF envoyé dans la messagerie propriétaire.", true);
-        setTimeout(hideAlert, 1100);
-        closeSendModal();
+        showAlert("✅ Facture rendue visible côté propriétaire (Facturation).", true);
+        setTimeout(hideAlert, 1200);
 
+        // refresh local
+        const i = all.findIndex(x => x.id === salesDocId);
+        if(i >= 0){
+          all[i] = { ...all[i], ownerVisible:true, invoiceStatus:"SENT" };
+          render();
+        }
       }catch(e){
         console.error(e);
-        showAlert("⛔ Erreur envoi PDF : " + (e?.message || "inconnue"));
-      }finally{
-        sendDoBtn.disabled = false;
-        sendDoBtn.style.opacity = "1";
+        showAlert("⛔ Erreur 'Envoyer' : " + (e?.message || "inconnue"));
       }
     }
-
-    sendDoBtn.addEventListener("click", uploadAndSend);
 
     function render(){
       const filtered = getFiltered();
@@ -810,8 +605,9 @@
         const avoirHref = `avoir.html?fromDocId=${encodeURIComponent(x.id)}`;
         const redoHref  = `facture.html?mode=redo&fromDocId=${encodeURIComponent(x.id)}&fromAvoirId=${encodeURIComponent(linkedCreditId)}`;
 
-        const ownerDocId = getOwnerDocIdForSend(x);
-        const canSend = !!ownerDocId && hasNum;
+        // Nouveau “Envoyer” : visible propriétaire
+        const ownerUid = getOwnerUid(x);
+        const canSend = !!ownerUid && hasNum && (stDisp === "ISSUED" || stDisp === "DRAFT"); // on évite re-send si déjà SENT/PAID etc.
 
         const div = document.createElement("div");
         div.className = "card";
@@ -861,7 +657,7 @@
                   Avoir : ${esc(linkedCreditNumber || linkedCreditId)}
                 </div>` : ``}
 
-              ${!ownerDocId ? `<div class="t" style="margin-top:4px; color:#b3261e;">Envoi impossible: clientOwnerDocId manquant</div>` : ``}
+              ${!ownerUid ? `<div class="t" style="margin-top:4px; color:#b3261e;">Envoi impossible: ownerUid manquant</div>` : ``}
             </div>
 
             <div class="k" style="align-items:flex-end; min-width:280px;">
@@ -882,7 +678,7 @@
 
         const sendBtn = div.querySelector('button[data-action="send"]');
         if(sendBtn && canSend){
-          sendBtn.addEventListener("click", ()=> openSendModalForItem(x));
+          sendBtn.addEventListener("click", ()=> markAsSentAndVisible(x.id));
         }
 
         listBox.appendChild(div);
@@ -926,7 +722,6 @@
     }
 
     async function loadInvoices(uid){
-      // salesDocuments : type == INVOICE
       const qInv = query(
         collection(db, "salesDocuments"),
         where("conciergerieUid", "==", uid),
@@ -966,5 +761,3 @@
   </script>
 </body>
 </html>
-
-
