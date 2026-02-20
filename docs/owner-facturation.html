@@ -1,4 +1,4 @@
-<!-- docs/owner-facturation.html (COMPLET — Owner: devis à valider via requests.type="billing" + Historique factures via salesDocuments.ownerVisible=true, reset unread billing) -->
+<!-- docs/owner-facturation.html (COMPLET — Owner lit + accepte/refuse devis, requests.type="billing", lecture facture/devis via aperçus, reset unread billing) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -34,7 +34,7 @@
       flex-direction:column;
       align-items:center;
       padding:16px 16px 28px;
-      padding-bottom:120px; /* place pour la bottom-nav */
+      padding-bottom:120px;
     }
 
     .topbar{
@@ -176,7 +176,6 @@
     .status.ok{ background:rgba(27,143,77,0.12); color:var(--ok); }
     .status.bad{ background:rgba(179,38,30,0.10); color:var(--bad); }
 
-    /* Bottom nav (4 onglets) */
     .bottom-nav{
       position:fixed; left:50%; transform:translateX(-50%); bottom:0;
       width:calc(100% - 20px); max-width:980px;
@@ -194,11 +193,27 @@
       text-decoration:none; color:#666;
       padding:10px; border-radius:999px;
       white-space:nowrap;
+      position:relative;
     }
     .bottom-nav a.active{
       background:linear-gradient(90deg,var(--violet-main),var(--violet-dark));
       color:#fff;
       box-shadow:0 10px 22px rgba(0,0,0,0.10);
+    }
+
+    /* optional dots (if you add spans in HTML later) */
+    .dot{
+      display:none;
+      position:absolute;
+      top:6px; right:12px;
+      min-width:18px;
+      padding:2px 6px;
+      border-radius:999px;
+      background:var(--violet-main);
+      color:#fff;
+      font-size:11px;
+      font-weight:1000;
+      line-height:1.2;
     }
   </style>
 </head>
@@ -231,17 +246,17 @@
 
       <section class="card">
         <div class="cardTitle">
-          <span>Historique (factures visibles)</span>
+          <span>Historique</span>
           <span class="tiny" id="historyCount">—</span>
         </div>
         <div class="tiny" style="margin-top:8px;">
-          Factures rendues visibles par la conciergerie (bouton “Envoyer” côté conciergerie).
+          Devis / factures disponibles (lecture seule). Tu peux ouvrir l’aperçu puis “Imprimer” → “Enregistrer en PDF”.
         </div>
         <div class="alert" id="alertHistory"></div>
         <div id="historyList" class="list"></div>
 
         <div class="tiny" style="margin-top:10px;">
-          Astuce impression : ouvre la facture puis “Imprimer” → “Enregistrer en PDF”.
+          Astuce impression : ouvre l’aperçu puis “Imprimer” → “Enregistrer en PDF”.
         </div>
       </section>
     </div>
@@ -287,10 +302,6 @@
   function resetUnreadBilling(){
     localStorage.setItem("cm_owner_unread_billing", "0");
   }
-  function refreshBottomBadgesFromLocal(){
-    // (badges optionnels : si tu ajoutes des pastilles plus tard)
-    // on ne fait rien ici pour éviter les null refs.
-  }
 
   function esc(s){
     return String(s ?? "")
@@ -320,7 +331,7 @@
     if(v === "refused") return `<span class="status bad">refusé</span>`;
     if(v === "paid") return `<span class="status ok">payé</span>`;
     if(v === "pending_owner") return `<span class="status">à valider</span>`;
-    if(v === "sent") return `<span class="status">visible</span>`;
+    if(v === "sent") return `<span class="status">envoyé</span>`;
     return `<span class="status">${esc(v)}</span>`;
   }
   function docTypeLabel(t){
@@ -342,8 +353,7 @@
 
   // ====== State ======
   let currentUser = null;
-  let unsubRequests = null;
-  let unsubInvoices = null;
+  let unsubBills = null;
 
   async function guardOwnerProfile(user){
     const us = await getDoc(doc(db, "users", user.uid));
@@ -371,15 +381,35 @@
     });
   }
 
-  function renderRequestRow(r, mode="history"){
-    // requests expected fields:
-    // docType, number, homeName, totalTTC, pdfUrl, status, createdAt
+  function buildOpenHref(r){
+    const salesDocId = String(r.salesDocId || r.docId || "").trim();
+    const dtype = String(r.docType || "").toLowerCase();
+
+    if(!salesDocId) return "";
+
+    // ✅ lecture seule via pages d’aperçu (pas facture.html)
+    if(dtype === "invoice"){
+      return `facture-apercu.html?docId=${encodeURIComponent(salesDocId)}&owner=1`;
+    }
+    if(dtype === "quote"){
+      return `devis-apercu.html?docId=${encodeURIComponent(salesDocId)}&owner=1`;
+    }
+    // fallback : tenter facture-apercu
+    return `facture-apercu.html?docId=${encodeURIComponent(salesDocId)}&owner=1`;
+  }
+
+  function renderBillingRow(r, mode="history"){
+    // expected fields:
+    // docType: "invoice"|"quote"
+    // number, homeName, totalTTC, salesDocId, status, createdAt, note(optional)
     const type = docTypeLabel(r.docType);
     const number = r.number ? `#${esc(r.number)}` : "—";
     const home = esc(r.homeName || r.home || "—");
     const total = money(r.totalTTC);
     const when = fmt(r.createdAt);
-    const pdfUrl = String(r.pdfUrl || "").trim();
+    const note = String(r.note || "").trim();
+
+    const openHref = buildOpenHref(r);
 
     const el = document.createElement("div");
     el.className = "item";
@@ -387,23 +417,34 @@
     const topRight = `${esc(when)} ${statusPill(r.status)}`;
 
     let actionsHtml = "";
-    if(pdfUrl){
-      actionsHtml += `<a class="btn" href="${esc(pdfUrl)}" target="_blank" rel="noopener">Ouvrir PDF</a>`;
+
+    if(openHref){
+      actionsHtml += `<a class="btn" href="${esc(openHref)}">Ouvrir</a>`;
     }
 
-    if(mode === "pending"){
+    // accept/refuse UNIQUEMENT pour devis en pending_owner
+    const dtype = String(r.docType || "").toLowerCase();
+    const isPending = String(r.status || "").toLowerCase() === "pending_owner";
+
+    if(mode === "pending" && dtype === "quote" && isPending){
       actionsHtml += `
         <button class="btn primary" data-act="accept">Accepter</button>
         <button class="btn danger" data-act="refuse">Refuser</button>
       `;
     }
 
+    const bodyLines = [
+      `Logement : ${home}`,
+      `Montant TTC : ${esc(total)}`
+    ];
+    if(note) bodyLines.push(`Message : ${esc(note)}`);
+
     el.innerHTML = `
       <div class="meta">
         <span><b>${esc(type)}</b> • ${number}</span>
         <span>${topRight}</span>
       </div>
-      <p class="msg">Logement : ${home}\nMontant TTC : ${esc(total)}</p>
+      <p class="msg">${bodyLines.join("\n")}</p>
       <div class="row">
         <span></span>
         <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;">
@@ -412,7 +453,7 @@
       </div>
     `;
 
-    if(mode === "pending"){
+    if(mode === "pending" && dtype === "quote" && isPending){
       const acceptBtn = el.querySelector('[data-act="accept"]');
       const refuseBtn = el.querySelector('[data-act="refuse"]');
 
@@ -447,43 +488,12 @@
     return el;
   }
 
-  function renderInvoiceRow(inv){
-    // salesDocuments expected fields:
-    // type="INVOICE", invoiceNumber, homeName, totalTTC, createdAt, invoiceStatus, ownerVisible
-    const invNum = String(inv.invoiceNumber || "").trim();
-    const number = invNum ? `#${esc(invNum)}` : "—";
-    const home = esc(inv.homeName || "—");
-    const total = money(inv.totalTTC ?? inv.total ?? 0);
-    const when = fmt(inv.createdAt || inv.createdAtMs || inv.snapAtMs);
-
-    const st = String(inv.invoiceStatus || (inv.ownerVisible ? "SENT" : "") || "").toLowerCase();
-    const status = st || (inv.ownerVisible ? "sent" : "");
-
-    const el = document.createElement("div");
-    el.className = "item";
-
-    const openHref = `facture.html?docId=${encodeURIComponent(inv.id)}&role=owner`;
-
-    el.innerHTML = `
-      <div class="meta">
-        <span><b>Facture</b> • ${number}</span>
-        <span>${esc(when)} ${statusPill(status)}</span>
-      </div>
-      <p class="msg">Logement : ${home}\nMontant TTC : ${esc(total)}</p>
-      <div class="row">
-        <span></span>
-        <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;">
-          <a class="btn primary" href="${openHref}">Ouvrir</a>
-        </div>
-      </div>
-    `;
-    return el;
-  }
-
-  function listenRequests(uid){
-    if(unsubRequests) unsubRequests();
+  function listenBilling(uid){
+    if(unsubBills) unsubBills();
     hideAlert(alertPending);
+    hideAlert(alertHistory);
 
+    // requests: type="billing" + ownerUid + orderBy(createdAt)
     const qb = query(
       collection(db, "requests"),
       where("ownerUid", "==", uid),
@@ -491,37 +501,58 @@
       orderBy("createdAt", "desc")
     );
 
-    unsubRequests = onSnapshot(qb, (snap)=>{
+    unsubBills = onSnapshot(qb, (snap)=>{
       const items = snap.docs.map(d => ({ id:d.id, ...(d.data()||{}) }));
 
-      const pending = items.filter(x => String(x.status||"").toLowerCase() === "pending_owner");
+      // pending only for quotes
+      const pending = items.filter(x =>
+        String(x.status||"").toLowerCase() === "pending_owner"
+        && String(x.docType||"").toLowerCase() === "quote"
+      );
+
+      const history = items.filter(x => !(String(x.status||"").toLowerCase() === "pending_owner" && String(x.docType||"").toLowerCase() === "quote"));
 
       pendingCount.textContent = String(pending.length);
+      historyCount.textContent = String(history.length);
+
       pendingList.innerHTML = "";
+      historyList.innerHTML = "";
 
       if(!pending.length){
         pendingList.innerHTML = `
           <div class="item">
             <div class="meta"><span>Aucun devis à valider</span><span>—</span></div>
-            <p class="msg">Quand la conciergerie t’enverra un devis, il apparaîtra ici.</p>
+            <p class="msg">Quand la conciergerie t’enverra un devis à valider, il apparaîtra ici.</p>
           </div>
         `;
       }else{
         for(const r of pending){
-          pendingList.appendChild(renderRequestRow(r, "pending"));
+          pendingList.appendChild(renderBillingRow(r, "pending"));
         }
       }
 
-      // Page ouverte => unread billing = 0
+      if(!history.length){
+        historyList.innerHTML = `
+          <div class="item">
+            <div class="meta"><span>Aucun historique</span><span>—</span></div>
+            <p class="msg">Les devis/factures envoyés apparaîtront ici.</p>
+          </div>
+        `;
+      }else{
+        for(const r of history){
+          historyList.appendChild(renderBillingRow(r, "history"));
+        }
+      }
+
+      // Owner-side: page ouverte => unread billing = 0
       resetUnreadBilling();
-      refreshBottomBadgesFromLocal();
 
     }, (err)=>{
       console.error(err);
       const msg = String(err?.message || "");
       if(msg.toLowerCase().includes("index")){
         showAlert(
-          alertPending,
+          alertHistory,
           "⛔ Index Firestore manquant.\n" +
           "Crée l’index composite: requests (ownerUid ASC, type ASC, createdAt DESC).\n" +
           "Puis recharge la page.",
@@ -529,72 +560,13 @@
         );
       }else if(msg.toLowerCase().includes("permission")){
         showAlert(
-          alertPending,
+          alertHistory,
           "⛔ Permission refusée sur requests.\n" +
           "Rules attendues: read autorisé si ownerUid == auth.uid (et type=='billing').",
           false
         );
       }else{
-        showAlert(alertPending, "Erreur chargement devis : " + msg, false);
-      }
-    });
-  }
-
-  function listenInvoices(uid){
-    if(unsubInvoices) unsubInvoices();
-    hideAlert(alertHistory);
-
-    // Historique = factures visibles
-    const qi = query(
-      collection(db, "salesDocuments"),
-      where("ownerUid", "==", uid),
-      where("type", "==", "INVOICE"),
-      where("ownerVisible", "==", true),
-      orderBy("createdAt", "desc")
-    );
-
-    unsubInvoices = onSnapshot(qi, (snap)=>{
-      const items = snap.docs.map(d => ({ id:d.id, ...(d.data()||{}) }));
-
-      historyCount.textContent = String(items.length);
-      historyList.innerHTML = "";
-
-      if(!items.length){
-        historyList.innerHTML = `
-          <div class="item">
-            <div class="meta"><span>Aucune facture</span><span>—</span></div>
-            <p class="msg">Quand la conciergerie rendra une facture visible, elle apparaîtra ici.</p>
-          </div>
-        `;
-      }else{
-        for(const inv of items){
-          historyList.appendChild(renderInvoiceRow(inv));
-        }
-      }
-
-      resetUnreadBilling();
-      refreshBottomBadgesFromLocal();
-
-    }, (err)=>{
-      console.error(err);
-      const msg = String(err?.message || "");
-      if(msg.toLowerCase().includes("index")){
-        showAlert(
-          alertHistory,
-          "⛔ Index Firestore manquant.\n" +
-          "Crée l’index composite: salesDocuments (ownerUid ASC, type ASC, ownerVisible ASC, createdAt DESC).\n" +
-          "Puis recharge la page.",
-          false
-        );
-      }else if(msg.toLowerCase().includes("permission")){
-        showAlert(
-          alertHistory,
-          "⛔ Permission refusée sur salesDocuments.\n" +
-          "Rules attendues: read autorisé si ownerUid == auth.uid et ownerVisible==true.",
-          false
-        );
-      }else{
-        showAlert(alertHistory, "Erreur chargement factures : " + msg, false);
+        showAlert(alertHistory, "Erreur chargement facturation : " + msg, false);
       }
     });
   }
@@ -612,17 +584,12 @@
 
     currentUser = user;
 
-    // reset unread billing dès l’entrée
     resetUnreadBilling();
-    refreshBottomBadgesFromLocal();
-
-    listenRequests(user.uid); // devis à valider
-    listenInvoices(user.uid); // factures visibles
+    listenBilling(user.uid);
   });
 
   window.addEventListener("focus", ()=>{
     resetUnreadBilling();
-    refreshBottomBadgesFromLocal();
   });
 </script>
 
