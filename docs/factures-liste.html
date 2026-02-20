@@ -1,4 +1,4 @@
-<!-- docs/factures-liste.html (FINAL — salesDocuments only + bouton "Envoyer" = ownerVisible (facturation propriétaire) + status SENT, NO messagerie, NO PDF upload) -->
+<!-- docs/factures-liste.html (FINAL — salesDocuments only + "Envoyer" => ownerVisible (facturation propriétaire) + invoiceStatus SENT, NO messagerie, NO PDF) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -519,9 +519,8 @@
         : `TVA non applicable. Totaux calculés sur les factures affichées.`;
     }
 
-    function getOwnerUid(x){
-      // on s’en sert juste pour vérifier si c’est “envoyable”
-      // (si tu préfères ownerDocId, on changera au besoin)
+    function getOwnerUidForSend(x){
+      // Canon attendu pour cohérence owner-facturation.html
       const a = String(x?.ownerUid || "").trim();
       if(a) return a;
       const b = String(x?.clientOwnerUid || "").trim();
@@ -544,7 +543,6 @@
         showAlert("✅ Facture rendue visible côté propriétaire (Facturation).", true);
         setTimeout(hideAlert, 1200);
 
-        // refresh local
         const i = all.findIndex(x => x.id === salesDocId);
         if(i >= 0){
           all[i] = { ...all[i], ownerVisible:true, invoiceStatus:"SENT" };
@@ -605,9 +603,12 @@
         const avoirHref = `avoir.html?fromDocId=${encodeURIComponent(x.id)}`;
         const redoHref  = `facture.html?mode=redo&fromDocId=${encodeURIComponent(x.id)}&fromAvoirId=${encodeURIComponent(linkedCreditId)}`;
 
-        // Nouveau “Envoyer” : visible propriétaire
-        const ownerUid = getOwnerUid(x);
-        const canSend = !!ownerUid && hasNum && (stDisp === "ISSUED" || stDisp === "DRAFT"); // on évite re-send si déjà SENT/PAID etc.
+        const ownerUid = getOwnerUidForSend(x);
+
+        // Eviter les re-envois inutiles
+        const alreadyVisible = !!x.ownerVisible || stDisp === "SENT";
+        const sendBlockedByStatus = ["PAID","CREDITED","CANCELLED","SENT"].includes(stDisp);
+        const canSend = !!ownerUid && hasNum && !alreadyVisible && !sendBlockedByStatus;
 
         const div = document.createElement("div");
         div.className = "card";
@@ -658,6 +659,7 @@
                 </div>` : ``}
 
               ${!ownerUid ? `<div class="t" style="margin-top:4px; color:#b3261e;">Envoi impossible: ownerUid manquant</div>` : ``}
+              ${alreadyVisible ? `<div class="t" style="margin-top:4px; color:#1b8f4d;">Déjà visible côté propriétaire</div>` : ``}
             </div>
 
             <div class="k" style="align-items:flex-end; min-width:280px;">
@@ -678,7 +680,10 @@
 
         const sendBtn = div.querySelector('button[data-action="send"]');
         if(sendBtn && canSend){
-          sendBtn.addEventListener("click", ()=> markAsSentAndVisible(x.id));
+          sendBtn.addEventListener("click", ()=>{
+            if(!confirm("Rendre cette facture visible côté propriétaire ?")) return;
+            markAsSentAndVisible(x.id);
+          });
         }
 
         listBox.appendChild(div);
