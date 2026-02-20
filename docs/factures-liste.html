@@ -1,4 +1,4 @@
-<!-- docs/factures-liste.html (FINAL — salesDocuments only + "Envoyer" => ownerVisible (facturation propriétaire) + invoiceStatus SENT, NO messagerie, NO PDF) -->
+<!-- docs/factures-liste.html (FINAL — salesDocuments only + bouton "Envoyer" = publier dans facturation propriétaire (requests.type="billing") + ownerVisible=true + status SENT) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -76,6 +76,7 @@
       font-size:12px;
       color:#444;
       white-space:pre-wrap;
+      font-weight:900;
     }
     .alert.ok{ border-left-color: var(--ok); }
 
@@ -253,6 +254,28 @@
       .bottom-nav a{ font-size: 13px; padding: 12px 12px; }
       .page{ padding-bottom: 32px; }
     }
+
+    /* Modal publish */
+    .modalBack{ display:none; position:fixed; inset:0; background:rgba(0,0,0,.35); z-index:9999; padding:16px; }
+    .modalBox{
+      max-width:620px; margin:6vh auto; background:#fff; border-radius:16px;
+      padding:14px; border:1px solid rgba(122,92,255,0.25);
+      box-shadow:0 14px 36px rgba(0,0,0,0.18);
+    }
+    .modalTitle{ display:flex; justify-content:space-between; align-items:center; gap:10px; font-weight:1000; }
+    .modalHint{ margin-top:10px; font-size:12px; color:#444; font-weight:850; }
+    .grid2{ margin-top:12px; display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+    @media(max-width:640px){ .grid2{ grid-template-columns:1fr; } }
+    .boxMini{ border:1px solid rgba(122,92,255,0.18); border-radius:14px; padding:10px 12px; background:#fff; }
+    .miniT{ font-size:12px; font-weight:1000; color:#333; }
+    .miniV{ font-weight:1000; margin-top:3px; }
+    .miniS{ font-weight:900; color:#666; margin-top:2px; font-size:12px; }
+    textarea.modalTxt{
+      width:100%; margin-top:10px; padding:10px 12px; border-radius:12px;
+      border:1px solid #D3C7FF; font-weight:850; resize:vertical; outline:none;
+    }
+    textarea.modalTxt:focus{ border-color:var(--violet); box-shadow:0 0 0 2px rgba(122,92,255,.12); }
+    .modalActions{ display:flex; gap:8px; justify-content:flex-end; margin-top:12px; flex-wrap:wrap; }
   </style>
 </head>
 
@@ -281,7 +304,7 @@
             <option value="ALL">Toutes</option>
             <option value="DRAFT">Brouillons</option>
             <option value="ISSUED">Émises</option>
-            <option value="SENT">Visibles propriétaire</option>
+            <option value="SENT">Envoyées</option>
             <option value="PAID">Payées</option>
             <option value="CREDITED">Créditées</option>
             <option value="CANCELLED">Annulées</option>
@@ -313,12 +336,53 @@
     <a href="messagerie.html">Messages</a>
   </nav>
 
+  <!-- Modal publication (facturation propriétaire) -->
+  <div id="publishModal" class="modalBack" aria-hidden="true">
+    <div class="modalBox">
+      <div class="modalTitle">
+        <div>Envoyer au propriétaire (Facturation)</div>
+        <button type="button" id="pubCloseBtn" style="border:none; background:#fff; font-weight:1000; cursor:pointer;">✕</button>
+      </div>
+
+      <div class="modalHint">
+        Cette action rend la facture <b>consultable côté propriétaire</b> (lecture seule).<br>
+        Le propriétaire pourra ouvrir l’aperçu et enregistrer son PDF.
+      </div>
+
+      <div class="grid2">
+        <div class="boxMini">
+          <div class="miniT">Propriétaire</div>
+          <div class="miniV" id="pubOwnerName">—</div>
+          <div class="miniS" id="pubOwnerEmail">—</div>
+        </div>
+        <div class="boxMini">
+          <div class="miniT">Facture</div>
+          <div class="miniV" id="pubInvNumber">—</div>
+          <div class="miniS" id="pubHome">—</div>
+        </div>
+      </div>
+
+      <div style="margin-top:10px;">
+        <div class="miniT">Message (optionnel)</div>
+        <textarea id="pubText" class="modalTxt" rows="2" placeholder="Ex: Voici votre facture. Merci !"></textarea>
+        <div class="miniS" style="margin-top:6px;">
+          Stocké dans <code>requests</code> (type <code>billing</code>) + patch <code>salesDocuments.ownerVisible=true</code>.
+        </div>
+      </div>
+
+      <div class="modalActions">
+        <button id="pubCancelBtn" type="button" class="btn">Annuler</button>
+        <button id="pubDoBtn" type="button" class="btn primary">Publier</button>
+      </div>
+    </div>
+  </div>
+
   <script type="module">
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
       collection, query, where, orderBy, limit, getDocs, doc, getDoc,
-      updateDoc, serverTimestamp
+      setDoc, updateDoc, serverTimestamp
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const helloLine = document.getElementById("helloLine");
@@ -333,10 +397,25 @@
     const globalTotalsBox = document.getElementById("globalTotalsBox");
     const globalTotalsNote = document.getElementById("globalTotalsNote");
 
+    // Modal
+    const publishModal = document.getElementById("publishModal");
+    const pubCloseBtn  = document.getElementById("pubCloseBtn");
+    const pubCancelBtn = document.getElementById("pubCancelBtn");
+    const pubDoBtn     = document.getElementById("pubDoBtn");
+    const pubOwnerName = document.getElementById("pubOwnerName");
+    const pubOwnerEmail= document.getElementById("pubOwnerEmail");
+    const pubInvNumber = document.getElementById("pubInvNumber");
+    const pubHome      = document.getElementById("pubHome");
+    const pubText      = document.getElementById("pubText");
+
     let currentUser = null;
     let all = [];
     let vatEnabled = false;
     let vatRate = 0;
+
+    let modalItem = null;
+    let modalOwnerUid = "";
+    let modalOwnerDocId = "";
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -387,13 +466,8 @@
       return { ht, tva, ttc };
     }
 
-    function getInvoiceStatusRaw(x){
-      return String(x?.invoiceStatus||"").toUpperCase().trim();
-    }
-    function getInvoiceNumber(x){
-      const n = String(x?.invoiceNumber || "").trim();
-      return n || "—";
-    }
+    function getInvoiceStatusRaw(x){ return String(x?.invoiceStatus||"").toUpperCase().trim(); }
+    function getInvoiceNumber(x){ return String(x?.invoiceNumber||"").trim() || "—"; }
     function getInvoiceStatusDisplay(x){
       const raw = getInvoiceStatusRaw(x);
       const hasNum = !!String(x?.invoiceNumber||"").trim();
@@ -405,7 +479,7 @@
       if(s === "PAID") return `<span class="badge ok">Payée</span>`;
       if(s === "CANCELLED") return `<span class="badge bad">Annulée</span>`;
       if(s === "CREDITED") return `<span class="badge bad">Créditée</span>`;
-      if(s === "SENT") return `<span class="badge">Visible propriétaire</span>`;
+      if(s === "SENT") return `<span class="badge">Envoyée</span>`;
       if(s === "ISSUED") return `<span class="badge">Émise</span>`;
       if(s === "DRAFT") return `<span class="badge">Brouillon</span>`;
       return `<span class="badge bad">Sans statut</span>`;
@@ -427,15 +501,12 @@
         item.invoiceNumber,
         item.clientName, item.clientEmail,
         item.homeName, item.homeCity, item.homeAddress, item.homeZip,
-        item.invoiceStatus,
-        item.creditNumber, item.creditNoteNumber
+        item.invoiceStatus
       ].filter(Boolean).join(" ").toLowerCase();
 
       return hay.includes(q);
     }
-    function getFiltered(){
-      return all.filter(e => matchesFilter(e) && matchesSearch(e));
-    }
+    function getFiltered(){ return all.filter(e => matchesFilter(e) && matchesSearch(e)); }
 
     function getCreatedAt(x){
       if(x?.createdAt?.toDate?.()) return x.createdAt.toDate().toLocaleDateString("fr-FR");
@@ -443,34 +514,6 @@
       if(x?.createdAtMs) return fmtDateFR(new Date(Number(x.createdAtMs)));
       if(x?.snapAtMs) return fmtDateFR(new Date(Number(x.snapAtMs)));
       return "—";
-    }
-
-    function getLinkedCreditId(x){
-      const keys = ["creditNoteId","avoirId","creditId","lastCreditId","fromAvoirId","linkedCreditId"];
-      for(const k of keys){
-        const v = String(x?.[k] || "").trim();
-        if(v) return v;
-      }
-      return "";
-    }
-    function getLinkedCreditNumber(x){
-      const keys = ["creditNoteNumber","creditNumber","avoirNumber"];
-      for(const k of keys){
-        const v = String(x?.[k] || "").trim();
-        if(v) return v;
-      }
-      return "";
-    }
-
-    function getPaidAmount(x){
-      const n = Number(x?.paidAmount);
-      return Number.isFinite(n) ? n : 0;
-    }
-    function isFullyPaid(x, ttc){
-      const st = getInvoiceStatusRaw(x);
-      if(st === "PAID") return true;
-      if(!!x?.invoicePaidAt) return true;
-      return getPaidAmount(x) >= (Number(ttc)||0) && (Number(ttc)||0) > 0;
     }
 
     function renderGlobalTotals(filtered){
@@ -519,40 +562,153 @@
         : `TVA non applicable. Totaux calculés sur les factures affichées.`;
     }
 
-    function getOwnerUidForSend(x){
-      // Canon attendu pour cohérence owner-facturation.html
+    // ===== Owner resolution =====
+    function getOwnerDocId(x){
+      const a = String(x?.clientOwnerDocId || "").trim();
+      if(a) return a;
+      const b = String(x?.ownerDocId || x?.clientOwnerId || "").trim();
+      if(b) return b;
+      return "";
+    }
+    function getOwnerUidFast(x){
       const a = String(x?.ownerUid || "").trim();
       if(a) return a;
       const b = String(x?.clientOwnerUid || "").trim();
       if(b) return b;
       return "";
     }
+    async function resolveOwnerUidFromOwnerDoc(ownerDocId){
+      if(!ownerDocId) return "";
+      try{
+        const snap = await getDoc(doc(db,"owners", ownerDocId));
+        if(!snap.exists()) return "";
+        const o = snap.data() || {};
+        return String(o.ownerUid || o.userUid || "").trim();
+      }catch{ return ""; }
+    }
+    function getOwnerNameEmail(x){
+      const ownerName = String(x?.clientName || x?.ownerName || "Propriétaire").trim();
+      const ownerEmail = String(x?.clientEmail || x?.ownerEmail || "").trim();
+      return { ownerName, ownerEmail };
+    }
 
-    async function markAsSentAndVisible(salesDocId){
+    // ===== Modal open/close =====
+    function openPublishModal(x, ownerUid, ownerDocId){
+      modalItem = x;
+      modalOwnerUid = String(ownerUid||"").trim();
+      modalOwnerDocId = String(ownerDocId||"").trim();
+
+      const invNum = getInvoiceNumber(x);
+      const home = String(x.homeName || "—").trim();
+      const { ownerName, ownerEmail } = getOwnerNameEmail(x);
+
+      pubOwnerName.textContent = ownerName || "—";
+      pubOwnerEmail.textContent = ownerEmail || "—";
+      pubInvNumber.textContent = invNum;
+      pubHome.textContent = home;
+
+      pubText.value = `Voici votre facture ${invNum}.`;
+      publishModal.style.display = "block";
+      publishModal.setAttribute("aria-hidden","false");
+    }
+    function closePublishModal(){
+      publishModal.style.display = "none";
+      publishModal.setAttribute("aria-hidden","true");
+      modalItem = null; modalOwnerUid = ""; modalOwnerDocId = "";
+      pubText.value = "";
+    }
+    pubCloseBtn.addEventListener("click", closePublishModal);
+    pubCancelBtn.addEventListener("click", closePublishModal);
+    publishModal.addEventListener("click", (e)=>{ if(e.target === publishModal) closePublishModal(); });
+
+    // ===== Publish action =====
+    function requestIdForSalesDoc(salesDocId){ return `bill_${String(salesDocId||"").trim()}`; }
+
+    async function publishToOwnerBilling(){
       hideAlert();
       if(!currentUser?.uid) return showAlert("Session invalide.");
+      if(!modalItem) return showAlert("Aucune facture sélectionnée.");
+
+      const salesDocId = String(modalItem.id || "").trim();
+      if(!salesDocId) return showAlert("ID facture manquant.");
+
+      const invNum = String(modalItem.invoiceNumber || "").trim();
+      if(!invNum) return showAlert("Facture non émise : crée le numéro avant d’envoyer.");
+
+      const ownerDocId = modalOwnerDocId || getOwnerDocId(modalItem);
+      if(!ownerDocId) return showAlert("Envoi impossible : clientOwnerDocId manquant sur cette facture.");
+
+      let ownerUid = String(modalOwnerUid || getOwnerUidFast(modalItem) || "").trim();
+      if(!ownerUid){
+        ownerUid = await resolveOwnerUidFromOwnerDoc(ownerDocId);
+      }
+      if(!ownerUid){
+        return showAlert("Envoi impossible : ownerUid introuvable (owners.ownerUid).");
+      }
+
+      pubDoBtn.disabled = true;
+      pubDoBtn.style.opacity = "0.75";
 
       try{
+        // 1) patch salesDocument => visible owner + SENT
         await updateDoc(doc(db,"salesDocuments", salesDocId), {
-          ownerVisible: true,
-          ownerVisibleAt: serverTimestamp(),
+          ownerUid,                 // sécurité: s’assurer que le doc est “owner-bound”
+          ownerVisible: true,       // requis par tes rules (owner read only if visible)
           invoiceStatus: "SENT",
-          sentAt: serverTimestamp()
+          sentAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
         });
 
-        showAlert("✅ Facture rendue visible côté propriétaire (Facturation).", true);
-        setTimeout(hideAlert, 1200);
+        // 2) create/update request billing (owner-facturation écoute requests)
+        const rid = requestIdForSalesDoc(salesDocId);
+        const rRef = doc(db,"requests", rid);
+        const exists = await getDoc(rRef);
 
-        const i = all.findIndex(x => x.id === salesDocId);
-        if(i >= 0){
-          all[i] = { ...all[i], ownerVisible:true, invoiceStatus:"SENT" };
-          render();
+        const msg = String(pubText.value || "").trim();
+
+        const totalTTC = Number.isFinite(Number(modalItem.totalTTC))
+          ? Number(modalItem.totalTTC)
+          : Number(computeTotalsFromLines(modalItem.lines).ttc) || 0;
+
+        const payloadBase = {
+          type: "billing",
+          status: "sent",                 // owner-facturation: ira dans Historique (≠ pending_owner)
+          conciergerieUid: currentUser.uid,
+          ownerUid,
+          ownerDocId,
+          docType: "invoice",
+          salesDocId,
+          number: invNum,
+          homeName: String(modalItem.homeName || "").trim(),
+          totalTTC,
+          note: msg,
+          updatedAt: serverTimestamp()
+        };
+
+        if(exists.exists()){
+          await setDoc(rRef, payloadBase, { merge:true });
+        }else{
+          await setDoc(rRef, {
+            ...payloadBase,
+            createdAt: serverTimestamp()
+          }, { merge:true });
         }
+
+        showAlert("✅ Facture publiée dans la Facturation propriétaire.", true);
+        closePublishModal();
+
+        // refresh local list quickly
+        await loadInvoices(currentUser.uid);
+
       }catch(e){
         console.error(e);
-        showAlert("⛔ Erreur 'Envoyer' : " + (e?.message || "inconnue"));
+        showAlert("⛔ Erreur envoi (publication facturation) : " + (e?.message || "inconnue"));
+      }finally{
+        pubDoBtn.disabled = false;
+        pubDoBtn.style.opacity = "1";
       }
     }
+    pubDoBtn.addEventListener("click", publishToOwnerBilling);
 
     function render(){
       const filtered = getFiltered();
@@ -585,30 +741,19 @@
         const stDisp = getInvoiceStatusDisplay(x);
         const stRaw = getInvoiceStatusRaw(x);
 
-        const linkedCreditId = getLinkedCreditId(x);
-        const linkedCreditNumber = getLinkedCreditNumber(x);
-
         const ttcStored = Number(x.totalTTC);
         const totals = Number.isFinite(ttcStored) ? { ttc: ttcStored } : computeTotalsFromLines(x.lines);
         const ttc = totals.ttc;
 
         const hasNum = !!String(x.invoiceNumber||"").trim();
-
-        const allowAvoir = hasNum && !["CANCELLED","CREDITED","PAID"].includes(stRaw);
-        const allowRedo = !!linkedCreditId;
-        const allowReglement = hasNum && !["CANCELLED","CREDITED"].includes(stRaw) && !isFullyPaid(x, ttc);
+        const allowReglement = hasNum && !["CANCELLED","CREDITED"].includes(stRaw);
 
         const openHref = `facture.html?docId=${encodeURIComponent(x.id)}`;
         const regHref  = `reglement.html?docId=${encodeURIComponent(x.id)}`;
-        const avoirHref = `avoir.html?fromDocId=${encodeURIComponent(x.id)}`;
-        const redoHref  = `facture.html?mode=redo&fromDocId=${encodeURIComponent(x.id)}&fromAvoirId=${encodeURIComponent(linkedCreditId)}`;
 
-        const ownerUid = getOwnerUidForSend(x);
-
-        // Eviter les re-envois inutiles
-        const alreadyVisible = !!x.ownerVisible || stDisp === "SENT";
-        const sendBlockedByStatus = ["PAID","CREDITED","CANCELLED","SENT"].includes(stDisp);
-        const canSend = !!ownerUid && hasNum && !alreadyVisible && !sendBlockedByStatus;
+        const ownerDocId = getOwnerDocId(x);
+        const ownerUidFast = getOwnerUidFast(x);
+        const canSend = !!ownerDocId && hasNum; // ownerUid resolved at click (owners doc)
 
         const div = document.createElement("div");
         div.className = "card";
@@ -653,13 +798,8 @@
               <div class="t">Statut</div>
               <div class="v">${badgeForStatus(stDisp)}</div>
 
-              ${(linkedCreditNumber || linkedCreditId) ? `
-                <div class="t" style="margin-top:4px;">
-                  Avoir : ${esc(linkedCreditNumber || linkedCreditId)}
-                </div>` : ``}
-
-              ${!ownerUid ? `<div class="t" style="margin-top:4px; color:#b3261e;">Envoi impossible: ownerUid manquant</div>` : ``}
-              ${alreadyVisible ? `<div class="t" style="margin-top:4px; color:#1b8f4d;">Déjà visible côté propriétaire</div>` : ``}
+              ${!ownerDocId ? `<div class="t" style="margin-top:4px; color:#b3261e;">Envoi impossible: clientOwnerDocId manquant</div>` : ``}
+              ${ownerDocId && !ownerUidFast ? `<div class="t" style="margin-top:4px;">(ownerUid sera résolu depuis owners)</div>` : ``}
             </div>
 
             <div class="k" style="align-items:flex-end; min-width:280px;">
@@ -669,10 +809,6 @@
                 <button class="btn" type="button" data-action="send" ${canSend ? "" : `aria-disabled="true"`}>Envoyer</button>
 
                 <a class="btn" href="${regHref}" ${allowReglement ? "" : `aria-disabled="true"`}>Règlement</a>
-
-                <a class="btn" href="${avoirHref}" ${allowAvoir ? "" : `aria-disabled="true"`}>Avoir</a>
-
-                <a class="btn" href="${allowRedo ? redoHref : "#"}" ${allowRedo ? "" : `aria-disabled="true"`}>Refaire</a>
               </div>
             </div>
           </div>
@@ -680,9 +816,10 @@
 
         const sendBtn = div.querySelector('button[data-action="send"]');
         if(sendBtn && canSend){
-          sendBtn.addEventListener("click", ()=>{
-            if(!confirm("Rendre cette facture visible côté propriétaire ?")) return;
-            markAsSentAndVisible(x.id);
+          sendBtn.addEventListener("click", async ()=>{
+            const { ownerName, ownerEmail } = getOwnerNameEmail(x);
+            const resolvedOwnerUid = ownerUidFast || "";
+            openPublishModal(x, resolvedOwnerUid, ownerDocId);
           });
         }
 
@@ -714,7 +851,6 @@
       }
       return Array.from(m.values());
     }
-
     function createdAtMsForSort(x){
       try{
         if(x?.createdAt?.toDate?.()) return x.createdAt.toDate().getTime();
