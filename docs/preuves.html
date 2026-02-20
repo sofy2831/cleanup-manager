@@ -1,4 +1,4 @@
-<!-- docs/preuves.html (FINAL STABLE — WhatsApp-like multi-photos MENAGE global + ZIP fallback) -->
+<!-- docs/preuves.html (FINAL — multi-photos + ZIP fallback, agent token, write ONLY missions/MENAGE like ZIP) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -179,7 +179,7 @@
       <section class="card">
         <div class="mini">
           <b>Le plus simple :</b> sélectionne 5/10/20 photos et envoie-les d’un coup.<br>
-          Stockage : mission <b>MENAGE</b> • Limite : <b>20 photos</b> • <b>30 Mo/photo</b>.
+          Mission <b>MENAGE</b> • Limite : <b>20 photos</b> • <b>30 Mo/photo</b>.
         </div>
 
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:space-between;margin-top:8px;">
@@ -397,7 +397,7 @@
       const m = mSnap.data() || {};
       if(String(m.dayToken || "") !== String(token)) throw new Error("Token non associé à cette mission (MENAGE).");
 
-      return { tokenDoc, missionDoc: m };
+      return { tokenDoc, missionRef: mRef, missionDoc: m };
     }
 
     // --------- ZIP UI ----------
@@ -444,9 +444,8 @@
             try{ await deleteObject(sRef(storage, proofZip.path)); }catch(e){ console.warn("deleteObject failed", e); }
           }
 
-          await updateDoc(doc(db,"events",prestationId,"missions",missionType),{
-            proofZip: null
-          });
+          // write ONLY mission doc
+          await updateDoc(doc(db,"events",prestationId,"missions",missionType),{ proofZip: null });
 
           showAlert("✅ ZIP supprimé dans l’app.", true);
           const d = await getDoc(doc(db,"events",prestationId,"missions",missionType));
@@ -498,10 +497,7 @@
       const files = Array.from(photosInput.files || []).filter(f => (f?.type || "").startsWith("image/"));
       renderLocalThumbs(files);
 
-      if(!files.length){
-        hidePhotosHint();
-        return;
-      }
+      if(!files.length){ hidePhotosHint(); return; }
 
       if(files.length > MAX_PHOTOS){
         showPhotosHint(`⚠️ Trop de photos : ${files.length}. Limite ${MAX_PHOTOS}.`, false);
@@ -520,13 +516,53 @@
       showPhotosHint(`✅ ${files.length} photo(s) sélectionnée(s).`, true);
     });
 
+    async function uploadOnePhoto(file, idx, total){
+      const ext = (file.name || "").split(".").pop() || "jpg";
+      const safeExt = ext.replace(/[^\w]+/g,"").slice(0,6) || "jpg";
+      const fname = `${Date.now()}_${idx}_${Math.random().toString(16).slice(2)}.${safeExt}`;
+      const path = `proofPhotos/${prestationId}/${missionType}/${token}/${fname}`;
+      const r = sRef(storage, path);
+
+      const task = uploadBytesResumable(r, file, { contentType: file.type || "image/jpeg" });
+
+      await new Promise((resolve, reject)=>{
+        task.on("state_changed",(snap)=>{
+          const frac = snap.totalBytes ? (snap.bytesTransferred / snap.totalBytes) : 0;
+          const global = ((idx - 1 + frac) / total) * 100;
+          setProgressPhotos(Math.max(1, Math.round(global)), `Upload photo ${idx}/${total}…`);
+        }, reject, resolve);
+      });
+
+      const url = await getDownloadURL(task.snapshot.ref);
+      return {
+        url,
+        path,
+        name: fname,
+        sizeBytes: Number(file.size || 0),
+        createdAtMs: Date.now()
+      };
+    }
+
+    // batch 3 par 3
+    async function uploadInBatches(files, batchSize=3){
+      const out = [];
+      const total = files.length;
+
+      for(let start=0; start<files.length; start += batchSize){
+        const batch = files.slice(start, start + batchSize);
+        const tasks = batch.map((file, j)=> uploadOnePhoto(file, start + j + 1, total));
+        const res = await Promise.all(tasks);
+        out.push(...res);
+      }
+      return out;
+    }
+
     uploadPhotosBtn.addEventListener("click", async ()=>{
       hideAlert();
       hideProgressPhotos();
 
       const files = Array.from(photosInput.files || []).filter(f => (f?.type || "").startsWith("image/"));
       if(!files.length) return showAlert("Choisis des photos (max 20).");
-
       if(files.length > MAX_PHOTOS) return showAlert(`Trop de photos : ${files.length}. Limite ${MAX_PHOTOS}.`);
 
       const tooBig = files.find(f => Number(f.size || 0) > MAX_BYTES);
@@ -534,58 +570,36 @@
 
       lockUI(true);
       try{
-        await preflight();
+        const { tokenDoc, missionRef, missionDoc } = await preflight();
 
-        const urls = [];
-        const total = files.length;
+        setProgressPhotos(1, "Démarrage…");
 
-        for(let i=0;i<files.length;i++){
-          const file = files[i];
-          const ext = (file.name || "").split(".").pop() || "jpg";
-          const safeExt = ext.replace(/[^\w]+/g,"").slice(0,6) || "jpg";
-          const fname = `${Date.now()}_${i+1}_${Math.random().toString(16).slice(2)}.${safeExt}`;
-
-          const path = `proofPhotos/${prestationId}/${missionType}/${token}/${fname}`;
-          const r = sRef(storage, path);
-
-          setProgressPhotos(Math.max(1, Math.round((i/total)*100)), `Upload photo ${i+1}/${total}…`);
-
-          const task = uploadBytesResumable(r, file, { contentType: file.type || "image/jpeg" });
-
-          await new Promise((resolve, reject)=>{
-            task.on("state_changed",(snap)=>{
-              const frac = snap.totalBytes ? (snap.bytesTransferred / snap.totalBytes) : 0;
-              const global = ((i + frac) / total) * 100;
-              setProgressPhotos(Math.max(1, Math.round(global)), `Upload photo ${i+1}/${total}…`);
-            }, reject, resolve);
-          });
-
-          const url = await getDownloadURL(task.snapshot.ref);
-          urls.push(url);
-        }
-
-        // garde-fous
-        const cleanUrls = urls.filter(u => typeof u === "string" && u.trim().length > 0);
-        if(cleanUrls.length !== urls.length) throw new Error("URL invalide détectée (upload incomplet).");
-        if(cleanUrls.length > MAX_PHOTOS) throw new Error("Trop de photos (max 20).");
+        // upload Storage (batch 3)
+        const uploaded = await uploadInBatches(files, 3);
 
         setProgressPhotos(100, "Finalisation…");
 
-        // ✅ IMPORTANT: on envoie TOUJOURS proofToken
-        await updateDoc(doc(db,"events",prestationId),{
-          proofToken: String(token),
-          proofPhotos: cleanUrls,
-          proofPhotosPreview: cleanUrls.slice(0,3)
+        const proofPhotos = uploaded.filter(x => x?.url && x?.path);
+
+        // ✅ write ONLY missions/MENAGE (comme ZIP)
+        await updateDoc(missionRef, {
+          proofPhotos,
+          proofPhotosPreview: proofPhotos.slice(0,3).map(x=>x.url),
+          proofPhotosCount: proofPhotos.length,
+          proofPhotosAtMs: Date.now(),
+          proofPhotosToken: String(token),
+          proofPhotosAgentEmail: String(tokenDoc?.agentEmail || ""),
+          proofPhotosAgentName: String(tokenDoc?.agentName || "")
         });
 
         photosInput.value = "";
         hideProgressPhotos();
-        showAlert(`✅ ${cleanUrls.length} photo(s) envoyée(s).`, true);
+        showAlert(`✅ ${proofPhotos.length} photo(s) envoyée(s).`, true);
 
       }catch(err){
         console.error(err);
         hideProgressPhotos();
-        showAlert("Erreur FIRESTORE update event : " + (err?.code || err?.message || String(err)));
+        showAlert("Erreur envoi photos : " + (err?.code || err?.message || String(err)));
       }finally{
         lockUI(false);
       }
@@ -661,9 +675,7 @@
           agentName: String(tokenDoc?.agentName || "")
         };
 
-        await updateDoc(doc(db,"events",prestationId,"missions",missionType),{
-          proofZip
-        });
+        await updateDoc(doc(db,"events",prestationId,"missions",missionType),{ proofZip });
 
         zipInput.value = "";
         showSizeHintZip(null);
