@@ -1,4 +1,4 @@
-<!-- docs/owner-facturation.html (COMPLET — Owner lit + accepte/refuse devis, requests.type="billing", lecture facture/devis via aperçus, reset unread billing) -->
+<!-- docs/owner-facturation.html (FINAL ROBUST — history from salesDocuments ownerUid, pending optional from requests) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -200,21 +200,6 @@
       color:#fff;
       box-shadow:0 10px 22px rgba(0,0,0,0.10);
     }
-
-    /* optional dots (if you add spans in HTML later) */
-    .dot{
-      display:none;
-      position:absolute;
-      top:6px; right:12px;
-      min-width:18px;
-      padding:2px 6px;
-      border-radius:999px;
-      background:var(--violet-main);
-      color:#fff;
-      font-size:11px;
-      font-weight:1000;
-      line-height:1.2;
-    }
   </style>
 </head>
 
@@ -238,7 +223,7 @@
           <span class="tiny" id="pendingCount">—</span>
         </div>
         <div class="tiny" style="margin-top:8px;">
-          Ici tu acceptes ou refuses les devis envoyés par la conciergerie.
+          (Optionnel) Si la conciergerie utilise “requests billing”, tu pourras accepter/refuser ici.
         </div>
         <div class="alert" id="alertPending"></div>
         <div id="pendingList" class="list"></div>
@@ -250,14 +235,10 @@
           <span class="tiny" id="historyCount">—</span>
         </div>
         <div class="tiny" style="margin-top:8px;">
-          Devis / factures disponibles (lecture seule). Tu peux ouvrir l’aperçu puis “Imprimer” → “Enregistrer en PDF”.
+          Devis / factures disponibles (lecture seule). Ouvre l’aperçu puis “Imprimer” → “Enregistrer en PDF”.
         </div>
         <div class="alert" id="alertHistory"></div>
         <div id="historyList" class="list"></div>
-
-        <div class="tiny" style="margin-top:10px;">
-          Astuce impression : ouvre l’aperçu puis “Imprimer” → “Enregistrer en PDF”.
-        </div>
       </section>
     </div>
   </div>
@@ -278,7 +259,6 @@
     updateDoc, serverTimestamp
   } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
-  // ====== UI ======
   const pendingList   = document.getElementById("pendingList");
   const historyList   = document.getElementById("historyList");
   const pendingCount  = document.getElementById("pendingCount");
@@ -326,21 +306,19 @@
     return new Intl.NumberFormat("fr-FR", { style:"currency", currency:"EUR" }).format(n);
   }
   function statusPill(s){
-    const v = String(s || "pending_owner").toLowerCase();
-    if(v === "accepted") return `<span class="status ok">accepté</span>`;
-    if(v === "refused") return `<span class="status bad">refusé</span>`;
-    if(v === "paid") return `<span class="status ok">payé</span>`;
-    if(v === "pending_owner") return `<span class="status">à valider</span>`;
-    if(v === "sent") return `<span class="status">envoyé</span>`;
-    return `<span class="status">${esc(v)}</span>`;
+    const v = String(s || "").toUpperCase().trim();
+    if(v === "ISSUED") return `<span class="status ok">émise</span>`;
+    if(v === "PAID") return `<span class="status ok">payée</span>`;
+    if(v === "CANCELLED") return `<span class="status bad">annulée</span>`;
+    if(v === "DRAFT") return `<span class="status">brouillon</span>`;
+    return v ? `<span class="status">${esc(v.toLowerCase())}</span>` : `<span class="status">—</span>`;
   }
   function docTypeLabel(t){
-    const v = String(t||"").toLowerCase();
-    if(v === "quote") return "Devis";
-    if(v === "invoice") return "Facture";
+    const v = String(t||"").toUpperCase().trim();
+    if(v === "QUOTE") return "Devis";
+    if(v === "INVOICE") return "Facture";
     return "Document";
   }
-
   function getParam(name){
     return (new URLSearchParams(location.search).get(name) || "").trim();
   }
@@ -351,9 +329,8 @@
       : `profil-proprietaire.html?self=1`;
   }
 
-  // ====== State ======
-  let currentUser = null;
-  let unsubBills = null;
+  let unsubSales = null;
+  let unsubRequests = null;
 
   async function guardOwnerProfile(user){
     const us = await getDoc(doc(db, "users", user.uid));
@@ -371,6 +348,7 @@
     return { ok:true, ownerDocId: od };
   }
 
+  // --------- OPTIONAL requests (accept/refuse) ----------
   async function setDecision(requestId, status, note=""){
     const ref = doc(db, "requests", requestId);
     await updateDoc(ref, {
@@ -380,58 +358,25 @@
       updatedAt: serverTimestamp()
     });
   }
-
-  function buildOpenHref(r){
+  function buildOpenHrefFromRequest(r){
     const salesDocId = String(r.salesDocId || r.docId || "").trim();
     const dtype = String(r.docType || "").toLowerCase();
-
     if(!salesDocId) return "";
-
-    // ✅ lecture seule via pages d’aperçu (pas facture.html)
-    if(dtype === "invoice"){
-      return `facture-apercu.html?docId=${encodeURIComponent(salesDocId)}&owner=1`;
-    }
-    if(dtype === "quote"){
-      return `devis-apercu.html?docId=${encodeURIComponent(salesDocId)}&owner=1`;
-    }
-    // fallback : tenter facture-apercu
+    if(dtype === "invoice") return `facture-apercu.html?docId=${encodeURIComponent(salesDocId)}&owner=1`;
+    if(dtype === "quote") return `devis-apercu.html?docId=${encodeURIComponent(salesDocId)}&owner=1`;
     return `facture-apercu.html?docId=${encodeURIComponent(salesDocId)}&owner=1`;
   }
-
-  function renderBillingRow(r, mode="history"){
-    // expected fields:
-    // docType: "invoice"|"quote"
-    // number, homeName, totalTTC, salesDocId, status, createdAt, note(optional)
-    const type = docTypeLabel(r.docType);
+  function renderPendingRequestRow(r){
+    const type = "Devis";
     const number = r.number ? `#${esc(r.number)}` : "—";
     const home = esc(r.homeName || r.home || "—");
     const total = money(r.totalTTC);
     const when = fmt(r.createdAt);
     const note = String(r.note || "").trim();
-
-    const openHref = buildOpenHref(r);
+    const openHref = buildOpenHrefFromRequest(r);
 
     const el = document.createElement("div");
     el.className = "item";
-
-    const topRight = `${esc(when)} ${statusPill(r.status)}`;
-
-    let actionsHtml = "";
-
-    if(openHref){
-      actionsHtml += `<a class="btn" href="${esc(openHref)}">Ouvrir</a>`;
-    }
-
-    // accept/refuse UNIQUEMENT pour devis en pending_owner
-    const dtype = String(r.docType || "").toLowerCase();
-    const isPending = String(r.status || "").toLowerCase() === "pending_owner";
-
-    if(mode === "pending" && dtype === "quote" && isPending){
-      actionsHtml += `
-        <button class="btn primary" data-act="accept">Accepter</button>
-        <button class="btn danger" data-act="refuse">Refuser</button>
-      `;
-    }
 
     const bodyLines = [
       `Logement : ${home}`,
@@ -442,109 +387,177 @@
     el.innerHTML = `
       <div class="meta">
         <span><b>${esc(type)}</b> • ${number}</span>
-        <span>${topRight}</span>
+        <span>${esc(when)} <span class="status">à valider</span></span>
       </div>
       <p class="msg">${bodyLines.join("\n")}</p>
       <div class="row">
         <span></span>
         <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;">
-          ${actionsHtml || `<span class="tiny">—</span>`}
+          ${openHref ? `<a class="btn" href="${esc(openHref)}">Ouvrir</a>` : ``}
+          <button class="btn primary" data-act="accept">Accepter</button>
+          <button class="btn danger" data-act="refuse">Refuser</button>
         </div>
       </div>
     `;
 
-    if(mode === "pending" && dtype === "quote" && isPending){
-      const acceptBtn = el.querySelector('[data-act="accept"]');
-      const refuseBtn = el.querySelector('[data-act="refuse"]');
+    const acceptBtn = el.querySelector('[data-act="accept"]');
+    const refuseBtn = el.querySelector('[data-act="refuse"]');
 
-      acceptBtn?.addEventListener("click", async ()=>{
-        if(!confirm("Confirmer l’acceptation de ce devis ?")) return;
-        acceptBtn.disabled = true; refuseBtn.disabled = true;
-        try{
-          await setDecision(r.id, "accepted", "");
-        }catch(err){
-          console.error(err);
-          showAlert(alertPending, "Erreur acceptation : " + (err?.message || "inconnue"));
-        }finally{
-          acceptBtn.disabled = false; refuseBtn.disabled = false;
-        }
-      });
+    acceptBtn?.addEventListener("click", async ()=>{
+      if(!confirm("Confirmer l’acceptation de ce devis ?")) return;
+      acceptBtn.disabled = true; refuseBtn.disabled = true;
+      try{
+        await setDecision(r.id, "accepted", "");
+      }catch(err){
+        console.error(err);
+        showAlert(alertPending, "Erreur acceptation : " + (err?.message || "inconnue"));
+      }finally{
+        acceptBtn.disabled = false; refuseBtn.disabled = false;
+      }
+    });
 
-      refuseBtn?.addEventListener("click", async ()=>{
-        const note = prompt("Motif du refus (optionnel) :", "") ?? "";
-        if(!confirm("Confirmer le refus ?")) return;
-        acceptBtn.disabled = true; refuseBtn.disabled = true;
-        try{
-          await setDecision(r.id, "refused", note.trim());
-        }catch(err){
-          console.error(err);
-          showAlert(alertPending, "Erreur refus : " + (err?.message || "inconnue"));
-        }finally{
-          acceptBtn.disabled = false; refuseBtn.disabled = false;
-        }
-      });
-    }
+    refuseBtn?.addEventListener("click", async ()=>{
+      const note = prompt("Motif du refus (optionnel) :", "") ?? "";
+      if(!confirm("Confirmer le refus ?")) return;
+      acceptBtn.disabled = true; refuseBtn.disabled = true;
+      try{
+        await setDecision(r.id, "refused", note.trim());
+      }catch(err){
+        console.error(err);
+        showAlert(alertPending, "Erreur refus : " + (err?.message || "inconnue"));
+      }finally{
+        acceptBtn.disabled = false; refuseBtn.disabled = false;
+      }
+    });
 
     return el;
   }
 
-  function listenBilling(uid){
-    if(unsubBills) unsubBills();
+  function listenOptionalRequests(uid){
+    if(unsubRequests) unsubRequests();
+    pendingList.innerHTML = "";
+    pendingCount.textContent = "0";
     hideAlert(alertPending);
-    hideAlert(alertHistory);
 
-    // requests: type="billing" + ownerUid + orderBy(createdAt)
+    // ⚠️ OPTIONAL: si rules/index pas prêts, on n'empêche pas la page de fonctionner
     const qb = query(
       collection(db, "requests"),
       where("ownerUid", "==", uid),
       where("type", "==", "billing"),
-      orderBy("createdAt", "desc")
+      where("status", "==", "pending_owner")
     );
 
-    unsubBills = onSnapshot(qb, (snap)=>{
-      const items = snap.docs.map(d => ({ id:d.id, ...(d.data()||{}) }));
+    unsubRequests = onSnapshot(qb, (snap)=>{
+      const items = snap.docs.map(d => ({ id:d.id, ...(d.data()||{}) }))
+        .filter(x => String(x.docType||"").toLowerCase() === "quote");
 
-      // pending only for quotes
-      const pending = items.filter(x =>
-        String(x.status||"").toLowerCase() === "pending_owner"
-        && String(x.docType||"").toLowerCase() === "quote"
-      );
-
-      const history = items.filter(x => !(String(x.status||"").toLowerCase() === "pending_owner" && String(x.docType||"").toLowerCase() === "quote"));
-
-      pendingCount.textContent = String(pending.length);
-      historyCount.textContent = String(history.length);
-
+      pendingCount.textContent = String(items.length);
       pendingList.innerHTML = "";
-      historyList.innerHTML = "";
 
-      if(!pending.length){
+      if(!items.length){
         pendingList.innerHTML = `
           <div class="item">
             <div class="meta"><span>Aucun devis à valider</span><span>—</span></div>
-            <p class="msg">Quand la conciergerie t’enverra un devis à valider, il apparaîtra ici.</p>
+            <p class="msg">Si la conciergerie utilise “requests billing”, les devis à valider apparaîtront ici.</p>
           </div>
         `;
       }else{
-        for(const r of pending){
-          pendingList.appendChild(renderBillingRow(r, "pending"));
+        for(const r of items){
+          pendingList.appendChild(renderPendingRequestRow(r));
         }
       }
+    }, (err)=>{
+      console.warn("requests listener:", err?.message || err);
+      pendingCount.textContent = "—";
+      pendingList.innerHTML = `
+        <div class="item">
+          <div class="meta"><span>À valider indisponible</span><span>—</span></div>
+          <p class="msg">La partie “validation” n’est pas activée (rules/index/collection). Aucun blocage : l’historique reste disponible.</p>
+        </div>
+      `;
+    });
+  }
 
-      if(!history.length){
+  // --------- HISTORY from salesDocuments (source of truth) ----------
+  function buildOpenHrefFromSales(d){
+    const id = String(d.id || "").trim();
+    if(!id) return "";
+    const type = String(d.type || "").toUpperCase().trim();
+    if(type === "QUOTE") return `devis-apercu.html?docId=${encodeURIComponent(id)}&owner=1`;
+    return `facture-apercu.html?docId=${encodeURIComponent(id)}&owner=1`;
+  }
+
+  function renderSalesRow(d){
+    const type = docTypeLabel(d.type);
+    const number =
+      String(d.invoiceNumber || d.quoteNumber || "").trim()
+        ? ("#" + esc(String(d.invoiceNumber || d.quoteNumber).trim()))
+        : "—";
+
+    const home = esc(d.homeName || d.home || "—");
+    const total = money(d.totalTTC);
+    const when = fmt(d.createdAt || d.updatedAt);
+    const openHref = buildOpenHrefFromSales(d);
+
+    const status =
+      String(d.type || "").toUpperCase().trim() === "INVOICE"
+        ? statusPill(d.invoiceStatus || d.commercialStatus || "")
+        : `<span class="status">${esc(String(d.quoteStatus || d.commercialStatus || "—").toLowerCase())}</span>`;
+
+    const el = document.createElement("div");
+    el.className = "item";
+
+    el.innerHTML = `
+      <div class="meta">
+        <span><b>${esc(type)}</b> • ${number}</span>
+        <span>${esc(when)} ${status}</span>
+      </div>
+      <p class="msg">${[
+        `Logement : ${home}`,
+        `Montant TTC : ${esc(total)}`
+      ].join("\n")}</p>
+      <div class="row">
+        <span></span>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;">
+          ${openHref ? `<a class="btn" href="${esc(openHref)}">Ouvrir</a>` : `<span class="tiny">—</span>`}
+        </div>
+      </div>
+    `;
+    return el;
+  }
+
+  function listenSalesHistory(uid){
+    if(unsubSales) unsubSales();
+    hideAlert(alertHistory);
+    historyList.innerHTML = "";
+    historyCount.textContent = "—";
+
+    const qs = query(
+      collection(db, "salesDocuments"),
+      where("ownerUid", "==", uid),
+      orderBy("createdAt", "desc")
+    );
+
+    unsubSales = onSnapshot(qs, (snap)=>{
+      const items = snap.docs.map(d => ({ id:d.id, ...(d.data()||{}) }));
+
+      historyCount.textContent = String(items.length);
+      historyList.innerHTML = "";
+
+      if(!items.length){
         historyList.innerHTML = `
           <div class="item">
-            <div class="meta"><span>Aucun historique</span><span>—</span></div>
-            <p class="msg">Les devis/factures envoyés apparaîtront ici.</p>
+            <div class="meta"><span>Aucun document</span><span>—</span></div>
+            <p class="msg">Aucun devis/facture pour le moment.</p>
           </div>
         `;
       }else{
-        for(const r of history){
-          historyList.appendChild(renderBillingRow(r, "history"));
+        for(const d of items){
+          historyList.appendChild(renderSalesRow(d));
         }
       }
 
-      // Owner-side: page ouverte => unread billing = 0
+      // page ouverte => reset
       resetUnreadBilling();
 
     }, (err)=>{
@@ -554,24 +567,23 @@
         showAlert(
           alertHistory,
           "⛔ Index Firestore manquant.\n" +
-          "Crée l’index composite: requests (ownerUid ASC, type ASC, createdAt DESC).\n" +
-          "Puis recharge la page.",
+          "Crée l’index composite: salesDocuments (ownerUid ASC, createdAt DESC).\n" +
+          "Puis recharge.",
           false
         );
       }else if(msg.toLowerCase().includes("permission")){
         showAlert(
           alertHistory,
-          "⛔ Permission refusée sur requests.\n" +
-          "Rules attendues: read autorisé si ownerUid == auth.uid (et type=='billing').",
+          "⛔ Permission refusée sur salesDocuments.\n" +
+          "Rule attendue: read autorisé si ownerUid == auth.uid.",
           false
         );
       }else{
-        showAlert(alertHistory, "Erreur chargement facturation : " + msg, false);
+        showAlert(alertHistory, "Erreur chargement historique : " + msg, false);
       }
     });
   }
 
-  // Boot
   onAuthStateChanged(auth, async (user)=>{
     if(!user){
       const tok = getParam("token");
@@ -582,15 +594,16 @@
     const g = await guardOwnerProfile(user);
     if(!g.ok) return;
 
-    currentUser = user;
-
     resetUnreadBilling();
-    listenBilling(user.uid);
+
+    // ✅ history = salesDocuments (obligatoire)
+    listenSalesHistory(user.uid);
+
+    // ✅ pending = requests (optionnel, ne doit jamais bloquer)
+    listenOptionalRequests(user.uid);
   });
 
-  window.addEventListener("focus", ()=>{
-    resetUnreadBilling();
-  });
+  window.addEventListener("focus", ()=> resetUnreadBilling());
 </script>
 
 </body>
