@@ -1,4 +1,4 @@
-<!-- docs/login.html (FINAL — reset mdp + erreurs + flux owner/conciergerie + merge safety clients) -->
+<!-- docs/login.html (FINAL — reset mdp + erreurs + flux owner/conciergerie + merge safety clients + LINK owners.ownerUid) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -119,7 +119,7 @@ import {
   sendPasswordResetEmail
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
 import {
-  doc, getDoc, setDoc, serverTimestamp
+  doc, getDoc, setDoc, updateDoc, serverTimestamp
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
 const form = document.getElementById("loginForm");
@@ -161,7 +161,7 @@ function humanAuthError(err){
 
 function normEmail(s){ return (s||"").trim().toLowerCase(); }
 
-// Filet de sécurité : s'assurer que clients/{c_owner_ownerDocId} existe
+// ✅ 1) Filet de sécurité : s'assurer que clients/{c_owner_ownerDocId} existe
 async function ensureClientDocForOwner(user){
   try{
     const us = await getDoc(doc(db,"users", user.uid));
@@ -182,14 +182,47 @@ async function ensureClientDocForOwner(user){
       ownerDocId: ownerDocId,
       ownerUid: user.uid,
       email: email,
+      emailLower: email,
       updatedAt: serverTimestamp()
     }, { merge:true });
 
-    return { ok:true, ownerDocId, conciergerieUid };
+    return { ok:true, ownerDocId, conciergerieUid, emailLower: email };
   }catch(e){
     console.warn("ensureClientDocForOwner:", e?.message || e);
     return { ok:false, reason:"error" };
   }
+}
+
+// ✅ 2) FIX IMPORTANT : raccorder owners/{ownerDocId}.ownerUid = auth.uid
+async function ensureOwnerUidOnOwners(ownerDocId, ownerUid, emailLower=""){
+  if(!ownerDocId || !ownerUid) return { ok:false, reason:"missing_params" };
+
+  const ref = doc(db, "owners", ownerDocId);
+  const snap = await getDoc(ref);
+  if(!snap.exists()) return { ok:false, reason:"owner_doc_missing" };
+
+  const o = snap.data() || {};
+  const cur = String(o.ownerUid || o.userUid || "").trim();
+
+  // déjà OK
+  if(cur === ownerUid) return { ok:true, already:true };
+
+  // sécurité : déjà lié à un autre compte
+  if(cur && cur !== ownerUid){
+    return { ok:false, reason:"ownerUid_already_set_other" };
+  }
+
+  const patch = {
+    ownerUid: ownerUid,
+    updatedAt: serverTimestamp(),
+    ownerUidLinkedAt: serverTimestamp()
+  };
+  if(emailLower && !String(o.emailLower || "").trim()){
+    patch.emailLower = emailLower;
+  }
+
+  await updateDoc(ref, patch);
+  return { ok:true, linked:true };
 }
 
 resetLink.addEventListener("click", async (e)=>{
@@ -237,10 +270,23 @@ form.addEventListener("submit", async (e)=>{
         return;
       }
 
-      // sinon : filet de sécurité (merge minimal clients)
-      await ensureClientDocForOwner(user);
+      // sinon : merge minimal (clients) + FIX owners.ownerUid
+      const res = await ensureClientDocForOwner(user);
 
-      // redirect (tu peux forcer profil si tu veux)
+      if(res?.ok && res.ownerDocId){
+        const link = await ensureOwnerUidOnOwners(res.ownerDocId, user.uid, res.emailLower || email);
+
+        if(link?.ok === false && link.reason === "ownerUid_already_set_other"){
+          showMsg(
+            "⛔ Ce propriétaire est déjà rattaché à un autre compte.\n" +
+            "Vérifie que tu utilises le bon email / la bonne invitation.",
+            false
+          );
+          submitBtn.disabled = false;
+          return;
+        }
+      }
+
       location.replace("owner-dashboard.html");
       return;
     }
