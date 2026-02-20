@@ -1,4 +1,4 @@
-<!-- docs/preuves.html (FINAL — multi-photos + ZIP fallback, agent token, write ONLY missions/MENAGE like ZIP) -->
+<!-- docs/preuves.html (FINAL — multi-photos + ZIP fallback, agent token, write ONLY missions/{type}, type via URL) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -170,16 +170,16 @@
 
     <div class="wrap">
       <div>
-        <h1>Preuves photos (global ménage)</h1>
+        <h1>Preuves photos</h1>
         <div class="sub" id="subLine">Chargement…</div>
         <div class="alert" id="alertBox"></div>
       </div>
 
       <!-- Photos -->
       <section class="card">
-        <div class="mini">
+        <div class="mini" id="photoMini">
           <b>Le plus simple :</b> sélectionne 5/10/20 photos et envoie-les d’un coup.<br>
-          Mission <b>MENAGE</b> • Limite : <b>20 photos</b> • <b>30 Mo/photo</b>.
+          Limite : <b>20 photos</b> • <b>30 Mo/photo</b>.
         </div>
 
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:space-between;margin-top:8px;">
@@ -202,7 +202,7 @@
 
       <!-- ZIP -->
       <section class="card">
-        <div class="mini">
+        <div class="mini" id="zipMini">
           <b>Alternative :</b> envoie <b>un ZIP</b> (10/15 photos) • Limite <b>30 Mo</b>.
         </div>
 
@@ -251,6 +251,9 @@
     const chipLine = document.getElementById("chipLine");
     const backBtn = document.getElementById("backBtn");
 
+    const photoMini = document.getElementById("photoMini");
+    const zipMini = document.getElementById("zipMini");
+
     const photosInput = document.getElementById("photosInput");
     const clearPhotosBtn = document.getElementById("clearPhotosBtn");
     const uploadPhotosBtn = document.getElementById("uploadPhotosBtn");
@@ -268,9 +271,6 @@
     const progressBarZip = document.getElementById("progressBarZip");
     const zipInfo = document.getElementById("zipInfo");
     const sizeHintZip = document.getElementById("sizeHintZip");
-
-    // MENAGE global
-    const missionType = "MENAGE";
 
     // Storage delete désactivé
     const ALLOW_STORAGE_DELETE = false;
@@ -361,9 +361,19 @@
       return (/\.zip$/i.test(clean)) ? clean : (clean + ".zip");
     }
 
-    // --------- PRE-FLIGHT (token + mission MENAGE) ----------
+    // --------- PARAMS ----------
     const token = qs("token");
     const prestationId = qs("prestationId");
+
+    // mission type comes from URL: ?type=MENAGE|LINGE|CHECKIN|CHECKOUT|KIT...
+    // keep MENAGE as default fallback (old links)
+    const missionType = (qs("type") || "MENAGE").toUpperCase().trim();
+
+    // set UI labels without exposing complexity
+    // you can keep it generic; still useful for debugging
+    photoMini.innerHTML =
+      `<b>Le plus simple :</b> sélectionne 5/10/20 photos et envoie-les d’un coup.<br>` +
+      `Mission <b>${missionType}</b> • Limite : <b>${MAX_PHOTOS} photos</b> • <b>${fmtSize(MAX_BYTES)}/photo</b>.`;
 
     function tokenValid(d){
       if(!d?.active) return false;
@@ -387,15 +397,23 @@
 
       const allowedTypes = (Array.isArray(tokenDoc.missionTypes) && tokenDoc.missionTypes.length)
         ? tokenDoc.missionTypes.map(x => String(x||"").toUpperCase())
-        : ["MENAGE"];
+        : [missionType];
 
-      if(!allowedTypes.includes("MENAGE")) throw new Error("Ce token n’autorise pas MENAGE. Regénère le lien.");
+      if(!allowedTypes.includes(missionType)){
+        throw new Error(`Ce token n’autorise pas ${missionType}. Regénère le lien.`);
+      }
 
       const mRef = doc(db,"events",prestationId,"missions",missionType);
       const mSnap = await getDoc(mRef);
-      if(!mSnap.exists()) throw new Error("Mission MENAGE non initialisée. Regénère le lien.");
+      if(!mSnap.exists()) throw new Error(`Mission ${missionType} non initialisée. Regénère le lien.`);
       const m = mSnap.data() || {};
-      if(String(m.dayToken || "") !== String(token)) throw new Error("Token non associé à cette mission (MENAGE).");
+      if(String(m.dayToken || "") !== String(token)) throw new Error(`Token non associé à cette mission (${missionType}).`);
+
+      // optional: guard opStatus (if present)
+      const st = String(m.opStatus || "").toUpperCase().trim();
+      if(st && !["A_VALIDER","EN_COURS","ASSIGNEE"].includes(st)){
+        throw new Error(`Mission verrouillée (opStatus=${st}).`);
+      }
 
       return { tokenDoc, missionRef: mRef, missionDoc: m };
     }
@@ -471,7 +489,7 @@
         return;
       }
 
-      chipLine.textContent = "token: " + token;
+      chipLine.textContent = `token: ${token} • ${missionType}`;
       backBtn.href = `agent.html?token=${encodeURIComponent(token)}&prestationId=${encodeURIComponent(prestationId)}`;
 
       try{
@@ -520,6 +538,7 @@
       const ext = (file.name || "").split(".").pop() || "jpg";
       const safeExt = ext.replace(/[^\w]+/g,"").slice(0,6) || "jpg";
       const fname = `${Date.now()}_${idx}_${Math.random().toString(16).slice(2)}.${safeExt}`;
+
       const path = `proofPhotos/${prestationId}/${missionType}/${token}/${fname}`;
       const r = sRef(storage, path);
 
@@ -579,22 +598,31 @@
 
         setProgressPhotos(100, "Finalisation…");
 
-        const proofPhotos = uploaded.filter(x => x?.url && x?.path);
+        // merge with existing (avoid overwrite if agent re-uploads)
+        const existing = Array.isArray(missionDoc?.proofPhotos) ? missionDoc.proofPhotos : [];
+        const next = [...existing, ...uploaded];
 
-        // ✅ write ONLY missions/MENAGE (comme ZIP)
+        if(next.length > MAX_PHOTOS){
+          throw new Error(`Trop de photos au total (${next.length}). Limite ${MAX_PHOTOS}.`);
+        }
+
+        // ✅ write ONLY mission doc
         await updateDoc(missionRef, {
-          proofPhotos,
-          proofPhotosPreview: proofPhotos.slice(0,3).map(x=>x.url),
-          proofPhotosCount: proofPhotos.length,
+          proofPhotos: next,
+          proofPhotosPreview: next.slice(0,3).map(x=> (typeof x === "string" ? x : x.url)).filter(Boolean),
+          proofPhotosCount: next.length,
           proofPhotosAtMs: Date.now(),
           proofPhotosToken: String(token),
           proofPhotosAgentEmail: String(tokenDoc?.agentEmail || ""),
-          proofPhotosAgentName: String(tokenDoc?.agentName || "")
+          proofPhotosAgentName: String(tokenDoc?.agentName || ""),
+          // keep opStatus stable; only set if missing
+          opStatus: (missionDoc?.opStatus ? missionDoc.opStatus : "EN_COURS"),
+          updatedAt: new Date()
         });
 
         photosInput.value = "";
         hideProgressPhotos();
-        showAlert(`✅ ${proofPhotos.length} photo(s) envoyée(s).`, true);
+        showAlert(`✅ ${uploaded.length} photo(s) envoyée(s). Total : ${next.length}.`, true);
 
       }catch(err){
         console.error(err);
@@ -675,7 +703,7 @@
           agentName: String(tokenDoc?.agentName || "")
         };
 
-        await updateDoc(doc(db,"events",prestationId,"missions",missionType),{ proofZip });
+        await updateDoc(doc(db,"events",prestationId,"missions",missionType),{ proofZip, updatedAt: new Date() });
 
         zipInput.value = "";
         showSizeHintZip(null);
