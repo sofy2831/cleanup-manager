@@ -639,6 +639,45 @@
       subLine.textContent = "";
     }
 
+    // ✅ FIX CRITIQUE : toujours resynchroniser dayToken des missions (si non verrouillées)
+    async function upsertMissionForToken({ tokenId, email, name, missionType }) {
+      const mRef = doc(db, "events", prestationId, "missions", missionType);
+
+      let locked = false;
+      try{
+        const mSnap = await getDoc(mRef);
+        if(mSnap.exists()){
+          const m = mSnap.data() || {};
+          locked = !!m.locked;
+        }
+      }catch(e){
+        // si read fail -> on continue avec merge, rules conciergerie devraient permettre
+        locked = false;
+      }
+
+      // si verrouillée, ne pas toucher au token (mission finie)
+      if(locked) return;
+
+      await setDoc(mRef, {
+        type: missionType,
+        missionId: missionType,
+        conciergerieUid: currentUser.uid,
+        prestationId: String(prestationId),
+
+        locked: false,
+        agentDone: false,
+        status: "ASSIGNEE",
+
+        // ✅ dayToken toujours = tokenId courant
+        dayToken: tokenId,
+
+        assignedToEmail: email,
+        assignedToName: name,
+
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+    }
+
     async function generateLink(){
       hideAlert();
 
@@ -698,24 +737,9 @@
         createdAt: serverTimestamp()
       });
 
-      // backfill missions (toutes celles du token)
+      // ✅ backfill missions : resync dayToken partout (si pas verrouillé)
       for (const t of missionTypes) {
-        await setDoc(doc(db, "events", prestationId, "missions", t), {
-          type: t,
-          missionId: t,
-          conciergerieUid: currentUser.uid,
-          prestationId: String(prestationId),
-
-          locked: false,
-          agentDone: false,
-          photos: [],
-          status: "ASSIGNEE",
-
-          dayToken: tokenId,
-          assignedToEmail: email,
-          assignedToName: name,
-          updatedAt: serverTimestamp()
-        }, { merge: true });
+        await upsertMissionForToken({ tokenId, email, name, missionType: t });
       }
 
       // parent event (conciergerie only)
