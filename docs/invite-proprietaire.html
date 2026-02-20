@@ -537,9 +537,12 @@
       return "profil-proprietaire.html?" + p.toString();
     }
 
+    // ✅ UNIFIER l'ID client : clients/c_owner_{ownerDocId}
     async function upsertClient(ownerDocId, conciergerieUid, payload){
-      const ref = doc(db, "clients", String(ownerDocId));
+      const clientId = "c_owner_" + String(ownerDocId);
+      const ref = doc(db, "clients", clientId);
       await setDoc(ref, {
+        clientId,
         ownerDocId: String(ownerDocId),
         conciergerieUid: String(conciergerieUid),
         type: "OWNER",
@@ -556,7 +559,6 @@
       const tid = stableThreadId(conciergerieUid, ownerDocId);
       const tRef = doc(db, "threads", tid);
 
-      // on merge pour éviter d’écraser si déjà créé
       await setDoc(tRef, {
         conciergerieUid: String(conciergerieUid),
         ownerDocId: String(ownerDocId),
@@ -694,6 +696,7 @@
           updatedAt: serverTimestamp()
         }, { merge:true });
 
+        // ✅ IMPORTANT: écrire ownerUid (utilisé par tes rules salesDocuments)
         await setDoc(doc(db, "owners", ownerDocId), {
           ownerDocId,
           conciergerieUid,
@@ -701,18 +704,21 @@
           emailLower: userEmail,
           fullname,
           phone,
-          uid: user.uid,
+
+          ownerUid: user.uid, // ✅ CANON
           status: "ACTIVE",
           isActive: true,
+
           address: { street:"", address2:"", zip:"", city:"", country:"FR" },
           acceptedAt: serverTimestamp(),
           updatedAt: serverTimestamp()
         }, { merge:true });
 
+        // ✅ clients/c_owner_{ownerDocId} + ownerUid
         await upsertClient(ownerDocId, conciergerieUid, {
           status: "ACTIVE",
           isActive: true,
-          uid: user.uid,
+          ownerUid: user.uid,
           email: userEmail,
           emailLower: userEmail,
           fullname,
@@ -728,7 +734,6 @@
 
         const linkRes = await autoLinkHomesForOwner(conciergerieUid, userEmail, token, ownerDocId, user.uid);
 
-        // ✅ Thread créé ici (à l’acceptation)
         const meta = {
           ownerName: fullname || "Propriétaire",
           ownerEmailLower: userEmail
@@ -907,9 +912,11 @@
               emailLower: email,
               fullname: name || "",
               phone: "",
+
+              ownerUid: "",            /* ✅ champ canon, vide tant que pas accepté */
               status: "INVITED",
               isActive: true,
-              uid: "",
+
               inviteToken: t,
               invitedBy: user.email || user.uid,
               address: { street:"", address2:"", zip:"", city:"", country:"FR" },
@@ -917,10 +924,12 @@
               updatedAt: serverTimestamp()
             }, { merge:true });
 
+            // ✅ clients/c_owner_{ownerDocId} (unique)
             await upsertClient(ownerDocId, user.uid, {
               status: "INVITED",
               isActive: true,
-              uid: "",
+              ownerUid: "",
+
               email,
               emailLower: email,
               fullname: name || "",
