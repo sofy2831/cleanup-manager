@@ -1,4 +1,4 @@
-<!-- docs/avoir.html (FINAL — clone facture.html adapté AVOIR : salesDocuments CREDIT + lien facture + patch facture CREDITED + bouton aperçu) -->
+<!-- docs/avoir.html (FINAL — Option A: facture.creditDocId + facture.creditedAt ; avoir = salesDocuments type CREDIT) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -378,7 +378,7 @@
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
       doc, getDoc, setDoc, updateDoc, serverTimestamp, runTransaction,
-      collection, query, where, orderBy, getDocs, limit, addDoc
+      collection, query, where, getDocs, limit, addDoc
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     // UI
@@ -681,15 +681,13 @@
       renderClientHeaderFromDoc(inv);
       renderLinesAndTotalsFromInvoice();
 
-      // lien / debug
       const invId = String(inv.id || "").trim();
       const credId = String(cred.id || "").trim();
       linkKv.innerHTML = `
         <div class="line"><b>invoiceDocId</b> : ${esc(invId || "—")}</div>
-        <div class="line"><b>avoirDocId</b> : ${esc(credId || "—")}</div>
+        <div class="line"><b>creditDocId</b> : ${esc(credId || "—")}</div>
       `;
 
-      // notes UI
       if(creditReasonEl.value === "" && cred.creditReason) creditReasonEl.value = cred.creditReason;
       if(creditNotesEl.value === "" && cred.creditNotes) creditNotesEl.value = cred.creditNotes;
 
@@ -698,7 +696,6 @@
     }
 
     function buildBackLink(){
-      // retour naturel: facture source si on vient d'une facture
       const fromDocId = getParam("fromDocId");
       const docId = getParam("docId");
 
@@ -707,15 +704,11 @@
         backLink.textContent = "← Facture";
         return;
       }
-
       if(docId){
-        // si on ouvre un avoir existant, on tente de revenir à la facture liée si on la connaît
-        // fallback factures-liste
         backLink.href = "factures-liste.html";
         backLink.textContent = "← Retour";
         return;
       }
-
       backLink.href = "factures-liste.html";
       backLink.textContent = "← Retour";
     }
@@ -727,7 +720,6 @@
         ...cred,
         creditReason: String(creditReasonEl.value || "").trim(),
         creditNotes: String(creditNotesEl.value || "").trim(),
-        // pour l'aperçu, on embarque une copie facture minimale (évite re-fetch si draft)
         _invoice: {
           id: inv.id,
           invoiceNumber: inv.invoiceNumber || "",
@@ -793,39 +785,49 @@
     }
 
     async function findExistingCreditForInvoice(invId){
-      // stratégie sans composite index : on charge les derniers CREDIT et on filtre côté client
+      // Sans composite index : PAS de orderBy ici.
       const qC = query(
         collection(db, "salesDocuments"),
         where("conciergerieUid", "==", currentUser.uid),
         where("type", "==", "CREDIT"),
-        orderBy("createdAt", "desc"),
         limit(200)
       );
 
       const snap = await getDocs(qC);
-      const arr = snap.docs.map(d => ({ id:d.id, ...(d.data()||{}) }));
-      const found = arr.find(x => String(x.fromInvoiceDocId||"").trim() === String(invId).trim());
-      return found ? found.id : "";
+      const arr = snap.docs.map(d => ({ id:d.id, ...(d.data()||{}) }))
+        .filter(x => String(x.fromInvoiceDocId||"").trim() === String(invId).trim());
+
+      if(!arr.length) return "";
+
+      // on prend le plus récent (createdAtMs ou createdAt)
+      arr.sort((a,b)=>{
+        const am = Number(a.createdAtMs)||0;
+        const bm = Number(b.createdAtMs)||0;
+        if(bm !== am) return bm - am;
+        const at = a.createdAt?.toMillis ? a.createdAt.toMillis() : 0;
+        const bt = b.createdAt?.toMillis ? b.createdAt.toMillis() : 0;
+        return bt - at;
+      });
+
+      return arr[0].id;
     }
 
     async function initFromInvoice(invId){
       await loadInvoice(invId);
 
-      // si la facture est déjà liée à un avoir, on l'ouvre directement
-      const linked = String(invoiceData.avoirDocId || "").trim();
+      // Option A : facture.creditDocId
+      const linked = String(invoiceData.creditDocId || "").trim();
       if(linked){
         await loadCredit(linked);
         return;
       }
 
-      // sinon on essaie de trouver un avoir existant
       const existing = await findExistingCreditForInvoice(invId);
       if(existing){
         await loadCredit(existing);
         return;
       }
 
-      // sinon on prépare un brouillon "virtuel" (pas encore en base)
       creditData = {
         id: "",
         conciergerieUid: currentUser.uid,
@@ -854,7 +856,6 @@
       const draft = makeDraftForPreview();
       sessionStorage.setItem("creditDraftPreview", JSON.stringify(draft));
 
-      // si l'avoir n'existe pas encore, on passe quand même un docId = fromDocId (fallback)
       const idForUrl = String(creditData?.id || fromDocId || "").trim();
       location.href = `avoir-apercu.html?docId=${encodeURIComponent(idForUrl)}&draft=1`;
     });
@@ -868,7 +869,6 @@
       try{
         const year = new Date().getFullYear();
 
-        // 1) créer numéro si besoin
         let creditNumber = String(creditData?.creditNumber || "").trim();
         if(!creditNumber){
           creditNumber = await ensureCreditNumber(currentUser.uid, year);
@@ -901,7 +901,6 @@
           creditReason: String(creditReasonEl.value || "").trim(),
           creditNotes: String(creditNotesEl.value || "").trim(),
 
-          // snapshot client/home pour cohérence (utile si on veut lister les avoirs)
           homeId: invoiceData.homeId || null,
           homeName: String(invoiceData.homeName || "").trim() || "",
           homeAddress: String(invoiceData.homeAddress || "").trim() || "",
@@ -920,10 +919,8 @@
           clientCity: String(invoiceData.clientCity || "").trim() || "",
           clientCountry: String(invoiceData.clientCountry || "FR").trim() || "FR",
 
-          // lignes copiées
           lines,
 
-          // totaux stockés POSITIFS (base), l’affichage fera -ttc
           totalHT: Number(totals.ht) || 0,
           totalTVA: Number(totals.tva) || 0,
           totalTTC: Number(totals.ttc) || 0
@@ -935,6 +932,7 @@
           const created = await addDoc(collection(db, "salesDocuments"), {
             ...payload,
             createdAt: serverTimestamp(),
+            createdAtMs: Date.now(),
             createdBy: currentUser.uid
           });
           createdId = created.id;
@@ -944,17 +942,15 @@
           creditRef = doc(db, "salesDocuments", createdId);
         }
 
-        // 2) patch facture -> CREDITED + lien avoir
+        // PATCH facture -> CREDITED + lien Option A
         await updateDoc(invoiceRef, {
           invoiceStatus: "CREDITED",
           creditedAt: serverTimestamp(),
           creditedBy: currentUser.uid,
-          avoirDocId: createdId,
-          avoirNumber: creditNumber,
+          creditDocId: createdId,
           updatedAt: serverTimestamp()
         });
 
-        // refresh local creditData
         const cSnap = await getDoc(doc(db, "salesDocuments", createdId));
         creditData = { id: cSnap.id, ...(cSnap.data()||{}) };
 
