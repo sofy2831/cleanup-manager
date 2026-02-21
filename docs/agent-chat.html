@@ -1,4 +1,4 @@
-<!-- docs/agent-chat.html (FINAL — Agent chat + photos via Firebase Auth email-link ; même UI vibe agent/intervention) -->
+<!-- docs/agent-chat.html (FINAL — Agent chat + photos ; email-link ; aligné avec tes champs ; pas de setDoc inutile) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -121,9 +121,7 @@
     }
     textarea:focus{ border-color:var(--violet); box-shadow:0 0 0 2px rgba(122,92,255,.15); }
 
-    .composer{
-      display:flex; flex-direction:column; gap:10px;
-    }
+    .composer{ display:flex; flex-direction:column; gap:10px; }
     .row{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; justify-content:space-between; }
     .btn{
       border:none; border-radius:999px; padding:10px 12px; font-size:13px; font-weight:900; cursor:pointer;
@@ -208,7 +206,7 @@
     import { auth, db, storage } from "./firebase-init.js";
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
-      doc, getDoc, setDoc, updateDoc,
+      doc, getDoc, updateDoc,
       collection, query, orderBy, limit, getDocs,
       addDoc, serverTimestamp, increment
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
@@ -297,10 +295,13 @@
       }
       threadDoc = { id: tSnap.id, ...(tSnap.data()||{}) };
 
-      // ✅ Autorisation côté UI : email doit matcher agentEmailLower (ou agentUid déjà lié)
+      // ✅ Autorisation UI (pareil que règles Firestore) :
+      // - soit agentUid match
+      // - soit email match agentEmailLower
       const myEmail = String(currentUser.email || "").trim().toLowerCase();
       const expected = String(threadDoc.agentEmailLower || "").trim().toLowerCase();
-      const ok = (threadDoc.agentUid && String(threadDoc.agentUid) === String(currentUser.uid))
+      const ok =
+        (threadDoc.agentUid && String(threadDoc.agentUid) === String(currentUser.uid))
         || (!!expected && myEmail === expected);
 
       if(!ok){
@@ -311,7 +312,10 @@
 
       // ✅ backfill agentUid si vide (première connexion agent)
       if(!threadDoc.agentUid){
-        await updateDoc(tRef, { agentUid: currentUser.uid, updatedAt: serverTimestamp() });
+        await updateDoc(tRef, {
+          agentUid: currentUser.uid,
+          updatedAt: serverTimestamp()
+        });
         threadDoc.agentUid = currentUser.uid;
       }
 
@@ -346,7 +350,7 @@
         const div = document.createElement("div");
         div.className = "msg" + (mine ? " me" : "");
 
-        const who = (m.senderRole === "AGENT") ? "Agent" : "Conciergerie";
+        const who = (String(m.senderRole||"").toUpperCase() === "AGENT") ? "Agent" : "Conciergerie";
         const when = fmtTs(m.createdAt);
 
         const hasText = typeof m.text === "string" && m.text.trim().length;
@@ -371,7 +375,6 @@
         msgsEl.appendChild(div);
       }
 
-      // scroll bas
       msgsEl.scrollTop = msgsEl.scrollHeight;
     }
 
@@ -381,7 +384,6 @@
       const path = `agentThreads/${threadId}/${messageId}/${now}_${safeName}`;
       const r = sRef(storage, path);
 
-      // uploadBytes (pas resumable ici : plus simple / stable)
       const meta = { contentType: file.type || "image/jpeg" };
       await uploadBytes(r, file, meta);
       const url = await getDownloadURL(r);
@@ -416,21 +418,20 @@
       refreshBtn.disabled = true;
 
       try{
-        // 1) créer message doc d’abord (pour avoir messageId)
+        // 1) create message (photos: [] array obligatoire)
         showProg("Création du message…");
         const msgRef = await addDoc(collection(db,"agentThreads",threadId,"messages"),{
           senderUid: currentUser.uid,
           senderRole: "AGENT",
           kind: files.length ? "photos" : "text",
           text: text || null,
-          photos: [],                 // ✅ toujours présent (vide si pas de photos)
+          photos: [],                 // ✅ array (pas map)
           createdAt: serverTimestamp()
         });
 
-        // 2) upload photos si nécessaire puis patch message
+        // 2) upload photos puis patch message
         let uploaded = [];
         if(files.length){
-          // garde-fou : pas 200 photos d’un coup
           const max = 15;
           const batch = files.slice(0, max);
 
@@ -447,7 +448,7 @@
           });
         }
 
-        // 3) update thread (dernier message + unread conciergerie)
+        // 3) update thread (unread conciergerie)
         const previewText =
           text ? text.slice(0, 180)
                : (uploaded.length ? `📷 ${uploaded.length} photo(s)` : null);
@@ -459,7 +460,6 @@
           unreadForConciergerie: increment(1)
         });
 
-        // reset UI
         textEl.value = "";
         filesEl.value = "";
         hideProg();
@@ -497,7 +497,7 @@
 
     onAuthStateChanged(auth, async (u)=>{
       if(!u){
-        // agent doit être connecté (email link) via login.html ou agent-login.html
+        // email-link login
         location.href = "login.html?role=agent";
         return;
       }
