@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CleanUp Manager — Connexion agent</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    *{box-sizing:border-box;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
+    :root{--v:#7A5CFF;--v2:#6238FF;--bg1:#F8F4FF;--bg2:#EDE6FF;--border:rgba(122,92,255,.18)}
+    body{margin:0;background:linear-gradient(180deg,var(--bg1),var(--bg2));color:#111}
+    .page{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px}
+    .card{width:100%;max-width:520px;background:#fff;border:1px solid var(--border);border-radius:18px;box-shadow:0 14px 36px rgba(0,0,0,.08);padding:14px}
+    h1{margin:0;font-size:18px;font-weight:900}
+    .sub{margin-top:6px;font-size:12px;font-weight:800;color:#444;white-space:pre-wrap}
+    input{width:100%;padding:10px;border-radius:12px;border:1px solid #D3C7FF;margin-top:10px;font-size:13px}
+    button{border:none;border-radius:999px;padding:10px 12px;margin-top:10px;font-size:13px;font-weight:900;cursor:pointer;color:#fff;background:linear-gradient(90deg,var(--v),var(--v2))}
+    .alert{display:none;margin-top:10px;padding:10px 12px;border-radius:14px;background:#fff;border-left:5px solid #b3261e;font-size:12px;font-weight:800;color:#444;white-space:pre-wrap}
+    .ok{border-left-color:#1b8f4d}
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="card">
+      <h1>Connexion agent</h1>
+      <div class="sub" id="sub">Entre ton email. Tu vas recevoir un lien de connexion.</div>
+      <div class="alert" id="alert"></div>
+
+      <input id="email" type="email" placeholder="ex. agent@email.com" />
+      <button id="sendBtn" type="button">Envoyer le lien</button>
+    </div>
+  </div>
+
+  <script type="module">
+    import { auth } from "./firebase-init.js";
+    import {
+      isSignInWithEmailLink,
+      sendSignInLinkToEmail,
+      signInWithEmailLink
+    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+
+    function qs(name){ return new URLSearchParams(location.search).get(name) || ""; }
+    const threadId = qs("threadId");
+
+    const alert = document.getElementById("alert");
+    const sub = document.getElementById("sub");
+    const emailEl = document.getElementById("email");
+    const sendBtn = document.getElementById("sendBtn");
+
+    function show(msg, ok=false){
+      alert.style.display="block";
+      alert.classList.toggle("ok", !!ok);
+      alert.textContent = msg;
+    }
+
+    // 1) Si on arrive depuis le mail (email link)
+    if (isSignInWithEmailLink(auth, window.location.href)) {
+      const savedEmail = localStorage.getItem("agentEmailForSignIn") || "";
+      const email = savedEmail || window.prompt("Confirme ton email pour te connecter :") || "";
+      if(!email){
+        show("Email requis pour finaliser la connexion.");
+      }else{
+        try{
+          await signInWithEmailLink(auth, email, window.location.href);
+          localStorage.removeItem("agentEmailForSignIn");
+          // redirect chat
+          if(!threadId){
+            show("threadId manquant dans l’URL.", false);
+          }else{
+            location.href = `agent-chat.html?threadId=${encodeURIComponent(threadId)}`;
+          }
+        }catch(e){
+          show("Erreur connexion : " + (e?.code || e?.message || "inconnue"));
+        }
+      }
+    }
+
+    // 2) Sinon : on envoie le lien
+    sendBtn.addEventListener("click", async ()=>{
+      const email = String(emailEl.value||"").trim().toLowerCase();
+      if(!email) return show("Email requis.");
+      if(!threadId) return show("threadId manquant (URL).");
+
+      try{
+        // IMPORTANT : l’URL de retour doit être autorisée dans Firebase Auth (Authorized domains)
+        const actionCodeSettings = {
+          url: `${location.origin}${location.pathname}?threadId=${encodeURIComponent(threadId)}`,
+          handleCodeInApp: true
+        };
+
+        await sendSignInLinkToEmail(auth, email, actionCodeSettings);
+        localStorage.setItem("agentEmailForSignIn", email);
+        show("Lien envoyé. Ouvre l’email sur ce même appareil/navigateur.", true);
+        sub.textContent = "Après clic sur le lien reçu par email, tu seras connecté puis redirigé vers le chat.";
+      }catch(e){
+        show("Erreur envoi email-link : " + (e?.code || e?.message || "inconnue"));
+      }
+    });
+  </script>
+</body>
+</html>
