@@ -1,4 +1,4 @@
-<!-- docs/factures-liste.html (FINAL — salesDocuments only + bouton "Envoyer" = publier dans facturation propriétaire (requests.type="billing") + ownerVisible=true + status SENT) -->
+<!-- docs/factures-liste.html (FINAL — salesDocuments only + bouton "Envoyer" = publier dans facturation propriétaire (requests.type="billing") + ownerVisible=true + status SENT + PATCH events.billingState="INVOICED") -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -643,6 +643,25 @@
     pubCancelBtn.addEventListener("click", closePublishModal);
     publishModal.addEventListener("click", (e)=>{ if(e.target === publishModal) closePublishModal(); });
 
+    // ===== Planning marker patch (events) =====
+    async function patchEventAsInvoiced(invoiceDocId, inv){
+      const sourceKind = String(inv?.sourceKind || "").toUpperCase().trim();
+      const eventId = String(inv?.sourceEventId || "").trim();
+
+      if(sourceKind !== "EVENT") return { ok:true, skipped:true, reason:"sourceKind != EVENT" };
+      if(!eventId) return { ok:false, skipped:false, reason:"sourceEventId manquant" };
+
+      // Patch minimal demandé : billingState + invoiceDocId + invoicedAt
+      await updateDoc(doc(db,"events", eventId), {
+        billingState: "INVOICED",
+        invoiceDocId: String(invoiceDocId || "").trim(),
+        invoicedAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+
+      return { ok:true, skipped:false };
+    }
+
     // ===== Publish action =====
     function requestIdForSalesDoc(salesDocId){ return `bill_${String(salesDocId||"").trim()}`; }
 
@@ -672,6 +691,7 @@
       pubDoBtn.style.opacity = "0.75";
 
       try{
+        // 1) Patch facture -> visible owner + status SENT
         await updateDoc(doc(db,"salesDocuments", salesDocId), {
           ownerUid,
           ownerVisible: true,
@@ -680,6 +700,7 @@
           updatedAt: serverTimestamp()
         });
 
+        // 2) Request côté propriétaire (facturation)
         const rid = requestIdForSalesDoc(salesDocId);
         const rRef = doc(db,"requests", rid);
         const exists = await getDoc(rRef);
@@ -711,7 +732,21 @@
           await setDoc(rRef, { ...payloadBase, createdAt: serverTimestamp() }, { merge:true });
         }
 
-        showAlert("✅ Facture publiée dans la Facturation propriétaire.", true);
+        // 3) Patch planning marker (events) => sortir du planning
+        let patchRes = null;
+        try{
+          patchRes = await patchEventAsInvoiced(salesDocId, modalItem);
+        }catch(e){
+          patchRes = { ok:false, skipped:false, reason: (e?.message || "Erreur patch events") };
+        }
+
+        if(patchRes?.ok){
+          showAlert("✅ Facture publiée dans la Facturation propriétaire.", true);
+        }else{
+          // la publication a réussi, mais le planning n'a pas été patché => tu le vois tout de suite
+          showAlert("✅ Facture publiée. ⚠️ Patch planning (events) impossible : " + (patchRes?.reason || "inconnu"), false);
+        }
+
         closePublishModal();
         await loadInvoices(currentUser.uid);
 
