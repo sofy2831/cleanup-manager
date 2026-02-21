@@ -1,0 +1,356 @@
+<!-- docs/agent-photos.html (FINAL — photos ONLY via token 24h ; upload multi ; Storage: /proofPhotos/{prestationId}/{type}/{token}/... ) -->
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CleanUp Manager — Photos</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+
+  <style>
+    *{ box-sizing:border-box; font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; }
+    :root{
+      --violet:#7A5CFF; --violet2:#6238FF;
+      --bg1:#F8F4FF; --bg2:#EDE6FF;
+      --text:#111; --muted:#666; --bad:#b3261e; --ok:#1b8f4d;
+      --border: rgba(122,92,255,0.18);
+      --shadow: 0 14px 36px rgba(0,0,0,0.08);
+      --card: rgba(255,255,255,0.90);
+    }
+    body{ margin:0; background:linear-gradient(180deg,var(--bg1) 0%, var(--bg2) 80%); color:var(--text); }
+    .page{ min-height:100vh; display:flex; flex-direction:column; align-items:center; padding:14px 14px 26px; padding-bottom:36px; }
+
+    .topbar{
+      width:100%; max-width:980px; display:flex; justify-content:space-between; align-items:center;
+      gap:10px; position:sticky; top:0; z-index:10; padding:10px 0;
+      background:rgba(248,244,255,.85); backdrop-filter:blur(6px);
+    }
+    .pill{
+      display:inline-flex; align-items:center; gap:8px; padding:8px 12px; border-radius:999px;
+      background:#fff; border:2px solid var(--violet); color:var(--violet);
+      text-decoration:none; font-weight:900; font-size:13px; cursor:pointer;
+      box-shadow:0 3px 10px rgba(0,0,0,.06); white-space:nowrap;
+    }
+    .pill.primary{
+      background:linear-gradient(90deg,var(--violet),var(--violet2));
+      border-color:transparent; color:#fff;
+    }
+    .pill:disabled{ opacity:.6; cursor:not-allowed; }
+
+    .wrap{ width:100%; max-width:980px; margin-top:6px; display:flex; flex-direction:column; gap:10px; }
+    h1{ margin:0; font-size:20px; font-weight:900; letter-spacing:-0.2px; }
+    .sub{ margin-top:4px; color:#444; font-size:12px; font-weight:800; white-space:pre-wrap; }
+
+    .alert{
+      display:none; margin-top:10px; padding:10px 12px; border-radius:14px; background:#fff;
+      border-left:5px solid var(--bad); box-shadow:0 3px 10px rgba(0,0,0,.06);
+      font-size:12px; font-weight:800; color:#444; white-space:pre-wrap;
+    }
+    .alert.ok{ border-left-color:var(--ok); }
+
+    .card{
+      background:var(--card); border:1px solid var(--border); border-radius:18px;
+      box-shadow:var(--shadow); backdrop-filter:blur(10px); padding:12px;
+    }
+    .mini{ font-size:11px; font-weight:900; color:var(--muted); }
+
+    input[type="file"]{ display:block; width:100%; }
+    .row{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; justify-content:space-between; }
+
+    .prog{
+      display:none;
+      padding:10px;
+      border-radius:14px;
+      background:#fff;
+      border:1px solid rgba(122,92,255,0.18);
+      box-shadow:0 3px 10px rgba(0,0,0,.06);
+      font-size:12px;
+      font-weight:900;
+      color:#444;
+      white-space:pre-wrap;
+    }
+
+    .grid{
+      display:grid;
+      grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+      gap:8px;
+    }
+    .ph{
+      width:100%;
+      border-radius:12px;
+      border:1px solid rgba(0,0,0,0.08);
+      background:#fafafa;
+      overflow:hidden;
+      aspect-ratio: 1 / 1;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      position:relative;
+    }
+    .ph img{ width:100%; height:100%; object-fit:cover; display:block; }
+    .tag{
+      position:absolute; left:6px; bottom:6px;
+      background:rgba(0,0,0,.55);
+      color:#fff; font-weight:900; font-size:10px;
+      padding:4px 6px; border-radius:999px;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="page">
+    <div class="topbar">
+      <span class="pill" id="who">Agent (photos)</span>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="pill" id="refreshBtn" type="button">Rafraîchir</button>
+      </div>
+    </div>
+
+    <div class="wrap">
+      <div>
+        <h1>Photos</h1>
+        <div class="sub" id="subLine">Chargement…</div>
+        <div class="alert" id="alertBox"></div>
+      </div>
+
+      <section class="card">
+        <div class="mini">Sélectionne tes photos puis envoie. (Token valable 24h)</div>
+        <div style="height:8px;"></div>
+
+        <input id="files" type="file" accept="image/*" multiple />
+
+        <div class="row" style="margin-top:10px;">
+          <button class="pill" id="clearBtn" type="button">Vider</button>
+          <button class="pill primary" id="sendBtn" type="button">Envoyer</button>
+        </div>
+
+        <div class="prog" id="prog"></div>
+      </section>
+
+      <section class="card">
+        <div class="mini">Aperçu (session)</div>
+        <div class="grid" id="grid"></div>
+        <div class="mini" style="margin-top:8px;">
+          Note : pour lister toutes les photos déjà envoyées (historique), il faudrait une indexation Firestore.
+          Ici on montre ce que tu viens d’envoyer.
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <script type="module">
+    import { storage, db } from "./firebase-init.js";
+    import { ref as sRef, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js";
+    import { doc, getDoc } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+
+    const alertBox = document.getElementById("alertBox");
+    const subLine  = document.getElementById("subLine");
+    const refreshBtn = document.getElementById("refreshBtn");
+
+    const filesEl = document.getElementById("files");
+    const clearBtn = document.getElementById("clearBtn");
+    const sendBtn = document.getElementById("sendBtn");
+    const prog = document.getElementById("prog");
+    const grid = document.getElementById("grid");
+
+    function qs(name){ return new URLSearchParams(location.search).get(name) || ""; }
+    function showAlert(msg, ok=false){
+      alertBox.style.display = "block";
+      alertBox.classList.toggle("ok", !!ok);
+      alertBox.textContent = msg;
+    }
+    function hideAlert(){
+      alertBox.style.display = "none";
+      alertBox.classList.remove("ok");
+      alertBox.textContent = "";
+    }
+    function showProg(msg){
+      prog.style.display = "block";
+      prog.textContent = msg;
+    }
+    function hideProg(){
+      prog.style.display = "none";
+      prog.textContent = "";
+    }
+    function esc(s){
+      return String(s ?? "")
+        .replaceAll("&","&amp;")
+        .replaceAll("<","&lt;")
+        .replaceAll(">","&gt;")
+        .replaceAll('"',"&quot;")
+        .replaceAll("'","&#039;");
+    }
+
+    const token = qs("token");
+    const prestationId = qs("prestationId");
+    const type = (qs("type") || "MENAGE").toUpperCase();
+
+    function validateParams(){
+      if(!token || !prestationId || !type){
+        subLine.textContent = "";
+        showAlert("Paramètres manquants : token / prestationId / type.");
+        return false;
+      }
+      return true;
+    }
+
+    function prettyExpiryFromMs(ms){
+      const t = Number(ms);
+      if(!Number.isFinite(t)) return "—";
+      const d = new Date(t);
+      const pad2 = (n)=> String(n).padStart(2,"0");
+      return `${pad2(d.getDate())}/${pad2(d.getMonth()+1)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+    }
+
+    function tokenValid(tokenDoc){
+      if(!tokenDoc?.active) return false;
+      const expMs = Number(tokenDoc?.expiresAtMs);
+      if(Number.isFinite(expMs)) return Date.now() < expMs;
+      const ts = tokenDoc?.expiresAt;
+      const ms = ts?.toMillis ? ts.toMillis() : NaN;
+      if(Number.isFinite(ms)) return Date.now() < ms;
+      return false;
+    }
+
+    async function checkToken(){
+      subLine.textContent = "Vérification token…";
+      const snap = await getDoc(doc(db,"dayTokens", token));
+      if(!snap.exists()){
+        subLine.textContent = "";
+        showAlert("Token invalide.");
+        return false;
+      }
+      const t = snap.data() || {};
+      if(String(t.prestationId) !== String(prestationId)){
+        subLine.textContent = "";
+        showAlert("Token ≠ prestation.");
+        return false;
+      }
+      if(!tokenValid(t)){
+        subLine.textContent = "";
+        showAlert("Token expiré.");
+        return false;
+      }
+      const mts = Array.isArray(t.missionTypes) ? t.missionTypes.map(x=>String(x||"").toUpperCase()) : [];
+      if(mts.length && !mts.includes(type)){
+        subLine.textContent = "";
+        showAlert(`Token ne permet pas la mission "${type}".`);
+        return false;
+      }
+      subLine.textContent = `OK • ${type} • expire: ${prettyExpiryFromMs(t.expiresAtMs || (t.expiresAt?.toMillis ? t.expiresAt.toMillis() : NaN))}`;
+      return true;
+    }
+
+    function safeName(name){
+      return String(name || "photo.jpg").replace(/[^\w.\-]+/g,"_").slice(0,80);
+    }
+
+    async function uploadOne(file){
+      const now = Date.now();
+      const name = safeName(file.name);
+      const path = `proofPhotos/${prestationId}/${type}/${token}/${now}_${name}`;
+      const r = sRef(storage, path);
+      const meta = { contentType: file.type || "image/jpeg" };
+
+      await uploadBytes(r, file, meta);
+      const url = await getDownloadURL(r);
+
+      return { url, path, name, sizeBytes: Number(file.size||0), createdAtMs: now };
+    }
+
+    function addThumb(p, idx){
+      const div = document.createElement("a");
+      div.className = "ph";
+      div.href = p.url;
+      div.target = "_blank";
+      div.rel = "noopener";
+      div.innerHTML = `
+        <img src="${esc(p.url)}" alt="">
+        <span class="tag">${esc(String(idx+1))}</span>
+      `;
+      grid.appendChild(div);
+    }
+
+    async function send(){
+      hideAlert();
+      hideProg();
+
+      if(!validateParams()) return;
+
+      const files = Array.from(filesEl.files || []).filter(f => f && f.size > 0);
+      if(!files.length) return showAlert("Aucun fichier sélectionné.");
+
+      // garde-fou
+      const max = 20;
+      const batch = files.slice(0, max);
+
+      sendBtn.disabled = true;
+      clearBtn.disabled = true;
+      refreshBtn.disabled = true;
+
+      try{
+        showProg(`Upload ${batch.length} photo(s)…`);
+        grid.innerHTML = "";
+
+        const uploaded = [];
+        for(let i=0;i<batch.length;i++){
+          showProg(`Upload ${i+1}/${batch.length}…`);
+          const meta = await uploadOne(batch[i]);
+          uploaded.push(meta);
+          addThumb(meta, i);
+        }
+
+        showProg("");
+        hideProg();
+        showAlert(`✅ ${uploaded.length} photo(s) envoyée(s).`, true);
+
+        // reset input
+        filesEl.value = "";
+      }catch(err){
+        console.error(err);
+        hideProg();
+        showAlert("Erreur upload : " + (err?.code || err?.message || "inconnue"));
+      }finally{
+        sendBtn.disabled = false;
+        clearBtn.disabled = false;
+        refreshBtn.disabled = false;
+      }
+    }
+
+    clearBtn.addEventListener("click", ()=>{
+      filesEl.value = "";
+      grid.innerHTML = "";
+      hideAlert();
+      hideProg();
+    });
+
+    sendBtn.addEventListener("click", ()=> send());
+
+    refreshBtn.addEventListener("click", async ()=>{
+      try{
+        hideAlert();
+        await checkToken();
+      }catch(err){
+        console.error(err);
+        showAlert("Erreur refresh : " + (err?.code || err?.message || "inconnue"));
+      }
+    });
+
+    (async function init(){
+      hideAlert();
+      grid.innerHTML = "";
+      if(!validateParams()) return;
+      try{
+        const ok = await checkToken();
+        if(!ok) return;
+      }catch(err){
+        console.error(err);
+        showAlert("Erreur init : " + (err?.code || err?.message || "inconnue"));
+      }
+    })();
+  </script>
+</body>
+</html>
