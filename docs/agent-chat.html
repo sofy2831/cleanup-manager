@@ -1,4 +1,4 @@
-<!-- docs/agent-chat.html (FINAL — Agent chat + photos ; email-link ; aligné avec tes champs ; pas de setDoc inutile) -->
+<!-- docs/agent-chat.html (FINAL — Agent chat + photos via Firebase Auth email-link ; login redirect -> agent-login.html ; photos: [] array ; rules-friendly) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -38,7 +38,6 @@
       background:linear-gradient(90deg,var(--violet),var(--violet2));
       border-color:transparent; color:#fff;
     }
-    .pill.disabled{ opacity:.55; cursor:not-allowed; pointer-events:none; border-color:#bbb; color:#777; }
 
     .wrap{ width:100%; max-width:980px; margin-top:6px; display:flex; flex-direction:column; gap:10px; }
     h1{ margin:0; font-size:20px; font-weight:900; letter-spacing:-0.2px; }
@@ -58,14 +57,9 @@
     .mini{ font-size:11px; font-weight:900; color:var(--muted); }
 
     .headerBox{
-      background:#fff;
-      border:1px solid rgba(122,92,255,0.18);
-      border-radius:16px;
-      padding:10px;
-      box-shadow:0 3px 10px rgba(0,0,0,.06);
-      display:flex;
-      flex-direction:column;
-      gap:6px;
+      background:#fff; border:1px solid rgba(122,92,255,0.18); border-radius:16px;
+      padding:10px; box-shadow:0 3px 10px rgba(0,0,0,.06);
+      display:flex; flex-direction:column; gap:6px;
     }
     .titleLine{ font-size:14px; font-weight:900; color:#222; }
     .kv{ display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; }
@@ -88,9 +82,7 @@
       border-color: rgba(122,92,255,0.25);
       background: linear-gradient(180deg,#ffffff 0%, rgba(122,92,255,0.06) 100%);
     }
-    .msgTop{
-      display:flex; justify-content:space-between; gap:10px; align-items:flex-start;
-    }
+    .msgTop{ display:flex; justify-content:space-between; gap:10px; align-items:flex-start; }
     .msgWho{ font-size:12px; font-weight:900; color:#222; }
     .msgWhen{ font-size:11px; font-weight:900; color:var(--muted); }
     .msgText{ font-size:13px; font-weight:800; color:#222; white-space:pre-wrap; line-height:1.3; }
@@ -111,9 +103,7 @@
       align-items:center;
       justify-content:center;
     }
-    .ph img{
-      width:100%; height:100%; object-fit:cover; display:block;
-    }
+    .ph img{ width:100%; height:100%; object-fit:cover; display:block; }
 
     textarea{
       width:100%; padding:10px; border-radius:12px; border:1px solid #D3C7FF; background:#fff;
@@ -169,7 +159,7 @@
 
       <section class="card">
         <div class="mini">Contexte</div>
-        <div class="headerBox" id="ctxBox">
+        <div class="headerBox">
           <div class="titleLine" id="ctxTitle">—</div>
           <div class="kv"><div class="k">Prestation</div><div class="v" id="ctxPresta">—</div></div>
           <div class="kv"><div class="k">Agent</div><div class="v" id="ctxAgent">—</div></div>
@@ -183,7 +173,6 @@
 
       <section class="card">
         <div class="mini">Envoyer</div>
-
         <div class="composer">
           <textarea id="text" rows="2" placeholder="Votre message…"></textarea>
 
@@ -210,9 +199,7 @@
       collection, query, orderBy, limit, getDocs,
       addDoc, serverTimestamp, increment
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
-    import {
-      ref as sRef, uploadBytes, getDownloadURL
-    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js";
+    import { ref as sRef, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js";
 
     const alertBox = document.getElementById("alertBox");
     const subLine  = document.getElementById("subLine");
@@ -232,11 +219,8 @@
     function qs(name){ return new URLSearchParams(location.search).get(name) || ""; }
     function esc(s){
       return String(s ?? "")
-        .replaceAll("&","&amp;")
-        .replaceAll("<","&lt;")
-        .replaceAll(">","&gt;")
-        .replaceAll('"',"&quot;")
-        .replaceAll("'","&#039;");
+        .replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;")
+        .replaceAll('"',"&quot;").replaceAll("'","&#039;");
     }
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -256,7 +240,6 @@
       prog.style.display = "none";
       prog.textContent = "";
     }
-
     function fmtTs(ts){
       try{
         const ms = ts?.toMillis ? ts.toMillis() : null;
@@ -270,6 +253,9 @@
     const threadId = qs("threadId");
     let currentUser = null;
     let threadDoc = null;
+
+    // baseDir GitHub pages (/cleanup-manager/)
+    const baseDir = location.origin + location.pathname.replace(/\/[^\/]*$/, "/");
 
     async function loadThread(){
       hideAlert();
@@ -295,13 +281,10 @@
       }
       threadDoc = { id: tSnap.id, ...(tSnap.data()||{}) };
 
-      // ✅ Autorisation UI (pareil que règles Firestore) :
-      // - soit agentUid match
-      // - soit email match agentEmailLower
+      // UI check : email doit matcher agentEmailLower (ou agentUid)
       const myEmail = String(currentUser.email || "").trim().toLowerCase();
       const expected = String(threadDoc.agentEmailLower || "").trim().toLowerCase();
-      const ok =
-        (threadDoc.agentUid && String(threadDoc.agentUid) === String(currentUser.uid))
+      const ok = (threadDoc.agentUid && String(threadDoc.agentUid) === String(currentUser.uid))
         || (!!expected && myEmail === expected);
 
       if(!ok){
@@ -310,16 +293,12 @@
         return false;
       }
 
-      // ✅ backfill agentUid si vide (première connexion agent)
+      // backfill agentUid si vide
       if(!threadDoc.agentUid){
-        await updateDoc(tRef, {
-          agentUid: currentUser.uid,
-          updatedAt: serverTimestamp()
-        });
+        await updateDoc(tRef, { agentUid: currentUser.uid, updatedAt: serverTimestamp() });
         threadDoc.agentUid = currentUser.uid;
       }
 
-      // contexte minimal
       ctxTitle.textContent = threadDoc.homeName ? `Logement : ${threadDoc.homeName}` : "Chat mission";
       ctxPresta.textContent = threadDoc.prestationId || "—";
       ctxAgent.textContent = (threadDoc.agentEmailLower || currentUser.email || "—");
@@ -350,7 +329,7 @@
         const div = document.createElement("div");
         div.className = "msg" + (mine ? " me" : "");
 
-        const who = (String(m.senderRole||"").toUpperCase() === "AGENT") ? "Agent" : "Conciergerie";
+        const who = (m.senderRole === "AGENT") ? "Agent" : "Conciergerie";
         const when = fmtTs(m.createdAt);
 
         const hasText = typeof m.text === "string" && m.text.trim().length;
@@ -383,18 +362,11 @@
       const now = Date.now();
       const path = `agentThreads/${threadId}/${messageId}/${now}_${safeName}`;
       const r = sRef(storage, path);
-
       const meta = { contentType: file.type || "image/jpeg" };
       await uploadBytes(r, file, meta);
       const url = await getDownloadURL(r);
 
-      return {
-        url,
-        path,
-        name: safeName,
-        sizeBytes: Number(file.size || 0),
-        createdAtMs: now
-      };
+      return { url, path, name: safeName, sizeBytes: Number(file.size || 0), createdAtMs: now };
     }
 
     async function send(){
@@ -409,27 +381,27 @@
       const text = String(textEl.value || "").trim();
       const files = Array.from(filesEl.files || []).filter(f => f && f.size > 0);
 
-      if(!text && !files.length){
-        return showAlert("Message vide.");
-      }
+      if(!text && !files.length) return showAlert("Message vide.");
 
       sendBtn.disabled = true;
       clearBtn.disabled = true;
       refreshBtn.disabled = true;
 
       try{
-        // 1) create message (photos: [] array obligatoire)
         showProg("Création du message…");
+
+        // IMPORTANT rules: createdAt = timestamp, text string (non vide) pour kind=text
+        // Ici: si pas de texte mais photos -> on met text="" pour rester compatible si tu imposes text string.
+        // (Sinon, ajuste rules pour autoriser text null)
         const msgRef = await addDoc(collection(db,"agentThreads",threadId,"messages"),{
           senderUid: currentUser.uid,
           senderRole: "AGENT",
           kind: files.length ? "photos" : "text",
-          text: text || null,
-          photos: [],                 // ✅ array (pas map)
+          text: (files.length ? (text || "") : text),  // string
+          photos: [],                                 // ✅ array
           createdAt: serverTimestamp()
         });
 
-        // 2) upload photos puis patch message
         let uploaded = [];
         if(files.length){
           const max = 15;
@@ -448,13 +420,12 @@
           });
         }
 
-        // 3) update thread (unread conciergerie)
         const previewText =
           text ? text.slice(0, 180)
-               : (uploaded.length ? `📷 ${uploaded.length} photo(s)` : null);
+               : (uploaded.length ? `📷 ${uploaded.length} photo(s)` : "");
 
         await updateDoc(doc(db,"agentThreads",threadId),{
-          lastMessageText: previewText || null,
+          lastMessageText: previewText || "",
           lastMessageAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
           unreadForConciergerie: increment(1)
@@ -497,8 +468,8 @@
 
     onAuthStateChanged(auth, async (u)=>{
       if(!u){
-        // email-link login
-        location.href = "login.html?role=agent";
+        // IMPORTANT: redirige vers agent-login avec threadId
+        location.href = baseDir + "agent-login.html?threadId=" + encodeURIComponent(threadId || "");
         return;
       }
       currentUser = u;
