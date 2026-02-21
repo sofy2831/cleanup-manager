@@ -1499,10 +1499,30 @@
 
         await updateDoc(docRef, patch);
 
-        const snap2 = await getDoc(docRef);
-        docData = { id: snap2.id, ...(snap2.data()||{}) };
+// ✅ miroir côté event : permet à planning de masquer l'intervention dès que la facture est ÉMISE
+try{
+  // On relit "le minimum" depuis patch + docData (docData = état avant update)
+  const sourceKind = String(patch.sourceKind || docData?.sourceKind || "").toUpperCase().trim();
+  const sourceEventId = String(patch.sourceEventId || docData?.sourceEventId || "").trim();
 
-        showAlert("✅ Facture enregistrée (émise).", true);
+  // Si la facture vient d’un event, on flag l’event
+  if(sourceKind === "EVENT" && sourceEventId){
+    await updateDoc(doc(db,"events", sourceEventId), {
+      invoiceStatusOnEvent: "ISSUED",
+      invoiceDocId: docData?.id || getParam("docId") || null,
+      invoiceDocUpdatedAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    });
+  }
+}catch(e){
+  console.warn("Mirror event invoiceStatusOnEvent failed:", e?.message || e);
+}
+
+const snap2 = await getDoc(docRef);
+docData = { id: snap2.id, ...(snap2.data()||{}) };
+
+           
+     showAlert("✅ Facture enregistrée (émise).", true);
         renderRecap();
       }catch(err){
         console.error(err);
@@ -1553,5 +1573,6 @@
   </script>
 </body>
 </html>
+
 
 
