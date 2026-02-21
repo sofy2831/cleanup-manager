@@ -856,7 +856,8 @@
       const draft = makeDraftForPreview();
       sessionStorage.setItem("creditDraftPreview", JSON.stringify(draft));
 
-      const idForUrl = String(creditData?.id || fromDocId || "").trim();
+      // docId peut être vide si nouveau => on passe un identifiant "virtuel" propre
+      const idForUrl = String(creditData?.id || "").trim() || "DRAFT";
       location.href = `avoir-apercu.html?docId=${encodeURIComponent(idForUrl)}&draft=1`;
     });
 
@@ -864,6 +865,12 @@
     saveBtn.addEventListener("click", async ()=>{
       hideAlert();
       if(!invoiceData) return showAlert("Facture source non chargée.");
+
+      // sécurité anti doublon : si déjà lié, on n’écrase pas
+      const already = String(invoiceData?.creditDocId || "").trim();
+      if(already && String(creditData?.id||"").trim() !== already){
+        return showAlert("Cette facture a déjà un avoir lié. Ouvre l’avoir existant depuis la liste factures.");
+      }
 
       lockUI(true);
       try{
@@ -947,12 +954,16 @@
           invoiceStatus: "CREDITED",
           creditedAt: serverTimestamp(),
           creditedBy: currentUser.uid,
-          creditDocId: createdId,
+          creditDocId: createdId,              // ✅ pivot unique pour badge + liens
           updatedAt: serverTimestamp()
         });
 
         const cSnap = await getDoc(doc(db, "salesDocuments", createdId));
         creditData = { id: cSnap.id, ...(cSnap.data()||{}) };
+
+        // recharger facture pour verrou anti doublon (au cas où)
+        const iSnap = await getDoc(invoiceRef);
+        invoiceData = { id: iSnap.id, ...(iSnap.data()||{}) };
 
         showAlert("✅ Avoir enregistré et lié à la facture.", true);
         renderRecap();
