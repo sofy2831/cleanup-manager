@@ -1,4 +1,4 @@
-<!-- docs/avoir-apercu.html (FINAL — Option A — Avoir + totaux négatifs + support draft=1 via sessionStorage.creditDraftPreview) -->
+<!-- docs/avoir-apercu.html (FIX — Retour intelligent: draft=1 => avoir.html?fromDocId=INVOICE ; sinon => avoir.html?docId=CREDIT) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -270,7 +270,7 @@
 <body>
   <div class="wrap">
     <div class="topbar">
-      <a class="pill" id="backLink" href="#">← Retour</a>
+      <a class="pill" id="backLink" href="factures-liste.html">← Retour</a>
       <button class="pill primary" id="printBtn" type="button">Imprimer / PDF</button>
     </div>
 
@@ -398,8 +398,8 @@
 
     const footerEl = document.getElementById("footer");
 
-    let creditDoc = null;
-    let invDoc = null;
+    let creditDoc = null;   // Avoir (salesDocuments type CREDIT) ou placeholder en draft
+    let invDoc = null;      // Facture (salesDocuments type INVOICE) ou _invoice du draft
     let isDraftPreview = false;
 
     function showError(msg){
@@ -590,8 +590,6 @@
       }
     }
 
-    printBtn.addEventListener("click", ()=> window.print());
-
     function loadDraftFromSession(){
       try{
         const raw = sessionStorage.getItem("creditDraftPreview");
@@ -599,10 +597,44 @@
         const draft = JSON.parse(raw);
         if(!draft || typeof draft !== "object") return null;
         return draft;
-      }catch(e){
+      }catch{
         return null;
       }
     }
+
+    function upperType(x){ return String(x||"").toUpperCase().trim(); }
+
+    function setBackLinkSmart(docIdParam){
+      // Règle:
+      // - draft=1 => retour vers avoir.html?fromDocId=<invoiceId>
+      // - sinon => retour vers avoir.html?docId=<creditId>&fromDocId=<invoiceId> (si possible)
+      const invId =
+        String(creditDoc?.fromInvoiceDocId || "").trim() ||
+        String(invDoc?.id || "").trim();
+
+      const creditId = String(creditDoc?.id || docIdParam || "").trim();
+
+      if(isDraftPreview){
+        if(invId){
+          backLink.href = `avoir.html?fromDocId=${encodeURIComponent(invId)}`;
+        }else if(creditId){
+          // fallback (évite un href vide)
+          backLink.href = `avoir.html?fromDocId=${encodeURIComponent(creditId)}`;
+        }else{
+          backLink.href = "factures-liste.html";
+        }
+        return;
+      }
+
+      if(creditId){
+        const extra = invId ? `&fromDocId=${encodeURIComponent(invId)}` : "";
+        backLink.href = `avoir.html?docId=${encodeURIComponent(creditId)}${extra}`;
+      }else{
+        backLink.href = "factures-liste.html";
+      }
+    }
+
+    printBtn.addEventListener("click", ()=> window.print());
 
     onAuthStateChanged(auth, async (user)=>{
       if(!user){
@@ -613,61 +645,86 @@
       const docId = getParam("docId");
       isDraftPreview = (getParam("draft") === "1");
 
-      if(!docId){
+      if(!docId && !isDraftPreview){
         showError("docId manquant.");
         backLink.href = "factures-liste.html";
         return;
       }
 
-      backLink.href = `avoir.html?docId=${encodeURIComponent(docId)}`;
-
       try{
-        // 1) charge avoir si possible
-        let creditSnap = await getDoc(doc(db, "salesDocuments", docId));
-        if(creditSnap.exists()){
-          creditDoc = { id: creditSnap.id, ...(creditSnap.data()||{}) };
-        }else{
-          creditDoc = { id: docId, type:"CREDIT" };
+        // 1) Draft: on peut vivre sans docId (mais ton appel en fournit un, donc OK)
+        let snap = null;
+        if(docId){
+          snap = await getDoc(doc(db, "salesDocuments", docId));
         }
 
-        // 2) merge draft
+        // 2) Cas 1: docId pointe sur un CREDIT => ok
+        if(snap && snap.exists()){
+          const data = snap.data() || {};
+          const t = upperType(data.type);
+
+          if(t === "CREDIT"){
+            creditDoc = { id: snap.id, ...data };
+          }else if(isDraftPreview && t === "INVOICE"){
+            // docId est en fait une FACTURE (cas preview brouillon => on l’accepte)
+            invDoc = { id: snap.id, ...data };
+            creditDoc = { id: docId, type:"CREDIT" }; // placeholder
+          }else{
+            // docId n'est pas un avoir => on stoppe proprement
+            showError("docId n’est pas un avoir (type CREDIT).");
+            backLink.href = "factures-liste.html";
+            return;
+          }
+        }else{
+          // docId inconnu en base: on ne bloque pas en draft (il y a le sessionStorage)
+          creditDoc = { id: docId || "", type:"CREDIT" };
+        }
+
+        // 3) Merge draft (prioritaire pour l’aperçu)
         if(isDraftPreview){
           const draft = loadDraftFromSession();
           if(draft){
-            creditDoc = { ...creditDoc, ...draft, id: creditDoc.id };
+            creditDoc = { ...creditDoc, ...draft, id: (creditDoc?.id || docId || "") };
           }
         }
 
-        // 3) facture associée
-        if(creditDoc?._invoice){
-          invDoc = creditDoc._invoice;
-        }else{
-          const invId = String(creditDoc?.fromInvoiceDocId || "").trim();
-          if(invId){
-            const invSnap = await getDoc(doc(db, "salesDocuments", invId));
-            if(invSnap.exists()){
-              invDoc = { id: invSnap.id, ...(invSnap.data()||{}) };
+        // 4) Résolution facture associée (si pas déjà chargée via docId INVOICE)
+        if(!invDoc){
+          if(creditDoc?._invoice){
+            invDoc = creditDoc._invoice;
+          }else{
+            const invId = String(creditDoc?.fromInvoiceDocId || "").trim();
+            if(invId){
+              const invSnap = await getDoc(doc(db, "salesDocuments", invId));
+              if(invSnap.exists()){
+                invDoc = { id: invSnap.id, ...(invSnap.data()||{}) };
+              }
             }
           }
         }
+
         if(!invDoc){
           showError("Facture liée introuvable pour l’aperçu.");
+          setBackLinkSmart(docId);
           return;
         }
 
-        // 4) sécurité conciergerie
+        // 5) Sécurité conciergerie
         const cUid = String(invDoc.conciergerieUid||"").trim();
         if(cUid && cUid !== String(user.uid)){
           showError("Accès refusé (document d’une autre conciergerie).");
+          backLink.href = "factures-liste.html";
           return;
         }
 
-        // 5) profile
+        // 6) BackLink OK (le vrai fix)
+        setBackLinkSmart(docId);
+
+        // 7) Profile + rendu
         const userSnap = await getDoc(doc(db,"users", user.uid));
         const profile = userSnap.exists() ? (userSnap.data()||{}) : {};
         const bp = applyBusinessProfile(profile);
 
-        // 6) rendu
         renderClientHeader(invDoc);
         renderHeader(creditDoc, invDoc);
         renderHomeAndPeriod(invDoc);
@@ -676,6 +733,7 @@
       }catch(e){
         console.error(e);
         showError(e?.message || "Erreur chargement aperçu avoir.");
+        backLink.href = "factures-liste.html";
       }
     });
   </script>
