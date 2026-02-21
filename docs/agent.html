@@ -38,6 +38,7 @@
     .wrap{ width:100%; max-width:980px; margin-top:6px; display:flex; flex-direction:column; gap:10px; }
     h1{ margin:0; font-size:20px; font-weight:900; letter-spacing:-0.2px; }
     .sub{ margin-top:4px; color:#444; font-size:12px; font-weight:800; white-space:pre-wrap; }
+
     .alert{
       display:none; margin-top:10px; padding:10px 12px; border-radius:14px; background:#fff;
       border-left:5px solid var(--bad); box-shadow:0 3px 10px rgba(0,0,0,.06);
@@ -113,7 +114,11 @@
     .chk input{ margin-top:3px; width:18px; height:18px; }
     .chk label{ font-size:12px; font-weight:900; color:#222; cursor:pointer; }
     .chk .hint{ font-size:11px; font-weight:800; color:#666; margin-top:3px; }
-    .chk.miss{ border-color: rgba(179,38,30,0.35); background: rgba(179,38,30,0.06); }
+
+    .chk.miss{
+      border-color: rgba(179,38,30,0.35);
+      background: rgba(179,38,30,0.06);
+    }
 
     textarea{
       width:100%; padding:10px; border-radius:12px; border:1px solid #D3C7FF; background:#fff;
@@ -504,11 +509,9 @@
         if(!ok) missing.push(m.id);
       }
 
-      if(missing.length){
-        globalHint.textContent = "Il reste des missions à terminer : " + missing.join(", ");
-      }else{
-        globalHint.textContent = "Toutes les missions sont terminées. Tu peux enregistrer la prestation.";
-      }
+      globalHint.textContent = missing.length
+        ? "Il reste des missions à terminer : " + missing.join(", ")
+        : "Toutes les missions sont terminées. Tu peux enregistrer la prestation.";
     }
 
     async function load(){
@@ -525,24 +528,13 @@
       whoAmI.textContent = "Agent (checklist)";
       chipToken.textContent = "token: " + token;
 
-      let tSnap;
-      try{
-        tSnap = await getDoc(doc(db, "dayTokens", token));
-      }catch(err){
-        console.error(err);
-        showAlert("⛔ Accès dayTokens refusé (rules).");
-        chipStatus.innerHTML = `<span class="chip bad">RULES</span>`;
-        subLine.textContent = "";
-        return;
-      }
-
+      const tSnap = await getDoc(doc(db, "dayTokens", token));
       if(!tSnap.exists()){
         showAlert("⛔ Token invalide.");
         chipStatus.innerHTML = `<span class="chip bad">INVALIDE</span>`;
         subLine.textContent = "";
         return;
       }
-
       tokenDoc = tSnap.data() || {};
 
       if(String(tokenDoc.prestationId) !== String(prestationId)){
@@ -574,8 +566,6 @@
 
       const missions = [];
       const missingDocs = [];
-      const denied = [];
-
       for(const t of TYPES){
         try{
           const m = await loadMissionDoc(t);
@@ -583,17 +573,11 @@
           else missingDocs.push(t);
         }catch(e){
           console.error("loadMissionDoc", t, e);
-          if(String(e?.code||"").includes("permission-denied")) denied.push(t);
-          else missingDocs.push(t);
+          missingDocs.push(t);
         }
       }
 
-      if(denied.length){
-        showAlert(
-          "⛔ Accès refusé sur missions : " + denied.join(", ") + "\n" +
-          "=> Ce n’est PAS un problème de docs : ce sont tes Firestore rules (lecture missions via token)."
-        );
-      }else if(missingDocs.length){
+      if(missingDocs.length){
         showAlert(
           "⚠️ Missions manquantes côté Firestore : " + missingDocs.join(", ") + "\n" +
           "=> Retourne dans intervention.html → Générer lien (ça doit créer events/{prestationId}/missions/{TYPE})."
@@ -604,7 +588,7 @@
         missionsWrap.innerHTML = `
           <div class="mcard">
             <div class="mtitle">Aucune mission disponible</div>
-            <div class="msub">Soit les docs missions n'existent pas, soit l'accès est bloqué par les rules.</div>
+            <div class="msub">Soit les docs missions n'existent pas, soit l'accès est bloqué.</div>
           </div>`;
         globalHint.textContent = "Aucune mission détectée.";
         return;
@@ -667,12 +651,8 @@
           const type = m.id;
 
           const box = wrap.querySelector(`.checklist[data-m="${type}"]`);
-          if(!box){
-            showAlert("⛔ Checklist introuvable (bug UI). Recharge la page.");
-            return;
-          }
-
           const checks = Array.from(box.querySelectorAll('input[type="checkbox"][data-k]'));
+
           const newItems = checks.map(ch => {
             const key = ch.getAttribute("data-k");
             const labelEl = box.querySelector(`label[for="${ch.id}"]`);
@@ -680,6 +660,7 @@
             return { key, label, done: !!ch.checked };
           });
 
+          // blocage si incomplète + surlignage
           const notDone = newItems.filter(x => !x.done);
           checks.forEach(ch => ch.closest(".chk")?.classList.toggle("miss", !ch.checked));
           if(notDone.length){
@@ -730,7 +711,7 @@
       try{
         const missing = await computeMissingDone();
         if(missing.length){
-          showAlert("⛔ Il reste des missions à terminer : " + missing.join(", "), false);
+          showAlert("⛔ Il reste des missions à terminer : " + missing.join(", "));
           return;
         }
 
