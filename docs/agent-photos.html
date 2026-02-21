@@ -1,4 +1,4 @@
-<!-- docs/agent-photos.html (FINAL — photos ONLY via token 24h ; upload multi ; Storage: /proofPhotos/{prestationId}/{type}/{token}/... + Firestore index mission + event aggregate) -->
+<!-- docs/agent-photos.html (FINAL — photos ONLY via token 24h ; upload multi ; Storage: /proofPhotos/{prestationId}/{type}/{token}/... + Firestore index mission + event aggregate + bouton Terminer -> missionfini.html) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -125,6 +125,7 @@
         <div class="row" style="margin-top:10px;">
           <button class="pill" id="clearBtn" type="button">Vider</button>
           <button class="pill primary" id="sendBtn" type="button">Envoyer</button>
+          <button class="pill primary" id="doneBtn" type="button" style="display:none;">Terminer</button>
         </div>
 
         <div class="prog" id="prog"></div>
@@ -152,6 +153,7 @@
     const filesEl = document.getElementById("files");
     const clearBtn = document.getElementById("clearBtn");
     const sendBtn = document.getElementById("sendBtn");
+    const doneBtn = document.getElementById("doneBtn");
     const prog = document.getElementById("prog");
     const grid = document.getElementById("grid");
 
@@ -319,16 +321,19 @@
 
       const merged = keepLast(uniqByPath([...(existing||[]), ...(uploadedPhotos||[])]), 80);
 
+      // ✅ IMPORTANT: proofToken = token (pour rules) + timestamps
       await updateDoc(mRef, {
         proofPhotos: merged,
         proofPhotosCount: merged.length,
         proofPhotosAtMs: nowMs,
+        proofToken: token || null,
         updatedAt: serverTimestamp()
       });
 
       // 2) event aggregate for planning badge
       const eRef = doc(db, "events", prestationId);
       await updateDoc(eRef, {
+        proofToken: token || null,            // ✅ IMPORTANT pour rules events
         proofPhotosAtMs: nowMs,
         updatedAt: serverTimestamp(),
         proofPhotosTotal: increment((uploadedPhotos||[]).length),
@@ -336,9 +341,20 @@
       });
     }
 
+    function showDoneButton(){
+      doneBtn.style.display = "inline-flex";
+      doneBtn.disabled = false;
+    }
+
+    function hideDoneButton(){
+      doneBtn.style.display = "none";
+      doneBtn.disabled = true;
+    }
+
     async function send(){
       hideAlert();
       hideProg();
+      hideDoneButton();
 
       if(!validateParams()) return;
 
@@ -355,6 +371,7 @@
       sendBtn.disabled = true;
       clearBtn.disabled = true;
       refreshBtn.disabled = true;
+      doneBtn.disabled = true;
 
       try{
         showProg(`Upload ${batch.length} photo(s)…`);
@@ -374,6 +391,9 @@
         hideProg();
         showAlert(`✅ ${uploaded.length} photo(s) envoyée(s).`, true);
         filesEl.value = "";
+
+        // ✅ affiche Terminer après succès
+        showDoneButton();
       }catch(err){
         console.error(err);
         hideProg();
@@ -390,9 +410,16 @@
       grid.innerHTML = "";
       hideAlert();
       hideProg();
+      hideDoneButton();
     });
 
     sendBtn.addEventListener("click", ()=> send());
+
+    doneBtn.addEventListener("click", ()=>{
+      // Redirige vers missionfini.html en conservant token/prestationId/type
+      const url = `missionfini.html?token=${encodeURIComponent(token)}&prestationId=${encodeURIComponent(prestationId)}&type=${encodeURIComponent(type)}`;
+      location.href = url;
+    });
 
     refreshBtn.addEventListener("click", async ()=>{
       try{
@@ -407,6 +434,7 @@
     (async function init(){
       hideAlert();
       grid.innerHTML = "";
+      hideDoneButton();
       if(!validateParams()) return;
       try{
         await checkToken();
