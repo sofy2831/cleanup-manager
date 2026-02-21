@@ -1,106 +1,182 @@
-<!-- docs/factures-liste.html (COMPLETE CLEANUP PRODUCTION) -->
+<!-- docs/factures-liste.html (FINAL PRO — CleanUp Manager factures liste COMPLETE) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-<title>Factures</title>
+<title>CleanUp Manager — Factures</title>
 
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
 
 <style>
 
 *{
 box-sizing:border-box;
-font-family:Inter;
+font-family:Inter,system-ui;
+}
+
+:root{
+--violet:#7A5CFF;
+--violet2:#6238FF;
+--bg1:#F8F4FF;
+--bg2:#EDE6FF;
+--text:#111;
+--muted:#666;
+--border:rgba(122,92,255,0.18);
+--shadow:0 14px 36px rgba(0,0,0,0.08);
+--ok:#1b8f4d;
+--bad:#b3261e;
 }
 
 body{
 margin:0;
-background:linear-gradient(180deg,#F8F4FF,#EDE6FF);
+background:linear-gradient(180deg,var(--bg1),var(--bg2));
+color:var(--text);
 }
 
 .page{
-max-width:1000px;
+max-width:980px;
 margin:auto;
-padding:20px;
+padding:16px;
+padding-bottom:100px;
+}
+
+.logo-title{
+display:flex;
+align-items:center;
+justify-content:center;
+gap:10px;
+margin-top:10px;
+}
+
+.logo-icon{
+width:44px;
+height:44px;
+border-radius:50%;
+background:#fff;
+border:2px solid var(--violet);
+display:flex;
+align-items:center;
+justify-content:center;
+font-weight:800;
+color:var(--violet);
+font-size:20px;
+}
+
+h1{
+margin:0;
+font-size:22px;
+font-weight:800;
+}
+
+.companyLine{
+text-align:center;
+margin-top:4px;
+font-weight:700;
+color:#444;
 }
 
 .card{
 background:#fff;
+border:1px solid var(--border);
 border-radius:16px;
-padding:16px;
-margin-bottom:12px;
-box-shadow:0 10px 24px rgba(0,0,0,.08);
-}
-
-.line{
-display:flex;
-flex-wrap:wrap;
-gap:16px;
-}
-
-.cell{
-min-width:120px;
-}
-
-.t{
-font-size:11px;
-color:#666;
-font-weight:800;
-}
-
-.v{
-font-size:14px;
-font-weight:800;
-}
-
-.actions{
+padding:14px;
 margin-top:12px;
+box-shadow:var(--shadow);
+}
+
+.row{
 display:flex;
-gap:8px;
+justify-content:space-between;
 flex-wrap:wrap;
+gap:8px;
 }
 
 .btn{
-padding:8px 14px;
+padding:8px 12px;
 border-radius:999px;
-border:1px solid #7A5CFF;
+border:1px solid var(--violet);
 background:#fff;
-color:#7A5CFF;
-font-weight:800;
+color:var(--violet);
+font-weight:700;
 cursor:pointer;
 text-decoration:none;
+font-size:12px;
 }
 
 .btn.primary{
-background:#7A5CFF;
+background:linear-gradient(90deg,var(--violet),var(--violet2));
 color:#fff;
+border:none;
 }
 
-.btn[disabled]{
-opacity:.4;
-pointer-events:none;
+.btn.danger{
+border-color:#b3261e;
+color:#b3261e;
+}
+
+.btn.ok{
+border-color:#1b8f4d;
+color:#1b8f4d;
+}
+
+.badge{
+font-size:11px;
+font-weight:700;
+padding:4px 8px;
+border-radius:999px;
+border:1px solid var(--border);
+}
+
+.bottom-nav{
+position:fixed;
+bottom:0;
+left:0;
+right:0;
+background:#fff;
+display:flex;
+justify-content:space-around;
+padding:10px;
+border-top:1px solid var(--border);
+}
+
+.bottom-nav a{
+text-decoration:none;
+color:#444;
+font-weight:700;
+font-size:13px;
 }
 
 </style>
-
 </head>
+
 <body>
 
 <div class="page">
 
-<h2>Factures</h2>
+<div class="logo-title">
+<div class="logo-icon">C</div>
+<h1>Factures</h1>
+</div>
 
-<div id="list"></div>
+<div class="companyLine" id="companyLine">Chargement…</div>
+
+<div id="listBox"></div>
 
 </div>
 
+<nav class="bottom-nav">
+<a href="planning.html">Planning</a>
+<a href="prestations.html">Opérations</a>
+<a href="logements.html">Logements</a>
+<a href="messagerie.html">Messages</a>
+</nav>
+
 <script type="module">
 
-import { auth, db } from "./firebase-init.js";
+import {auth, db} from "./firebase-init.js";
 
 import {
 collection,
@@ -109,7 +185,9 @@ where,
 orderBy,
 getDocs,
 doc,
+getDoc,
 updateDoc,
+setDoc,
 serverTimestamp
 }
 from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
@@ -119,253 +197,182 @@ onAuthStateChanged
 }
 from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
 
+const listBox = document.getElementById("listBox");
+const companyLine = document.getElementById("companyLine");
 
 let user;
 
+function esc(x){
+return String(x||"");
+}
 
-function esc(s){
+function fmtMoney(v){
+return Number(v||0).toLocaleString("fr-FR",{minimumFractionDigits:2})+" €";
+}
 
-return String(s||"")
-.replaceAll("<","&lt;")
-.replaceAll(">","&gt;");
+async function loadCompanyName(uid){
+
+const snap = await getDoc(doc(db,"users",uid));
+
+if(!snap.exists()){
+companyLine.textContent="Conciergerie";
+return;
+}
+
+const name =
+snap.data()?.businessProfile?.companyName
+|| "Conciergerie";
+
+companyLine.textContent=name;
+}
+
+function badge(status){
+
+if(status==="PAID") return `<span class="badge">Payée</span>`;
+if(status==="SENT") return `<span class="badge">Envoyée</span>`;
+if(status==="CREDITED") return `<span class="badge">Créditée</span>`;
+return `<span class="badge">Brouillon</span>`;
 
 }
 
+async function publishInvoice(item){
 
-function money(v){
+await updateDoc(doc(db,"salesDocuments",item.id),{
 
-const n=Number(v);
-
-if(!Number.isFinite(n))
-return "—";
-
-return n.toLocaleString("fr-FR",{minimumFractionDigits:2})+" €";
-
-}
-
-
-function computeTTC(doc){
-
-if(Number.isFinite(Number(doc.totalTTC)))
-return doc.totalTTC;
-
-let t=0;
-
-for(const l of (doc.lines||[])){
-
-t+=
-(Number(l.qty)||0)
-*
-(Number(l.unitPrice)||0);
-
-}
-
-return t;
-
-}
-
-
-function status(doc){
-
-if(doc.creditedAt)
-return "CREDITED";
-
-if(doc.invoiceStatus)
-return doc.invoiceStatus;
-
-if(doc.invoiceNumber)
-return "ISSUED";
-
-return "DRAFT";
-
-}
-
-
-async function send(docu){
-
-await updateDoc(
-doc(db,"salesDocuments",docu.id),
-{
 invoiceStatus:"SENT",
 ownerVisible:true,
-sentAt:serverTimestamp(),
 updatedAt:serverTimestamp()
+
+});
+
+alert("Facture envoyée");
+
+loadInvoices();
+
 }
-);
-
-load();
-
-}
-
 
 function render(list){
 
-const root=document.getElementById("list");
+listBox.innerHTML="";
 
-root.innerHTML="";
-
-
-for(const d of list){
-
-const st=status(d);
-
-const credited=!!d.creditedAt;
-
-const canSend=
-d.invoiceNumber
-&& !credited;
-
-const canCredit=
-d.invoiceNumber
-&& !credited;
-
-const canRedo=
-credited;
-
-const canReg=
-d.invoiceNumber
-&& !credited;
-
+for(const x of list){
 
 const div=document.createElement("div");
+
+const status=x.invoiceStatus||"DRAFT";
+
+const hasCredit = x.creditedAt;
 
 div.className="card";
 
 div.innerHTML=`
 
-<div class="line">
+<div class="row">
 
-<div class="cell">
+<div>
 
-<div class="t">Numéro</div>
+<div><b>${esc(x.invoiceNumber||"—")}</b></div>
 
-<div class="v">${esc(d.invoiceNumber||"—")}</div>
+<div>${esc(x.clientName||"")}</div>
 
-</div>
+<div>${fmtMoney(x.totalTTC||0)}</div>
 
-<div class="cell">
-
-<div class="t">Client</div>
-
-<div class="v">${esc(d.clientName)}</div>
+<div>${badge(status)}</div>
 
 </div>
 
-<div class="cell">
-
-<div class="t">Logement</div>
-
-<div class="v">${esc(d.homeName)}</div>
-
-</div>
-
-<div class="cell">
-
-<div class="t">Statut</div>
-
-<div class="v">${st}</div>
-
-</div>
-
-<div class="cell">
-
-<div class="t">Total</div>
-
-<div class="v">${money(computeTTC(d))}</div>
-
-</div>
-
-</div>
-
-<div class="actions">
+<div class="row">
 
 <a class="btn primary"
-href="facture.html?docId=${d.id}">
+href="facture.html?docId=${x.id}">
 Ouvrir
 </a>
 
-<button class="btn send"
-${canSend?"":"disabled"}>
+<button class="btn ok"
+data-send>
 Envoyer
 </button>
 
 <a class="btn"
-href="reglement.html?docId=${d.id}"
-${canReg?"":"disabled"}>
+href="reglement.html?docId=${x.id}">
 Règlement
 </a>
 
-${
-canCredit
-?
-`<a class="btn"
-href="avoir.html?fromDocId=${d.id}">
+<button class="btn danger"
+data-credit>
 Avoir
-</a>`
-:
-""
-}
+</button>
 
-${
-canRedo
-?
-`<a class="btn primary"
-href="facture.html?mode=redo&fromDocId=${d.id}">
-Recréer facture
-</a>`
-:
-""
-}
+<button class="btn"
+data-recreate>
+Recréer
+</button>
+
+</div>
 
 </div>
 
 `;
 
-const sendBtn=div.querySelector(".send");
+div.querySelector("[data-send]")
+.onclick=()=>publishInvoice(x);
 
-if(sendBtn){
+div.querySelector("[data-credit]")
+.onclick=()=>{
 
-sendBtn.onclick=()=>send(d);
+location.href=
+"avoir.html?fromDocId="+x.id;
+
+};
+
+div.querySelector("[data-recreate]")
+.onclick=()=>{
+
+location.href=
+"facture.html?mode=redo&fromDocId="+x.id;
+
+};
+
+listBox.appendChild(div);
 
 }
 
-root.appendChild(div);
-
 }
 
-}
-
-
-async function load(){
+async function loadInvoices(){
 
 const q=query(
+
 collection(db,"salesDocuments"),
+
 where("conciergerieUid","==",user.uid),
+
 where("type","==","INVOICE"),
+
 orderBy("createdAt","desc")
+
 );
 
 const snap=await getDocs(q);
 
-const list=
-snap.docs.map(d=>({
+const arr=snap.docs.map(d=>({
 id:d.id,
 ...d.data()
 }));
 
-render(list);
+render(arr);
 
 }
 
+onAuthStateChanged(auth,async(u)=>{
 
-onAuthStateChanged(auth,(u)=>{
-
-if(!u)
-location.href="login.html";
+if(!u) return location.href="login.html";
 
 user=u;
 
-load();
+await loadCompanyName(u.uid);
+
+await loadInvoices();
 
 });
 
