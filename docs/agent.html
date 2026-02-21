@@ -129,10 +129,6 @@
       text-decoration:none;
       display:inline-flex; align-items:center; justify-content:center;
     }
-    .btn.ghost{
-      background:#fff; color:var(--violet); border:2px solid var(--violet);
-      box-shadow:0 3px 10px rgba(0,0,0,.06);
-    }
     .btn:disabled{ opacity:.6; cursor:not-allowed; }
 
     .done{
@@ -270,7 +266,7 @@
         .replaceAll("&","&amp;")
         .replaceAll("<","&lt;")
         .replaceAll(">","&gt;")
-        .replaceAll('"',"quot;")
+        .replaceAll('"',"&quot;")
         .replaceAll("'","&#039;");
     }
 
@@ -529,13 +525,24 @@
       whoAmI.textContent = "Agent (checklist)";
       chipToken.textContent = "token: " + token;
 
-      const tSnap = await getDoc(doc(db, "dayTokens", token));
+      let tSnap;
+      try{
+        tSnap = await getDoc(doc(db, "dayTokens", token));
+      }catch(err){
+        console.error(err);
+        showAlert("⛔ Accès dayTokens refusé (rules).");
+        chipStatus.innerHTML = `<span class="chip bad">RULES</span>`;
+        subLine.textContent = "";
+        return;
+      }
+
       if(!tSnap.exists()){
         showAlert("⛔ Token invalide.");
         chipStatus.innerHTML = `<span class="chip bad">INVALIDE</span>`;
         subLine.textContent = "";
         return;
       }
+
       tokenDoc = tSnap.data() || {};
 
       if(String(tokenDoc.prestationId) !== String(prestationId)){
@@ -567,6 +574,8 @@
 
       const missions = [];
       const missingDocs = [];
+      const denied = [];
+
       for(const t of TYPES){
         try{
           const m = await loadMissionDoc(t);
@@ -574,11 +583,17 @@
           else missingDocs.push(t);
         }catch(e){
           console.error("loadMissionDoc", t, e);
-          missingDocs.push(t);
+          if(String(e?.code||"").includes("permission-denied")) denied.push(t);
+          else missingDocs.push(t);
         }
       }
 
-      if(missingDocs.length){
+      if(denied.length){
+        showAlert(
+          "⛔ Accès refusé sur missions : " + denied.join(", ") + "\n" +
+          "=> Ce n’est PAS un problème de docs : ce sont tes Firestore rules (lecture missions via token)."
+        );
+      }else if(missingDocs.length){
         showAlert(
           "⚠️ Missions manquantes côté Firestore : " + missingDocs.join(", ") + "\n" +
           "=> Retourne dans intervention.html → Générer lien (ça doit créer events/{prestationId}/missions/{TYPE})."
@@ -589,7 +604,7 @@
         missionsWrap.innerHTML = `
           <div class="mcard">
             <div class="mtitle">Aucune mission disponible</div>
-            <div class="msub">Soit les docs missions n'existent pas, soit l'accès est bloqué.</div>
+            <div class="msub">Soit les docs missions n'existent pas, soit l'accès est bloqué par les rules.</div>
           </div>`;
         globalHint.textContent = "Aucune mission détectée.";
         return;
@@ -651,11 +666,16 @@
           hideAlert();
           const type = m.id;
 
-          const box = wrap.querySelector(\`.checklist[data-m="\${type}"]\`);
+          const box = wrap.querySelector(`.checklist[data-m="${type}"]`);
+          if(!box){
+            showAlert("⛔ Checklist introuvable (bug UI). Recharge la page.");
+            return;
+          }
+
           const checks = Array.from(box.querySelectorAll('input[type="checkbox"][data-k]'));
           const newItems = checks.map(ch => {
             const key = ch.getAttribute("data-k");
-            const labelEl = box.querySelector(\`label[for="\${ch.id}"]\`);
+            const labelEl = box.querySelector(`label[for="${ch.id}"]`);
             const label = labelEl ? labelEl.textContent.trim() : key;
             return { key, label, done: !!ch.checked };
           });
@@ -663,7 +683,7 @@
           const notDone = newItems.filter(x => !x.done);
           checks.forEach(ch => ch.closest(".chk")?.classList.toggle("miss", !ch.checked));
           if(notDone.length){
-            showAlert(\`⚠️ Mission "\${type}" : il reste \${notDone.length} case(s) à cocher.\nCoche tout avant de terminer.\`);
+            showAlert(`⚠️ Mission "${type}" : il reste ${notDone.length} case(s) à cocher.\nCoche tout avant de terminer.`);
             return;
           }else{
             checks.forEach(ch => ch.closest(".chk")?.classList.remove("miss"));
@@ -683,7 +703,7 @@
 
           try{
             await updateDoc(doc(db, "events", prestationId, "missions", type), payload);
-            showAlert(\`✅ Mission "\${type}" terminée (verrouillée).\`, true);
+            showAlert(`✅ Mission "${type}" terminée (verrouillée).`, true);
             await load();
           }catch(err){
             console.error(err);
@@ -691,7 +711,7 @@
           }
         }
 
-        wrap.querySelector(\`button[data-done="\${m.id}"]\`)?.addEventListener("click", finishMission);
+        wrap.querySelector(`button[data-done="${m.id}"]`)?.addEventListener("click", finishMission);
       }
 
       updateGlobalHintFromRendered(missions);
