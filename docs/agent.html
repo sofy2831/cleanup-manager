@@ -1,4 +1,4 @@
-<!-- docs/agent.html (FINAL — 1 seul lien reçu par email ; checklist via token + bouton "Chat & Photos" (email-link) ; Firestore checklist inchangé) -->
+<!-- docs/agent.html (FINAL — checklist ONLY via token ; aucun bouton Photos/Chat) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -33,13 +33,6 @@
       background:#fff; border:2px solid var(--violet); color:var(--violet);
       text-decoration:none; font-weight:900; font-size:13px; cursor:pointer;
       box-shadow:0 3px 10px rgba(0,0,0,.06); white-space:nowrap;
-    }
-    .pill.disabled{
-      opacity:.55;
-      cursor:not-allowed;
-      pointer-events:none;
-      border-color:#bbb;
-      color:#777;
     }
 
     .wrap{ width:100%; max-width:980px; margin-top:6px; display:flex; flex-direction:column; gap:10px; }
@@ -120,12 +113,7 @@
     .chk input{ margin-top:3px; width:18px; height:18px; }
     .chk label{ font-size:12px; font-weight:900; color:#222; cursor:pointer; }
     .chk .hint{ font-size:11px; font-weight:800; color:#666; margin-top:3px; }
-
-    /* ✅ Surlignage si case manquante */
-    .chk.miss{
-      border-color: rgba(179,38,30,0.35);
-      background: rgba(179,38,30,0.06);
-    }
+    .chk.miss{ border-color: rgba(179,38,30,0.35); background: rgba(179,38,30,0.06); }
 
     textarea{
       width:100%; padding:10px; border-radius:12px; border:1px solid #D3C7FF; background:#fff;
@@ -168,8 +156,6 @@
     <div class="topbar">
       <span class="pill" id="whoAmI">Agent (checklist)</span>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
-        <!-- ✅ Chat & photos (email-link) -->
-        <a class="pill" id="chatBtn" href="#" role="button">💬 Chat & Photos</a>
         <button class="pill" id="refreshBtn" type="button">Rafraîchir</button>
       </div>
     </div>
@@ -214,7 +200,6 @@
         </div>
       </section>
 
-      <!-- ✅ Commentaire global (unique) -->
       <section class="card">
         <div class="mini" style="margin-bottom:6px;">Commentaire global (optionnel)</div>
         <textarea id="globalComment" rows="2" placeholder="Ex. remarque générale, incident, manque matériel..."></textarea>
@@ -228,7 +213,6 @@
         <div class="missions" id="missionsWrap"></div>
       </section>
 
-      <!-- ✅ Enregistrer global -->
       <section class="card footerCard">
         <div class="footerRow">
           <div>
@@ -263,7 +247,6 @@
 
     const refreshBtn = document.getElementById("refreshBtn");
     const whoAmI = document.getElementById("whoAmI");
-    const chatBtn = document.getElementById("chatBtn");
 
     const globalCommentEl = document.getElementById("globalComment");
     const finishAllBtn = document.getElementById("finishAllBtn");
@@ -287,7 +270,7 @@
         .replaceAll("&","&amp;")
         .replaceAll("<","&lt;")
         .replaceAll(">","&gt;")
-        .replaceAll('"',"&quot;")
+        .replaceAll('"',"quot;")
         .replaceAll("'","&#039;");
     }
 
@@ -330,7 +313,6 @@
       return false;
     }
 
-    // Checklist template (affichage only)
     function compactChecklistTemplate(type){
       const t = (type||"").toUpperCase();
 
@@ -449,7 +431,6 @@
 
     const token = qs("token");
     const prestationId = qs("prestationId");
-    const threadId = qs("threadId"); // ✅ ajouté (chat/photos)
 
     let tokenDoc = null;
     let TYPES = ["MENAGE"];
@@ -490,7 +471,6 @@
     function lockUI(locked){
       finishAllBtn.disabled = !!locked;
       refreshBtn.disabled = !!locked;
-      chatBtn.classList.toggle("disabled", !!locked || !threadId);
     }
 
     function normalizeTypeList(list){
@@ -535,23 +515,10 @@
       }
     }
 
-    // ✅ bouton chat : agent-chat.html (gère la connexion email-link)
-    function setupChatLink(){
-      if(threadId){
-        chatBtn.classList.remove("disabled");
-        chatBtn.href = `agent-chat.html?threadId=${encodeURIComponent(threadId)}`;
-      }else{
-        chatBtn.classList.add("disabled");
-        chatBtn.href = "#";
-      }
-    }
-
     async function load(){
       hideAlert();
       missionsWrap.innerHTML = "";
       subLine.textContent = "Chargement…";
-
-      setupChatLink();
 
       if(!token || !prestationId){
         showAlert("⛔ Paramètres manquants (token / prestationId).");
@@ -560,7 +527,6 @@
       }
 
       whoAmI.textContent = "Agent (checklist)";
-
       chipToken.textContent = "token: " + token;
 
       const tSnap = await getDoc(doc(db, "dayTokens", token));
@@ -597,7 +563,6 @@
       agentLine.textContent = `Agent : ${(tokenDoc.agentName || "—")}${tokenDoc.agentEmail ? " • " + tokenDoc.agentEmail : ""}`;
 
       TYPES = normalizeTypeList(tokenDoc.missionTypes);
-
       subLine.textContent = "";
 
       const missions = [];
@@ -686,23 +651,19 @@
           hideAlert();
           const type = m.id;
 
-          const box = wrap.querySelector(`.checklist[data-m="${type}"]`);
+          const box = wrap.querySelector(\`.checklist[data-m="\${type}"]\`);
           const checks = Array.from(box.querySelectorAll('input[type="checkbox"][data-k]'));
           const newItems = checks.map(ch => {
             const key = ch.getAttribute("data-k");
-            const labelEl = box.querySelector(`label[for="${ch.id}"]`);
+            const labelEl = box.querySelector(\`label[for="\${ch.id}"]\`);
             const label = labelEl ? labelEl.textContent.trim() : key;
             return { key, label, done: !!ch.checked };
           });
 
-          // ✅ BLOQUAGE si checklist incomplète (et surlignage des manquantes)
           const notDone = newItems.filter(x => !x.done);
           checks.forEach(ch => ch.closest(".chk")?.classList.toggle("miss", !ch.checked));
           if(notDone.length){
-            showAlert(
-              `⚠️ Mission "${type}" : il reste ${notDone.length} case(s) à cocher.\n` +
-              `Coche tout avant de terminer.`
-            );
+            showAlert(\`⚠️ Mission "\${type}" : il reste \${notDone.length} case(s) à cocher.\nCoche tout avant de terminer.\`);
             return;
           }else{
             checks.forEach(ch => ch.closest(".chk")?.classList.remove("miss"));
@@ -722,7 +683,7 @@
 
           try{
             await updateDoc(doc(db, "events", prestationId, "missions", type), payload);
-            showAlert(`✅ Mission "${type}" terminée (verrouillée).`, true);
+            showAlert(\`✅ Mission "\${type}" terminée (verrouillée).\`, true);
             await load();
           }catch(err){
             console.error(err);
@@ -730,7 +691,7 @@
           }
         }
 
-        wrap.querySelector(`button[data-done="${m.id}"]`)?.addEventListener("click", finishMission);
+        wrap.querySelector(\`button[data-done="\${m.id}"]\`)?.addEventListener("click", finishMission);
       }
 
       updateGlobalHintFromRendered(missions);
@@ -768,7 +729,6 @@
       }
     });
 
-    // init
     load().catch(err=>{
       console.error(err);
       showAlert("Erreur chargement agent : " + (err?.code || err?.message || "inconnue"));
