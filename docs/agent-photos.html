@@ -295,14 +295,19 @@
       return out;
     }
 
+    function keepLast(list, max){
+      const arr = Array.isArray(list) ? list : [];
+      if(arr.length <= max) return arr;
+      return arr.slice(arr.length - max);
+    }
+
     async function writeProofIndex({ uploadedPhotos }){
       const nowMs = Date.now();
       const upperType = String(type).toUpperCase();
 
-      // 1) mission doc
+      // 1) mission doc (store photo metadata list capped)
       const mRef = doc(db, "events", prestationId, "missions", upperType);
 
-      // try to merge with existing proofPhotos
       let existing = [];
       try{
         const ms = await getDoc(mRef);
@@ -310,21 +315,18 @@
           const d = ms.data() || {};
           existing = Array.isArray(d.proofPhotos) ? d.proofPhotos : [];
         }
-      }catch{
-        existing = [];
-      }
+      }catch{ existing = []; }
 
-      const merged = uniqByPath([...(existing||[]), ...(uploadedPhotos||[])]);
+      const merged = keepLast(uniqByPath([...(existing||[]), ...(uploadedPhotos||[])]), 80);
 
       await updateDoc(mRef, {
         proofPhotos: merged,
         proofPhotosCount: merged.length,
         proofPhotosAtMs: nowMs,
-        proofToken: token || null,
         updatedAt: serverTimestamp()
       });
 
-      // 2) event aggregate for planning
+      // 2) event aggregate for planning badge
       const eRef = doc(db, "events", prestationId);
       await updateDoc(eRef, {
         proofPhotosAtMs: nowMs,
@@ -340,14 +342,13 @@
 
       if(!validateParams()) return;
 
-      // token gate (avoid upload for nothing)
+      // token gate
       const ok = await checkToken();
       if(!ok) return;
 
       const files = Array.from(filesEl.files || []).filter(f => f && f.size > 0);
       if(!files.length) return showAlert("Aucun fichier sélectionné.");
 
-      // garde-fou
       const max = 20;
       const batch = files.slice(0, max);
 
@@ -367,14 +368,11 @@
           addThumb(meta, i);
         }
 
-        // write index in Firestore (mission + event aggregate)
         showProg(`Indexation…`);
         await writeProofIndex({ uploadedPhotos: uploaded });
 
         hideProg();
         showAlert(`✅ ${uploaded.length} photo(s) envoyée(s).`, true);
-
-        // reset input
         filesEl.value = "";
       }catch(err){
         console.error(err);
