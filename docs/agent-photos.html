@@ -1,4 +1,4 @@
-<!-- docs/agent-photos.html (FINAL — photos ONLY via token 24h ; upload multi ; Storage: /proofPhotos/{prestationId}/{type}/{token}/... ) -->
+<!-- docs/agent-photos.html (FINAL — photos ONLY via token 24h ; upload multi ; Storage: /proofPhotos/{prestationId}/{type}/{token}/... + Firestore index mission + event aggregate) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -134,8 +134,7 @@
         <div class="mini">Aperçu (session)</div>
         <div class="grid" id="grid"></div>
         <div class="mini" style="margin-top:8px;">
-          Note : pour lister toutes les photos déjà envoyées (historique), il faudrait une indexation Firestore.
-          Ici on montre ce que tu viens d’envoyer.
+          Note : ici on montre ce que tu viens d’envoyer (session). L’historique sera visible côté conciergerie dans intervention.html (via index Firestore).
         </div>
       </section>
     </div>
@@ -144,7 +143,7 @@
   <script type="module">
     import { storage, db } from "./firebase-init.js";
     import { ref as sRef, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js";
-    import { doc, getDoc } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import { doc, getDoc, updateDoc, serverTimestamp, increment } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const alertBox = document.getElementById("alertBox");
     const subLine  = document.getElementById("subLine");
@@ -215,6 +214,8 @@
       return false;
     }
 
+    let tokenDocCache = null;
+
     async function checkToken(){
       subLine.textContent = "Vérification token…";
       const snap = await getDoc(doc(db,"dayTokens", token));
@@ -224,6 +225,8 @@
         return false;
       }
       const t = snap.data() || {};
+      tokenDocCache = t;
+
       if(String(t.prestationId) !== String(prestationId)){
         subLine.textContent = "";
         showAlert("Token ≠ prestation.");
@@ -240,7 +243,12 @@
         showAlert(`Token ne permet pas la mission "${type}".`);
         return false;
       }
-      subLine.textContent = `OK • ${type} • expire: ${prettyExpiryFromMs(t.expiresAtMs || (t.expiresAt?.toMillis ? t.expiresAt.toMillis() : NaN))}`;
+
+      const exp = Number.isFinite(Number(t.expiresAtMs))
+        ? t.expiresAtMs
+        : (t.expiresAt?.toMillis ? t.expiresAt.toMillis() : NaN);
+
+      subLine.textContent = `OK • ${type} • expire: ${prettyExpiryFromMs(exp)}`;
       return true;
     }
 
@@ -262,16 +270,68 @@
     }
 
     function addThumb(p, idx){
-      const div = document.createElement("a");
-      div.className = "ph";
-      div.href = p.url;
-      div.target = "_blank";
-      div.rel = "noopener";
-      div.innerHTML = `
+      const a = document.createElement("a");
+      a.className = "ph";
+      a.href = p.url;
+      a.target = "_blank";
+      a.rel = "noopener";
+      a.innerHTML = `
         <img src="${esc(p.url)}" alt="">
         <span class="tag">${esc(String(idx+1))}</span>
       `;
-      grid.appendChild(div);
+      grid.appendChild(a);
+    }
+
+    // ---------- Firestore index helpers ----------
+    function uniqByPath(list){
+      const seen = new Set();
+      const out = [];
+      for(const p of (Array.isArray(list) ? list : [])){
+        const key = String(p?.path || p?.url || Math.random());
+        if(seen.has(key)) continue;
+        seen.add(key);
+        out.push(p);
+      }
+      return out;
+    }
+
+    async function writeProofIndex({ uploadedPhotos }){
+      const nowMs = Date.now();
+      const upperType = String(type).toUpperCase();
+
+      // 1) mission doc
+      const mRef = doc(db, "events", prestationId, "missions", upperType);
+
+      // try to merge with existing proofPhotos
+      let existing = [];
+      try{
+        const ms = await getDoc(mRef);
+        if(ms.exists()){
+          const d = ms.data() || {};
+          existing = Array.isArray(d.proofPhotos) ? d.proofPhotos : [];
+        }
+      }catch{
+        existing = [];
+      }
+
+      const merged = uniqByPath([...(existing||[]), ...(uploadedPhotos||[])]);
+
+      await updateDoc(mRef, {
+        proofPhotos: merged,
+        proofPhotosCount: merged.length,
+        proofPhotosAtMs: nowMs,
+        proofToken: token || null,
+        updatedAt: serverTimestamp()
+      });
+
+      // 2) event aggregate for planning
+      const eRef = doc(db, "events", prestationId);
+      await updateDoc(eRef, {
+        proofPhotosAtMs: nowMs,
+        updatedAt: serverTimestamp(),
+        proofPhotosTotal: increment((uploadedPhotos||[]).length),
+        [`proofPhotosByType.${upperType}`]: increment((uploadedPhotos||[]).length)
+      });
     }
 
     async function send(){
@@ -279,6 +339,10 @@
       hideProg();
 
       if(!validateParams()) return;
+
+      // token gate (avoid upload for nothing)
+      const ok = await checkToken();
+      if(!ok) return;
 
       const files = Array.from(filesEl.files || []).filter(f => f && f.size > 0);
       if(!files.length) return showAlert("Aucun fichier sélectionné.");
@@ -303,7 +367,10 @@
           addThumb(meta, i);
         }
 
-        showProg("");
+        // write index in Firestore (mission + event aggregate)
+        showProg(`Indexation…`);
+        await writeProofIndex({ uploadedPhotos: uploaded });
+
         hideProg();
         showAlert(`✅ ${uploaded.length} photo(s) envoyée(s).`, true);
 
@@ -312,7 +379,7 @@
       }catch(err){
         console.error(err);
         hideProg();
-        showAlert("Erreur upload : " + (err?.code || err?.message || "inconnue"));
+        showAlert("Erreur upload/index : " + (err?.code || err?.message || "inconnue"));
       }finally{
         sendBtn.disabled = false;
         clearBtn.disabled = false;
@@ -344,8 +411,7 @@
       grid.innerHTML = "";
       if(!validateParams()) return;
       try{
-        const ok = await checkToken();
-        if(!ok) return;
+        await checkToken();
       }catch(err){
         console.error(err);
         showAlert("Erreur init : " + (err?.code || err?.message || "inconnue"));
