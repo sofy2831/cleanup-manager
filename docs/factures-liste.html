@@ -1,4 +1,4 @@
-<!-- docs/factures-liste.html (FINAL — salesDocuments only + bouton "Envoyer" = publier dans facturation propriétaire (requests.type="billing") + ownerVisible=true + status SENT + PATCH events.billingState="INVOICED") -->
+<!-- docs/factures-liste.html (FINAL — salesDocuments only + badges AVOIR + bouton Ouvrir avoir + bouton Recréer (si creditDocId) + Envoi = seulement à "Publier") -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -152,6 +152,8 @@
     }
     .badge.ok{ border-color: rgba(27,143,77,0.35); color: var(--ok); }
     .badge.bad{ border-color: rgba(179,38,30,0.30); color: var(--bad); }
+    .badge.orange{ border-color: rgba(255,140,0,0.35); color: #9a4f00; }
+    .badge.gray{ border-color: rgba(0,0,0,0.12); color:#222; }
 
     .line6{
       display:grid;
@@ -189,9 +191,9 @@
       min-width:0;
       margin-top:10px;
     }
-    .k{ min-width:220px; display:flex; flex-direction:column; gap:3px; min-width:0; }
+    .k{ min-width:220px; display:flex; flex-direction:column; gap:6px; min-width:0; }
     .k .t{ font-size:12px; color:#666; font-weight:900; }
-    .k .v{ font-size:13px; color:#111; font-weight:900; }
+    .k .v{ font-size:13px; color:#111; font-weight:900; display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
 
     .actionsBar{
       display:flex;
@@ -562,26 +564,14 @@
         : `TVA non applicable. Totaux calculés sur les factures affichées.`;
     }
 
-    // ===== Avoir helpers =====
+    // ===== Avoir pivot (Option A) =====
     function getAvoirId(x){
-      const candidates = [
-        x?.avoirId, x?.avoirDocId, x?.avoirSalesDocId,
-        x?.creditNoteId, x?.creditDocId, x?.creditedByDocId,
-        x?.fromAvoirId
-      ];
-      for(const c of candidates){
-        const s = String(c||"").trim();
-        if(s) return s;
-      }
+      const a = String(x?.creditDocId || "").trim();
+      if(a) return a;
+      // tolérance si ancien champ existe
+      const b = String(x?.creditNoteId || "").trim();
+      if(b) return b;
       return "";
-    }
-    function hasAvoirActivated(x){
-      const raw = getInvoiceStatusRaw(x);
-      const aId = getAvoirId(x);
-      const creditedAt = !!x?.creditedAt;
-      const creditedAtMs = Number.isFinite(Number(x?.creditedAtMs)) && Number(x.creditedAtMs) > 0;
-      const anyFlag = !!x?.credited || !!x?.isCredited || !!x?.creditApplied;
-      return !!aId || creditedAt || creditedAtMs || anyFlag || raw === "CREDITED";
     }
 
     // ===== Owner resolution =====
@@ -651,7 +641,6 @@
       if(sourceKind !== "EVENT") return { ok:true, skipped:true, reason:"sourceKind != EVENT" };
       if(!eventId) return { ok:false, skipped:false, reason:"sourceEventId manquant" };
 
-      // Patch minimal demandé : billingState + invoiceDocId + invoicedAt
       await updateDoc(doc(db,"events", eventId), {
         billingState: "INVOICED",
         invoiceDocId: String(invoiceDocId || "").trim(),
@@ -691,7 +680,7 @@
       pubDoBtn.style.opacity = "0.75";
 
       try{
-        // 1) Patch facture -> visible owner + status SENT
+        // 1) Patch facture -> visible owner + status SENT (SEULEMENT ICI = au moment Publier)
         await updateDoc(doc(db,"salesDocuments", salesDocId), {
           ownerUid,
           ownerVisible: true,
@@ -743,7 +732,6 @@
         if(patchRes?.ok){
           showAlert("✅ Facture publiée dans la Facturation propriétaire.", true);
         }else{
-          // la publication a réussi, mais le planning n'a pas été patché => tu le vois tout de suite
           showAlert("✅ Facture publiée. ⚠️ Patch planning (events) impossible : " + (patchRes?.reason || "inconnu"), false);
         }
 
@@ -797,23 +785,31 @@
 
         const hasNum = !!String(x.invoiceNumber||"").trim();
 
+        // ✅ pivot AVOIR
+        const avoirId = getAvoirId(x);
+        const avoirActive = !!avoirId;
+
         const openHref = `facture.html?docId=${encodeURIComponent(x.id)}`;
         const regHref  = `reglement.html?docId=${encodeURIComponent(x.id)}`;
 
         const allowReglement = hasNum && !["CANCELLED","CREDITED"].includes(stRaw);
 
-        // Avoir = visible si facture numérotée (émise)
-        const allowAvoir = hasNum && stRaw !== "CANCELLED";
-        // Recréer = visible seulement si avoir activé
-        const avoirActive = hasAvoirActivated(x);
+        // ✅ Créer avoir : uniquement si facture émise ET pas déjà créditée
+        const allowCreateAvoir = hasNum && stRaw !== "CANCELLED" && !avoirActive;
+
+        // ✅ Ouvrir avoir : si lien existe
+        const allowOpenAvoir = avoirActive;
+
+        // ✅ Recréer : seulement si avoir lié (tu ne te perds pas)
         const allowRedo = hasNum && avoirActive;
 
-        const avoirId = getAvoirId(x);
-        const avoirHref = avoirId
+        const ouvrirAvoirHref = avoirId
           ? `avoir.html?docId=${encodeURIComponent(avoirId)}&fromDocId=${encodeURIComponent(x.id)}`
           : `avoir.html?fromDocId=${encodeURIComponent(x.id)}`;
 
-        const redoHref = `facture.html?mode=redo&fromDocId=${encodeURIComponent(x.id)}${avoirId ? `&fromAvoirId=${encodeURIComponent(avoirId)}` : ""}`;
+        const creerAvoirHref = `avoir.html?fromDocId=${encodeURIComponent(x.id)}`;
+
+        const redoHref = `facture.html?mode=redo&fromDocId=${encodeURIComponent(x.id)}&fromAvoirId=${encodeURIComponent(avoirId)}`;
 
         const ownerDocId = getOwnerDocId(x);
         const ownerUidFast = getOwnerUidFast(x);
@@ -860,10 +856,13 @@
           <div class="row">
             <div class="k">
               <div class="t">Statut</div>
-              <div class="v">${badgeForStatus(stDisp)}</div>
+              <div class="v">
+                ${badgeForStatus(stDisp)}
+                ${avoirActive ? `<span class="badge orange">AVOIR</span>` : ``}
+              </div>
 
-              ${!ownerDocId ? `<div class="t" style="margin-top:4px; color:#b3261e;">Envoi impossible: clientOwnerDocId manquant</div>` : ``}
-              ${ownerDocId && !ownerUidFast ? `<div class="t" style="margin-top:4px;">(ownerUid sera résolu depuis owners)</div>` : ``}
+              ${!ownerDocId ? `<div class="t" style="margin-top:2px; color:#b3261e;">Envoi impossible: clientOwnerDocId manquant</div>` : ``}
+              ${ownerDocId && !ownerUidFast ? `<div class="t" style="margin-top:2px;">(ownerUid sera résolu depuis owners)</div>` : ``}
             </div>
 
             <div class="k" style="align-items:flex-end; min-width:280px;">
@@ -874,7 +873,8 @@
 
                 <a class="btn" href="${regHref}" ${allowReglement ? "" : `aria-disabled="true"`}>Règlement</a>
 
-                <a class="btn" href="${avoirHref}" ${allowAvoir ? "" : `aria-disabled="true"`}>Avoir</a>
+                ${allowCreateAvoir ? `<a class="btn" href="${creerAvoirHref}">Avoir</a>` : ``}
+                ${allowOpenAvoir ? `<a class="btn" href="${ouvrirAvoirHref}">Ouvrir avoir</a>` : ``}
 
                 ${allowRedo ? `<a class="btn" href="${redoHref}">Recréer</a>` : ``}
               </div>
