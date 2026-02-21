@@ -1,4 +1,4 @@
-<!-- docs/intervention.html (FINAL — 2 liens : checklist token + photos token ; resync missions non verrouillées ; NO query()) -->
+<!-- docs/intervention.html (FINAL — 2 liens : checklist token + photos token ; + Photos agent par mission (miniatures) ; resync missions non verrouillées ; NO query()) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -126,6 +126,90 @@
       font-size:12px; font-weight:800; color:#444; line-height:1.35;
     }
     .hintBox b{ font-weight:900; }
+
+    /* ===========================
+       Photos agent (NEW)
+       =========================== */
+    .photosBox{
+      margin-top:8px;
+      background:#fff;
+      border:1px solid rgba(122,92,255,0.18);
+      border-radius:16px;
+      padding:10px;
+      box-shadow:0 3px 10px rgba(0,0,0,.06);
+      display:flex;
+      flex-direction:column;
+      gap:10px;
+    }
+    .photosHead{
+      display:flex;
+      justify-content:space-between;
+      gap:10px;
+      align-items:flex-start;
+      flex-wrap:wrap;
+    }
+    .photosTitle{
+      font-weight:900;
+      font-size:13px;
+      color:#222;
+    }
+    .badge{
+      display:inline-flex;
+      align-items:center;
+      gap:6px;
+      padding:4px 9px;
+      border-radius:999px;
+      background:rgba(122,92,255,0.12);
+      color:#5b45c8;
+      font-size:11px;
+      font-weight:900;
+      white-space:nowrap;
+    }
+    .pMission{
+      border:1px solid rgba(0,0,0,0.05);
+      border-radius:14px;
+      background:rgba(122,92,255,0.03);
+      padding:10px;
+      display:flex;
+      flex-direction:column;
+      gap:8px;
+    }
+    .pMissionHead{
+      display:flex;
+      justify-content:space-between;
+      gap:10px;
+      align-items:center;
+      flex-wrap:wrap;
+    }
+    .pMissionName{ font-weight:900; font-size:12px; color:#222; }
+    .pGrid{
+      display:grid;
+      grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+      gap:8px;
+    }
+    .pThumb{
+      border-radius:12px;
+      border:1px solid rgba(0,0,0,0.08);
+      overflow:hidden;
+      background:#fafafa;
+      aspect-ratio:1/1;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      position:relative;
+      text-decoration:none;
+    }
+    .pThumb img{ width:100%; height:100%; object-fit:cover; display:block; }
+    .pTag{
+      position:absolute; left:6px; bottom:6px;
+      background:rgba(0,0,0,.55);
+      color:#fff;
+      font-weight:900;
+      font-size:10px;
+      padding:4px 6px;
+      border-radius:999px;
+    }
+    .pEmpty{ font-size:12px; font-weight:800; color:#666; }
   </style>
 </head>
 
@@ -190,6 +274,15 @@
         <div class="hintBox" id="missionsHint">
           <b>Missions envoyées à l’agent :</b> —
         </div>
+
+        <!-- Photos agent (NEW) -->
+        <div class="photosBox" id="photosBox" style="display:none;">
+          <div class="photosHead">
+            <div class="photosTitle">Photos agent</div>
+            <div class="badge" id="photosTotalBadge">📷 0</div>
+          </div>
+          <div id="photosWrap"></div>
+        </div>
       </section>
 
       <!-- DROITE -->
@@ -250,6 +343,11 @@
     const copyBtn = document.getElementById("copyBtn");
     const mailtoBtn = document.getElementById("mailtoBtn");
     const linkBox = document.getElementById("linkBox");
+
+    // Photos UI
+    const photosBox = document.getElementById("photosBox");
+    const photosWrap = document.getElementById("photosWrap");
+    const photosTotalBadge = document.getElementById("photosTotalBadge");
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -377,6 +475,97 @@
       }
     }
 
+    /* ===========================
+       Photos agent (NEW)
+       =========================== */
+    function thumbHtml(p, idx){
+      const url = p?.url || "";
+      return `
+        <a class="pThumb" href="${esc(url)}" target="_blank" rel="noopener">
+          <img src="${esc(url)}" alt="">
+          <span class="pTag">${esc(String(idx+1))}</span>
+        </a>
+      `;
+    }
+
+    async function loadPhotosByMission(missionTypes){
+      photosWrap.innerHTML = "";
+      photosBox.style.display = "none";
+      photosTotalBadge.textContent = "📷 0";
+
+      if(!Array.isArray(missionTypes) || !missionTypes.length) return;
+
+      let total = 0;
+      const blocks = [];
+
+      for(const t of missionTypes){
+        const type = String(t||"").toUpperCase();
+        try{
+          const mSnap = await getDoc(doc(db, "events", prestationId, "missions", type));
+          if(!mSnap.exists()){
+            blocks.push(`
+              <div class="pMission">
+                <div class="pMissionHead">
+                  <div class="pMissionName">${esc(missionLabel(type))}</div>
+                  <span class="badge">📷 0</span>
+                </div>
+                <div class="pEmpty">Aucune photo.</div>
+              </div>
+            `);
+            continue;
+          }
+
+          const d = mSnap.data() || {};
+          const arr = Array.isArray(d.proofPhotos) ? d.proofPhotos : [];
+          const count = Number(d.proofPhotosCount ?? arr.length ?? 0) || 0;
+          total += count;
+
+          if(!count){
+            blocks.push(`
+              <div class="pMission">
+                <div class="pMissionHead">
+                  <div class="pMissionName">${esc(missionLabel(type))}</div>
+                  <span class="badge">📷 0</span>
+                </div>
+                <div class="pEmpty">Aucune photo.</div>
+              </div>
+            `);
+          }else{
+            const thumbs = arr.slice(0, 24).map((p, i)=>thumbHtml(p, i)).join("");
+            const more = (arr.length > 24)
+              ? `<div class="mini">+ ${arr.length - 24} photo(s) non affichée(s)</div>`
+              : ``;
+
+            blocks.push(`
+              <div class="pMission">
+                <div class="pMissionHead">
+                  <div class="pMissionName">${esc(missionLabel(type))}</div>
+                  <span class="badge">📷 ${esc(String(count))}</span>
+                </div>
+                <div class="pGrid">${thumbs}</div>
+                ${more}
+              </div>
+            `);
+          }
+        }catch(err){
+          console.error("loadPhotosByMission", t, err);
+          blocks.push(`
+            <div class="pMission">
+              <div class="pMissionHead">
+                <div class="pMissionName">${esc(missionLabel(type))}</div>
+                <span class="badge">⚠️</span>
+              </div>
+              <div class="pEmpty">Erreur de lecture des photos.</div>
+            </div>
+          `);
+        }
+      }
+
+      photosWrap.innerHTML = blocks.join("");
+      photosTotalBadge.textContent = `📷 ${total}`;
+      photosBox.style.display = "block";
+    }
+
     async function load(){
       hideAlert();
       subLine.textContent = "Chargement…";
@@ -432,6 +621,9 @@
 
       agentName.value = e.assignedToName || "";
       agentEmail.value = e.assignedToEmail || "";
+
+      // NEW: photos by mission
+      await loadPhotosByMission(inferredMissionTypes);
 
       subLine.textContent = "";
     }
@@ -539,7 +731,7 @@
         base.replace("intervention.html","agent.html")
         + `?token=${encodeURIComponent(tokenId)}&prestationId=${encodeURIComponent(prestationId)}`;
 
-      // lien 2 : photos (token) — on met MENAGE par défaut, l’agent peut changer via URL si besoin
+      // lien 2 : photos (token) — MENAGE par défaut (l’agent peut changer via URL)
       const photosLink =
         base.replace("intervention.html","agent-photos.html")
         + `?token=${encodeURIComponent(tokenId)}&prestationId=${encodeURIComponent(prestationId)}&type=MENAGE`;
