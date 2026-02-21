@@ -562,9 +562,8 @@
         : `TVA non applicable. Totaux calculés sur les factures affichées.`;
     }
 
-    // ===== Avoir (credit note) helpers =====
+    // ===== Avoir helpers =====
     function getAvoirId(x){
-      // accepte plusieurs noms possibles (vu qu’on a eu 12 versions…)
       const candidates = [
         x?.avoirId, x?.avoirDocId, x?.avoirSalesDocId,
         x?.creditNoteId, x?.creditDocId, x?.creditedByDocId,
@@ -577,7 +576,6 @@
       return "";
     }
     function hasAvoirActivated(x){
-      // "avoir activé" = une trace d’avoir existe
       const raw = getInvoiceStatusRaw(x);
       const aId = getAvoirId(x);
       const creditedAt = !!x?.creditedAt;
@@ -674,7 +672,6 @@
       pubDoBtn.style.opacity = "0.75";
 
       try{
-        // 1) patch salesDocument => visible owner + SENT
         await updateDoc(doc(db,"salesDocuments", salesDocId), {
           ownerUid,
           ownerVisible: true,
@@ -683,7 +680,6 @@
           updatedAt: serverTimestamp()
         });
 
-        // 2) create/update request billing
         const rid = requestIdForSalesDoc(salesDocId);
         const rRef = doc(db,"requests", rid);
         const exists = await getDoc(rRef);
@@ -769,11 +765,14 @@
         const openHref = `facture.html?docId=${encodeURIComponent(x.id)}`;
         const regHref  = `reglement.html?docId=${encodeURIComponent(x.id)}`;
 
-        // Règlement autorisé si facture numérotée ET pas annulée/créditée
         const allowReglement = hasNum && !["CANCELLED","CREDITED"].includes(stRaw);
 
-        // Avoir / Recréer visibles UNIQUEMENT si "avoir activé"
+        // Avoir = visible si facture numérotée (émise)
+        const allowAvoir = hasNum && stRaw !== "CANCELLED";
+        // Recréer = visible seulement si avoir activé
         const avoirActive = hasAvoirActivated(x);
+        const allowRedo = hasNum && avoirActive;
+
         const avoirId = getAvoirId(x);
         const avoirHref = avoirId
           ? `avoir.html?docId=${encodeURIComponent(avoirId)}&fromDocId=${encodeURIComponent(x.id)}`
@@ -783,7 +782,7 @@
 
         const ownerDocId = getOwnerDocId(x);
         const ownerUidFast = getOwnerUidFast(x);
-        const canSend = !!ownerDocId && hasNum; // ownerUid resolved at click
+        const canSend = !!ownerDocId && hasNum;
 
         const div = document.createElement("div");
         div.className = "card";
@@ -840,12 +839,9 @@
 
                 <a class="btn" href="${regHref}" ${allowReglement ? "" : `aria-disabled="true"`}>Règlement</a>
 
-                ${
-                  avoirActive
-                    ? `<a class="btn" href="${avoirHref}">Avoir</a>
-                       <a class="btn" href="${redoHref}">Recréer</a>`
-                    : ``
-                }
+                <a class="btn" href="${avoirHref}" ${allowAvoir ? "" : `aria-disabled="true"`}>Avoir</a>
+
+                ${allowRedo ? `<a class="btn" href="${redoHref}">Recréer</a>` : ``}
               </div>
             </div>
           </div>
