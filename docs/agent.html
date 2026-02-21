@@ -1,4 +1,4 @@
-<!-- docs/agent.html (FINAL++ — Terminer BLOQUÉ si checklist incomplète + mini alerte + surlignage cases manquantes ; Firestore inchangé) -->
+<!-- docs/agent.html (FINAL — 1 seul lien reçu par email ; checklist via token + bouton "Chat & Photos" (email-link) ; Firestore checklist inchangé) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -166,9 +166,10 @@
 <body>
   <div class="page">
     <div class="topbar">
-      <span class="pill" id="whoAmI">Agent (token)</span>
+      <span class="pill" id="whoAmI">Agent (checklist)</span>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
-        <a class="pill" id="photosBtn" href="#" role="button">📷 Photos</a>
+        <!-- ✅ Chat & photos (email-link) -->
+        <a class="pill" id="chatBtn" href="#" role="button">💬 Chat & Photos</a>
         <button class="pill" id="refreshBtn" type="button">Rafraîchir</button>
       </div>
     </div>
@@ -244,9 +245,6 @@
     import { db } from "./firebase-init.js";
     import { doc, getDoc, updateDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
-    // ✅ PHOTOS ON
-    const PHOTOS_ENABLED = true;
-
     const alertBox = document.getElementById("alertBox");
     const subLine = document.getElementById("subLine");
 
@@ -265,7 +263,7 @@
 
     const refreshBtn = document.getElementById("refreshBtn");
     const whoAmI = document.getElementById("whoAmI");
-    const photosBtn = document.getElementById("photosBtn");
+    const chatBtn = document.getElementById("chatBtn");
 
     const globalCommentEl = document.getElementById("globalComment");
     const finishAllBtn = document.getElementById("finishAllBtn");
@@ -451,8 +449,10 @@
 
     const token = qs("token");
     const prestationId = qs("prestationId");
+    const threadId = qs("threadId"); // ✅ ajouté (chat/photos)
+
     let tokenDoc = null;
-    let TYPES = ["MENAGE"]; // sera écrasé par tokenDoc.missionTypes
+    let TYPES = ["MENAGE"];
 
     function setPrestaHeaderFromToken(presta){
       const e = presta || {};
@@ -490,8 +490,7 @@
     function lockUI(locked){
       finishAllBtn.disabled = !!locked;
       refreshBtn.disabled = !!locked;
-      photosBtn.classList.toggle("disabled", !!locked);
-      // Les boutons mission sont gérés par disabled dans le rendu
+      chatBtn.classList.toggle("disabled", !!locked || !threadId);
     }
 
     function normalizeTypeList(list){
@@ -536,10 +535,23 @@
       }
     }
 
+    // ✅ bouton chat : agent-chat.html (gère la connexion email-link)
+    function setupChatLink(){
+      if(threadId){
+        chatBtn.classList.remove("disabled");
+        chatBtn.href = `agent-chat.html?threadId=${encodeURIComponent(threadId)}`;
+      }else{
+        chatBtn.classList.add("disabled");
+        chatBtn.href = "#";
+      }
+    }
+
     async function load(){
       hideAlert();
       missionsWrap.innerHTML = "";
       subLine.textContent = "Chargement…";
+
+      setupChatLink();
 
       if(!token || !prestationId){
         showAlert("⛔ Paramètres manquants (token / prestationId).");
@@ -547,21 +559,9 @@
         return;
       }
 
-      whoAmI.textContent = "Agent (token)";
-      chipToken.textContent = "token: " + token;
+      whoAmI.textContent = "Agent (checklist)";
 
-      // ✅ Photos ON (ZIP global -> preuves.html sans type)
-      if(PHOTOS_ENABLED){
-        photosBtn.classList.remove("disabled");
-        photosBtn.textContent = "📷 Photos";
-        photosBtn.href = `preuves.html?token=${encodeURIComponent(token)}&prestationId=${encodeURIComponent(prestationId)}`;
-        photosBtn.setAttribute("aria-disabled", "false");
-      }else{
-        photosBtn.classList.add("disabled");
-        photosBtn.textContent = "📷 Photos (désactivé)";
-        photosBtn.href = "#";
-        photosBtn.setAttribute("aria-disabled", "true");
-      }
+      chipToken.textContent = "token: " + token;
 
       const tSnap = await getDoc(doc(db, "dayTokens", token));
       if(!tSnap.exists()){
@@ -593,7 +593,6 @@
       }
       chipStatus.innerHTML = `<span class="chip ok">OK</span>`;
 
-      // Header depuis dayTokens snapshot
       setPrestaHeaderFromToken(tokenDoc?.presta || {});
       agentLine.textContent = `Agent : ${(tokenDoc.agentName || "—")}${tokenDoc.agentEmail ? " • " + tokenDoc.agentEmail : ""}`;
 
@@ -706,7 +705,6 @@
             );
             return;
           }else{
-            // nettoie si tout est ok
             checks.forEach(ch => ch.closest(".chk")?.classList.remove("miss"));
           }
 
@@ -749,21 +747,18 @@
 
       lockUI(true);
       try{
-        // Vérif: toutes les missions terminées
         const missing = await computeMissingDone();
         if(missing.length){
           showAlert("⛔ Il reste des missions à terminer : " + missing.join(", "), false);
           return;
         }
 
-        // Update parent event
         await updateDoc(doc(db,"events",prestationId),{
           opStatus: "A_VALIDER",
           proofToken: token,
           updatedAt: serverTimestamp()
         });
 
-        // Redirect fin prestation
         location.href = "missionfini.html";
       }catch(err){
         console.error(err);
@@ -773,6 +768,7 @@
       }
     });
 
+    // init
     load().catch(err=>{
       console.error(err);
       showAlert("Erreur chargement agent : " + (err?.code || err?.message || "inconnue"));
