@@ -562,6 +562,30 @@
         : `TVA non applicable. Totaux calculés sur les factures affichées.`;
     }
 
+    // ===== Avoir (credit note) helpers =====
+    function getAvoirId(x){
+      // accepte plusieurs noms possibles (vu qu’on a eu 12 versions…)
+      const candidates = [
+        x?.avoirId, x?.avoirDocId, x?.avoirSalesDocId,
+        x?.creditNoteId, x?.creditDocId, x?.creditedByDocId,
+        x?.fromAvoirId
+      ];
+      for(const c of candidates){
+        const s = String(c||"").trim();
+        if(s) return s;
+      }
+      return "";
+    }
+    function hasAvoirActivated(x){
+      // "avoir activé" = une trace d’avoir existe
+      const raw = getInvoiceStatusRaw(x);
+      const aId = getAvoirId(x);
+      const creditedAt = !!x?.creditedAt;
+      const creditedAtMs = Number.isFinite(Number(x?.creditedAtMs)) && Number(x.creditedAtMs) > 0;
+      const anyFlag = !!x?.credited || !!x?.isCredited || !!x?.creditApplied;
+      return !!aId || creditedAt || creditedAtMs || anyFlag || raw === "CREDITED";
+    }
+
     // ===== Owner resolution =====
     function getOwnerDocId(x){
       const a = String(x?.clientOwnerDocId || "").trim();
@@ -652,14 +676,14 @@
       try{
         // 1) patch salesDocument => visible owner + SENT
         await updateDoc(doc(db,"salesDocuments", salesDocId), {
-          ownerUid,                 // sécurité: s’assurer que le doc est “owner-bound”
-          ownerVisible: true,       // requis par tes rules (owner read only if visible)
+          ownerUid,
+          ownerVisible: true,
           invoiceStatus: "SENT",
           sentAt: serverTimestamp(),
           updatedAt: serverTimestamp()
         });
 
-        // 2) create/update request billing (owner-facturation écoute requests)
+        // 2) create/update request billing
         const rid = requestIdForSalesDoc(salesDocId);
         const rRef = doc(db,"requests", rid);
         const exists = await getDoc(rRef);
@@ -672,7 +696,7 @@
 
         const payloadBase = {
           type: "billing",
-          status: "sent",                 // owner-facturation: ira dans Historique (≠ pending_owner)
+          status: "sent",
           conciergerieUid: currentUser.uid,
           ownerUid,
           ownerDocId,
@@ -688,16 +712,11 @@
         if(exists.exists()){
           await setDoc(rRef, payloadBase, { merge:true });
         }else{
-          await setDoc(rRef, {
-            ...payloadBase,
-            createdAt: serverTimestamp()
-          }, { merge:true });
+          await setDoc(rRef, { ...payloadBase, createdAt: serverTimestamp() }, { merge:true });
         }
 
         showAlert("✅ Facture publiée dans la Facturation propriétaire.", true);
         closePublishModal();
-
-        // refresh local list quickly
         await loadInvoices(currentUser.uid);
 
       }catch(e){
@@ -746,14 +765,25 @@
         const ttc = totals.ttc;
 
         const hasNum = !!String(x.invoiceNumber||"").trim();
-        const allowReglement = hasNum && !["CANCELLED","CREDITED"].includes(stRaw);
 
         const openHref = `facture.html?docId=${encodeURIComponent(x.id)}`;
         const regHref  = `reglement.html?docId=${encodeURIComponent(x.id)}`;
 
+        // Règlement autorisé si facture numérotée ET pas annulée/créditée
+        const allowReglement = hasNum && !["CANCELLED","CREDITED"].includes(stRaw);
+
+        // Avoir / Recréer visibles UNIQUEMENT si "avoir activé"
+        const avoirActive = hasAvoirActivated(x);
+        const avoirId = getAvoirId(x);
+        const avoirHref = avoirId
+          ? `avoir.html?docId=${encodeURIComponent(avoirId)}&fromDocId=${encodeURIComponent(x.id)}`
+          : `avoir.html?fromDocId=${encodeURIComponent(x.id)}`;
+
+        const redoHref = `facture.html?mode=redo&fromDocId=${encodeURIComponent(x.id)}${avoirId ? `&fromAvoirId=${encodeURIComponent(avoirId)}` : ""}`;
+
         const ownerDocId = getOwnerDocId(x);
         const ownerUidFast = getOwnerUidFast(x);
-        const canSend = !!ownerDocId && hasNum; // ownerUid resolved at click (owners doc)
+        const canSend = !!ownerDocId && hasNum; // ownerUid resolved at click
 
         const div = document.createElement("div");
         div.className = "card";
@@ -809,6 +839,13 @@
                 <button class="btn" type="button" data-action="send" ${canSend ? "" : `aria-disabled="true"`}>Envoyer</button>
 
                 <a class="btn" href="${regHref}" ${allowReglement ? "" : `aria-disabled="true"`}>Règlement</a>
+
+                ${
+                  avoirActive
+                    ? `<a class="btn" href="${avoirHref}">Avoir</a>
+                       <a class="btn" href="${redoHref}">Recréer</a>`
+                    : ``
+                }
               </div>
             </div>
           </div>
@@ -817,7 +854,6 @@
         const sendBtn = div.querySelector('button[data-action="send"]');
         if(sendBtn && canSend){
           sendBtn.addEventListener("click", async ()=>{
-            const { ownerName, ownerEmail } = getOwnerNameEmail(x);
             const resolvedOwnerUid = ownerUidFast || "";
             openPublishModal(x, resolvedOwnerUid, ownerDocId);
           });
@@ -902,4 +938,3 @@
   </script>
 </body>
 </html>
-
