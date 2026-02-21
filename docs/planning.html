@@ -1,4 +1,4 @@
-<!-- docs/planning.html (FINAL — facture via salesDocuments + invoiceDocId canonique + totaux calculés à la création) -->
+<!-- docs/planning.html (FINAL — + badge photos 📷 dans À valider & prestations) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -139,6 +139,14 @@
     .badge.bad{ background:rgba(179,38,30,0.14); color:var(--bad); }
     .badge.blue{ background:rgba(0,163,255,0.14); color:#0067a6; }
     .badge.orange{ background:rgba(255,140,0,0.16); color:#9a4f00; }
+
+    /* NEW: badge photos */
+    .badge.photo{
+      background:rgba(0,0,0,0.06);
+      color:#222;
+      cursor:pointer;
+      border:1px solid rgba(0,0,0,0.08);
+    }
 
     .calHead{
       display:flex; align-items:center; justify-content:space-between; gap:8px;
@@ -718,9 +726,29 @@
       const up  = Number(l?.unitPrice)||0;
       ht += qty * up;
     }
-    // Ici: TTC=HT (TVA gérée dans facture.html via profil conciergerie).
-    // L'objectif: ne plus avoir 0 et ne pas "vider" les listes / boutons.
     return { ht, ttc: ht };
+  }
+
+  // ✅ NEW: photos count depuis event (pas lecture missions)
+  function photosCountFromEvent(ev){
+    const direct = Number(ev?.proofPhotosTotal);
+    if(Number.isFinite(direct) && direct > 0) return direct;
+
+    const byType = ev?.proofPhotosByType;
+    if(byType && typeof byType === "object"){
+      let sum = 0;
+      for(const k of Object.keys(byType)){
+        const v = Number(byType[k]);
+        if(Number.isFinite(v) && v > 0) sum += v;
+      }
+      return sum;
+    }
+    return 0;
+  }
+
+  function openIntervention(prestationId){
+    if(!prestationId) return;
+    location.href = `intervention.html?prestationId=${encodeURIComponent(prestationId)}&returnTo=planning&returnDate=${encodeURIComponent(selectedDateKey)}`;
   }
 
   function closeModal(){
@@ -943,11 +971,13 @@
 
         opStatus: normalizeOpStatus(ev.opStatus || ev.status || "EN_COURS"),
 
-        // ✅ CANON : on garde invoiceDocId côté events
         invoiceDocId: (ev.invoiceDocId || "").toString(),
+        lines: Array.isArray(ev.lines) ? ev.lines : [],
 
-        // ✅ Lignes pour créer une facture non vide
-        lines: Array.isArray(ev.lines) ? ev.lines : []
+        // ✅ NEW fields (optional)
+        proofPhotosTotal: ev.proofPhotosTotal ?? null,
+        proofPhotosByType: ev.proofPhotosByType ?? null,
+        proofPhotosAtMs: ev.proofPhotosAtMs ?? null
       };
 
       allEvents.push(obj);
@@ -1013,24 +1043,20 @@
     location.href = `preuves-admin.html?${p.toString()}`;
   }
 
-  // ✅ FACTURE : tout passe par facture.html (salesDocuments), event écrit invoiceDocId
   async function openFacture(ev){
     try{
       if(!ev?.id) return;
 
-      // 1) déjà créée -> ouvrir directement facture.html docId
       if(ev.invoiceDocId){
         location.href = `facture.html?docId=${encodeURIComponent(ev.invoiceDocId)}&returnTo=planning&returnDate=${encodeURIComponent(selectedDateKey)}`;
         return;
       }
 
-      // 2) créer salesDocuments INVOICE non vide (lines + totaux)
       const lines = Array.isArray(ev.lines) ? ev.lines : [];
       const totals = computeTotalsFromLines(lines);
 
       const payload = {
         conciergerieUid: currentUser.uid,
-
         type: "INVOICE",
         docType: "INVOICE_EVENT",
         listable: true,
@@ -1061,7 +1087,6 @@
 
         lines,
 
-        // ✅ plus de 0 : au minimum HT=TTC = sum(qty*unitPrice)
         totalHT: Number(totals.ht) || 0,
         totalTVA: 0,
         totalTTC: Number(totals.ttc) || 0
@@ -1069,14 +1094,12 @@
 
       const created = await addDoc(collection(db,"salesDocuments"), payload);
 
-      // 3) canon : on écrit invoiceDocId sur l'event
       await updateDoc(doc(db,"events", ev.id), {
         invoiceDocId: created.id,
         invoiceDocUpdatedAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       });
 
-      // 4) ouvrir facture.html docId
       location.href = `facture.html?docId=${encodeURIComponent(created.id)}&returnTo=planning&returnDate=${encodeURIComponent(selectedDateKey)}`;
 
     }catch(e){
@@ -1231,6 +1254,11 @@
         ev.assignedToName ? `Agent: ${ev.assignedToName}` : null
       ].filter(Boolean).join(" • ");
 
+      const pc = photosCountFromEvent(ev);
+      const photoBadge = pc > 0
+        ? `<span class="badge photo" data-open-intervention="${esc(ev.id)}">📷 ${esc(String(pc))}</span>`
+        : ``;
+
       const div = document.createElement("div");
       div.className = "item prestaRow";
       div.innerHTML = `
@@ -1238,6 +1266,7 @@
           <div class="iTop">
             <span class="badge blue">À VALIDER</span>
             <span class="badge">Prestation</span>
+            ${photoBadge}
           </div>
           <div class="iTitle">${esc(title)}</div>
           <div class="iSub">${esc(sub || "—")}</div>
@@ -1274,6 +1303,12 @@
         setFocusParams(selectedDateKey, "");
         renderCalendar();
         renderDayList();
+      });
+
+      // ✅ NEW: click badge -> intervention
+      div.querySelector(`[data-open-intervention="${CSS.escape(ev.id)}"]`)?.addEventListener("click",(e)=>{
+        e.stopPropagation();
+        openIntervention(ev.id);
       });
     }
   }
@@ -1522,6 +1557,9 @@
       const bCls = opBadgeClass(st);
       const bTxt = opLabel(st);
 
+      const pc = photosCountFromEvent(ev);
+      const photoBadge = pc > 0 ? `<span class="badge photo" data-open-intervention="${esc(ev.id)}">📷 ${esc(String(pc))}</span>` : ``;
+
       const div = document.createElement("div");
       div.className = "item prestaRow";
       div.innerHTML = `
@@ -1529,6 +1567,7 @@
           <div class="iTop">
             <span class="badge ${esc(bCls)}">${esc(bTxt)}</span>
             <span class="badge">Prestation</span>
+            ${photoBadge}
           </div>
           <div class="iTitle">${esc(title)}</div>
           <div class="iSub">${esc(sub || "—")}</div>
@@ -1562,6 +1601,12 @@
       div.querySelector(`[data-open-presta="${CSS.escape(ev.id)}"]`)?.addEventListener("click", (e)=>{ e.stopPropagation(); openEventDetail(ev); });
       div.querySelector(`[data-open-facture="${CSS.escape(ev.id)}"]`)?.addEventListener("click", (e)=>{ e.stopPropagation(); openFacture(ev); });
       div.querySelector(`[data-validate="${CSS.escape(ev.id)}"]`)?.addEventListener("click", (e)=>{ e.stopPropagation(); validateEvent(ev); });
+
+      // ✅ NEW: click badge -> intervention
+      div.querySelector(`[data-open-intervention="${CSS.escape(ev.id)}"]`)?.addEventListener("click",(e)=>{
+        e.stopPropagation();
+        openIntervention(ev.id);
+      });
     }
   }
 
