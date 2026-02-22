@@ -1,4 +1,4 @@
-<!-- docs/factures-liste.html (FINAL — salesDocuments only + badges AVOIR + bouton Ouvrir avoir + bouton Recréer (si creditDocId) + Envoi = seulement à "Publier") -->
+<!-- docs/factures-liste.html (FINAL — salesDocuments only + badge AVOIR cliquable + Envoi (modal) facture/avoir/les 2 + statut SENT uniquement après Publier + textes tech masqués) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -155,16 +155,10 @@
     .badge.orange{ border-color: rgba(255,140,0,0.35); color: #9a4f00; }
     .badge.gray{ border-color: rgba(0,0,0,0.12); color:#222; }
 
-    .badgeLink{
-  text-decoration:none;
-  cursor:pointer;
-}
-.badgeLink:hover{
-  filter: brightness(0.98);
-}
-.badgeLink:active{
-  transform: translateY(1px);
-}
+    .badgeLink{ text-decoration:none; cursor:pointer; }
+    .badgeLink:hover{ filter: brightness(0.98); }
+    .badgeLink:active{ transform: translateY(1px); }
+
     .line6{
       display:grid;
       grid-template-columns: 110px 160px 1.2fr 1.2fr 1.1fr 130px;
@@ -288,8 +282,9 @@
     }
     textarea.modalTxt:focus{ border-color:var(--violet); box-shadow:0 0 0 2px rgba(122,92,255,.12); }
     .modalActions{ display:flex; gap:8px; justify-content:flex-end; margin-top:12px; flex-wrap:wrap; }
-  
-  
+
+    /* ✅ masquage des textes techniques */
+    .tech-only{ display:none !important; }
   </style>
 </head>
 
@@ -358,7 +353,8 @@
         <button type="button" id="pubCloseBtn" style="border:none; background:#fff; font-weight:1000; cursor:pointer;">✕</button>
       </div>
 
-      <div class="modalHint">
+      <!-- ✅ caché (texte technique) -->
+      <div class="modalHint tech-only">
         Cette action rend la facture <b>consultable côté propriétaire</b> (lecture seule).<br>
         Le propriétaire pourra ouvrir l’aperçu et enregistrer son PDF.
       </div>
@@ -379,9 +375,28 @@
       <div style="margin-top:10px;">
         <div class="miniT">Message (optionnel)</div>
         <textarea id="pubText" class="modalTxt" rows="2" placeholder="Ex: Voici votre facture. Merci !"></textarea>
-        <div class="miniS" style="margin-top:6px;">
+
+        <!-- ✅ caché (texte technique) -->
+        <div class="miniS tech-only" style="margin-top:6px;">
           Stocké dans <code>requests</code> (type <code>billing</code>) + patch <code>salesDocuments.ownerVisible=true</code>.
         </div>
+      </div>
+
+      <!-- ✅ NEW : choix documents -->
+      <div style="margin-top:12px;">
+        <div class="miniT">Documents à envoyer</div>
+        <div style="margin-top:8px; display:flex; gap:10px; flex-wrap:wrap;">
+          <label style="display:flex; gap:8px; align-items:center; font-weight:900;">
+            <input type="checkbox" id="sendInvoiceChk" checked>
+            Facture
+          </label>
+
+          <label id="sendCreditWrap" style="display:none; gap:8px; align-items:center; font-weight:900;">
+            <input type="checkbox" id="sendCreditChk">
+            Avoir
+          </label>
+        </div>
+        <div class="miniS" id="sendDocsHint" style="margin-top:6px;">—</div>
       </div>
 
       <div class="modalActions">
@@ -421,6 +436,12 @@
     const pubInvNumber = document.getElementById("pubInvNumber");
     const pubHome      = document.getElementById("pubHome");
     const pubText      = document.getElementById("pubText");
+
+    // ✅ NEW : checkboxes docs
+    const sendInvoiceChk = document.getElementById("sendInvoiceChk");
+    const sendCreditWrap = document.getElementById("sendCreditWrap");
+    const sendCreditChk  = document.getElementById("sendCreditChk");
+    const sendDocsHint   = document.getElementById("sendDocsHint");
 
     let currentUser = null;
     let all = [];
@@ -576,11 +597,10 @@
         : `TVA non applicable. Totaux calculés sur les factures affichées.`;
     }
 
-    // ===== Avoir pivot (Option A) =====
+    // ===== Avoir pivot =====
     function getAvoirId(x){
       const a = String(x?.creditDocId || "").trim();
       if(a) return a;
-      // tolérance si ancien champ existe
       const b = String(x?.creditNoteId || "").trim();
       if(b) return b;
       return "";
@@ -632,6 +652,26 @@
       pubHome.textContent = home;
 
       pubText.value = `Voici votre facture ${invNum}.`;
+
+      // ✅ choix docs : facture/avoir/les 2
+      const avoirId = getAvoirId(x);
+      const hasAvoir = !!avoirId;
+
+      sendInvoiceChk.checked = true;
+
+      // si facture créditée -> par défaut on envoie l’avoir (et pas la facture)
+      const raw = getInvoiceStatusRaw(x);
+      if(hasAvoir && raw === "CREDITED"){
+        sendInvoiceChk.checked = false;
+      }
+
+      sendCreditWrap.style.display = hasAvoir ? "flex" : "none";
+      sendCreditChk.checked = hasAvoir ? true : false;
+
+      sendDocsHint.textContent = hasAvoir
+        ? "Choisis d’envoyer la facture, l’avoir, ou les deux."
+        : "Seule la facture est disponible.";
+
       publishModal.style.display = "block";
       publishModal.setAttribute("aria-hidden","false");
     }
@@ -640,6 +680,10 @@
       publishModal.setAttribute("aria-hidden","true");
       modalItem = null; modalOwnerUid = ""; modalOwnerDocId = "";
       pubText.value = "";
+      sendInvoiceChk.checked = true;
+      sendCreditChk.checked = false;
+      sendCreditWrap.style.display = "none";
+      sendDocsHint.textContent = "—";
     }
     pubCloseBtn.addEventListener("click", closePublishModal);
     pubCancelBtn.addEventListener("click", closePublishModal);
@@ -671,11 +715,17 @@
       if(!currentUser?.uid) return showAlert("Session invalide.");
       if(!modalItem) return showAlert("Aucune facture sélectionnée.");
 
-      const salesDocId = String(modalItem.id || "").trim();
-      if(!salesDocId) return showAlert("ID facture manquant.");
+      const sendInvoice = !!sendInvoiceChk?.checked;
+      const sendCredit  = !!sendCreditChk?.checked && (sendCreditWrap.style.display !== "none");
+      if(!sendInvoice && !sendCredit){
+        return showAlert("Choisis au moins un document à envoyer.");
+      }
+
+      const invoiceDocId = String(modalItem.id || "").trim();
+      if(!invoiceDocId) return showAlert("ID facture manquant.");
 
       const invNum = String(modalItem.invoiceNumber || "").trim();
-      if(!invNum) return showAlert("Facture non émise : crée le numéro avant d’envoyer.");
+      if(sendInvoice && !invNum) return showAlert("Facture non émise : crée le numéro avant d’envoyer.");
 
       const ownerDocId = modalOwnerDocId || getOwnerDocId(modalItem);
       if(!ownerDocId) return showAlert("Envoi impossible : clientOwnerDocId manquant sur cette facture.");
@@ -688,63 +738,128 @@
         return showAlert("Envoi impossible : ownerUid introuvable (owners.ownerUid).");
       }
 
+      // ✅ si on veut envoyer l'avoir, on le charge et on vérifie qu'il est émis
+      const avoirId = getAvoirId(modalItem);
+      let creditDoc = null;
+      if(sendCredit){
+        if(!avoirId) return showAlert("Avoir introuvable : creditDocId manquant.");
+        const cSnap = await getDoc(doc(db,"salesDocuments", avoirId));
+        if(!cSnap.exists()) return showAlert("Avoir introuvable en base.");
+        creditDoc = { id: cSnap.id, ...(cSnap.data()||{}) };
+
+        const creditNum = String(creditDoc.creditNumber || "").trim();
+        if(!creditNum) return showAlert("Avoir non émis : crée le numéro de l’avoir avant d’envoyer.");
+      }
+
       pubDoBtn.disabled = true;
       pubDoBtn.style.opacity = "0.75";
 
       try{
-        // 1) Patch facture -> visible owner + status SENT (SEULEMENT ICI = au moment Publier)
-        await updateDoc(doc(db,"salesDocuments", salesDocId), {
-          ownerUid,
-          ownerVisible: true,
-          invoiceStatus: "SENT",
-          sentAt: serverTimestamp(),
-          updatedAt: serverTimestamp()
-        });
-
-        // 2) Request côté propriétaire (facturation)
-        const rid = requestIdForSalesDoc(salesDocId);
-        const rRef = doc(db,"requests", rid);
-        const exists = await getDoc(rRef);
-
         const msg = String(pubText.value || "").trim();
 
-        const totalTTC = Number.isFinite(Number(modalItem.totalTTC))
-          ? Number(modalItem.totalTTC)
-          : Number(computeTotalsFromLines(modalItem.lines).ttc) || 0;
-
-        const payloadBase = {
-          type: "billing",
-          status: "sent",
-          conciergerieUid: currentUser.uid,
-          ownerUid,
-          ownerDocId,
-          docType: "invoice",
-          salesDocId,
-          number: invNum,
-          homeName: String(modalItem.homeName || "").trim(),
-          totalTTC,
-          note: msg,
-          updatedAt: serverTimestamp()
-        };
-
-        if(exists.exists()){
-          await setDoc(rRef, payloadBase, { merge:true });
-        }else{
-          await setDoc(rRef, { ...payloadBase, createdAt: serverTimestamp() }, { merge:true });
+        // 1) Patch facture (uniquement si envoyée)
+        if(sendInvoice){
+          await updateDoc(doc(db,"salesDocuments", invoiceDocId), {
+            ownerUid,
+            ownerVisible: true,
+            invoiceStatus: "SENT",
+            sentAt: serverTimestamp(),
+            updatedAt: serverTimestamp()
+          });
         }
 
-        // 3) Patch planning marker (events) => sortir du planning
+        // 1bis) Patch avoir (uniquement si envoyé)
+        if(sendCredit && creditDoc){
+          await updateDoc(doc(db,"salesDocuments", creditDoc.id), {
+            ownerUid,
+            ownerVisible: true,
+            creditStatus: "SENT",
+            sentAt: serverTimestamp(),
+            updatedAt: serverTimestamp()
+          });
+        }
+
+        // 2) Request invoice
+        if(sendInvoice){
+          const rid = requestIdForSalesDoc(invoiceDocId);
+          const rRef = doc(db,"requests", rid);
+          const exists = await getDoc(rRef);
+
+          const totalTTC = Number.isFinite(Number(modalItem.totalTTC))
+            ? Number(modalItem.totalTTC)
+            : Number(computeTotalsFromLines(modalItem.lines).ttc) || 0;
+
+          const payloadBase = {
+            type: "billing",
+            status: "sent",
+            conciergerieUid: currentUser.uid,
+            ownerUid,
+            ownerDocId,
+            docType: "invoice",
+            salesDocId: invoiceDocId,
+            number: invNum,
+            homeName: String(modalItem.homeName || "").trim(),
+            totalTTC,
+            note: msg,
+            updatedAt: serverTimestamp()
+          };
+
+          if(exists.exists()){
+            await setDoc(rRef, payloadBase, { merge:true });
+          }else{
+            await setDoc(rRef, { ...payloadBase, createdAt: serverTimestamp() }, { merge:true });
+          }
+        }
+
+        // 2bis) Request credit
+        if(sendCredit && creditDoc){
+          const ridC = requestIdForSalesDoc(creditDoc.id);
+          const rRefC = doc(db,"requests", ridC);
+          const existsC = await getDoc(rRefC);
+
+          const cTotal = Number.isFinite(Number(creditDoc.totalTTC))
+            ? Number(creditDoc.totalTTC)
+            : Number(computeTotalsFromLines(creditDoc.lines).ttc) || 0;
+
+          const payloadCredit = {
+            type: "billing",
+            status: "sent",
+            conciergerieUid: currentUser.uid,
+            ownerUid,
+            ownerDocId,
+            docType: "credit",
+            salesDocId: creditDoc.id,
+            relatedInvoiceId: invoiceDocId,
+            number: String(creditDoc.creditNumber||"").trim(),
+            homeName: String(creditDoc.homeName || modalItem.homeName || "").trim(),
+            totalTTC: -Math.abs(cTotal), // négatif côté owner
+            note: msg,
+            updatedAt: serverTimestamp()
+          };
+
+          if(existsC.exists()){
+            await setDoc(rRefC, payloadCredit, { merge:true });
+          }else{
+            await setDoc(rRefC, { ...payloadCredit, createdAt: serverTimestamp() }, { merge:true });
+          }
+        }
+
+        // 3) Patch planning marker (events) : seulement si facture envoyée
         let patchRes = null;
-        try{
-          patchRes = await patchEventAsInvoiced(salesDocId, modalItem);
-        }catch(e){
-          patchRes = { ok:false, skipped:false, reason: (e?.message || "Erreur patch events") };
+        if(sendInvoice){
+          try{
+            patchRes = await patchEventAsInvoiced(invoiceDocId, modalItem);
+          }catch(e){
+            patchRes = { ok:false, skipped:false, reason: (e?.message || "Erreur patch events") };
+          }
         }
 
-        if(patchRes?.ok){
-          showAlert("✅ Facture publiée dans la Facturation propriétaire.", true);
+        if(patchRes && patchRes?.ok){
+          showAlert("✅ Publication effectuée.", true);
+        }else if(patchRes && !patchRes?.ok){
+          showAlert("✅ Publication effectuée. ⚠️ Patch planning (events) impossible : " + (patchRes?.reason || "inconnu"), false);
         }else{
-          showAlert("✅ Facture publiée. ⚠️ Patch planning (events) impossible : " + (patchRes?.reason || "inconnu"), false);
+          showAlert("✅ Publication effectuée.", true);
         }
 
         closePublishModal();
@@ -797,7 +912,6 @@
 
         const hasNum = !!String(x.invoiceNumber||"").trim();
 
-        // ✅ pivot AVOIR
         const avoirId = getAvoirId(x);
         const avoirActive = !!avoirId;
 
@@ -806,13 +920,8 @@
 
         const allowReglement = hasNum && !["CANCELLED","CREDITED"].includes(stRaw);
 
-        // ✅ Créer avoir : uniquement si facture émise ET pas déjà créditée
         const allowCreateAvoir = hasNum && stRaw !== "CANCELLED" && !avoirActive;
 
-        // ✅ Ouvrir avoir : si lien existe
-        const allowOpenAvoir = avoirActive;
-
-        // ✅ Recréer : seulement si avoir lié (tu ne te perds pas)
         const allowRedo = hasNum && avoirActive;
 
         const ouvrirAvoirHref = avoirId
@@ -825,7 +934,14 @@
 
         const ownerDocId = getOwnerDocId(x);
         const ownerUidFast = getOwnerUidFast(x);
-        const canSend = !!ownerDocId && hasNum;
+
+        // ✅ verrouillage UX : déjà publié => plus de modale
+        const isPublished = !!x.ownerVisible || stRaw === "SENT";
+
+        // ✅ autoriser ouverture modale si: ownerDocId + numéro + pas publié + (facture envoyable OU avoir existant)
+        // règle: si CREDITED => on envoie l’avoir, pas la facture (mais modale OK si avoir existe)
+        const invoiceSendAllowed = !!ownerDocId && hasNum && !["CANCELLED","CREDITED"].includes(stRaw);
+        const canOpenModal = !!ownerDocId && hasNum && !isPublished && (invoiceSendAllowed || avoirActive);
 
         const div = document.createElement("div");
         div.className = "card";
@@ -870,24 +986,26 @@
               <div class="t">Statut</div>
               <div class="v">
                 ${badgeForStatus(stDisp)}
-               ${avoirActive ? `<a class="badge orange badgeLink" href="${ouvrirAvoirHref}" title="Ouvrir l’avoir">AVOIR</a>` : ``}
+                ${avoirActive ? `<a class="badge orange badgeLink" href="${ouvrirAvoirHref}" title="Ouvrir l’avoir">AVOIR</a>` : ``}
               </div>
 
               ${!ownerDocId ? `<div class="t" style="margin-top:2px; color:#b3261e;">Envoi impossible: clientOwnerDocId manquant</div>` : ``}
               ${ownerDocId && !ownerUidFast ? `<div class="t" style="margin-top:2px;">(ownerUid sera résolu depuis owners)</div>` : ``}
+              ${isPublished ? `<div class="t" style="margin-top:2px;">Déjà publié côté propriétaire.</div>` : ``}
             </div>
 
             <div class="k" style="align-items:flex-end; min-width:280px;">
               <div class="actionsBar">
                 <a class="btn primary" href="${openHref}">Ouvrir</a>
 
-                <button class="btn" type="button" data-action="send" ${canSend ? "" : `aria-disabled="true"`}>Envoyer</button>
+                <button class="btn" type="button" data-action="send"
+                  ${canOpenModal ? "" : `aria-disabled="true"`}>
+                  ${isPublished ? "Publié" : "Envoyer"}
+                </button>
 
                 <a class="btn" href="${regHref}" ${allowReglement ? "" : `aria-disabled="true"`}>Règlement</a>
 
                 ${allowCreateAvoir ? `<a class="btn" href="${creerAvoirHref}">Avoir</a>` : ``}
-               
-
                 ${allowRedo ? `<a class="btn" href="${redoHref}">Recréer</a>` : ``}
               </div>
             </div>
@@ -895,7 +1013,7 @@
         `;
 
         const sendBtn = div.querySelector('button[data-action="send"]');
-        if(sendBtn && canSend){
+        if(sendBtn && canOpenModal){
           sendBtn.addEventListener("click", async ()=>{
             const resolvedOwnerUid = ownerUidFast || "";
             openPublishModal(x, resolvedOwnerUid, ownerDocId);
@@ -981,5 +1099,3 @@
   </script>
 </body>
 </html>
-
-
