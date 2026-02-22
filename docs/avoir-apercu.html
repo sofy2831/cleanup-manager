@@ -1,4 +1,4 @@
-<!-- docs/avoir-apercu.html (FINAL — owner=1 support + security ownerUid + backLink owner + login owner/conciergerie + draft=1 conciergerie-only + PRINT FIX) -->
+<!-- docs/avoir-apercu.html (FINAL — owner=1 support + security ownerUid + backLink owner + login owner/conciergerie + SANS draft=1 + PRINT FIX) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -400,7 +400,6 @@
 
     let creditDoc = null;
     let invDoc = null;
-    let isDraftPreview = false;
 
     // ✅ PRINT STATE (évite variables hors scope)
     let currentDocId = "";
@@ -528,7 +527,7 @@
       const invNum  = String(credit?.fromInvoiceNumber || invoice?.invoiceNumber || "").trim();
       const issued = String(credit?.creditIssuedDate || "").trim() || ddmmyyyy(new Date());
 
-      docTitleEl.textContent = credNum ? `AVOIR N° ${credNum}` : `AVOIR N° — (BROUILLON)`;
+      docTitleEl.textContent = credNum ? `AVOIR N° ${credNum}` : `AVOIR N° —`;
       metaRightEl.innerHTML = `
         <div><b>Émis le</b> ${esc(issued)}</div>
         <div><b>Facture</b> ${esc(invNum || "—")}</div>
@@ -615,18 +614,6 @@
       setTimeout(()=>{ document.title = originalTitle; }, 1000);
     });
 
-    function loadDraftFromSession(){
-      try{
-        const raw = sessionStorage.getItem("creditDraftPreview");
-        if(!raw) return null;
-        const draft = JSON.parse(raw);
-        if(!draft || typeof draft !== "object") return null;
-        return draft;
-      }catch{
-        return null;
-      }
-    }
-
     function loginRedirectUrl(){
       const token = getParam("token");
       const base = isOwnerMode() ? "login.html?role=proprietaire" : "login.html?role=conciergerie";
@@ -644,54 +631,8 @@
 
       const docId = getParam("docId");
       currentDocId = docId; // ✅ pour print fallback
-      isDraftPreview = (getParam("draft") === "1");
 
       try{
-        // draft=1 => conciergerie only
-        if(isDraftPreview){
-          if(isOwnerMode()){
-            showError("Mode propriétaire : aperçu brouillon non supporté.");
-            backLink.href = "owner-facturation.html";
-            return;
-          }
-
-          const draft = loadDraftFromSession();
-          if(!draft || typeof draft !== "object"){
-            showError("Prévisualisation brouillon impossible : sessionStorage vide.");
-            backLink.href = "factures-liste.html";
-            return;
-          }
-
-          creditDoc = { ...(draft||{}), id: String(docId||draft?.id||"").trim(), type:"CREDIT" };
-          invDoc = draft._invoice || null;
-
-          if(!invDoc){
-            showError("Prévisualisation brouillon : facture (_invoice) manquante.");
-            backLink.href = "factures-liste.html";
-            return;
-          }
-
-          const cUid = String(invDoc.conciergerieUid||"").trim();
-          if(cUid && cUid !== String(user.uid)){
-            showError("Accès refusé (document d’une autre conciergerie).");
-            backLink.href = "factures-liste.html";
-            return;
-          }
-
-          backLink.href = `avoir.html?fromDocId=${encodeURIComponent(String(invDoc.id||"").trim())}`;
-
-          const userSnap = await getDoc(doc(db,"users", user.uid));
-          const profile = userSnap.exists() ? (userSnap.data()||{}) : {};
-          const bp = applyBusinessProfile(profile);
-
-          renderClientHeader(invDoc);
-          renderHeader(creditDoc, invDoc);
-          renderHomeAndPeriod(invDoc);
-          renderReason(creditDoc);
-          renderLines(invDoc, bp || {});
-          return;
-        }
-
         // mode normal => docId CREDIT obligatoire
         if(!docId){
           showError("docId manquant.");
