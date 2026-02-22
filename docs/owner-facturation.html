@@ -1,4 +1,4 @@
-<!-- docs/owner-facturation.html (FINAL ROBUST — history from salesDocuments ownerUid, pending optional from requests) -->
+<!-- docs/owner-facturation.html (FINAL ROBUST — history from salesDocuments ownerUid + ownerVisible=true, pending optional from requests) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -317,6 +317,7 @@
     const v = String(t||"").toUpperCase().trim();
     if(v === "QUOTE") return "Devis";
     if(v === "INVOICE") return "Facture";
+    if(v === "CREDIT") return "Avoir";
     return "Document";
   }
   function getParam(name){
@@ -364,6 +365,7 @@
     if(!salesDocId) return "";
     if(dtype === "invoice") return `facture-apercu.html?docId=${encodeURIComponent(salesDocId)}&owner=1`;
     if(dtype === "quote") return `devis-apercu.html?docId=${encodeURIComponent(salesDocId)}&owner=1`;
+    if(dtype === "credit") return `avoir-apercu.html?docId=${encodeURIComponent(salesDocId)}&owner=1`;
     return `facture-apercu.html?docId=${encodeURIComponent(salesDocId)}&owner=1`;
   }
   function renderPendingRequestRow(r){
@@ -439,7 +441,6 @@
     pendingCount.textContent = "0";
     hideAlert(alertPending);
 
-    // ⚠️ OPTIONAL: si rules/index pas prêts, on n'empêche pas la page de fonctionner
     const qb = query(
       collection(db, "requests"),
       where("ownerUid", "==", uid),
@@ -484,14 +485,15 @@
     if(!id) return "";
     const type = String(d.type || "").toUpperCase().trim();
     if(type === "QUOTE") return `devis-apercu.html?docId=${encodeURIComponent(id)}&owner=1`;
+    if(type === "CREDIT") return `avoir-apercu.html?docId=${encodeURIComponent(id)}&owner=1`;
     return `facture-apercu.html?docId=${encodeURIComponent(id)}&owner=1`;
   }
 
   function renderSalesRow(d){
     const type = docTypeLabel(d.type);
     const number =
-      String(d.invoiceNumber || d.quoteNumber || "").trim()
-        ? ("#" + esc(String(d.invoiceNumber || d.quoteNumber).trim()))
+      String(d.invoiceNumber || d.quoteNumber || d.creditNumber || "").trim()
+        ? ("#" + esc(String(d.invoiceNumber || d.quoteNumber || d.creditNumber).trim()))
         : "—";
 
     const home = esc(d.homeName || d.home || "—");
@@ -532,6 +534,7 @@
     historyList.innerHTML = "";
     historyCount.textContent = "—";
 
+    // ✅ IMPORTANT: ownerVisible == true est requis par la rule (owner read = published)
     const qs = query(
       collection(db, "salesDocuments"),
       where("ownerUid", "==", uid),
@@ -549,7 +552,7 @@
         historyList.innerHTML = `
           <div class="item">
             <div class="meta"><span>Aucun document</span><span>—</span></div>
-            <p class="msg">Aucun devis/facture pour le moment.</p>
+            <p class="msg">Aucune facture/avoir publié pour le moment.</p>
           </div>
         `;
       }else{
@@ -558,7 +561,6 @@
         }
       }
 
-      // page ouverte => reset
       resetUnreadBilling();
 
     }, (err)=>{
@@ -568,7 +570,7 @@
         showAlert(
           alertHistory,
           "⛔ Index Firestore manquant.\n" +
-          "Crée l’index composite: salesDocuments (ownerUid ASC, createdAt DESC).\n" +
+          "Crée l’index composite: salesDocuments (ownerUid ASC, ownerVisible ASC, createdAt DESC).\n" +
           "Puis recharge.",
           false
         );
@@ -576,7 +578,7 @@
         showAlert(
           alertHistory,
           "⛔ Permission refusée sur salesDocuments.\n" +
-          "Rule attendue: read autorisé si ownerUid == auth.uid.",
+          "Rule attendue: read owner autorisé si ownerUid == auth.uid ET ownerVisible == true.",
           false
         );
       }else{
@@ -609,4 +611,3 @@
 
 </body>
 </html>
-
