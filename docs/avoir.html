@@ -1,4 +1,4 @@
-<!-- docs/avoir.html (FINAL — FIX: autosave motif+notes avant aperçu, + restore au retour) -->
+<!-- docs/avoir.html (FINAL — FIX: autosave motif+notes avant aperçu + restore au retour + READONLY après émission) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -253,7 +253,6 @@
       }
       .page{ padding-bottom: 32px; }
     }
-      .tech-only{ display:none !important; }
   </style>
 </head>
 
@@ -361,7 +360,7 @@
 
         <div class="divider"></div>
 
-        <div class="kv" id="linkKv"></div>
+        <div class="kv" id="linkKv" style="display:none;"></div>
       </div>
     </div>
   </div>
@@ -563,35 +562,37 @@
       return x;
     }
 
+    // ✅ READONLY rules
     function isCreditReadOnly(){
-  const st = String(creditData?.creditStatus || "").toUpperCase().trim();
-  const hasNum = !!String(creditData?.creditNumber || "").trim();
-  // Dès qu'il y a un numéro OU que le statut n'est plus DRAFT => verrouillé
-  return hasNum || (st && st !== "DRAFT");
-}
+      const st = String(creditData?.creditStatus || "").toUpperCase().trim();
+      const hasNum = !!String(creditData?.creditNumber || "").trim();
+      return hasNum || (st && st !== "DRAFT");
+    }
 
-function applyReadOnlyUI(){
-  const ro = isCreditReadOnly();
+    function applyReadOnlyUI(){
+      const ro = isCreditReadOnly();
 
-  creditReasonEl.disabled = ro;
-  creditNotesEl.disabled  = ro;
+      // champs
+      creditReasonEl.disabled = ro;
+      creditNotesEl.disabled  = ro;
 
-  // Enregistrer = interdit si émis
-  saveBtn.disabled = ro || !invoiceData;
-  saveBtn.style.display = ro ? "none" : ""; // optionnel: tu peux juste disable au lieu de cacher
+      // boutons
+      if(ro){
+        saveBtn.disabled = true;
+        saveBtn.style.display = "none"; // si tu préfères visible mais grisé: commente cette ligne
+      }else{
+        saveBtn.style.display = "";
+        saveBtn.disabled = !invoiceData;
+      }
 
-  // Aperçu reste OK
-  previewBtn.disabled = !invoiceData;
+      previewBtn.disabled = !invoiceData;
 
-  // petit détail UX
-  if(ro){
-    creditReasonEl.placeholder = "";
-    creditNotesEl.placeholder = "";
-  }
-}
+      if(ro){
+        creditReasonEl.placeholder = "";
+        creditNotesEl.placeholder = "";
+      }
+    }
 
-
-    
     async function loadProfile(uid){
       const snap = await getDoc(doc(db, "users", uid));
       profileData = snap.exists() ? (snap.data() || {}) : {};
@@ -617,8 +618,19 @@ function applyReadOnlyUI(){
     }
 
     function lockUI(locked){
-      saveBtn.disabled = !!locked || !invoiceData;
+      // Le verrou "read-only" gagne toujours
+      const ro = isCreditReadOnly();
+
       previewBtn.disabled = !!locked || !invoiceData;
+
+      if(ro){
+        saveBtn.disabled = true;
+        creditReasonEl.disabled = true;
+        creditNotesEl.disabled = true;
+        return;
+      }
+
+      saveBtn.disabled = !!locked || !invoiceData;
       saveBtn.style.opacity = locked ? "0.75" : "1";
       creditReasonEl.disabled = !!locked;
       creditNotesEl.disabled = !!locked;
@@ -712,22 +724,16 @@ function applyReadOnlyUI(){
       renderClientHeaderFromDoc(inv);
       renderLinesAndTotalsFromInvoice();
 
-      const invId = String(inv.id || "").trim();
-      const credId = String(cred.id || "").trim();
-      
+      // Liaisons techniques cachées
       linkKv.style.display = "none";
-      linkKv.innerHTML = `
-        <div class="line"><b>invoiceDocId</b> : ${esc(invId || "—")}</div>
-        <div class="line"><b>creditDocId</b> : ${esc(credId || "—")}</div>
-              
-      `;
+      linkKv.innerHTML = "";
 
       // Hydrate champs depuis Firestore si vides
       if((creditReasonEl.value || "").trim() === "" && cred.creditReason) creditReasonEl.value = cred.creditReason;
       if((creditNotesEl.value || "").trim() === "" && cred.creditNotes) creditNotesEl.value = cred.creditNotes;
 
-      previewBtn.disabled = !invoiceData;
-      saveBtn.disabled = !invoiceData;
+      // Applique le mode read-only si émis
+      applyReadOnlyUI();
     }
 
     function buildBackLink(){
@@ -782,41 +788,38 @@ function applyReadOnlyUI(){
       };
     }
 
-    // ✅ NEW: autosave motif/notes (Firestore si doc existe, sinon sessionStorage fallback)
+    // ✅ autosave motif/notes (Firestore si doc existe, sinon sessionStorage fallback)
     async function autosaveCreditDraft(){
+      if(isCreditReadOnly()) return; // pas de modif après émission
+
       const motif = String(creditReasonEl.value || "").trim();
       const notes = String(creditNotesEl.value || "").trim();
 
-      // Toujours garder un fallback local (au cas où doc pas encore créé)
       try{
         sessionStorage.setItem("creditDraftPreview", JSON.stringify(makeDraftForPreview()));
       }catch(e){}
 
       const creditId = String(creditData?.id || "").trim();
-      if(!creditId) return; // pas encore créé -> on reste sur fallback sessionStorage
+      if(!creditId) return;
 
-      // On écrit dans Firestore pour que le retour recharge le bon motif
       try{
         await updateDoc(doc(db, "salesDocuments", creditId), {
           creditReason: motif,
           creditNotes: notes,
           updatedAt: serverTimestamp()
         });
-        // Miroir local
         creditData = { ...(creditData||{}), creditReason: motif, creditNotes: notes };
       }catch(e){
         console.warn("autosaveCreditDraft failed:", e?.message || e);
       }
     }
 
-    // ✅ NEW: hydrate depuis sessionStorage si retour d'aperçu
     function restoreDraftFromSessionIfAny(){
       try{
         const raw = sessionStorage.getItem("creditDraftPreview");
         if(!raw) return;
         const d = JSON.parse(raw);
 
-        // on n'écrase pas si Firestore a déjà quelque chose
         if((creditReasonEl.value || "").trim() === "" && d?.creditReason) creditReasonEl.value = d.creditReason;
         if((creditNotesEl.value || "").trim() === "" && d?.creditNotes) creditNotesEl.value = d.creditNotes;
       }catch(e){}
@@ -928,7 +931,6 @@ function applyReadOnlyUI(){
       hideAlert();
       lockUI(true);
       try{
-        // ✅ Sauvegarde le motif AVANT l’aperçu
         await autosaveCreditDraft();
 
         const idForUrl = String(creditData?.id || "").trim() || "DRAFT";
@@ -937,6 +939,7 @@ function applyReadOnlyUI(){
         console.error(e);
         showAlert("Erreur aperçu : " + (e?.message || "inconnue"));
         lockUI(false);
+        applyReadOnlyUI();
       }
     });
 
@@ -944,6 +947,7 @@ function applyReadOnlyUI(){
     saveBtn.addEventListener("click", async ()=>{
       hideAlert();
       if(!invoiceData) return showAlert("Facture source non chargée.");
+      if(isCreditReadOnly()) return showAlert("Avoir déjà émis : modification interdite.");
 
       const already = String(invoiceData?.creditDocId || "").trim();
       if(already && String(creditData?.id||"").trim() !== already){
@@ -1043,12 +1047,15 @@ function applyReadOnlyUI(){
 
         showAlert("✅ Avoir enregistré et lié à la facture.", true);
         renderRecap();
+        lockUI(false);
+        applyReadOnlyUI();
 
       }catch(e){
         console.error(e);
         showAlert("⛔ Erreur enregistrement avoir : " + (e?.message || "inconnue"));
       }finally{
         lockUI(false);
+        applyReadOnlyUI();
       }
     });
 
@@ -1070,22 +1077,19 @@ function applyReadOnlyUI(){
           throw new Error("docId ou fromDocId manquant. Ex: avoir.html?fromDocId=XXXX");
         }
 
-        // ✅ NEW: restore draft si retour d’aperçu
         restoreDraftFromSessionIfAny();
 
         renderRecap();
         lockUI(false);
+        applyReadOnlyUI();
 
       }catch(e){
         console.error(e);
         showAlert("⛔ " + (e?.message || "Erreur chargement avoir"), false);
         lockUI(true);
+        applyReadOnlyUI();
       }
     });
   </script>
 </body>
 </html>
-
-
-
-
