@@ -1,4 +1,4 @@
-<!-- docs/factures-liste.html (FINAL — modal envoyer: check invoice/credit, 1 request par doc, no tech text, title sans "facturation") -->
+<!-- docs/factures-liste.html (FINAL — publish ownerUid+ownerVisible + mailto open + 1 request/doc + modal clean) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -438,6 +438,7 @@
       <div class="modalActions">
         <button id="pubCancelBtn" type="button" class="btn">Annuler</button>
         <button id="pubDoBtn" type="button" class="btn primary">Publier</button>
+        <button id="pubMailBtn" type="button" class="btn">Ouvrir mail</button>
       </div>
     </div>
   </div>
@@ -467,6 +468,7 @@
     const pubCloseBtn  = document.getElementById("pubCloseBtn");
     const pubCancelBtn = document.getElementById("pubCancelBtn");
     const pubDoBtn     = document.getElementById("pubDoBtn");
+    const pubMailBtn   = document.getElementById("pubMailBtn");
     const pubOwnerName = document.getElementById("pubOwnerName");
     const pubOwnerEmail= document.getElementById("pubOwnerEmail");
     const pubHome      = document.getElementById("pubHome");
@@ -489,8 +491,8 @@
     let modalItem = null;
     let modalOwnerUid = "";
     let modalOwnerDocId = "";
-    let modalCreditId = "";         // creditDocId if exists
-    let modalCreditNumber = "";     // fetched if needed
+    let modalCreditId = "";
+    let modalCreditNumber = "";
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -705,10 +707,10 @@
       const sendInv = !!chkInvoice.checked && !!invNum;
       const sendCred = !!chkCredit.checked && !!creditNum;
 
-      if(sendInv && sendCred) return `Voici votre facture ${invNum} et votre avoir ${creditNum}.`;
-      if(sendInv) return `Voici votre facture ${invNum}.`;
-      if(sendCred) return `Voici votre avoir ${creditNum}.`;
-      return `Voici votre document.`;
+      if(sendInv && sendCred) return `Facture ${invNum} + avoir ${creditNum}.`;
+      if(sendInv) return `Facture ${invNum}.`;
+      if(sendCred) return `Avoir ${creditNum}.`;
+      return `Document.`;
     }
 
     async function fetchCreditNumberIfNeeded(creditId){
@@ -740,7 +742,7 @@
       pubHome.textContent = home;
       pubPeriod.textContent = period;
 
-      // Invoice checkbox (always available if invoice has number)
+      // Invoice checkbox (available if invoice has number)
       const invNum = String(x.invoiceNumber || "").trim();
       pubInvNumberPill.textContent = invNum || "—";
       chkInvoice.checked = !!invNum;
@@ -753,7 +755,7 @@
         modalCreditNumber = await fetchCreditNumberIfNeeded(modalCreditId);
         pubCreditNumberPill.textContent = modalCreditNumber || "—";
         chkCreditWrap.style.display = "";
-        chkCredit.checked = !!modalCreditNumber; // par défaut coché si numéro trouvé
+        chkCredit.checked = !!modalCreditNumber;
       }else{
         chkCreditWrap.style.display = "none";
         chkCredit.checked = false;
@@ -765,12 +767,8 @@
       publishModal.setAttribute("aria-hidden","false");
     }
 
-    chkInvoice.addEventListener("change", ()=>{
-      pubText.value = buildDefaultMessage();
-    });
-    chkCredit.addEventListener("change", ()=>{
-      pubText.value = buildDefaultMessage();
-    });
+    chkInvoice.addEventListener("change", ()=>{ pubText.value = buildDefaultMessage(); });
+    chkCredit.addEventListener("change", ()=>{ pubText.value = buildDefaultMessage(); });
 
     // ===== Planning marker patch (events) =====
     async function patchEventAsInvoiced(invoiceDocId, inv){
@@ -800,11 +798,11 @@
 
       const payloadBase = {
         type: "billing",
-        status: "sent",                 // pas de validation côté owner ici
+        status: "sent",
         conciergerieUid: currentUser.uid,
         ownerUid,
         ownerDocId,
-        docType,                        // "invoice" | "credit"
+        docType, // "invoice" | "credit"
         salesDocId,
         number: String(number||"").trim(),
         homeName: String(homeName||"").trim(),
@@ -818,6 +816,49 @@
       }else{
         await setDoc(rRef, { ...payloadBase, createdAt: serverTimestamp() }, { merge:true });
       }
+    }
+
+    function buildMailto(toEmail, subject, body){
+      const s = encodeURIComponent(subject || "");
+      const b = encodeURIComponent(body || "");
+      return `mailto:${encodeURIComponent(toEmail || "")}?subject=${s}&body=${b}`;
+    }
+
+    function buildEmailSubject(){
+      const invNum = String(modalItem?.invoiceNumber || "").trim();
+      const creditNum = String(modalCreditNumber || "").trim();
+      const sendInv = !!chkInvoice.checked && !!invNum;
+      const sendCred = !!chkCredit.checked && !!creditNum;
+
+      if(sendInv && sendCred) return `Facture ${invNum} + avoir ${creditNum}`;
+      if(sendInv) return `Facture ${invNum}`;
+      if(sendCred) return `Avoir ${creditNum}`;
+      return `Document`;
+    }
+
+    function buildEmailBody(){
+      const msg = String(pubText.value || "").trim();
+      const invId = String(modalItem?.id || "").trim();
+      const invNum = String(modalItem?.invoiceNumber || "").trim();
+
+      const sendInv = !!chkInvoice.checked && !!invNum;
+      const sendCred = !!chkCredit.checked && !!modalCreditId;
+
+      const lines = [];
+      if(msg) lines.push(msg);
+      lines.push("");
+      lines.push("Liens (lecture seule) :");
+
+      if(sendInv && invId){
+        lines.push(`- Facture : ${location.origin}${location.pathname.replace(/[^\/]*$/, "")}facture-apercu.html?docId=${encodeURIComponent(invId)}&owner=1`);
+      }
+      if(sendCred && modalCreditId){
+        lines.push(`- Avoir : ${location.origin}${location.pathname.replace(/[^\/]*$/, "")}avoir-apercu.html?docId=${encodeURIComponent(modalCreditId)}&owner=1`);
+      }
+
+      lines.push("");
+      lines.push("Vous pouvez joindre le PDF de votre côté avant envoi.");
+      return lines.join("\n");
     }
 
     async function publishToOwner(){
@@ -850,13 +891,15 @@
       }
 
       pubDoBtn.disabled = true;
+      pubMailBtn.disabled = true;
       pubDoBtn.style.opacity = "0.75";
+      pubMailBtn.style.opacity = "0.75";
 
       try{
         const msg = String(pubText.value || "").trim();
         const homeName = String(modalItem.homeName || "").trim();
 
-        // 1) INVOICE (si coché)
+        // 1) INVOICE
         if(sendInv){
           await updateDoc(doc(db,"salesDocuments", invoiceDocId), {
             ownerUid,
@@ -881,13 +924,11 @@
             note: msg
           });
 
-          // Patch planning marker (events) uniquement sur facture
           try{ await patchEventAsInvoiced(invoiceDocId, modalItem); }catch(e){}
         }
 
-        // 2) CREDIT (si coché)
+        // 2) CREDIT
         if(sendCred){
-          // On relit l’avoir pour sécuriser number/total
           const cs = await getDoc(doc(db,"salesDocuments", modalCreditId));
           if(!cs.exists()) throw new Error("Avoir introuvable (creditDocId).");
           const cd = cs.data() || {};
@@ -916,9 +957,21 @@
             totalTTC: totalCredTTC,
             note: msg
           });
+
+          modalCreditNumber = creditNum; // sync mail subject/body
+          pubCreditNumberPill.textContent = creditNum || "—";
         }
 
         showAlert("✅ Publication effectuée côté propriétaire.", true);
+
+        // ✅ Ouvrir le mail (pas de PJ, juste mailto)
+        const { ownerEmail } = getOwnerNameEmail(modalItem);
+        if(ownerEmail){
+          const mailto = buildMailto(ownerEmail, buildEmailSubject(), buildEmailBody());
+          // certains navigateurs bloquent window.open si pas user gesture.
+          // Ici on le fait dans le même click => OK
+          window.location.href = mailto;
+        }
 
         closePublishModal();
         await loadInvoices(currentUser.uid);
@@ -928,10 +981,25 @@
         showAlert("⛔ Erreur publication : " + (e?.message || "inconnue"));
       }finally{
         pubDoBtn.disabled = false;
+        pubMailBtn.disabled = false;
         pubDoBtn.style.opacity = "1";
+        pubMailBtn.style.opacity = "1";
       }
     }
+
     pubDoBtn.addEventListener("click", publishToOwner);
+
+    // bouton mail seul (sans publish) si tu veux juste préparer l'email
+    pubMailBtn.addEventListener("click", ()=>{
+      if(!modalItem) return;
+      const { ownerEmail } = getOwnerNameEmail(modalItem);
+      if(!ownerEmail){
+        showAlert("⛔ Email propriétaire manquant.", false);
+        return;
+      }
+      const mailto = buildMailto(ownerEmail, buildEmailSubject(), buildEmailBody());
+      window.location.href = mailto;
+    });
 
     function render(){
       const filtered = getFiltered();
@@ -1040,7 +1108,7 @@
               </div>
 
               ${!ownerDocId ? `<div class="t" style="margin-top:2px; color:#b3261e;">Envoi impossible: clientOwnerDocId manquant</div>` : ``}
-              ${ownerDocId && !ownerUidFast ? `<div class="t" style="margin-top:2px;">(ownerUid sera résolu depuis owners)</div>` : ``}
+              ${ownerDocId && !ownerUidFast ? `` : ``}
             </div>
 
             <div class="k" style="align-items:flex-end; min-width:280px;">
@@ -1145,4 +1213,3 @@
   </script>
 </body>
 </html>
-
