@@ -1,4 +1,4 @@
-<!-- docs/facture-apercu.html (FINAL — FIX CSS + respect invoiceShowCancellation + support draft=1 via sessionStorage) -->
+<!-- docs/facture-apercu.html (FINAL — owner=1 support + security ownerUid + backLink owner + forbid owner on eventId) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -387,7 +387,6 @@
 
     const logoImg = document.getElementById("logoImg");
     const logoFallback = document.getElementById("logoFallback");
-
     const companyNameEl = document.getElementById("companyName");
 
     const docTitleEl = document.getElementById("docTitle");
@@ -435,10 +434,6 @@
     let docData = null;
     let isDraftPreview = false;
 
-    function showError(msg){
-      alertBox.style.display = "block";
-      alertBox.textContent = "⛔ " + msg;
-    }
     function esc(s){
       return String(s||"")
         .replaceAll("&","&amp;")
@@ -447,6 +442,10 @@
         .replaceAll('"',"&quot;")
         .replaceAll("'","&#039;");
     }
+    function showError(msg){
+      alertBox.style.display = "block";
+      alertBox.textContent = "⛔ " + msg;
+    }
     function money(n){
       const x = Number(n || 0);
       return x.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " €";
@@ -454,6 +453,9 @@
     function getParam(name){
       const p = new URLSearchParams(location.search);
       return (p.get(name) || "").trim();
+    }
+    function isOwnerMode(){
+      return getParam("owner") === "1";
     }
     function ddmmyyyy(d){
       const dd = String(d.getDate()).padStart(2,"0");
@@ -831,7 +833,7 @@
       const quoteRef = String(d?.quoteNumber || "").trim();
       cond1.innerHTML = `<b>Référence devis</b> : ${esc(quoteRef || "—")}`;
 
-      // ✅ annulation affichable/masquable
+      // annulation affichable/masquable
       const showCancel = (typeof d?.invoiceShowCancellation === "boolean") ? d.invoiceShowCancellation : true;
       const cancelPct = Number.isFinite(Number(businessProfile?.conditions?.cancellationPercent))
         ? Number(businessProfile.conditions.cancellationPercent)
@@ -848,7 +850,7 @@
       cond3.innerHTML = `&nbsp;`;
     }
 
-    function renderBank(businessProfile, profileRaw){
+    function renderBank(businessProfile){
       const bank = (businessProfile?.bank || {});
       const bankName = String(bank.name || "").trim();
       const iban = String(bank.iban || "").trim();
@@ -898,9 +900,18 @@
       }
     }
 
+    function loginRedirectUrl(){
+      const token = getParam("token");
+      const base = isOwnerMode() ? "login.html?role=proprietaire" : "login.html?role=conciergerie";
+      return token ? (base + "&token=" + encodeURIComponent(token)) : base;
+    }
+
     onAuthStateChanged(auth, async (user)=>{
+      // backLink par défaut
+      backLink.href = isOwnerMode() ? "owner-facturation.html" : "factures-liste.html";
+
       if(!user){
-        location.href = "login.html?role=conciergerie";
+        location.href = loginRedirectUrl();
         return;
       }
 
@@ -908,15 +919,24 @@
       const eventId = getParam("eventId");
       isDraftPreview = (getParam("draft") === "1");
 
+      // owner mode: on force docId (salesDocuments)
+      if(isOwnerMode() && eventId){
+        showError("Mode propriétaire : eventId non supporté. (Ouvre via docId depuis l’historique.)");
+        backLink.href = "owner-facturation.html";
+        return;
+      }
+
       if(!docId && !eventId){
-        backLink.href = "factures-liste.html";
         showError("docId ou eventId manquant.");
         return;
       }
 
-      backLink.href = docId
-        ? `facture.html?docId=${encodeURIComponent(docId)}`
-        : `facture.html?eventId=${encodeURIComponent(eventId)}`;
+      // backLink fin (non owner)
+      if(!isOwnerMode()){
+        backLink.href = docId
+          ? `facture.html?docId=${encodeURIComponent(docId)}`
+          : `facture.html?eventId=${encodeURIComponent(eventId)}`;
+      }
 
       try{
         // 1) doc source
@@ -930,13 +950,27 @@
         }
         docData = { id: snap.id, ...(snap.data()||{}) };
 
-        // 2) sécurité conciergerie
-        if(String(docData.conciergerieUid||"") && String(docData.conciergerieUid) !== String(user.uid)){
-          return showError("Accès refusé (document d’une autre conciergerie).");
+        // 2) sécurité
+        if(isOwnerMode()){
+          const ouid = String(docData.ownerUid || "").trim();
+          if(!ouid){
+            showError("Accès refusé : ownerUid manquant sur ce document.");
+            backLink.href = "owner-facturation.html";
+            return;
+          }
+          if(ouid !== String(user.uid)){
+            showError("Accès refusé (document d’un autre propriétaire).");
+            backLink.href = "owner-facturation.html";
+            return;
+          }
+        }else{
+          if(String(docData.conciergerieUid||"") && String(docData.conciergerieUid) !== String(user.uid)){
+            return showError("Accès refusé (document d’une autre conciergerie).");
+          }
         }
 
-        // 3) draft merge (aperçu avant save)
-        if(isDraftPreview){
+        // 3) draft merge (aperçu avant save) — conciergerie uniquement
+        if(isDraftPreview && !isOwnerMode()){
           const expectedId = docId ? docId : eventId;
           const draft = loadDraftFromSession(expectedId);
           if(draft){
@@ -944,13 +978,19 @@
           }
         }
 
-        // 4) profile
-        const userSnap = await getDoc(doc(db,"users", user.uid));
+        // 4) profile société (conciergerieUid)
+        const conciergerieUid = String(docData.conciergerieUid || "").trim();
+        if(!conciergerieUid){
+          showError("conciergerieUid manquant sur le document.");
+          return;
+        }
+
+        const userSnap = await getDoc(doc(db,"users", conciergerieUid));
         const profile = userSnap.exists() ? (userSnap.data()||{}) : {};
         const bp = applyBusinessProfile(profile);
 
         // 5) client (owners -> homes -> snapshot)
-        const ownerFromOwners = await loadOwnerFromDoc(user.uid, docData);
+        const ownerFromOwners = await loadOwnerFromDoc(conciergerieUid, docData);
         const homeFallback = await loadHomeClientFallback(docData);
         renderClientHeader(ownerFromOwners, homeFallback, docData);
 
@@ -959,7 +999,7 @@
         renderHomeAndPeriod(docData);
         renderLines(docData, bp || {});
         renderPaymentAndConditions(docData, bp || {});
-        renderBank(bp || {}, profile || {});
+        renderBank(bp || {});
         renderPenalty(docData);
 
       }catch(e){
