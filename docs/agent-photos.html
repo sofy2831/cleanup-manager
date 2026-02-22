@@ -1,4 +1,4 @@
-<!-- docs/agent-photos.html (FINAL — photos ONLY via token 24h ; upload multi ; Storage: /proofPhotos/{prestationId}/{type}/{token}/... + Firestore index mission + event aggregate + bouton Terminer -> missionfini.html) -->
+<!-- docs/agent-photos.html (FINAL — photos via token 24h ; type auto (depuis token) ; accepte prestationId OU eventId ; NE BLOQUE PAS par type) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -185,14 +185,23 @@
         .replaceAll("'","&#039;");
     }
 
+    // ===== Params (type devient OPTIONNEL) =====
     const token = qs("token");
-    const prestationId = qs("prestationId");
-    const type = (qs("type") || "MENAGE").toUpperCase();
+
+    // accepte prestationId OU eventId (compat)
+    const prestationId =
+      (qs("prestationId") || qs("eventId") || qs("event") || "").trim();
+
+    // type demandé (UX), mais on ne BLOQUE PLUS dessus
+    const requestedType = (qs("type") || "").toUpperCase().trim();
+
+    // type EFFECTIF (pour stockage + index) : on le fixe après lecture token
+    let effectiveType = "PHOTOS";
 
     function validateParams(){
-      if(!token || !prestationId || !type){
+      if(!token || !prestationId){
         subLine.textContent = "";
-        showAlert("Paramètres manquants : token / prestationId / type.");
+        showAlert("Paramètres manquants : token / prestationId (ou eventId).");
         return false;
       }
       return true;
@@ -218,6 +227,31 @@
 
     let tokenDocCache = null;
 
+    function normalizeType(x){
+      return String(x||"").toUpperCase().trim();
+    }
+
+    function pickEffectiveTypeFromToken(t){
+      // priorité :
+      // 1) type demandé SI présent
+      // 2) t.missionId / t.type
+      // 3) t.missionTypes[0]
+      // 4) "PHOTOS"
+      const mts = Array.isArray(t?.missionTypes) ? t.missionTypes.map(normalizeType).filter(Boolean) : [];
+      const tokenPrimary = normalizeType(t?.missionId || t?.type || "");
+      let chosen =
+        normalizeType(requestedType) ||
+        tokenPrimary ||
+        (mts[0] || "") ||
+        "PHOTOS";
+
+      // si requestedType fourni mais pas dans missionTypes -> on CONTINUE, mais on bascule sur tokenPrimary/mts[0]
+      if(normalizeType(requestedType) && mts.length && !mts.includes(normalizeType(requestedType))){
+        chosen = tokenPrimary || (mts[0] || "PHOTOS");
+      }
+      return chosen || "PHOTOS";
+    }
+
     async function checkToken(){
       subLine.textContent = "Vérification token…";
       const snap = await getDoc(doc(db,"dayTokens", token));
@@ -229,28 +263,35 @@
       const t = snap.data() || {};
       tokenDocCache = t;
 
-      if(String(t.prestationId) !== String(prestationId)){
+      // ✅ match par eventId/prestationId (pas par mission)
+      const tokenPid = String(t.prestationId || t.eventId || t.bookingId || "").trim();
+      if(tokenPid && String(tokenPid) !== String(prestationId)){
         subLine.textContent = "";
-        showAlert("Token ≠ prestation.");
+        showAlert("Token ≠ prestation/événement.");
         return false;
       }
+
       if(!tokenValid(t)){
         subLine.textContent = "";
         showAlert("Token expiré.");
         return false;
       }
-      const mts = Array.isArray(t.missionTypes) ? t.missionTypes.map(x=>String(x||"").toUpperCase()) : [];
-      if(mts.length && !mts.includes(type)){
-        subLine.textContent = "";
-        showAlert(`Token ne permet pas la mission "${type}".`);
-        return false;
-      }
+
+      // ✅ type effectif (auto)
+      effectiveType = pickEffectiveTypeFromToken(t);
 
       const exp = Number.isFinite(Number(t.expiresAtMs))
         ? t.expiresAtMs
         : (t.expiresAt?.toMillis ? t.expiresAt.toMillis() : NaN);
 
-      subLine.textContent = `OK • ${type} • expire: ${prettyExpiryFromMs(exp)}`;
+      // info (si mismatch, on l’affiche en subtil mais on ne bloque pas)
+      const mts = Array.isArray(t.missionTypes) ? t.missionTypes.map(normalizeType).filter(Boolean) : [];
+      const mismatchNote =
+        (normalizeType(requestedType) && mts.length && !mts.includes(normalizeType(requestedType)))
+          ? `\n⚠️ Type demandé "${requestedType}" non autorisé par le token → stockage sous "${effectiveType}".`
+          : "";
+
+      subLine.textContent = `OK • ${effectiveType} • expire: ${prettyExpiryFromMs(exp)}${mismatchNote}`;
       return true;
     }
 
@@ -261,14 +302,17 @@
     async function uploadOne(file){
       const now = Date.now();
       const name = safeName(file.name);
-      const path = `proofPhotos/${prestationId}/${type}/${token}/${now}_${name}`;
+
+      // ✅ Storage : /proofPhotos/{prestationId}/{effectiveType}/{token}/...
+      const path = `proofPhotos/${prestationId}/${effectiveType}/${token}/${now}_${name}`;
+
       const r = sRef(storage, path);
       const meta = { contentType: file.type || "image/jpeg" };
 
       await uploadBytes(r, file, meta);
       const url = await getDownloadURL(r);
 
-      return { url, path, name, sizeBytes: Number(file.size||0), createdAtMs: now };
+      return { url, path, name, sizeBytes: Number(file.size||0), createdAtMs: now, type: effectiveType };
     }
 
     function addThumb(p, idx){
@@ -305,9 +349,9 @@
 
     async function writeProofIndex({ uploadedPhotos }){
       const nowMs = Date.now();
-      const upperType = String(type).toUpperCase();
+      const upperType = String(effectiveType).toUpperCase();
 
-      // 1) mission doc (store photo metadata list capped)
+      // 1) mission doc : events/{prestationId}/missions/{upperType}
       const mRef = doc(db, "events", prestationId, "missions", upperType);
 
       let existing = [];
@@ -321,7 +365,6 @@
 
       const merged = keepLast(uniqByPath([...(existing||[]), ...(uploadedPhotos||[])]), 80);
 
-      // ✅ IMPORTANT: proofToken = token (pour rules) + timestamps
       await updateDoc(mRef, {
         proofPhotos: merged,
         proofPhotosCount: merged.length,
@@ -330,10 +373,10 @@
         updatedAt: serverTimestamp()
       });
 
-      // 2) event aggregate for planning badge
+      // 2) event aggregate
       const eRef = doc(db, "events", prestationId);
       await updateDoc(eRef, {
-        proofToken: token || null,            // ✅ IMPORTANT pour rules events
+        proofToken: token || null,
         proofPhotosAtMs: nowMs,
         updatedAt: serverTimestamp(),
         proofPhotosTotal: increment((uploadedPhotos||[]).length),
@@ -358,7 +401,6 @@
 
       if(!validateParams()) return;
 
-      // token gate
       const ok = await checkToken();
       if(!ok) return;
 
@@ -392,7 +434,6 @@
         showAlert(`✅ ${uploaded.length} photo(s) envoyée(s).`, true);
         filesEl.value = "";
 
-        // ✅ affiche Terminer après succès
         showDoneButton();
       }catch(err){
         console.error(err);
@@ -416,8 +457,9 @@
     sendBtn.addEventListener("click", ()=> send());
 
     doneBtn.addEventListener("click", ()=>{
-      // Redirige vers missionfini.html en conservant token/prestationId/type
-      const url = `missionfini.html?token=${encodeURIComponent(token)}&prestationId=${encodeURIComponent(prestationId)}&type=${encodeURIComponent(type)}`;
+      // ✅ conserve token/prestationId + type EFFECTIF
+      const url =
+        `missionfini.html?token=${encodeURIComponent(token)}&prestationId=${encodeURIComponent(prestationId)}&type=${encodeURIComponent(effectiveType)}`;
       location.href = url;
     });
 
