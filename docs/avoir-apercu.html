@@ -1,4 +1,4 @@
-<!-- docs/avoir-apercu.html (FINAL — owner=1 support + security ownerUid + backLink owner + login owner/conciergerie + SANS draft=1 + PRINT FIX) -->
+<!-- docs/avoir-apercu.html (FINAL — owner=1 support + security ownerUid + backLink owner + login owner/conciergerie + SANS draft=1 + BUSINESS SNAPSHOT + CLIENT SNAPSHOT + PRINT FIX) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -417,6 +417,11 @@
       alertBox.style.display = "block";
       alertBox.textContent = "⛔ " + msg;
     }
+    function showWarn(msg){
+      // warning non bloquant
+      alertBox.style.display = "block";
+      alertBox.textContent = "⚠️ " + msg;
+    }
     function money(n){
       const x = Number(n || 0);
       return x.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " €";
@@ -445,20 +450,21 @@
       return { ht, tva, ttc };
     }
 
-    function applyBusinessProfile(profile){
-      const bp = (profile?.businessProfile || {});
-      const companyName = String(bp.companyName || "Conciergerie").trim();
-      const logoUrl = String(bp.logoUrl || "").trim();
+    // -------- business snapshot (owner-safe) ----------
+    function applyBusinessSnapshot(bs, profileFallback){
+      const src = (bs && typeof bs === "object") ? bs : (profileFallback?.businessProfile || {});
+      const companyName = String(src.companyName || "Conciergerie").trim();
+      const logoUrl = String(src.logoUrl || "").trim();
 
-      const street = String(bp.address?.street || "").trim();
-      const zip = String(bp.address?.zip || "").trim();
-      const city = String(bp.address?.city || "").trim();
+      const street = String(src.address?.street || "").trim();
+      const zip = String(src.address?.zip || "").trim();
+      const city = String(src.address?.city || "").trim();
 
-      const siret = String(bp.registration?.siret || "").trim();
-      const ape   = String(bp.registration?.ape || "").trim();
+      const siret = String(src.registration?.siret || "").trim();
+      const ape   = String(src.registration?.ape || "").trim();
 
-      const email = String(bp.billingEmail || profile?.email || "").trim();
-      const phone = String(bp.phone || "").trim();
+      const email = String(src.billingEmail || profileFallback?.email || "").trim();
+      const phone = String(src.phone || "").trim();
 
       companyNameEl.textContent = companyName || "Conciergerie";
 
@@ -487,7 +493,7 @@
       if(email || phone) footerParts.push([email, phone].filter(Boolean).join(" • "));
       footerEl.innerHTML = footerParts.map(x=>esc(x)).join(" • ");
 
-      return bp;
+      return src; // pour VAT etc.
     }
 
     function getStayPeriod(d){
@@ -555,12 +561,12 @@
       reasonLine.textContent = r || "—";
     }
 
-    function renderLines(invoice, businessProfile){
+    function renderLines(invoice, businessProfileLike){
       const arr = Array.isArray(invoice?.lines) ? invoice.lines : [];
       linesBody.innerHTML = "";
 
-      const vatEnabled = !!businessProfile?.vat?.enabled;
-      const vatRate = Number.isFinite(Number(businessProfile?.vat?.rate)) ? Number(businessProfile.vat.rate) : 0;
+      const vatEnabled = !!businessProfileLike?.vat?.enabled;
+      const vatRate = Number.isFinite(Number(businessProfileLike?.vat?.rate)) ? Number(businessProfileLike.vat.rate) : 0;
 
       if(!arr.length){
         const tr = document.createElement("tr");
@@ -592,12 +598,12 @@
       if(vatEnabled){
         tvaLineEl.textContent = `HT ${money(-totals.ht)} • TVA ${Math.round(vatRate*100)}% ${money(-totals.tva)}`;
       }else{
-        const ex = String(businessProfile?.tvaExemptionText || "").trim();
+        const ex = String(businessProfileLike?.tvaExemptionText || "").trim();
         tvaLineEl.textContent = ex || "TVA non applicable (art. 293B CGI)";
       }
     }
 
-    // ✅ PRINT FIX: plus de d/docId hors scope
+    // ✅ PRINT FIX
     printBtn.addEventListener("click", ()=>{
       const originalTitle = document.title;
 
@@ -621,7 +627,6 @@
     }
 
     onAuthStateChanged(auth, async (user)=>{
-      // backLink par défaut
       backLink.href = isOwnerMode() ? "owner-facturation.html" : "factures-liste.html";
 
       if(!user){
@@ -630,10 +635,9 @@
       }
 
       const docId = getParam("docId");
-      currentDocId = docId; // ✅ pour print fallback
+      currentDocId = docId || "";
 
       try{
-        // mode normal => docId CREDIT obligatoire
         if(!docId){
           showError("docId manquant.");
           return;
@@ -654,7 +658,7 @@
 
         creditDoc = { id: creditSnap.id, ...data };
 
-        // ✅ alimente print state dès maintenant
+        // print state
         currentCreditNumber = String(creditDoc.creditNumber || "").trim();
 
         // sécurité owner / conciergerie
@@ -675,6 +679,7 @@
           backLink.href = `avoir.html?docId=${encodeURIComponent(docId)}`;
         }
 
+        // facture liée (pour home/period + lignes)
         const invId = String(creditDoc.fromInvoiceDocId || "").trim();
         if(!invId){
           showError("Avoir sans facture liée (fromInvoiceDocId manquant).");
@@ -688,7 +693,7 @@
         }
         invDoc = { id: invSnap.id, ...(invSnap.data()||{}) };
 
-        // sécurité conciergerie (si non-owner mode)
+        // sécurité conciergerie
         if(!isOwnerMode()){
           const cUid = String(invDoc.conciergerieUid||"").trim();
           if(cUid && cUid !== String(user.uid)){
@@ -699,23 +704,54 @@
           backLink.href = `avoir.html?docId=${encodeURIComponent(docId)}&fromDocId=${encodeURIComponent(invId)}`;
         }
 
-        // profile société = conciergerieUid du doc
-        const conciergerieUid = String(invDoc.conciergerieUid || creditDoc.conciergerieUid || "").trim();
-        if(!conciergerieUid){
-          showError("conciergerieUid manquant (facture liée).");
-          return;
+        // -------- BUSINESS: priorité au snapshot sur l'avoir (owner-safe) ----------
+        // - owner mode: on ne doit PAS dépendre de /users/{conciergerieUid}
+        // - conciergerie mode: fallback possible sur /users
+        let businessLike = null;
+
+        const bsCredit = (creditDoc.businessSnapshot && typeof creditDoc.businessSnapshot === "object") ? creditDoc.businessSnapshot : null;
+        const bsInv    = (invDoc.businessSnapshot && typeof invDoc.businessSnapshot === "object") ? invDoc.businessSnapshot : null;
+
+        if(isOwnerMode()){
+          businessLike = bsCredit || bsInv;
+          if(!businessLike){
+            showWarn("businessSnapshot manquant sur l’avoir (ou sur la facture liée). La société peut être incomplète.");
+          }
+          applyBusinessSnapshot(businessLike || {}, null);
+        }else{
+          // conciergerie: on garde ton comportement (users->businessProfile) si possible
+          const conciergerieUid = String(invDoc.conciergerieUid || creditDoc.conciergerieUid || "").trim();
+          if(!conciergerieUid){
+            showError("conciergerieUid manquant (facture liée).");
+            return;
+          }
+
+          const userSnap = await getDoc(doc(db,"users", conciergerieUid));
+          const profile = userSnap.exists() ? (userSnap.data()||{}) : {};
+          // si tu as mis un snapshot, il prime quand même
+          businessLike = bsCredit || bsInv || (profile.businessProfile || {});
+          applyBusinessSnapshot(businessLike || {}, profile || {});
         }
 
-        const userSnap = await getDoc(doc(db,"users", conciergerieUid));
-        const profile = userSnap.exists() ? (userSnap.data()||{}) : {};
-        const bp = applyBusinessProfile(profile);
+        // -------- CLIENT: priorité au snapshot (avoir), sinon facture ----------
+        // (tu viens de faire ça pour factures, on réplique)
+        const clientSource = creditDoc || {};
+        const hasClientAddr =
+          !!String(clientSource.clientAddress1 || "").trim()
+          || !!String(clientSource.clientZip || "").trim()
+          || !!String(clientSource.clientCity || "").trim();
+
+        if(hasClientAddr){
+          renderClientHeader(creditDoc);
+        }else{
+          renderClientHeader(invDoc);
+        }
 
         // rendu
-        renderClientHeader(invDoc);
         renderHeader(creditDoc, invDoc);
         renderHomeAndPeriod(invDoc);
         renderReason(creditDoc);
-        renderLines(invDoc, bp || {});
+        renderLines(invDoc, businessLike || {});
       }catch(e){
         console.error(e);
         showError(e?.message || "Erreur chargement aperçu avoir.");
