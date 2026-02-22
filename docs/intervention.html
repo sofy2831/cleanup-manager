@@ -1,4 +1,4 @@
-<!-- docs/intervention.html (FINAL — 2 liens : checklist token + photos token ; + Photos agent par mission (miniatures) ; resync missions non verrouillées ; NO query()) -->
+<!-- docs/intervention.html (FINAL — 2 liens : checklist token + photos token ; Photos BYPASS = missions/PHOTOS ; resync missions non verrouillées ; crée missions/PHOTOS ; NO query()) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -128,7 +128,7 @@
     .hintBox b{ font-weight:900; }
 
     /* ===========================
-       Photos agent (NEW)
+       Photos agent (BYPASS)
        =========================== */
     .photosBox{
       margin-top:8px;
@@ -275,7 +275,7 @@
           <b>Missions envoyées à l’agent :</b> —
         </div>
 
-        <!-- Photos agent (NEW) -->
+        <!-- Photos agent (BYPASS) -->
         <div class="photosBox" id="photosBox" style="display:none;">
           <div class="photosHead">
             <div class="photosTitle">Photos agent</div>
@@ -476,7 +476,7 @@
     }
 
     /* ===========================
-       Photos agent (BYPASS) : on lit UNIQUEMENT missions/PHOTOS
+       Photos agent (BYPASS) : lecture uniquement missions/PHOTOS
        =========================== */
     function thumbHtml(p, idx){
       const url = p?.url || "";
@@ -654,6 +654,41 @@
       }, { merge: true });
     }
 
+    // ✅ NEW : crée / met à jour missions/PHOTOS systématiquement
+    async function upsertPhotosMissionForToken({ tokenId }) {
+      const mRef = doc(db, "events", prestationId, "missions", "PHOTOS");
+
+      let locked = false;
+      try{
+        const mSnap = await getDoc(mRef);
+        if(mSnap.exists()){
+          locked = !!(mSnap.data()?.locked);
+        }
+      }catch{ locked = false; }
+
+      if(locked) return;
+
+      await setDoc(mRef, {
+        missionId: "PHOTOS",
+        type: "PHOTOS",
+        conciergerieUid: currentUser.uid,
+        prestationId: String(prestationId),
+
+        dayToken: tokenId,
+
+        proofPhotos: [],
+        proofPhotosCount: 0,
+        proofPhotosAtMs: 0,
+        proofToken: tokenId,
+
+        locked: false,
+        agentDone: false,
+        status: "ASSIGNEE",
+
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+    }
+
     async function generateLinks(){
       hideAlert();
 
@@ -704,10 +739,13 @@
         createdAt: serverTimestamp()
       });
 
-      // missions resync
+      // missions resync (métier)
       for (const t of missionTypes) {
         await upsertMissionForToken({ tokenId, email, name, missionType: t });
       }
+
+      // ✅ crée PHOTOS à chaque fois (bypass)
+      await upsertPhotosMissionForToken({ tokenId });
 
       // parent event
       await setDoc(doc(db,"events",prestationId),{
@@ -798,4 +836,3 @@
   </script>
 </body>
 </html>
-
