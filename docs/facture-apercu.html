@@ -1,4 +1,4 @@
-<!-- docs/facture-apercu.html (FINAL — owner=1 support + security ownerUid + backLink owner + forbid owner on eventId + PRINT FIX) -->
+<!-- docs/facture-apercu.html (FINAL — owner=1 support + security ownerUid/ownerVisible + backLink owner + forbid owner on eventId + NO /users read in owner mode + PRINT FIX) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -570,6 +570,7 @@
       return { street, address2, zip, city, country };
     }
 
+    // ✅ conciergerie mode : /users read
     function applyBusinessProfile(profile){
       const bp = (profile?.businessProfile || {});
       const companyName = String(bp.companyName || "Conciergerie").trim();
@@ -583,6 +584,52 @@
       const ape   = String(bp.registration?.ape || "").trim();
 
       const email = String(bp.billingEmail || profile?.email || "").trim();
+      const phone = String(bp.phone || "").trim();
+
+      companyNameEl.textContent = companyName || "Conciergerie";
+
+      if(logoUrl){
+        logoImg.src = logoUrl;
+        logoImg.style.display = "block";
+        logoFallback.style.display = "none";
+      }else{
+        logoImg.style.display = "none";
+        logoFallback.style.display = "block";
+      }
+
+      soc1.textContent = companyName || "Conciergerie";
+      soc2.textContent = street || "";
+      soc3.textContent = [zip, city].filter(Boolean).join(" ") || "";
+      soc4.textContent = [
+        [siret ? `SIRET ${siret}` : "", ape ? `APE ${ape}` : ""].filter(Boolean).join(" • "),
+        [email, phone].filter(Boolean).join(" • ")
+      ].filter(Boolean).join(" • ");
+
+      const footerParts = [];
+      footerParts.push(companyName || "Conciergerie");
+      if(street) footerParts.push(street);
+      if(zip || city) footerParts.push([zip, city].filter(Boolean).join(" "));
+      if(siret || ape) footerParts.push([siret ? `SIRET ${siret}` : "", ape ? `APE ${ape}` : ""].filter(Boolean).join(" • "));
+      if(email || phone) footerParts.push([email, phone].filter(Boolean).join(" • "));
+      footerEl.innerHTML = footerParts.map(x=>esc(x)).join(" • ");
+
+      return bp;
+    }
+
+    // ✅ owner mode : on utilise businessSnapshot (pas de /users read)
+    function applyBusinessSnapshot(bsnap){
+      const bp = (bsnap || {});
+      const companyName = String(bp.companyName || "Conciergerie").trim();
+      const logoUrl = String(bp.logoUrl || "").trim();
+
+      const street = String(bp.address?.street || "").trim();
+      const zip = String(bp.address?.zip || "").trim();
+      const city = String(bp.address?.city || "").trim();
+
+      const siret = String(bp.registration?.siret || "").trim();
+      const ape   = String(bp.registration?.ape || "").trim();
+
+      const email = String(bp.billingEmail || bp.email || "").trim();
       const phone = String(bp.phone || "").trim();
 
       companyNameEl.textContent = companyName || "Conciergerie";
@@ -636,7 +683,6 @@
       `;
       docMetaEl.textContent = `Émise le ${issuedLabel} • Échéance ${ddmmyyyy(due)}`;
 
-      // ✅ alimente print state
       currentInvoiceNumber = invNum || "";
     }
 
@@ -927,7 +973,6 @@
     }
 
     onAuthStateChanged(auth, async (user)=>{
-      // backLink par défaut
       backLink.href = isOwnerMode() ? "owner-facturation.html" : "factures-liste.html";
 
       if(!user){
@@ -937,7 +982,7 @@
 
       const docId = getParam("docId");
       const eventId = getParam("eventId");
-      currentDocId = docId || eventId || ""; // ✅ print fallback
+      currentDocId = docId || eventId || "";
       isDraftPreview = (getParam("draft") === "1");
 
       // owner mode: on force docId (salesDocuments)
@@ -952,7 +997,6 @@
         return;
       }
 
-      // backLink fin (non owner)
       if(!isOwnerMode()){
         backLink.href = docId
           ? `facture.html?docId=${encodeURIComponent(docId)}`
@@ -971,10 +1015,9 @@
         }
         docData = { id: snap.id, ...(snap.data()||{}) };
 
-        // ✅ alimente print state dès maintenant
         currentInvoiceNumber = String(docData?.invoiceNumber || "").trim();
 
-        // 2) sécurité
+        // 2) sécurité owner
         if(isOwnerMode()){
           const ouid = String(docData.ownerUid || "").trim();
           if(!ouid){
@@ -987,22 +1030,19 @@
             backLink.href = "owner-facturation.html";
             return;
           }
+          // ✅ règle publiée : ownerVisible=true attendu
+          if(docData.ownerVisible !== true){
+            showError("Accès refusé : document non publié (ownerVisible=false).");
+            backLink.href = "owner-facturation.html";
+            return;
+          }
         }else{
           if(String(docData.conciergerieUid||"") && String(docData.conciergerieUid) !== String(user.uid)){
             return showError("Accès refusé (document d’une autre conciergerie).");
           }
         }
 
-        // 2bis) type attendu si salesDocuments
-        if(docId){
-          const t = String(docData.type || "").toUpperCase();
-          if(t && t !== "INVOICE" && t !== "invoice"){
-            // pas bloquant si tu as encore des vieux types, mais on évite les erreurs silencieuses
-            // tu peux commenter si tu veux
-          }
-        }
-
-        // 3) draft merge (aperçu avant save) — conciergerie uniquement
+        // 3) draft merge (conciergerie only)
         if(isDraftPreview && !isOwnerMode()){
           const expectedId = docId ? docId : eventId;
           const draft = loadDraftFromSession(expectedId);
@@ -1012,20 +1052,41 @@
           }
         }
 
-        // 4) profile société (conciergerieUid)
+        // 4) profile société
         const conciergerieUid = String(docData.conciergerieUid || "").trim();
         if(!conciergerieUid){
           showError("conciergerieUid manquant sur le document.");
           return;
         }
 
-        const userSnap = await getDoc(doc(db,"users", conciergerieUid));
-        const profile = userSnap.exists() ? (userSnap.data()||{}) : {};
-        const bp = applyBusinessProfile(profile);
+        let bp = {};
+        if(isOwnerMode()){
+          const bsnap = docData.businessSnapshot || null;
+          if(!bsnap){
+            showError("businessSnapshot manquant sur la facture (impossible d’afficher la société).");
+            bp = {};
+          }else{
+            bp = applyBusinessSnapshot(bsnap) || {};
+          }
+        }else{
+          const userSnap = await getDoc(doc(db,"users", conciergerieUid));
+          const profile = userSnap.exists() ? (userSnap.data()||{}) : {};
+          bp = applyBusinessProfile(profile) || {};
+        }
 
-        // 5) client (owners -> homes -> snapshot)
-        const ownerFromOwners = await loadOwnerFromDoc(conciergerieUid, docData);
-        const homeFallback = await loadHomeClientFallback(docData);
+        // 5) client
+        // ⚠️ owner mode n’a pas forcément accès à owners/homes selon tes rules.
+        // On tente, mais on ne casse pas si permission denied.
+        let ownerFromOwners = null;
+        let homeFallback = null;
+        if(!isOwnerMode()){
+          ownerFromOwners = await loadOwnerFromDoc(conciergerieUid, docData);
+          homeFallback = await loadHomeClientFallback(docData);
+        }else{
+          // owner: on se contente du snapshot client présent dans la facture
+          ownerFromOwners = null;
+          homeFallback = null;
+        }
         renderClientHeader(ownerFromOwners, homeFallback, docData);
 
         // 6) render
