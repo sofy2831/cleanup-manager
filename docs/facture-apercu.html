@@ -1,4 +1,4 @@
-<!-- docs/facture-apercu.html (FINAL — owner=1 support + security ownerUid + backLink owner + forbid owner on eventId) -->
+<!-- docs/facture-apercu.html (FINAL — owner=1 support + security ownerUid + backLink owner + forbid owner on eventId + PRINT FIX) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -434,6 +434,10 @@
     let docData = null;
     let isDraftPreview = false;
 
+    // ✅ PRINT STATE (évite d/docId hors scope)
+    let currentDocId = "";
+    let currentInvoiceNumber = "";
+
     function esc(s){
       return String(s||"")
         .replaceAll("&","&amp;")
@@ -631,6 +635,9 @@
         <div><b>Échéance</b> ${esc(ddmmyyyy(due))}</div>
       `;
       docMetaEl.textContent = `Émise le ${issuedLabel} • Échéance ${ddmmyyyy(due)}`;
+
+      // ✅ alimente print state
+      currentInvoiceNumber = invNum || "";
     }
 
     function renderHomeAndPeriod(d){
@@ -676,7 +683,6 @@
 
     async function loadOwnerFromDoc(conciergerieUid, d){
       const ownerDocId =
-        String(d?.ownerUid || "").trim() ||
         String(d?.ownerDocId || "").trim() ||
         String(d?.clientOwnerDocId || "").trim();
 
@@ -833,7 +839,6 @@
       const quoteRef = String(d?.quoteNumber || "").trim();
       cond1.innerHTML = `<b>Référence devis</b> : ${esc(quoteRef || "—")}`;
 
-      // annulation affichable/masquable
       const showCancel = (typeof d?.invoiceShowCancellation === "boolean") ? d.invoiceShowCancellation : true;
       const cancelPct = Number.isFinite(Number(businessProfile?.conditions?.cancellationPercent))
         ? Number(businessProfile.conditions.cancellationPercent)
@@ -885,22 +890,22 @@
       penBox.style.display = "";
     }
 
+    // ✅ PRINT FIX (plus de d/docId hors scope)
     printBtn.addEventListener("click", ()=>{
-  const originalTitle = document.title;
+      const originalTitle = document.title;
 
-  const numberRaw =
-    String(d?.invoiceNumber || "").trim()
-    || String(docId || "").trim()
-    || "Facture";
+      const numberRaw =
+        String(currentInvoiceNumber || "").trim()
+        || String(currentDocId || "").trim()
+        || "Facture";
 
-  const safeNumber = numberRaw.replace(/[^\w\-]/g, "_");
+      const safeNumber = numberRaw.replace(/[^\w\-]/g, "_");
+      document.title = "CleanUp_Facture_" + safeNumber;
 
-  document.title = "CleanUp_Facture_" + safeNumber;
+      window.print();
 
-  window.print();
-
-  setTimeout(()=>{ document.title = originalTitle; }, 1000);
-});
+      setTimeout(()=>{ document.title = originalTitle; }, 1000);
+    });
 
     function loadDraftFromSession(expectedId){
       try{
@@ -932,6 +937,7 @@
 
       const docId = getParam("docId");
       const eventId = getParam("eventId");
+      currentDocId = docId || eventId || ""; // ✅ print fallback
       isDraftPreview = (getParam("draft") === "1");
 
       // owner mode: on force docId (salesDocuments)
@@ -965,6 +971,9 @@
         }
         docData = { id: snap.id, ...(snap.data()||{}) };
 
+        // ✅ alimente print state dès maintenant
+        currentInvoiceNumber = String(docData?.invoiceNumber || "").trim();
+
         // 2) sécurité
         if(isOwnerMode()){
           const ouid = String(docData.ownerUid || "").trim();
@@ -984,12 +993,22 @@
           }
         }
 
+        // 2bis) type attendu si salesDocuments
+        if(docId){
+          const t = String(docData.type || "").toUpperCase();
+          if(t && t !== "INVOICE" && t !== "invoice"){
+            // pas bloquant si tu as encore des vieux types, mais on évite les erreurs silencieuses
+            // tu peux commenter si tu veux
+          }
+        }
+
         // 3) draft merge (aperçu avant save) — conciergerie uniquement
         if(isDraftPreview && !isOwnerMode()){
           const expectedId = docId ? docId : eventId;
           const draft = loadDraftFromSession(expectedId);
           if(draft){
             docData = { ...docData, ...draft, id: docData.id };
+            currentInvoiceNumber = String(docData?.invoiceNumber || "").trim();
           }
         }
 
@@ -1025,6 +1044,3 @@
   </script>
 </body>
 </html>
-
-
-
