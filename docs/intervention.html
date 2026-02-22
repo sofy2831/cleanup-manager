@@ -307,7 +307,7 @@
         <textarea id="linkBox" rows="7" style="margin-top:8px;" readonly placeholder="Les liens apparaîtront ici…"></textarea>
 
         <div class="mini" style="margin-top:10px;">
-          Checklist : token 24h. Photos : token 24h via agent-photos.html (par mission).
+          Checklist : token 24h. Photos : token 24h via agent-photos.html (PHOTOS bypass).
         </div>
       </aside>
     </div>
@@ -476,7 +476,7 @@
     }
 
     /* ===========================
-       Photos agent (NEW)
+       Photos agent (BYPASS) : on lit UNIQUEMENT missions/PHOTOS
        =========================== */
     function thumbHtml(p, idx){
       const url = p?.url || "";
@@ -488,82 +488,75 @@
       `;
     }
 
-    async function loadPhotosByMission(missionTypes){
+    async function loadPhotosByMission(){
       photosWrap.innerHTML = "";
       photosBox.style.display = "none";
       photosTotalBadge.textContent = "📷 0";
 
-      if(!Array.isArray(missionTypes) || !missionTypes.length) return;
-
-      let total = 0;
-      const blocks = [];
-
-      for(const t of missionTypes){
-        const type = String(t||"").toUpperCase();
-        try{
-          const mSnap = await getDoc(doc(db, "events", prestationId, "missions", type));
-          if(!mSnap.exists()){
-            blocks.push(`
-              <div class="pMission">
-                <div class="pMissionHead">
-                  <div class="pMissionName">${esc(missionLabel(type))}</div>
-                  <span class="badge">📷 0</span>
-                </div>
-                <div class="pEmpty">Aucune photo.</div>
-              </div>
-            `);
-            continue;
-          }
-
-          const d = mSnap.data() || {};
-          const arr = Array.isArray(d.proofPhotos) ? d.proofPhotos : [];
-          const count = Number(d.proofPhotosCount ?? arr.length ?? 0) || 0;
-          total += count;
-
-          if(!count){
-            blocks.push(`
-              <div class="pMission">
-                <div class="pMissionHead">
-                  <div class="pMissionName">${esc(missionLabel(type))}</div>
-                  <span class="badge">📷 0</span>
-                </div>
-                <div class="pEmpty">Aucune photo.</div>
-              </div>
-            `);
-          }else{
-            const thumbs = arr.slice(0, 24).map((p, i)=>thumbHtml(p, i)).join("");
-            const more = (arr.length > 24)
-              ? `<div class="mini">+ ${arr.length - 24} photo(s) non affichée(s)</div>`
-              : ``;
-
-            blocks.push(`
-              <div class="pMission">
-                <div class="pMissionHead">
-                  <div class="pMissionName">${esc(missionLabel(type))}</div>
-                  <span class="badge">📷 ${esc(String(count))}</span>
-                </div>
-                <div class="pGrid">${thumbs}</div>
-                ${more}
-              </div>
-            `);
-          }
-        }catch(err){
-          console.error("loadPhotosByMission", t, err);
-          blocks.push(`
+      try{
+        const mSnap = await getDoc(doc(db, "events", prestationId, "missions", "PHOTOS"));
+        if(!mSnap.exists()){
+          photosWrap.innerHTML = `
             <div class="pMission">
               <div class="pMissionHead">
-                <div class="pMissionName">${esc(missionLabel(type))}</div>
-                <span class="badge">⚠️</span>
+                <div class="pMissionName">PHOTOS</div>
+                <span class="badge">📷 0</span>
               </div>
-              <div class="pEmpty">Erreur de lecture des photos.</div>
+              <div class="pEmpty">Aucune photo.</div>
             </div>
-          `);
+          `;
+          photosBox.style.display = "block";
+          return;
         }
-      }
 
-      photosWrap.innerHTML = blocks.join("");
-      photosTotalBadge.textContent = `📷 ${total}`;
-      photosBox.style.display = "block";
+        const d = mSnap.data() || {};
+        const arr = Array.isArray(d.proofPhotos) ? d.proofPhotos : [];
+        const count = Number(d.proofPhotosCount ?? arr.length ?? 0) || 0;
+
+        photosTotalBadge.textContent = `📷 ${count}`;
+
+        if(!count){
+          photosWrap.innerHTML = `
+            <div class="pMission">
+              <div class="pMissionHead">
+                <div class="pMissionName">PHOTOS</div>
+                <span class="badge">📷 0</span>
+              </div>
+              <div class="pEmpty">Aucune photo.</div>
+            </div>
+          `;
+        }else{
+          const thumbs = arr.slice(0, 24).map((p, i)=>thumbHtml(p, i)).join("");
+          const more = (arr.length > 24)
+            ? `<div class="mini">+ ${arr.length - 24} photo(s) non affichée(s)</div>`
+            : ``;
+
+          photosWrap.innerHTML = `
+            <div class="pMission">
+              <div class="pMissionHead">
+                <div class="pMissionName">PHOTOS</div>
+                <span class="badge">📷 ${esc(String(count))}</span>
+              </div>
+              <div class="pGrid">${thumbs}</div>
+              ${more}
+            </div>
+          `;
+        }
+
+        photosBox.style.display = "block";
+      }catch(err){
+        console.error("loadPhotosByMission(PHOTOS)", err);
+        photosWrap.innerHTML = `
+          <div class="pMission">
+            <div class="pMissionHead">
+              <div class="pMissionName">PHOTOS</div>
+              <span class="badge">⚠️</span>
+            </div>
+            <div class="pEmpty">Erreur de lecture des photos.</div>
+          </div>
+        `;
+        photosBox.style.display = "block";
+      }
     }
 
     async function load(){
@@ -622,8 +615,8 @@
       agentName.value = e.assignedToName || "";
       agentEmail.value = e.assignedToEmail || "";
 
-      // NEW: photos by mission
-      await loadPhotosByMission(inferredMissionTypes);
+      // ✅ PHOTOS bypass : on lit missions/PHOTOS uniquement
+      await loadPhotosByMission();
 
       subLine.textContent = "";
     }
@@ -731,10 +724,10 @@
         base.replace("intervention.html","agent.html")
         + `?token=${encodeURIComponent(tokenId)}&prestationId=${encodeURIComponent(prestationId)}`;
 
-      // lien 2 : photos (token) — MENAGE par défaut (l’agent peut changer via URL)
+      // ✅ lien 2 : photos (token) — SANS type
       const photosLink =
         base.replace("intervention.html","agent-photos.html")
-        + `?token=${encodeURIComponent(tokenId)}&prestationId=${encodeURIComponent(prestationId)}&type=MENAGE`;
+        + `?token=${encodeURIComponent(tokenId)}&prestationId=${encodeURIComponent(prestationId)}`;
 
       linkBox.value =
         `Checklist (token 24h):\n${tokenLink}\n\n` +
