@@ -1,4 +1,4 @@
-<!-- docs/avoir-apercu.html (FINAL — Option A — Avoir + totaux négatifs + support draft=1 via sessionStorage.creditDraftPreview) -->
+<!-- docs/avoir-apercu.html (FINAL — owner=1 support + security ownerUid + backLink owner + login owner/conciergerie + draft=1 conciergerie-only) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -402,10 +402,6 @@
     let invDoc = null;
     let isDraftPreview = false;
 
-    function showError(msg){
-      alertBox.style.display = "block";
-      alertBox.textContent = "⛔ " + msg;
-    }
     function esc(s){
       return String(s||"")
         .replaceAll("&","&amp;")
@@ -413,6 +409,10 @@
         .replaceAll(">","&gt;")
         .replaceAll('"',"&quot;")
         .replaceAll("'","&#039;");
+    }
+    function showError(msg){
+      alertBox.style.display = "block";
+      alertBox.textContent = "⛔ " + msg;
     }
     function money(n){
       const x = Number(n || 0);
@@ -422,13 +422,15 @@
       const p = new URLSearchParams(location.search);
       return (p.get(name) || "").trim();
     }
+    function isOwnerMode(){
+      return getParam("owner") === "1";
+    }
     function ddmmyyyy(d){
       const dd = String(d.getDate()).padStart(2,"0");
       const mm = String(d.getMonth()+1).padStart(2,"0");
       const yy = d.getFullYear();
       return `${dd}/${mm}/${yy}`;
     }
-    function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
 
     function computeTotals(linesArr, vatEnabled, vatRate){
       let ht = 0;
@@ -501,7 +503,7 @@
       const a2 = String(d?.clientAddress2 || "").trim();
       const zip = String(d?.clientZip || "").trim();
       const city = String(d?.clientCity || "").trim();
-      const email = normalizeEmail(d?.clientEmail || "");
+      const email = String(d?.clientEmail || "").trim();
       const phone = String(d?.clientPhone || "").trim();
 
       cli1.textContent = name || "—";
@@ -520,7 +522,6 @@
     function renderHeader(credit, invoice){
       const credNum = String(credit?.creditNumber || "").trim();
       const invNum  = String(credit?.fromInvoiceNumber || invoice?.invoiceNumber || "").trim();
-
       const issued = String(credit?.creditIssuedDate || "").trim() || ddmmyyyy(new Date());
 
       docTitleEl.textContent = credNum ? `AVOIR N° ${credNum}` : `AVOIR N° — (BROUILLON)`;
@@ -604,20 +605,33 @@
       }
     }
 
+    function loginRedirectUrl(){
+      const token = getParam("token");
+      const base = isOwnerMode() ? "login.html?role=proprietaire" : "login.html?role=conciergerie";
+      return token ? (base + "&token=" + encodeURIComponent(token)) : base;
+    }
+
     onAuthStateChanged(auth, async (user)=>{
+      // backLink par défaut
+      backLink.href = isOwnerMode() ? "owner-facturation.html" : "factures-liste.html";
+
       if(!user){
-        location.href = "login.html?role=conciergerie";
+        location.href = loginRedirectUrl();
         return;
       }
 
       const docId = getParam("docId");
       isDraftPreview = (getParam("draft") === "1");
 
-      // docId peut être vide en preview si tu as mis un placeholder
-      // on gère au mieux, sans Firestore en mode draft
       try{
-        // 1) draft=1 => ZÉRO lecture salesDocuments (évite Missing/permissions)
+        // draft=1 => conciergerie only
         if(isDraftPreview){
+          if(isOwnerMode()){
+            showError("Mode propriétaire : aperçu brouillon non supporté.");
+            backLink.href = "owner-facturation.html";
+            return;
+          }
+
           const draft = loadDraftFromSession();
           if(!draft || typeof draft !== "object"){
             showError("Prévisualisation brouillon impossible : sessionStorage vide.");
@@ -634,7 +648,6 @@
             return;
           }
 
-          // sécurité conciergerie
           const cUid = String(invDoc.conciergerieUid||"").trim();
           if(cUid && cUid !== String(user.uid)){
             showError("Accès refusé (document d’une autre conciergerie).");
@@ -642,10 +655,8 @@
             return;
           }
 
-          // Retour logique : vers l’avoir (source facture)
           backLink.href = `avoir.html?fromDocId=${encodeURIComponent(String(invDoc.id||"").trim())}`;
 
-          // Profile + rendu
           const userSnap = await getDoc(doc(db,"users", user.uid));
           const profile = userSnap.exists() ? (userSnap.data()||{}) : {};
           const bp = applyBusinessProfile(profile);
@@ -658,62 +669,81 @@
           return;
         }
 
-        // 2) mode normal => docId DOIT être un CREDIT lisible
+        // mode normal => docId CREDIT obligatoire
         if(!docId){
           showError("docId manquant.");
-          backLink.href = "factures-liste.html";
           return;
         }
 
-        backLink.href = `avoir.html?docId=${encodeURIComponent(docId)}`;
-
+        // lecture avoir
         const creditSnap = await getDoc(doc(db, "salesDocuments", docId));
         if(!creditSnap.exists()){
           showError("Avoir introuvable.");
-          backLink.href = "factures-liste.html";
           return;
         }
 
         const data = creditSnap.data() || {};
         if(String(data.type||"").toUpperCase().trim() !== "CREDIT"){
           showError("docId n’est pas un avoir (type CREDIT).");
-          backLink.href = "factures-liste.html";
           return;
         }
 
         creditDoc = { id: creditSnap.id, ...data };
 
+        // sécurité owner / conciergerie
+        if(isOwnerMode()){
+          const ouid = String(creditDoc.ownerUid || "").trim();
+          if(!ouid){
+            showError("Accès refusé : ownerUid manquant sur ce document.");
+            backLink.href = "owner-facturation.html";
+            return;
+          }
+          if(ouid !== String(user.uid)){
+            showError("Accès refusé (document d’un autre propriétaire).");
+            backLink.href = "owner-facturation.html";
+            return;
+          }
+          backLink.href = "owner-facturation.html";
+        }else{
+          backLink.href = `avoir.html?docId=${encodeURIComponent(docId)}`;
+        }
+
         const invId = String(creditDoc.fromInvoiceDocId || "").trim();
         if(!invId){
           showError("Avoir sans facture liée (fromInvoiceDocId manquant).");
-          backLink.href = "factures-liste.html";
           return;
         }
 
         const invSnap = await getDoc(doc(db, "salesDocuments", invId));
         if(!invSnap.exists()){
           showError("Facture liée introuvable.");
-          backLink.href = "factures-liste.html";
           return;
         }
         invDoc = { id: invSnap.id, ...(invSnap.data()||{}) };
 
-        // sécurité conciergerie
-        const cUid = String(invDoc.conciergerieUid||"").trim();
-        if(cUid && cUid !== String(user.uid)){
-          showError("Accès refusé (document d’une autre conciergerie).");
-          backLink.href = "factures-liste.html";
+        // sécurité conciergerie (si non-owner mode)
+        if(!isOwnerMode()){
+          const cUid = String(invDoc.conciergerieUid||"").trim();
+          if(cUid && cUid !== String(user.uid)){
+            showError("Accès refusé (document d’une autre conciergerie).");
+            backLink.href = "factures-liste.html";
+            return;
+          }
+          backLink.href = `avoir.html?docId=${encodeURIComponent(docId)}&fromDocId=${encodeURIComponent(invId)}`;
+        }
+
+        // profile société = conciergerieUid du doc
+        const conciergerieUid = String(invDoc.conciergerieUid || creditDoc.conciergerieUid || "").trim();
+        if(!conciergerieUid){
+          showError("conciergerieUid manquant (facture liée).");
           return;
         }
 
-        // backLink enrichi
-        backLink.href = `avoir.html?docId=${encodeURIComponent(docId)}&fromDocId=${encodeURIComponent(invId)}`;
-
-        // profile + rendu
-        const userSnap = await getDoc(doc(db,"users", user.uid));
+        const userSnap = await getDoc(doc(db,"users", conciergerieUid));
         const profile = userSnap.exists() ? (userSnap.data()||{}) : {};
         const bp = applyBusinessProfile(profile);
 
+        // rendu
         renderClientHeader(invDoc);
         renderHeader(creditDoc, invDoc);
         renderHomeAndPeriod(invDoc);
@@ -722,7 +752,6 @@
       }catch(e){
         console.error(e);
         showError(e?.message || "Erreur chargement aperçu avoir.");
-        backLink.href = "factures-liste.html";
       }
     });
   </script>
