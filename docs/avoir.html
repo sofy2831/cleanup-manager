@@ -1,4 +1,4 @@
-<!-- docs/avoir.html (FINAL — Option A: facture.creditDocId + facture.creditedAt ; avoir = salesDocuments type CREDIT) -->
+<!-- docs/avoir.html (FINAL — FIX: autosave motif+notes avant aperçu, + restore au retour) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -421,6 +421,7 @@
     let invoiceRef = null;    // salesDocuments/INVOICE
     let invoiceData = null;
 
+    // --- helpers ---
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
       alertBox.classList.toggle("ok", !!ok);
@@ -688,8 +689,9 @@
         <div class="line"><b>creditDocId</b> : ${esc(credId || "—")}</div>
       `;
 
-      if(creditReasonEl.value === "" && cred.creditReason) creditReasonEl.value = cred.creditReason;
-      if(creditNotesEl.value === "" && cred.creditNotes) creditNotesEl.value = cred.creditNotes;
+      // Hydrate champs depuis Firestore si vides
+      if((creditReasonEl.value || "").trim() === "" && cred.creditReason) creditReasonEl.value = cred.creditReason;
+      if((creditNotesEl.value || "").trim() === "" && cred.creditNotes) creditNotesEl.value = cred.creditNotes;
 
       previewBtn.disabled = !invoiceData;
       saveBtn.disabled = !invoiceData;
@@ -747,6 +749,46 @@
       };
     }
 
+    // ✅ NEW: autosave motif/notes (Firestore si doc existe, sinon sessionStorage fallback)
+    async function autosaveCreditDraft(){
+      const motif = String(creditReasonEl.value || "").trim();
+      const notes = String(creditNotesEl.value || "").trim();
+
+      // Toujours garder un fallback local (au cas où doc pas encore créé)
+      try{
+        sessionStorage.setItem("creditDraftPreview", JSON.stringify(makeDraftForPreview()));
+      }catch(e){}
+
+      const creditId = String(creditData?.id || "").trim();
+      if(!creditId) return; // pas encore créé -> on reste sur fallback sessionStorage
+
+      // On écrit dans Firestore pour que le retour recharge le bon motif
+      try{
+        await updateDoc(doc(db, "salesDocuments", creditId), {
+          creditReason: motif,
+          creditNotes: notes,
+          updatedAt: serverTimestamp()
+        });
+        // Miroir local
+        creditData = { ...(creditData||{}), creditReason: motif, creditNotes: notes };
+      }catch(e){
+        console.warn("autosaveCreditDraft failed:", e?.message || e);
+      }
+    }
+
+    // ✅ NEW: hydrate depuis sessionStorage si retour d'aperçu
+    function restoreDraftFromSessionIfAny(){
+      try{
+        const raw = sessionStorage.getItem("creditDraftPreview");
+        if(!raw) return;
+        const d = JSON.parse(raw);
+
+        // on n'écrase pas si Firestore a déjà quelque chose
+        if((creditReasonEl.value || "").trim() === "" && d?.creditReason) creditReasonEl.value = d.creditReason;
+        if((creditNotesEl.value || "").trim() === "" && d?.creditNotes) creditNotesEl.value = d.creditNotes;
+      }catch(e){}
+    }
+
     // ===== Data loading =====
     const docId = getParam("docId");
     const fromDocId = getParam("fromDocId");
@@ -785,7 +827,6 @@
     }
 
     async function findExistingCreditForInvoice(invId){
-      // Sans composite index : PAS de orderBy ici.
       const qC = query(
         collection(db, "salesDocuments"),
         where("conciergerieUid", "==", currentUser.uid),
@@ -799,7 +840,6 @@
 
       if(!arr.length) return "";
 
-      // on prend le plus récent (createdAtMs ou createdAt)
       arr.sort((a,b)=>{
         const am = Number(a.createdAtMs)||0;
         const bm = Number(b.createdAtMs)||0;
@@ -815,7 +855,6 @@
     async function initFromInvoice(invId){
       await loadInvoice(invId);
 
-      // Option A : facture.creditDocId
       const linked = String(invoiceData.creditDocId || "").trim();
       if(linked){
         await loadCredit(linked);
@@ -849,16 +888,23 @@
       await loadProfile(currentUser.uid);
     }
 
-    // ===== Preview =====
-    previewBtn.addEventListener("click", ()=>{
+    // ===== Preview (FIX) =====
+    previewBtn.addEventListener("click", async ()=>{
       if(!invoiceData) return;
 
-      const draft = makeDraftForPreview();
-      sessionStorage.setItem("creditDraftPreview", JSON.stringify(draft));
+      hideAlert();
+      lockUI(true);
+      try{
+        // ✅ Sauvegarde le motif AVANT l’aperçu
+        await autosaveCreditDraft();
 
-      // docId peut être vide si nouveau => on passe un identifiant "virtuel" propre
-      const idForUrl = String(creditData?.id || "").trim() || "DRAFT";
-      location.href = `avoir-apercu.html?docId=${encodeURIComponent(idForUrl)}&draft=1`;
+        const idForUrl = String(creditData?.id || "").trim() || "DRAFT";
+        location.href = `avoir-apercu.html?docId=${encodeURIComponent(idForUrl)}&draft=1`;
+      }catch(e){
+        console.error(e);
+        showAlert("Erreur aperçu : " + (e?.message || "inconnue"));
+        lockUI(false);
+      }
     });
 
     // ===== Save =====
@@ -866,7 +912,6 @@
       hideAlert();
       if(!invoiceData) return showAlert("Facture source non chargée.");
 
-      // sécurité anti doublon : si déjà lié, on n’écrase pas
       const already = String(invoiceData?.creditDocId || "").trim();
       if(already && String(creditData?.id||"").trim() !== already){
         return showAlert("Cette facture a déjà un avoir lié. Ouvre l’avoir existant depuis la liste factures.");
@@ -949,19 +994,17 @@
           creditRef = doc(db, "salesDocuments", createdId);
         }
 
-        // PATCH facture -> CREDITED + lien Option A
         await updateDoc(invoiceRef, {
           invoiceStatus: "CREDITED",
           creditedAt: serverTimestamp(),
           creditedBy: currentUser.uid,
-          creditDocId: createdId,              // ✅ pivot unique pour badge + liens
+          creditDocId: createdId,
           updatedAt: serverTimestamp()
         });
 
         const cSnap = await getDoc(doc(db, "salesDocuments", createdId));
         creditData = { id: cSnap.id, ...(cSnap.data()||{}) };
 
-        // recharger facture pour verrou anti doublon (au cas où)
         const iSnap = await getDoc(invoiceRef);
         invoiceData = { id: iSnap.id, ...(iSnap.data()||{}) };
 
@@ -993,6 +1036,9 @@
         }else{
           throw new Error("docId ou fromDocId manquant. Ex: avoir.html?fromDocId=XXXX");
         }
+
+        // ✅ NEW: restore draft si retour d’aperçu
+        restoreDraftFromSessionIfAny();
 
         renderRecap();
         lockUI(false);
