@@ -1,4 +1,4 @@
-<!-- docs/agent-photos.html (FINAL — photos via token 24h ; type auto (depuis token) ; accepte prestationId OU eventId ; NE BLOQUE PAS par type) -->
+<!-- docs/agent-photos.html (FINAL — PHOTOS BYPASS via token 24h ; upload multi ; Storage: /proofPhotos/{prestationId}/PHOTOS/{token}/... ; Firestore index: events/{prestationId}/missions/PHOTOS ; bouton Terminer -> missionfini.html) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -89,6 +89,7 @@
       align-items:center;
       justify-content:center;
       position:relative;
+      text-decoration:none;
     }
     .ph img{ width:100%; height:100%; object-fit:cover; display:block; }
     .tag{
@@ -135,7 +136,7 @@
         <div class="mini">Aperçu (session)</div>
         <div class="grid" id="grid"></div>
         <div class="mini" style="margin-top:8px;">
-          Note : ici on montre ce que tu viens d’envoyer (session). L’historique sera visible côté conciergerie dans intervention.html (via index Firestore).
+          Note : ici on montre ce que tu viens d’envoyer (session). L’historique sera visible côté conciergerie dans intervention.html (index Firestore).
         </div>
       </section>
     </div>
@@ -144,7 +145,7 @@
   <script type="module">
     import { storage, db } from "./firebase-init.js";
     import { ref as sRef, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js";
-    import { doc, getDoc, updateDoc, serverTimestamp, increment } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import { doc, getDoc, setDoc, updateDoc, serverTimestamp, increment } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const alertBox = document.getElementById("alertBox");
     const subLine  = document.getElementById("subLine");
@@ -185,18 +186,14 @@
         .replaceAll("'","&#039;");
     }
 
-    // ===== Params (type devient OPTIONNEL) =====
-    const token = qs("token");
+    // ===== Params (PHOTO BYPASS) =====
+    const token = (qs("token") || "").trim();
 
     // accepte prestationId OU eventId (compat)
-    const prestationId =
-      (qs("prestationId") || qs("eventId") || qs("event") || "").trim();
+    const prestationId = (qs("prestationId") || qs("eventId") || qs("event") || "").trim();
 
-    // type demandé (UX), mais on ne BLOQUE PLUS dessus
-    const requestedType = (qs("type") || "").toUpperCase().trim();
-
-    // type EFFECTIF (pour stockage + index) : on le fixe après lecture token
-    let effectiveType = "PHOTOS";
+    // ✅ type unique, point final
+    const effectiveType = "PHOTOS";
 
     function validateParams(){
       if(!token || !prestationId){
@@ -227,29 +224,23 @@
 
     let tokenDocCache = null;
 
-    function normalizeType(x){
-      return String(x||"").toUpperCase().trim();
-    }
+    async function ensurePhotosMissionDoc({ tokenId }){
+      // crée le doc missions/PHOTOS si absent (utile pour éviter updateDoc fail)
+      const mRef = doc(db, "events", prestationId, "missions", "PHOTOS");
+      const snap = await getDoc(mRef);
+      if(snap.exists()) return;
 
-    function pickEffectiveTypeFromToken(t){
-      // priorité :
-      // 1) type demandé SI présent
-      // 2) t.missionId / t.type
-      // 3) t.missionTypes[0]
-      // 4) "PHOTOS"
-      const mts = Array.isArray(t?.missionTypes) ? t.missionTypes.map(normalizeType).filter(Boolean) : [];
-      const tokenPrimary = normalizeType(t?.missionId || t?.type || "");
-      let chosen =
-        normalizeType(requestedType) ||
-        tokenPrimary ||
-        (mts[0] || "") ||
-        "PHOTOS";
-
-      // si requestedType fourni mais pas dans missionTypes -> on CONTINUE, mais on bascule sur tokenPrimary/mts[0]
-      if(normalizeType(requestedType) && mts.length && !mts.includes(normalizeType(requestedType))){
-        chosen = tokenPrimary || (mts[0] || "PHOTOS");
-      }
-      return chosen || "PHOTOS";
+      await setDoc(mRef, {
+        missionId: "PHOTOS",
+        type: "PHOTOS",
+        prestationId: String(prestationId),
+        dayToken: tokenId,
+        proofPhotos: [],
+        proofPhotosCount: 0,
+        proofPhotosAtMs: 0,
+        proofToken: tokenId,
+        updatedAt: serverTimestamp()
+      }, { merge: true });
     }
 
     async function checkToken(){
@@ -263,7 +254,7 @@
       const t = snap.data() || {};
       tokenDocCache = t;
 
-      // ✅ match par eventId/prestationId (pas par mission)
+      // match par prestation/event id (pas par mission)
       const tokenPid = String(t.prestationId || t.eventId || t.bookingId || "").trim();
       if(tokenPid && String(tokenPid) !== String(prestationId)){
         subLine.textContent = "";
@@ -277,21 +268,15 @@
         return false;
       }
 
-      // ✅ type effectif (auto)
-      effectiveType = pickEffectiveTypeFromToken(t);
-
       const exp = Number.isFinite(Number(t.expiresAtMs))
         ? t.expiresAtMs
         : (t.expiresAt?.toMillis ? t.expiresAt.toMillis() : NaN);
 
-      // info (si mismatch, on l’affiche en subtil mais on ne bloque pas)
-      const mts = Array.isArray(t.missionTypes) ? t.missionTypes.map(normalizeType).filter(Boolean) : [];
-      const mismatchNote =
-        (normalizeType(requestedType) && mts.length && !mts.includes(normalizeType(requestedType)))
-          ? `\n⚠️ Type demandé "${requestedType}" non autorisé par le token → stockage sous "${effectiveType}".`
-          : "";
+      subLine.textContent = `OK • PHOTOS • expire: ${prettyExpiryFromMs(exp)}`;
 
-      subLine.textContent = `OK • ${effectiveType} • expire: ${prettyExpiryFromMs(exp)}${mismatchNote}`;
+      // sécurise l’existence du doc missions/PHOTOS
+      try{ await ensurePhotosMissionDoc({ tokenId: token }); }catch{}
+
       return true;
     }
 
@@ -303,16 +288,15 @@
       const now = Date.now();
       const name = safeName(file.name);
 
-      // ✅ Storage : /proofPhotos/{prestationId}/{effectiveType}/{token}/...
-      const path = `proofPhotos/${prestationId}/${effectiveType}/${token}/${now}_${name}`;
-
+      // ✅ Storage : /proofPhotos/{prestationId}/PHOTOS/{token}/...
+      const path = `proofPhotos/${prestationId}/PHOTOS/${token}/${now}_${name}`;
       const r = sRef(storage, path);
       const meta = { contentType: file.type || "image/jpeg" };
 
       await uploadBytes(r, file, meta);
       const url = await getDownloadURL(r);
 
-      return { url, path, name, sizeBytes: Number(file.size||0), createdAtMs: now, type: effectiveType };
+      return { url, path, name, sizeBytes: Number(file.size||0), createdAtMs: now };
     }
 
     function addThumb(p, idx){
@@ -349,10 +333,9 @@
 
     async function writeProofIndex({ uploadedPhotos }){
       const nowMs = Date.now();
-      const upperType = String(effectiveType).toUpperCase();
 
-      // 1) mission doc : events/{prestationId}/missions/{upperType}
-      const mRef = doc(db, "events", prestationId, "missions", upperType);
+      // 1) mission doc : events/{prestationId}/missions/PHOTOS
+      const mRef = doc(db, "events", prestationId, "missions", "PHOTOS");
 
       let existing = [];
       try{
@@ -373,14 +356,13 @@
         updatedAt: serverTimestamp()
       });
 
-      // 2) event aggregate
+      // 2) event aggregate (SANS proofPhotosByType)
       const eRef = doc(db, "events", prestationId);
       await updateDoc(eRef, {
         proofToken: token || null,
         proofPhotosAtMs: nowMs,
         updatedAt: serverTimestamp(),
-        proofPhotosTotal: increment((uploadedPhotos||[]).length),
-        [`proofPhotosByType.${upperType}`]: increment((uploadedPhotos||[]).length)
+        proofPhotosTotal: increment((uploadedPhotos||[]).length)
       });
     }
 
@@ -388,7 +370,6 @@
       doneBtn.style.display = "inline-flex";
       doneBtn.disabled = false;
     }
-
     function hideDoneButton(){
       doneBtn.style.display = "none";
       doneBtn.disabled = true;
@@ -407,6 +388,7 @@
       const files = Array.from(filesEl.files || []).filter(f => f && f.size > 0);
       if(!files.length) return showAlert("Aucun fichier sélectionné.");
 
+      // ✅ limite soft côté UI (Storage rules restent 30MB/objet)
       const max = 20;
       const batch = files.slice(0, max);
 
@@ -457,7 +439,6 @@
     sendBtn.addEventListener("click", ()=> send());
 
     doneBtn.addEventListener("click", ()=>{
-      // ✅ conserve token/prestationId + type EFFECTIF
       const url =
         `missionfini.html?token=${encodeURIComponent(token)}&prestationId=${encodeURIComponent(prestationId)}&type=${encodeURIComponent(effectiveType)}`;
       location.href = url;
