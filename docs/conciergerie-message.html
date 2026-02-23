@@ -1,0 +1,318 @@
+<!-- docs/conciergerie-message.html (FINAL — conciergerie : conversation thread, lecture + envoi, SANS PDF/attachments) -->
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CleanUp Manager — Conversation</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+
+  <style>
+    *{ box-sizing:border-box; font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; }
+    :root{
+      --violet:#7A5CFF; --violet2:#6238FF;
+      --bg1:#F8F4FF; --bg2:#EDE6FF;
+      --text:#111; --muted:#666;
+      --bad:#b3261e; --ok:#1b8f4d;
+      --border: rgba(122,92,255,0.18);
+      --shadow: 0 14px 36px rgba(0,0,0,0.08);
+      --card: rgba(255,255,255,0.88);
+    }
+    body{ margin:0; background:linear-gradient(180deg,var(--bg1) 0%,var(--bg2) 80%); color:var(--text); }
+    .page{ min-height:100vh; display:flex; flex-direction:column; align-items:center; padding:14px 14px 40px; }
+    .topbar{
+      width:100%; max-width:980px;
+      display:flex; justify-content:space-between; align-items:center; gap:10px;
+      position:sticky; top:0; z-index:20; padding:10px 0;
+      background:rgba(248,244,255,.85); backdrop-filter:blur(6px);
+    }
+    .pill{
+      display:inline-flex; align-items:center; gap:8px;
+      padding:8px 12px; border-radius:999px;
+      background:#fff; border:2px solid var(--violet);
+      color:var(--violet); text-decoration:none;
+      font-weight:900; font-size:13px; cursor:pointer;
+      box-shadow:0 3px 10px rgba(0,0,0,.06); white-space:nowrap;
+    }
+
+    .wrap{ width:100%; max-width:980px; display:flex; flex-direction:column; gap:10px; margin-top:6px; }
+
+    .alert{
+      display:none; padding:10px 12px; border-radius:14px; background:#fff;
+      border-left:5px solid var(--bad); box-shadow:0 3px 10px rgba(0,0,0,.06);
+      font-size:12px; font-weight:900; color:#444; white-space:pre-wrap;
+      width:100%;
+    }
+    .alert.ok{ border-left-color:var(--ok); }
+
+    .card{
+      background:var(--card);
+      border:1px solid var(--border);
+      border-radius:18px;
+      box-shadow:var(--shadow);
+      backdrop-filter:blur(10px);
+      padding:12px;
+    }
+    .cardTitle{
+      display:flex; justify-content:space-between; align-items:center; gap:10px;
+      font-size:14px; font-weight:900; color:#111;
+    }
+    .tiny{ font-size:12px; color:var(--muted); font-weight:900; }
+
+    .chat{
+      display:flex; flex-direction:column; gap:10px;
+      margin-top:10px;
+      max-height:65vh;
+      overflow:auto;
+      padding-right:2px;
+    }
+    .msg{
+      max-width:92%;
+      padding:10px 12px;
+      border-radius:16px;
+      background:#fff;
+      border:1px solid rgba(0,0,0,0.05);
+      box-shadow:0 3px 10px rgba(0,0,0,.06);
+    }
+    .msg.me{ margin-left:auto; border-color: rgba(122,92,255,0.22); }
+    .msg .meta{ font-size:11px; color:#666; font-weight:900; margin-bottom:6px; }
+    .msg .text{ font-size:13px; font-weight:850; white-space:pre-wrap; }
+
+    .composer{
+      margin-top:10px;
+      display:flex; gap:8px; align-items:flex-end;
+    }
+    textarea{
+      flex:1;
+      width:100%;
+      padding:10px 12px;
+      border-radius:14px;
+      border:1px solid #D3C7FF;
+      font-size:14px;
+      outline:none;
+      background:#fff;
+      font-weight:800;
+      resize:vertical;
+      min-height:44px;
+      max-height:160px;
+    }
+    textarea:focus{ border-color:var(--violet); box-shadow:0 0 0 2px rgba(122,92,255,.15); }
+
+    .btnMini{
+      border:none; border-radius:999px;
+      padding:9px 10px; font-size:12px; font-weight:900;
+      cursor:pointer; white-space:nowrap;
+      background:linear-gradient(90deg,var(--violet),var(--violet2)); color:#fff;
+      box-shadow:0 10px 22px rgba(0,0,0,0.10);
+      text-decoration:none; display:inline-flex; align-items:center; justify-content:center;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="page">
+    <div class="topbar">
+      <a class="pill" href="conciergerie-messages.html">← Messages</a>
+      <button class="pill" id="logoutBtn" type="button">Déconnexion</button>
+    </div>
+
+    <div class="wrap">
+      <div class="alert" id="alertBox"></div>
+
+      <section class="card">
+        <div class="cardTitle">
+          <span id="titleLine">Conversation</span>
+          <span class="tiny" id="hintLine">—</span>
+        </div>
+
+        <div class="chat" id="chatBox"></div>
+
+        <div class="composer">
+          <textarea id="msgInput" placeholder="Écrire un message…"></textarea>
+          <button class="btnMini" id="sendBtn" type="button">Envoyer</button>
+        </div>
+
+        <div class="tiny" style="margin-top:10px;">
+          Conversation propriétaire ↔ conciergerie (pas de fichiers).
+        </div>
+      </section>
+    </div>
+  </div>
+
+<script type="module">
+import { auth, db } from "./firebase-init.js";
+import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+import {
+  doc, getDoc, addDoc, updateDoc, collection,
+  query, orderBy, limit, onSnapshot, serverTimestamp, increment
+} from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+
+const alertBox = document.getElementById("alertBox");
+const chatBox = document.getElementById("chatBox");
+const msgInput = document.getElementById("msgInput");
+const sendBtn = document.getElementById("sendBtn");
+const titleLine = document.getElementById("titleLine");
+const hintLine = document.getElementById("hintLine");
+const logoutBtn = document.getElementById("logoutBtn");
+
+function showAlert(msg, ok=false){
+  alertBox.style.display="block";
+  alertBox.classList.toggle("ok",!!ok);
+  alertBox.textContent=msg;
+}
+function hideAlert(){
+  alertBox.style.display="none";
+  alertBox.classList.remove("ok");
+  alertBox.textContent="";
+}
+function esc(s){
+  return String(s ?? "")
+    .replaceAll("&","&amp;")
+    .replaceAll("<","&lt;")
+    .replaceAll(">","&gt;")
+    .replaceAll('"',"&quot;")
+    .replaceAll("'","&#039;");
+}
+function fmtTs(ts){
+  try{
+    const d = ts?.toDate ? ts.toDate() : null;
+    if(!d) return "";
+    return d.toLocaleString("fr-FR");
+  }catch(_){ return ""; }
+}
+
+logoutBtn.onclick = async ()=>{
+  await signOut(auth);
+  localStorage.removeItem("cm_auth");
+  location.href="login.html";
+};
+
+const params = new URLSearchParams(location.search);
+const threadId = String(params.get("threadId") || "").trim();
+
+let currentUser = null;
+let unsubMessages = null;
+
+function renderMessage(m){
+  const role = String(m.senderRole || "").toUpperCase().trim();
+  const isMe = role === "CONCIERGERIE";
+
+  const div = document.createElement("div");
+  div.className = "msg" + (isMe ? " me" : "");
+  const meta = `${isMe ? "Moi (conciergerie)" : "Propriétaire"} • ${fmtTs(m.at)}`;
+
+  const text = String(m.text || "").trim();
+
+  div.innerHTML = `
+    <div class="meta">${esc(meta)}</div>
+    <div class="text">${esc(text || "—")}</div>
+  `;
+  return div;
+}
+
+async function loadThreadMeta(){
+  const ref = doc(db,"threads", threadId);
+  const snap = await getDoc(ref);
+  if(!snap.exists()) throw new Error("Thread introuvable.");
+  const t = snap.data() || {};
+
+  // sécurité simple: ce thread doit être à la conciergerie connectée
+  const cuid = String(t.conciergerieUid || "").trim();
+  if(!currentUser || cuid !== String(currentUser.uid)){
+    throw new Error("Accès refusé à ce thread.");
+  }
+
+  titleLine.textContent = `Conversation — ${String(t.ownerName || "Propriétaire").trim()}`;
+  hintLine.textContent = String(t.ownerDocId || "").trim() ? `OwnerDocId: ${t.ownerDocId}` : "—";
+}
+
+async function subscribeMessages(){
+  if(!threadId) throw new Error("threadId manquant dans l’URL.");
+  await loadThreadMeta();
+
+  if(unsubMessages) unsubMessages();
+
+  const q = query(
+    collection(db, "threads", threadId, "messages"),
+    orderBy("at","asc"),
+    limit(300)
+  );
+
+  unsubMessages = onSnapshot(q, async (snap)=>{
+    chatBox.innerHTML = "";
+    if(snap.empty){
+      chatBox.innerHTML = `<div class="tiny">Aucun message.</div>`;
+    }else{
+      snap.forEach(d=>{
+        chatBox.appendChild(renderMessage(d.data() || {}));
+      });
+    }
+
+    // vu côté conciergerie
+    try{ await updateDoc(doc(db,"threads", threadId), { unreadForConciergerie: 0 }); }catch(_){}
+
+    chatBox.scrollTop = chatBox.scrollHeight + 9999;
+  }, (err)=>{
+    console.error(err);
+    showAlert("Erreur messages : " + (err?.message || "inconnue"));
+  });
+}
+
+sendBtn.onclick = async ()=>{
+  hideAlert();
+  const text = String(msgInput.value || "").trim();
+  if(!text) return;
+
+  sendBtn.disabled = true;
+  try{
+    // double check droits
+    await loadThreadMeta();
+
+    await addDoc(collection(db,"threads", threadId, "messages"), {
+      text,
+      at: serverTimestamp(),
+      senderRole: "CONCIERGERIE",
+      senderUid: currentUser.uid
+    });
+
+    await updateDoc(doc(db,"threads", threadId), {
+      lastAt: serverTimestamp(),
+      lastText: text,
+      unreadForOwner: increment(1)
+    });
+
+    msgInput.value = "";
+  }catch(e){
+    showAlert("Envoi impossible : " + (e?.message || "erreur"));
+  }finally{
+    sendBtn.disabled = false;
+  }
+};
+
+msgInput.addEventListener("keydown", (e)=>{
+  if(e.key === "Enter" && !e.shiftKey){
+    e.preventDefault();
+    sendBtn.click();
+  }
+});
+
+onAuthStateChanged(auth, async (user)=>{
+  if(!user){
+    location.href="login.html";
+    return;
+  }
+  currentUser = user;
+
+  try{
+    await subscribeMessages();
+  }catch(e){
+    console.error(e);
+    showAlert("Erreur : " + (e?.message || "inconnue"));
+  }
+});
+</script>
+</body>
+</html>
