@@ -1,4 +1,4 @@
-<!-- docs/owner-planning.html (FINAL — planning owner: homes tenant-safe + events by homeId IN + dateKey range + calendar+list) -->
+<!-- docs/owner-planning.html (FINAL FIX — selected day not frozen + highlight selected + scroll-to-day + URL param dateKey) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -23,6 +23,12 @@
       --card: rgba(255,255,255,0.88);
       --bg1:#F8F4FF;
       --bg2:#EDE6FF;
+
+      /* couleurs planning */
+      --c-arr:#1b8f4d;   /* arrivée = vert */
+      --c-dep:#FF3B3B;   /* départ  = rouge (tu peux passer orange si tu veux) */
+      --c-mis: var(--violet-main); /* missions = violet */
+      --c-res:#111;      /* réservation (fallback) = noir */
     }
     *{ box-sizing:border-box; font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; }
     body{ margin:0; background:linear-gradient(180deg,var(--bg1),var(--bg2)); color:var(--text); }
@@ -161,11 +167,21 @@
       color:#333;
     }
     .day.muted .dayNum{ color:#bbb; }
+
+    /* Aujourd'hui = léger */
     .day.today{
-      outline:2px solid rgba(122,92,255,.35);
+      outline:2px solid rgba(122,92,255,.25);
       outline-offset:-2px;
-      background:rgba(122,92,255,0.06);
+      background:rgba(122,92,255,0.05);
     }
+
+    /* ✅ Jour sélectionné = fort */
+    .day.selected{
+      outline:3px solid rgba(122,92,255,.75);
+      outline-offset:-3px;
+      background:rgba(122,92,255,0.12);
+    }
+
     .dots{
       position:absolute;
       left:6px;
@@ -175,10 +191,10 @@
       align-items:center;
     }
     .dot{ width:7px; height:7px; border-radius:50%; background: var(--violet-main); opacity:.9; }
-    .dot.res{ background:#111; }
-    .dot.mis{ background: var(--violet-main); }
-    .dot.dep{ background:#FF3B3B; }
-    .dot.arr{ background:#1b8f4d; }
+    .dot.res{ background:var(--c-res); }
+    .dot.mis{ background:var(--c-mis); }
+    .dot.dep{ background:var(--c-dep); }
+    .dot.arr{ background:var(--c-arr); }
     .dot.more{
       width:auto; height:auto;
       padding:2px 6px;
@@ -324,6 +340,14 @@ function fmtDateKey(k){
   if(!isDateKey(s)) return s;
   return s.slice(8,10)+"/"+s.slice(5,7)+"/"+s.slice(0,4);
 }
+function dateFromKey(k){
+  const s = String(k||"");
+  if(!isDateKey(s)) return new Date();
+  const y = Number(s.slice(0,4));
+  const m = Number(s.slice(5,7)) - 1;
+  const d = Number(s.slice(8,10));
+  return new Date(y,m,d);
+}
 function monthLabel(d){
   const months = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"];
   return `${months[d.getMonth()]} ${d.getFullYear()}`;
@@ -383,6 +407,33 @@ let eventsByDate = new Map();   // dateKey -> counts
 /* Month view */
 let viewMonth = new Date();
 viewMonth = new Date(viewMonth.getFullYear(), viewMonth.getMonth(), 1);
+
+/* ✅ selected day (fix freeze) */
+const todayKey = toKey(new Date());
+const urlParams = new URLSearchParams(location.search);
+let selectedKey =
+  (urlParams.get("dateKey") || "").trim()
+  || (localStorage.getItem("owner_planning_selectedKey") || "").trim()
+  || todayKey;
+
+function setSelectedKey(k){
+  if(!isDateKey(k)) return;
+  selectedKey = k;
+  localStorage.setItem("owner_planning_selectedKey", selectedKey);
+
+  // optionnel : sync URL sans recharger
+  const u = new URL(location.href);
+  u.searchParams.set("dateKey", selectedKey);
+  history.replaceState({}, "", u.toString());
+
+  // bascule mois visible si besoin
+  const d = dateFromKey(selectedKey);
+  viewMonth = new Date(d.getFullYear(), d.getMonth(), 1);
+
+  renderCalendar();
+  renderList();   // affiche le jour sélectionné en premier (voir plus bas)
+  scrollToDate(selectedKey);
+}
 
 /* Business */
 function computeRangeKeys(){
@@ -474,6 +525,13 @@ function fillHomes(){
   }
 }
 
+function scrollToDate(dk){
+  const anchor = document.getElementById("day_"+dk);
+  if(anchor){
+    anchor.scrollIntoView({ behavior:"smooth", block:"start" });
+  }
+}
+
 function renderList(){
   planningList.innerHTML = "";
   emptyBox.style.display = "none";
@@ -494,6 +552,7 @@ function renderList(){
     return;
   }
 
+  // group by dateKey
   const groups = new Map();
   for(const e of filtered){
     const dk = String(e.dateKey || e.arrivalDateKey || "").trim();
@@ -502,7 +561,12 @@ function renderList(){
     groups.get(dk).push(e);
   }
 
-  const dates = Array.from(groups.keys()).sort((a,b)=> a.localeCompare(b));
+  let dates = Array.from(groups.keys()).sort((a,b)=> a.localeCompare(b));
+
+  // ✅ mettre le jour sélectionné en tête s'il existe
+  if(isDateKey(selectedKey) && groups.has(selectedKey)){
+    dates = [selectedKey, ...dates.filter(x=>x!==selectedKey)];
+  }
 
   for(const dk of dates){
     const dayItems = groups.get(dk) || [];
@@ -534,9 +598,10 @@ function renderList(){
 
     const block = document.createElement("div");
     block.className = "item";
+    block.id = "day_"+dk; // ✅ anchor scroll
     block.innerHTML = `
       <div class="meta">
-        <span>${esc(fmtDateKey(dk))}</span>
+        <span>${esc(fmtDateKey(dk))}${dk===selectedKey ? " • sélection" : ""}</span>
         <span>${esc(String(dayItems.length))} élément(s)</span>
       </div>
       <p class="msg">${esc(lines.join("\n\n"))}</p>
@@ -551,8 +616,6 @@ function dateKeyFromYMD(y,m,d){ return `${y}-${pad2(m+1)}-${pad2(d)}`; }
 function renderCalendar(){
   calTitle.textContent = monthLabel(viewMonth);
   clearCalendar();
-
-  const todayKey = toKey(new Date());
 
   const first = new Date(viewMonth.getFullYear(), viewMonth.getMonth(), 1);
   const last  = new Date(viewMonth.getFullYear(), viewMonth.getMonth()+1, 0);
@@ -588,6 +651,7 @@ function renderCalendar(){
 
     if(muted) cell.classList.add("muted");
     if(dk === todayKey) cell.classList.add("today");
+    if(dk === selectedKey) cell.classList.add("selected");
 
     cell.dataset.dateKey = dk;
     cell.innerHTML = `<div class="dayNum">${dNum}</div>`;
@@ -613,10 +677,7 @@ function renderCalendar(){
     }
 
     cell.addEventListener("click", ()=>{
-      const target = fmtDateKey(dk);
-      const el = Array.from(planningList.querySelectorAll(".item"))
-        .find(x => x.textContent.includes(target));
-      if(el) el.scrollIntoView({ behavior:"smooth", block:"start" });
+      setSelectedKey(dk);
     });
 
     calGrid.appendChild(cell);
@@ -642,7 +703,7 @@ function refreshSubtitle(){
   const titleHome = (chosen === "__all__")
     ? "Tous les logements"
     : (homesById.get(chosen)?.name || "Logement");
-  subtitleLine.textContent = `${titleHome} • ${fmtDateKey(minKey)} → ${fmtDateKey(maxKey)}`;
+  subtitleLine.textContent = `${titleHome} • ${fmtDateKey(minKey)} → ${fmtDateKey(maxKey)} • Sélection : ${fmtDateKey(selectedKey)}`;
 }
 
 function listenEventsByHomeIds(){
@@ -683,7 +744,6 @@ function listenEventsByHomeIds(){
     );
 
     const unsub = onSnapshot(qEvents, (snap)=>{
-      // merge stable via docChanges
       snap.docChanges().forEach(ch=>{
         if(ch.type === "removed"){
           eventsMap.delete(ch.doc.id);
@@ -702,6 +762,10 @@ function listenEventsByHomeIds(){
       rebuildMaps();
       renderCalendar();
       renderList();
+
+      // ✅ si on arrive sur une dateKey depuis URL/localStorage, on scroll une fois
+      if(isDateKey(selectedKey)) setTimeout(()=>scrollToDate(selectedKey), 50);
+
     }, (err)=>{
       console.error(err);
       const m = String(err?.message||"").toLowerCase();
@@ -723,7 +787,6 @@ function listenHomesForOwner(){
 
   if(!currentUser) return;
 
-  // ✅ tenant-safe : homes via (conciergerieUid + ownerDocId), sinon fallback ownerUid
   const qh = (ownerDocId && conciergerieUid)
     ? query(
         collection(db,"homes"),
@@ -770,9 +833,6 @@ onAuthStateChanged(auth, async (user)=>{
   }
   currentUser = user;
 
-  renderCalendar();
-  refreshSubtitle();
-
   // users/{uid} -> ownerDocId + conciergerieUid
   try{
     const us = await getDoc(doc(db,"users", user.uid));
@@ -781,11 +841,16 @@ onAuthStateChanged(auth, async (user)=>{
     conciergerieUid = String(ud.conciergerieUid || "").trim();
   }catch(_){}
 
-  // si pas rattaché, on laisse fallback ownerUid fonctionner, mais on le dit
   if(!ownerDocId || !conciergerieUid){
     showAlert("⚠️ Compte pas encore rattaché (ownerDocId/conciergerieUid). Va sur Profil puis Enregistrer.", false);
   }
 
+  // ✅ init mois + render
+  if(!isDateKey(selectedKey)) selectedKey = todayKey;
+  viewMonth = new Date(dateFromKey(selectedKey).getFullYear(), dateFromKey(selectedKey).getMonth(), 1);
+
+  renderCalendar();
+  refreshSubtitle();
   listenHomesForOwner();
 });
 </script>
