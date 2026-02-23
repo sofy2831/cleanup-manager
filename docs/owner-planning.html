@@ -559,19 +559,63 @@ function renderList(){
     const city = e.homeCity || (homesById.get(e.homeId||"")?.city) || "";
     const time = String(e.time || e.arrivalTime || e.departureTime || "").trim();
 
-    const { isReservation, hasMissions, mt } = classifyEvent(e);
+          const { isReservation, hasMissions, mt } = classifyEvent(e);
 
-    let label = "Événement";
-    if(isReservation && !hasMissions) label = "Réservation";
-    if(hasMissions){
-      const map = { "CHECKIN":"Check-in", "CHECKOUT":"Check-out", "MENAGE":"Ménage" };
-      const nice = mt.map(x=> map[x] || x).join(" • ");
-      label = nice || "Intervention";
-    }
+      // --- logement ---
+      const placeLine = `${homeName}${city ? (" • " + city) : ""}`;
 
-    const extra = (e.status && String(e.status).trim()) ? ` • ${String(e.status)}` : "";
-    lines.push(`${time ? (time+" — ") : ""}${label}${extra}\n${homeName}${city ? (" • "+city) : ""}`);
-  }
+      // --- statut ---
+      const extra = (e.status && String(e.status).trim()) ? ` • ${String(e.status).trim()}` : "";
+
+      // --- helper affichage date+heure ---
+      const niceDT = (k, t)=>{
+        const kk = String(k||"").trim();
+        const tt = String(t||"").trim();
+        if(isDateKey(kk) && tt) return `${fmtDateKey(kk)} ${tt}`;
+        if(isDateKey(kk)) return `${fmtDateKey(kk)}`;
+        if(tt) return tt;
+        return "—";
+      };
+
+      // --- RESERVATION : on affiche arrivée + départ (dates+heures) ---
+      if(isReservation && !hasMissions){
+        const arr = niceDT(e.arrivalDateKey, e.arrivalTime);
+        const dep = niceDT(e.departureDateKey, e.departureTime);
+
+        // si tu veux garder une heure "principale" dans l’ordre du jour :
+        // - priorité : arrivalTime si dateKey == arrivalDateKey
+        // - sinon departureTime si dateKey == departureDateKey
+        let mainTime = "";
+        const dk0 = String(dk||"");
+        if(dk0 && dk0 === String(e.arrivalDateKey||"") && e.arrivalTime) mainTime = String(e.arrivalTime);
+        else if(dk0 && dk0 === String(e.departureDateKey||"") && e.departureTime) mainTime = String(e.departureTime);
+
+        const title = `${mainTime ? (mainTime+" — ") : ""}Réservation${extra}`;
+        const details = `Arrivée : ${arr}\nDépart : ${dep}`;
+
+        lines.push(`${title}\n${placeLine}\n${details}`);
+        continue;
+      }
+
+      // --- MISSIONS : seulement si missionTypes existe vraiment ---
+      if(hasMissions){
+        const map = { "CHECKIN":"Check-in", "CHECKOUT":"Check-out", "MENAGE":"Ménage" };
+        const nice = mt.map(x=> map[x] || x).join(" • ");
+        const title = `${time ? (time+" — ") : ""}${(nice || "Intervention")}${extra}`;
+
+        // si tu veux aussi rappeler arrivée/départ quand ils existent (optionnel, utile)
+        const arrOk = isDateKey(e.arrivalDateKey) || String(e.arrivalTime||"").trim();
+        const depOk = isDateKey(e.departureDateKey) || String(e.departureTime||"").trim();
+        const details = [];
+        if(arrOk) details.push(`Arrivée : ${niceDT(e.arrivalDateKey, e.arrivalTime)}`);
+        if(depOk) details.push(`Départ : ${niceDT(e.departureDateKey, e.departureTime)}`);
+
+        lines.push(`${title}\n${placeLine}${details.length ? ("\n"+details.join("\n")) : ""}`);
+        continue;
+      }
+
+      // --- fallback événement ---
+      lines.push(`${time ? (time+" — ") : ""}Événement${extra}\n${placeLine}`);
 
   const block = document.createElement("div");
   block.className = "item";
@@ -824,3 +868,4 @@ onAuthStateChanged(auth, async (user)=>{
 </script>
 </body>
 </html>
+
