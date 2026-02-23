@@ -1,4 +1,4 @@
-<!-- docs/owner-homes.html (OWNER — ajout logement + liste) -->
+<!-- docs/owner-homes.html (FINAL — owner guard + add_home request + homes list tenant-safe) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -300,10 +300,11 @@ onAuthStateChanged(auth, async (user)=>{
     return;
   }
 
-  // Source de vérité
+  hideAlert();
+
+  // Source de vérité users/{uid}
   let ownerDocId = "";
   let conciergerieUid = "";
-
   try{
     const us = await getDoc(doc(db,"users", user.uid));
     const ud = us.exists() ? (us.data()||{}) : {};
@@ -313,6 +314,11 @@ onAuthStateChanged(auth, async (user)=>{
 
   if(unsubHomes) unsubHomes();
   unsubHomes = null;
+
+  // Si non rattaché : on peut encore afficher via fallback ownerUid, mais on prévient
+  if(!ownerDocId || !conciergerieUid){
+    showAlert("⚠️ Ton compte n’est pas encore rattaché (ownerDocId/conciergerieUid). Va sur Profil puis Enregistrer.", false);
+  }
 
   // Query principale : homes liés via ownerDocId + conciergerieUid
   // Fallback : homes.ownerUid == auth.uid (anciens docs)
@@ -366,7 +372,11 @@ onAuthStateChanged(auth, async (user)=>{
     hideAlert();
 
     if(!ownerDocId || !conciergerieUid){
-      return showAlert("Ton compte n’est pas encore rattaché correctement (ownerDocId/conciergerieUid manquant). Reviens sur Profil puis Enregistrer.", false);
+      return showAlert(
+        "Ton compte n’est pas encore rattaché correctement (ownerDocId/conciergerieUid manquant).\n" +
+        "Va sur Profil puis Enregistrer.",
+        false
+      );
     }
 
     if(!homeName.value.trim() || !homeCity.value.trim()){
@@ -380,7 +390,7 @@ onAuthStateChanged(auth, async (user)=>{
         ownerDocId,
         ownerUid: user.uid,
         ownerEmail: user.email || "",
-        type:"add_home",
+        type:"home_add",
         title:`Ajout logement – ${homeName.value.trim()}`,
         message:(homeMsg.value||"").trim(),
         payload:{
@@ -389,7 +399,8 @@ onAuthStateChanged(auth, async (user)=>{
           type:homeType.value
         },
         status:"pending",
-        createdAt:serverTimestamp()
+        createdAt:serverTimestamp(),
+        createdAtMs: Date.now()
       });
 
       showAlert("✅ Demande envoyée.",true);
