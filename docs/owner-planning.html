@@ -1,4 +1,4 @@
-<!-- docs/owner-planning.html (FINAL — lignes = Réservation + Logement/Ville + Arrivée + Départ + missionTypes si présent) -->
+<!-- docs/owner-planning.html (FINAL — 1 ligne par event: Réservation + Logement/Ville + Arrivée + Départ + labels(lines) si présent) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -360,6 +360,19 @@ function chunk(arr, size){
   return out;
 }
 
+/* ✅ labels réels depuis events.lines[] */
+function extractLineLabels(e){
+  const lines = Array.isArray(e?.lines) ? e.lines : [];
+  const out = [];
+  for(const ln of lines){
+    const lab = String(ln?.label || "").trim();
+    const cat = String(ln?.category || "").trim();
+    if(lab) out.push(lab);
+    else if(cat) out.push(cat);
+  }
+  return Array.from(new Set(out));
+}
+
 /* UI */
 const homeSelect   = document.getElementById("homeSelect");
 const rangeSelect  = document.getElementById("rangeSelect");
@@ -440,10 +453,14 @@ function computeRangeKeys(){
 }
 
 function classifyEvent(e){
-  const mt = Array.isArray(e.missionTypes) ? e.missionTypes.map(x=>String(x||"").toUpperCase()) : [];
   const source = String(e.source||"").toLowerCase();
   const isReservation = (source === "ical") || (!!e.arrivalDateKey && !!e.departureDateKey);
-  const hasMissions = mt.length > 0;
+
+  // ✅ missions = soit missionTypes, soit lines (ton cas réel)
+  const mt = Array.isArray(e.missionTypes) ? e.missionTypes.map(x=>String(x||"").toUpperCase()) : [];
+  const hasLines = Array.isArray(e.lines) && e.lines.length > 0;
+  const hasMissions = (mt.length > 0) || hasLines;
+
   return { isReservation, hasMissions, mt };
 }
 
@@ -534,7 +551,7 @@ function renderList(){
     filtered = filtered.filter(e => String(e.homeId||"") === String(chosen));
   }
 
-  // filtre date = selectedKey (dateKey des events)
+  // filtre date = selectedKey
   filtered = filtered.filter(e => {
     const dk = String(e.dateKey || e.arrivalDateKey || "").trim();
     return dk === selectedKey;
@@ -562,24 +579,12 @@ function renderList(){
     return "—";
   };
 
-  const niceMissionTypes = (mtUpper)=>{
-    // ✅ ne montre que Ménage / Check-in / Check-out si présents
-    const allow = new Set(["MENAGE","CHECKIN","CHECKOUT"]);
-    const map = { "MENAGE":"Ménage", "CHECKIN":"Check-in", "CHECKOUT":"Check-out" };
-    const picked = (Array.isArray(mtUpper) ? mtUpper : [])
-      .map(x=>String(x||"").toUpperCase())
-      .filter(x=>allow.has(x));
-    // unique
-    const uniq = Array.from(new Set(picked));
-    return uniq.map(x=>map[x] || x).join(" / ");
-  };
-
   for(const e of filtered){
     const h = homesById.get(String(e.homeId||""));
     const homeName = String(e.homeName || h?.name || "Logement").trim();
     const city = String(e.homeCity || h?.city || "").trim();
 
-    const { isReservation, mt } = classifyEvent(e);
+    const { isReservation } = classifyEvent(e);
 
     const reservationLabel = isReservation ? "Réservation" : "Mission";
     const place = city ? `${homeName} / ${city}` : homeName;
@@ -587,11 +592,13 @@ function renderList(){
     const arr = niceDT(e.arrivalDateKey, e.arrivalTime);
     const dep = niceDT(e.departureDateKey, e.departureTime);
 
-    const mtText = niceMissionTypes(mt);
-    const mtPart = mtText ? ` • ${mtText}` : "";
+    // ✅ labels réels depuis lines[]
+    const labels = extractLineLabels(e);
+    const labelsText = labels.join(" / ");
+    const labelsPart = labelsText ? ` • ${labelsText}` : "";
 
     // ✅ 1 seule ligne
-    const line = `${reservationLabel} • ${place} • Arrivée ${arr} • Départ ${dep}${mtPart}`;
+    const line = `${reservationLabel} • ${place} • Arrivée ${arr} • Départ ${dep}${labelsPart}`;
 
     const div = document.createElement("div");
     div.className = "item";
