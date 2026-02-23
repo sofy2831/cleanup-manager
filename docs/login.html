@@ -132,11 +132,11 @@ const emailEl = document.getElementById("email");
 const passEl  = document.getElementById("password");
 
 const params = new URLSearchParams(location.search);
-const role = (params.get("role") || "conciergerie").toLowerCase();
+const requestedRole = (params.get("role") || "conciergerie").toLowerCase(); // rôle demandé (UI)
 const token = (params.get("token") || "").trim();
 
 subtitleP.textContent =
-  role === "proprietaire"
+  requestedRole === "proprietaire"
     ? (token ? "Connexion pour finaliser l’invitation." : "Accès à ton espace propriétaire.")
     : "Accès à ton espace conciergerie.";
 
@@ -161,11 +161,22 @@ function humanAuthError(err){
 
 function normEmail(s){ return (s||"").trim().toLowerCase(); }
 
-// ✅ 1) Filet de sécurité : s'assurer que clients/{c_owner_ownerDocId} existe
-async function ensureClientDocForOwner(user){
+// ✅ Lit users/{uid} si présent (source de vérité pour router)
+async function loadUserProfile(uid){
   try{
-    const us = await getDoc(doc(db,"users", user.uid));
-    const u  = us.exists() ? (us.data() || {}) : {};
+    const us = await getDoc(doc(db,"users", uid));
+    if(!us.exists()) return null;
+    return us.data() || null;
+  }catch(e){
+    console.warn("loadUserProfile:", e?.message || e);
+    return null;
+  }
+}
+
+// ✅ 1) Filet de sécurité : s'assurer que clients/{c_owner_ownerDocId} existe
+async function ensureClientDocForOwner(user, userProfile){
+  try{
+    const u = userProfile || {};
 
     const ownerDocId = String(u.ownerDocId || "").trim();
     const conciergerieUid = String(u.conciergerieUid || "").trim();
@@ -178,9 +189,11 @@ async function ensureClientDocForOwner(user){
 
     await setDoc(doc(db,"clients", clientDocId), {
       conciergerieUid,
+      clientId: clientDocId,
       clientKey: ownerDocId,
       ownerDocId: ownerDocId,
       ownerUid: user.uid,
+      uid: user.uid, // compat
       email: email,
       emailLower: email,
       updatedAt: serverTimestamp()
@@ -193,8 +206,8 @@ async function ensureClientDocForOwner(user){
   }
 }
 
-// ✅ 2) FIX IMPORTANT : raccorder owners/{ownerDocId}.ownerUid = auth.uid
-async function ensureOwnerUidOnOwners(ownerDocId, ownerUid, emailLower=""){
+// ✅ 2) FIX IMPORTANT + sécurité tenant : raccorder owners/{ownerDocId}.ownerUid = auth.uid
+async function ensureOwnerUidOnOwners(ownerDocId, ownerUid, expectedConciergerieUid="", emailLower=""){
   if(!ownerDocId || !ownerUid) return { ok:false, reason:"missing_params" };
 
   const ref = doc(db, "owners", ownerDocId);
@@ -202,7 +215,14 @@ async function ensureOwnerUidOnOwners(ownerDocId, ownerUid, emailLower=""){
   if(!snap.exists()) return { ok:false, reason:"owner_doc_missing" };
 
   const o = snap.data() || {};
-  const cur = String(o.ownerUid || o.userUid || "").trim();
+
+  // ✅ sécurité tenant
+  const ownerConc = String(o.conciergerieUid || "").trim();
+  if(expectedConciergerieUid && ownerConc && ownerConc !== String(expectedConciergerieUid)){
+    return { ok:false, reason:"owner_tenant_mismatch" };
+  }
+
+  const cur = String(o.ownerUid || o.uid || o.userUid || "").trim();
 
   // déjà OK
   if(cur === ownerUid) return { ok:true, already:true };
@@ -213,7 +233,8 @@ async function ensureOwnerUidOnOwners(ownerDocId, ownerUid, emailLower=""){
   }
 
   const patch = {
-    ownerUid: ownerUid,
+    ownerUid: ownerUid, // ✅ canon
+    uid: ownerUid,      // compat
     updatedAt: serverTimestamp(),
     ownerUidLinkedAt: serverTimestamp()
   };
@@ -262,24 +283,46 @@ form.addEventListener("submit", async (e)=>{
     const cred = await signInWithEmailAndPassword(auth, email, pass);
     const user = cred.user;
 
-    // PROPRIÉTAIRE
-    if(role === "proprietaire"){
-      // si token : on laisse invite-proprietaire finaliser (source de vérité)
-      if(token){
-        location.replace("invite-proprietaire.html?token="+encodeURIComponent(token));
-        return;
-      }
+    // ✅ token propriétaire = priorité absolue
+    if(token){
+      location.replace("invite-proprietaire.html?token="+encodeURIComponent(token));
+      return;
+    }
 
-      // sinon : merge minimal (clients) + FIX owners.ownerUid
-      const res = await ensureClientDocForOwner(user);
+    // ✅ router sur base users/{uid}.role si existant
+    const profile = await loadUserProfile(user.uid);
+    const realRole = String(profile?.role || "").toLowerCase().trim();
+
+    // Si pas de profile, on fallback sur le role demandé (mais on reste prudent)
+    const effectiveRole = realRole || requestedRole;
+
+    // PROPRIÉTAIRE
+    if(effectiveRole === "proprietaire"){
+      // merge minimal (clients) + FIX owners.ownerUid (avec sécurité tenant)
+      const res = await ensureClientDocForOwner(user, profile);
 
       if(res?.ok && res.ownerDocId){
-        const link = await ensureOwnerUidOnOwners(res.ownerDocId, user.uid, res.emailLower || email);
+        const link = await ensureOwnerUidOnOwners(
+          res.ownerDocId,
+          user.uid,
+          res.conciergerieUid,
+          res.emailLower || email
+        );
 
         if(link?.ok === false && link.reason === "ownerUid_already_set_other"){
           showMsg(
             "⛔ Ce propriétaire est déjà rattaché à un autre compte.\n" +
             "Vérifie que tu utilises le bon email / la bonne invitation.",
+            false
+          );
+          submitBtn.disabled = false;
+          return;
+        }
+
+        if(link?.ok === false && link.reason === "owner_tenant_mismatch"){
+          showMsg(
+            "⛔ Incohérence de données (propriétaire rattaché à une autre conciergerie).\n" +
+            "Ne force pas : régénère une invitation propre depuis la conciergerie.",
             false
           );
           submitBtn.disabled = false;
@@ -291,8 +334,15 @@ form.addEventListener("submit", async (e)=>{
       return;
     }
 
-    // CONCIERGERIE
-    location.replace("conciergerie.html");
+    // CONCIERGERIE (ou admin)
+    if(effectiveRole === "conciergerie" || effectiveRole === "admin"){
+      location.replace("conciergerie.html");
+      return;
+    }
+
+    // fallback propre
+    showMsg("⛔ Compte non reconnu (role manquant). Ouvre une invitation ou contacte la conciergerie.", false);
+    submitBtn.disabled = false;
 
   }catch(err){
     showMsg(humanAuthError(err));
