@@ -1,4 +1,4 @@
-<!-- docs/factures-liste.html (FINAL — publish ownerUid+ownerVisible + mailto open + 1 request/doc + modal clean) -->
+<!-- docs/factures-liste.html (FINAL — publish ownerUid+ownerVisible + mailto open (manual) + 1 request/doc + modal success banner) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -318,6 +318,40 @@
       font-size:11px; font-weight:1000; color:#4b2cff;
       white-space:nowrap;
     }
+
+    /* ✅ Modal alerts + success banner */
+    .modalAlert{
+      display:none;
+      margin-top:10px;
+      padding:10px 12px;
+      border-radius:14px;
+      background:#fff;
+      border-left:5px solid var(--bad);
+      box-shadow:0 3px 10px rgba(0,0,0,.06);
+      font-size:12px;
+      font-weight:900;
+      color:#444;
+      white-space:pre-wrap;
+    }
+    .modalAlert.ok{ border-left-color: var(--ok); }
+
+    .successBar{
+      display:none;
+      margin-top:10px;
+      padding:10px 12px;
+      border-radius:14px;
+      border:1px solid rgba(27,143,77,0.25);
+      background: rgba(27,143,77,0.06);
+      box-shadow:0 3px 10px rgba(0,0,0,.06);
+      font-size:12px;
+      font-weight:1000;
+      color:#0f5f31;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+    }
+    .successBar .left{ display:flex; align-items:center; gap:10px; }
+    .successBar .right{ display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
   </style>
 </head>
 
@@ -386,8 +420,24 @@
         <button type="button" id="pubCloseBtn" style="border:none; background:#fff; font-weight:1000; cursor:pointer;">✕</button>
       </div>
 
+      <!-- ✅ Bandeau succès après publication -->
+      <div id="pubSuccessBar" class="successBar" role="status" aria-live="polite">
+        <div class="left">
+          <span>✅ Publié côté propriétaire.</span>
+          <span class="pillMini" id="pubSuccessHint">—</span>
+        </div>
+        <div class="right">
+          <button id="pubAfterMailBtn" type="button" class="btn">Préparer email</button>
+          <button id="pubAfterCloseBtn" type="button" class="btn primary">Fermer</button>
+        </div>
+      </div>
+
+      <!-- ✅ Erreurs/infos dans la modale -->
+      <div id="pubModalAlert" class="modalAlert"></div>
+
       <div class="modalHint">
         Le propriétaire verra le(s) document(s) dans son espace et pourra ouvrir l’aperçu puis imprimer / enregistrer en PDF.
+        <br/>Si vous devez envoyer un email, cliquez sur “Préparer email” puis joignez votre PDF dans votre messagerie.
       </div>
 
       <div class="grid2">
@@ -438,7 +488,7 @@
       <div class="modalActions">
         <button id="pubCancelBtn" type="button" class="btn">Annuler</button>
         <button id="pubDoBtn" type="button" class="btn primary">Publier</button>
-        <button id="pubMailBtn" type="button" class="btn">Ouvrir mail</button>
+        <button id="pubMailBtn" type="button" class="btn">Préparer email</button>
       </div>
     </div>
   </div>
@@ -482,6 +532,13 @@
     const pubInvNumberPill = document.getElementById("pubInvNumberPill");
     const pubCreditNumberPill = document.getElementById("pubCreditNumberPill");
 
+    // ✅ modal alerts + success banner
+    const pubModalAlert = document.getElementById("pubModalAlert");
+    const pubSuccessBar = document.getElementById("pubSuccessBar");
+    const pubSuccessHint = document.getElementById("pubSuccessHint");
+    const pubAfterMailBtn = document.getElementById("pubAfterMailBtn");
+    const pubAfterCloseBtn = document.getElementById("pubAfterCloseBtn");
+
     let currentUser = null;
     let all = [];
     let vatEnabled = false;
@@ -504,6 +561,27 @@
       alertBox.classList.remove("ok");
       alertBox.textContent = "";
     }
+
+    function showPubModalAlert(msg, ok=false){
+      pubModalAlert.style.display = "block";
+      pubModalAlert.classList.toggle("ok", !!ok);
+      pubModalAlert.textContent = msg;
+    }
+    function hidePubModalAlert(){
+      pubModalAlert.style.display = "none";
+      pubModalAlert.classList.remove("ok");
+      pubModalAlert.textContent = "";
+    }
+
+    function showPubSuccess(textHint=""){
+      pubSuccessHint.textContent = String(textHint || "OK").trim() || "OK";
+      pubSuccessBar.style.display = "flex";
+    }
+    function hidePubSuccess(){
+      pubSuccessHint.textContent = "—";
+      pubSuccessBar.style.display = "none";
+    }
+
     function esc(s){
       return String(s||"")
         .replaceAll("&","&amp;")
@@ -695,10 +773,23 @@
       chkCreditWrap.style.display = "none";
       pubInvNumberPill.textContent = "—";
       pubCreditNumberPill.textContent = "—";
+
+      hidePubModalAlert();
+      hidePubSuccess();
+
+      pubDoBtn.disabled = false;
+      pubMailBtn.disabled = false;
+      pubCancelBtn.disabled = false;
+      pubCloseBtn.disabled = false;
+
+      pubDoBtn.style.opacity = "1";
+      pubMailBtn.style.opacity = "1";
     }
     pubCloseBtn.addEventListener("click", closePublishModal);
     pubCancelBtn.addEventListener("click", closePublishModal);
     publishModal.addEventListener("click", (e)=>{ if(e.target === publishModal) closePublishModal(); });
+
+    pubAfterCloseBtn.addEventListener("click", closePublishModal);
 
     function buildDefaultMessage(){
       const invNum = String(modalItem?.invoiceNumber || "").trim();
@@ -729,6 +820,9 @@
       modalItem = x;
       modalOwnerUid = String(ownerUid||"").trim();
       modalOwnerDocId = String(ownerDocId||"").trim();
+
+      hidePubModalAlert();
+      hidePubSuccess();
 
       const home = String(x.homeName || "—").trim();
       const period = (x.arrivalDateKey || x.departureDateKey)
@@ -844,54 +938,76 @@
       const sendInv = !!chkInvoice.checked && !!invNum;
       const sendCred = !!chkCredit.checked && !!modalCreditId;
 
+      const base = location.origin + location.pathname.replace(/[^\/]*$/, "");
+
       const lines = [];
       if(msg) lines.push(msg);
       lines.push("");
       lines.push("Liens (lecture seule) :");
 
       if(sendInv && invId){
-        lines.push(`- Facture : ${location.origin}${location.pathname.replace(/[^\/]*$/, "")}facture-apercu.html?docId=${encodeURIComponent(invId)}&owner=1`);
+        lines.push(`- Facture : ${base}facture-apercu.html?docId=${encodeURIComponent(invId)}&owner=1`);
       }
       if(sendCred && modalCreditId){
-        lines.push(`- Avoir : ${location.origin}${location.pathname.replace(/[^\/]*$/, "")}avoir-apercu.html?docId=${encodeURIComponent(modalCreditId)}&owner=1`);
+        lines.push(`- Avoir : ${base}avoir-apercu.html?docId=${encodeURIComponent(modalCreditId)}&owner=1`);
       }
 
       lines.push("");
-      lines.push("Vous pouvez joindre le PDF de votre côté avant envoi.");
+      lines.push("Pièce jointe : merci de joindre le PDF du/des document(s) (généré(s) depuis CleanUp).");
       return lines.join("\n");
     }
 
+    // ✅ Préparer email (dans bandeau succès aussi)
+    function openMailDraft(){
+      if(!modalItem) return;
+      const { ownerEmail } = getOwnerNameEmail(modalItem);
+      if(!ownerEmail){
+        showPubModalAlert("⛔ Email propriétaire manquant.", false);
+        return;
+      }
+      const mailto = buildMailto(ownerEmail, buildEmailSubject(), buildEmailBody());
+      window.location.href = mailto;
+    }
+    pubMailBtn.addEventListener("click", openMailDraft);
+    pubAfterMailBtn.addEventListener("click", openMailDraft);
+
     async function publishToOwner(){
       hideAlert();
-      if(!currentUser?.uid) return showAlert("Session invalide.");
-      if(!modalItem) return showAlert("Aucune facture sélectionnée.");
+      hidePubModalAlert();
+      hidePubSuccess();
+
+      if(!currentUser?.uid) return showPubModalAlert("Session invalide.");
+      if(!modalItem) return showPubModalAlert("Aucune facture sélectionnée.");
 
       const invoiceDocId = String(modalItem.id || "").trim();
-      if(!invoiceDocId) return showAlert("ID facture manquant.");
+      if(!invoiceDocId) return showPubModalAlert("ID facture manquant.");
 
       const invNum = String(modalItem.invoiceNumber || "").trim();
-      if(!invNum) return showAlert("Facture non émise : crée le numéro avant d’envoyer.");
+      if(!invNum) return showPubModalAlert("Facture non émise : crée le numéro avant d’envoyer.");
 
       const ownerDocId = modalOwnerDocId || getOwnerDocId(modalItem);
-      if(!ownerDocId) return showAlert("Envoi impossible : clientOwnerDocId manquant sur cette facture.");
+      if(!ownerDocId) return showPubModalAlert("Envoi impossible : clientOwnerDocId manquant sur cette facture.");
 
       let ownerUid = String(modalOwnerUid || getOwnerUidFast(modalItem) || "").trim();
       if(!ownerUid){
         ownerUid = await resolveOwnerUidFromOwnerDoc(ownerDocId);
       }
       if(!ownerUid){
-        return showAlert("Envoi impossible : ownerUid introuvable (owners.ownerUid).");
+        return showPubModalAlert("Envoi impossible : ownerUid introuvable (owners.ownerUid).");
       }
 
       const sendInv = !!chkInvoice.checked;
       const sendCred = !!chkCredit.checked && !!modalCreditId;
 
       if(!sendInv && !sendCred){
-        return showAlert("Choisis au moins un document à envoyer (facture et/ou avoir).");
+        return showPubModalAlert("Choisis au moins un document à envoyer (facture et/ou avoir).");
       }
 
       pubDoBtn.disabled = true;
       pubMailBtn.disabled = true;
+      pubCancelBtn.disabled = true;
+      pubCloseBtn.disabled = true;
+
       pubDoBtn.style.opacity = "0.75";
       pubMailBtn.style.opacity = "0.75";
 
@@ -962,44 +1078,30 @@
           pubCreditNumberPill.textContent = creditNum || "—";
         }
 
-        showAlert("✅ Publication effectuée côté propriétaire.", true);
+        // ✅ bandeau succès + hint
+        const hint = sendInv && sendCred ? "Facture + Avoir" : (sendInv ? "Facture" : "Avoir");
+        showPubSuccess(hint);
+        showPubModalAlert("✅ Publication effectuée côté propriétaire.", true);
 
-        // ✅ Ouvrir le mail (pas de PJ, juste mailto)
-        const { ownerEmail } = getOwnerNameEmail(modalItem);
-        if(ownerEmail){
-          const mailto = buildMailto(ownerEmail, buildEmailSubject(), buildEmailBody());
-          // certains navigateurs bloquent window.open si pas user gesture.
-          // Ici on le fait dans le même click => OK
-          window.location.href = mailto;
-        }
-
-        closePublishModal();
+        // ✅ rafraîchir la liste derrière (utile si statut change en SENT)
         await loadInvoices(currentUser.uid);
 
       }catch(e){
         console.error(e);
-        showAlert("⛔ Erreur publication : " + (e?.message || "inconnue"));
-      }finally{
+        showPubModalAlert("⛔ Erreur publication : " + (e?.message || "inconnue"), false);
+
+        // réactiver boutons pour retenter
         pubDoBtn.disabled = false;
         pubMailBtn.disabled = false;
+        pubCancelBtn.disabled = false;
+        pubCloseBtn.disabled = false;
+
         pubDoBtn.style.opacity = "1";
         pubMailBtn.style.opacity = "1";
       }
     }
 
     pubDoBtn.addEventListener("click", publishToOwner);
-
-    // bouton mail seul (sans publish) si tu veux juste préparer l'email
-    pubMailBtn.addEventListener("click", ()=>{
-      if(!modalItem) return;
-      const { ownerEmail } = getOwnerNameEmail(modalItem);
-      if(!ownerEmail){
-        showAlert("⛔ Email propriétaire manquant.", false);
-        return;
-      }
-      const mailto = buildMailto(ownerEmail, buildEmailSubject(), buildEmailBody());
-      window.location.href = mailto;
-    });
 
     function render(){
       const filtered = getFiltered();
@@ -1108,7 +1210,6 @@
               </div>
 
               ${!ownerDocId ? `<div class="t" style="margin-top:2px; color:#b3261e;">Envoi impossible: clientOwnerDocId manquant</div>` : ``}
-              ${ownerDocId && !ownerUidFast ? `` : ``}
             </div>
 
             <div class="k" style="align-items:flex-end; min-width:280px;">
