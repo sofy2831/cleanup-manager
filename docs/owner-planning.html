@@ -1,4 +1,4 @@
-<!-- docs/owner-planning.html (OWNER — planning: events only + calendrier points + liste — SAFE RULES via homeId IN) -->
+<!-- docs/owner-planning.html (FINAL — planning owner: homes tenant-safe + events by homeId IN + dateKey range + calendar+list) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -311,6 +311,7 @@
 import { auth, db } from "./firebase-init.js";
 import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
 import {
+  doc, getDoc,
   collection, query, where, orderBy, limit, onSnapshot
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
@@ -365,6 +366,9 @@ function hideAlert(){
 /* State */
 let currentUser = null;
 
+let ownerDocId = "";
+let conciergerieUid = "";
+
 let homes = [];
 let homesById = new Map();
 let ownedHomeIds = [];
@@ -372,9 +376,9 @@ let ownedHomeIds = [];
 let unsubHomes = null;
 let unsubEventChunks = [];
 
-let events = [];
 let eventsMap = new Map();      // eventId -> event
-let eventsByDate = new Map();   // dateKey -> {arr, dep, mis, res, itemsCount}
+let events = [];
+let eventsByDate = new Map();   // dateKey -> counts
 
 /* Month view */
 let viewMonth = new Date();
@@ -411,7 +415,6 @@ function rebuildMaps(){
     const dk = String(e.dateKey || e.arrivalDateKey || "").trim();
     const { isReservation, hasMissions } = classifyEvent(e);
 
-    // liste (itemsCount)
     if(isDateKey(dk)){
       const b = addBucket(dk);
       if(b) b.itemsCount++;
@@ -491,7 +494,6 @@ function renderList(){
     return;
   }
 
-  // group by dateKey
   const groups = new Map();
   for(const e of filtered){
     const dk = String(e.dateKey || e.arrivalDateKey || "").trim();
@@ -621,7 +623,11 @@ function renderCalendar(){
   }
 }
 
-/* Firestore listeners */
+function stopHomesListener(){
+  if(unsubHomes) unsubHomes();
+  unsubHomes = null;
+}
+
 function stopEventListeners(){
   for(const u of unsubEventChunks){ try{ u(); }catch(_){ } }
   unsubEventChunks = [];
@@ -644,25 +650,22 @@ function listenEventsByHomeIds(){
   hideAlert();
 
   if(!currentUser) return;
+
+  const { minKey, maxKey } = computeRangeKeys();
+  refreshSubtitle();
+
   if(!ownedHomeIds.length){
-    refreshSubtitle();
     renderCalendar();
     renderList();
     return;
   }
-
-  const { minKey, maxKey } = computeRangeKeys();
-  refreshSubtitle();
 
   const chosen = homeSelect.value || "__all__";
   const idsToUse = (chosen !== "__all__")
     ? [String(chosen)]
     : ownedHomeIds.slice();
 
-  // Firestore "in" max = 10
   const chunks = chunk(idsToUse, 10);
-
-  // Safety : si 0 => rien
   if(!chunks.length){
     renderCalendar();
     renderList();
@@ -676,28 +679,20 @@ function listenEventsByHomeIds(){
       where("dateKey", ">=", minKey),
       where("dateKey", "<=", maxKey),
       orderBy("dateKey","asc"),
-      limit(800)
+      limit(600)
     );
 
     const unsub = onSnapshot(qEvents, (snap)=>{
-      // merge by id (stable)
-      // On reconstruit sur chaque snapshot chunk : simple MVP
-      // (Si perf devient un sujet, on passe en docChanges)
-      const seenIds = new Set(snap.docs.map(d=>d.id));
-      // purge des ids de ce chunk qui ne sont plus là
-      for(const [eid, ev] of eventsMap.entries()){
-        if(ids.includes(String(ev.homeId||"")) && !seenIds.has(eid)){
-          eventsMap.delete(eid);
+      // merge stable via docChanges
+      snap.docChanges().forEach(ch=>{
+        if(ch.type === "removed"){
+          eventsMap.delete(ch.doc.id);
+        }else{
+          eventsMap.set(ch.doc.id, { id: ch.doc.id, ...(ch.doc.data()||{}) });
         }
-      }
-      // upsert
-      for(const d of snap.docs){
-        eventsMap.set(d.id, { id:d.id, ...(d.data()||{}) });
-      }
+      });
 
       events = Array.from(eventsMap.values());
-
-      // tri stable
       events.sort((a,b)=>{
         const ak = (a.dateKey||"") + " " + String(a.time||a.arrivalTime||"");
         const bk = (b.dateKey||"") + " " + String(b.time||b.arrivalTime||"");
@@ -723,15 +718,22 @@ function listenEventsByHomeIds(){
   }
 }
 
-function listenHomes(uid){
-  if(unsubHomes) unsubHomes();
+function listenHomesForOwner(){
+  stopHomesListener();
 
-  // Ici : on part du principe que tes homes ont ownerUid, ou à défaut ownerDocId/conciergerieUid.
-  // Pour être stable, on écoute ownerUid (car côté OWNER c'est propre).
-  const qh = query(
-    collection(db,"homes"),
-    where("ownerUid","==", uid)
-  );
+  if(!currentUser) return;
+
+  // ✅ tenant-safe : homes via (conciergerieUid + ownerDocId), sinon fallback ownerUid
+  const qh = (ownerDocId && conciergerieUid)
+    ? query(
+        collection(db,"homes"),
+        where("conciergerieUid","==", String(conciergerieUid)),
+        where("ownerDocId","==", String(ownerDocId))
+      )
+    : query(
+        collection(db,"homes"),
+        where("ownerUid","==", String(currentUser.uid))
+      );
 
   unsubHomes = onSnapshot(qh, (snap)=>{
     homes = snap.docs.map(d=>({ id:d.id, ...(d.data()||{}) }));
@@ -761,7 +763,7 @@ nextMonthBtn.addEventListener("click", ()=>{
 });
 
 /* Boot */
-onAuthStateChanged(auth, (user)=>{
+onAuthStateChanged(auth, async (user)=>{
   if(!user){
     location.href="login.html?role=proprietaire";
     return;
@@ -769,8 +771,22 @@ onAuthStateChanged(auth, (user)=>{
   currentUser = user;
 
   renderCalendar();
-  listenHomes(user.uid);
   refreshSubtitle();
+
+  // users/{uid} -> ownerDocId + conciergerieUid
+  try{
+    const us = await getDoc(doc(db,"users", user.uid));
+    const ud = us.exists() ? (us.data()||{}) : {};
+    ownerDocId = String(ud.ownerDocId || "").trim();
+    conciergerieUid = String(ud.conciergerieUid || "").trim();
+  }catch(_){}
+
+  // si pas rattaché, on laisse fallback ownerUid fonctionner, mais on le dit
+  if(!ownerDocId || !conciergerieUid){
+    showAlert("⚠️ Compte pas encore rattaché (ownerDocId/conciergerieUid). Va sur Profil puis Enregistrer.", false);
+  }
+
+  listenHomesForOwner();
 });
 </script>
 </body>
