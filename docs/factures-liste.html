@@ -1,4 +1,4 @@
-<!-- docs/factures-liste.html (FINAL — publish ownerUid+ownerVisible + mailto open (manual) + 1 request/doc + modal success banner) -->
+<!-- docs/factures-liste.html (FINAL — publish ownerUid+ownerVisible + mailto open (manual) + 1 request/doc + modal success banner + ✅ disable "Publier" if already sent (but keep "Préparer email" active)) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -140,6 +140,13 @@
       box-shadow:0 12px 24px rgba(0,0,0,0.10);
     }
     .btn[aria-disabled="true"]{ opacity:.45; pointer-events:none; }
+
+    /* ✅ disabled buttons (for PubliER only in modal) */
+    .btn:disabled{
+      opacity:.45;
+      cursor:not-allowed;
+      pointer-events:none;
+    }
 
     .badge{
       display:inline-flex; align-items:center; gap:6px;
@@ -435,9 +442,6 @@
       <!-- ✅ Erreurs/infos dans la modale -->
       <div id="pubModalAlert" class="modalAlert"></div>
 
-      
-        
-
       <div class="grid2">
         <div class="boxMini">
           <div class="miniT">Propriétaire</div>
@@ -549,6 +553,10 @@
     let modalOwnerDocId = "";
     let modalCreditId = "";
     let modalCreditNumber = "";
+
+    // ✅ NEW: already sent flags (to disable "Publier" only)
+    let modalInvoiceAlreadySent = false;
+    let modalCreditAlreadySent = false;
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -755,6 +763,45 @@
       return { ownerName, ownerEmail };
     }
 
+    // ✅ NEW: utility to detect "already published/sent" for a sales document
+    function isDocAlreadySent(data, kind="INVOICE"){
+      const d = data || {};
+      const ownerVisible = d.ownerVisible === true;
+      const sentAt = !!d.sentAt;
+      if(kind === "INVOICE"){
+        const st = String(d.invoiceStatus || "").toUpperCase().trim();
+        return ownerVisible || sentAt || st === "SENT";
+      }
+      if(kind === "CREDIT"){
+        const st = String(d.creditStatus || "").toUpperCase().trim();
+        return ownerVisible || sentAt || st === "SENT";
+      }
+      return ownerVisible || sentAt;
+    }
+
+    // ✅ NEW: refresh "Publier" button state (disable only publish; keep mail active)
+    function refreshPublishBtnState(){
+      const invNum = String(modalItem?.invoiceNumber || "").trim();
+      const hasInv = !!chkInvoice.checked && !!invNum;
+      const hasCred = !!chkCredit.checked && !!modalCreditId && !!String(modalCreditNumber||"").trim();
+
+      const invNeedsPublish = hasInv && !modalInvoiceAlreadySent;
+      const credNeedsPublish = hasCred && !modalCreditAlreadySent;
+
+      const canPublishSomething = invNeedsPublish || credNeedsPublish;
+
+      pubDoBtn.disabled = !canPublishSomething;
+      pubDoBtn.title = pubDoBtn.disabled
+        ? "Déjà publié côté propriétaire (aucun document à republier)."
+        : "";
+
+      // important: Préparer email reste toujours possible
+      pubMailBtn.disabled = false;
+
+      // si facture déjà envoyée, on laisse la checkbox cochée mais c’est ok:
+      // l’utilisateur peut quand même préparer l’email, et publier seulement l’avoir si besoin.
+    }
+
     // ===== Modal open/close =====
     function closePublishModal(){
       publishModal.style.display = "none";
@@ -765,6 +812,9 @@
       modalOwnerDocId = "";
       modalCreditId = "";
       modalCreditNumber = "";
+
+      modalInvoiceAlreadySent = false;
+      modalCreditAlreadySent = false;
 
       pubText.value = "";
       chkInvoice.checked = false;
@@ -803,15 +853,18 @@
       return `Document.`;
     }
 
-    async function fetchCreditNumberIfNeeded(creditId){
-      if(!creditId) return "";
+    // ✅ changed: fetch credit meta (number + sent status)
+    async function fetchCreditMetaIfNeeded(creditId){
+      if(!creditId) return { number:"", alreadySent:false };
       try{
         const snap = await getDoc(doc(db,"salesDocuments", creditId));
-        if(!snap.exists()) return "";
+        if(!snap.exists()) return { number:"", alreadySent:false };
         const d = snap.data() || {};
-        return String(d.creditNumber || "").trim();
+        const number = String(d.creditNumber || "").trim();
+        const alreadySent = isDocAlreadySent(d, "CREDIT");
+        return { number, alreadySent };
       }catch{
-        return "";
+        return { number:"", alreadySent:false };
       }
     }
 
@@ -840,12 +893,19 @@
       pubInvNumberPill.textContent = invNum || "—";
       chkInvoice.checked = !!invNum;
 
+      // ✅ compute "already sent" for invoice (to disable publish)
+      modalInvoiceAlreadySent = isDocAlreadySent(x, "INVOICE");
+
       // Credit checkbox (only if creditDocId exists)
       modalCreditId = getAvoirId(x);
       modalCreditNumber = "";
+      modalCreditAlreadySent = false;
 
       if(modalCreditId){
-        modalCreditNumber = await fetchCreditNumberIfNeeded(modalCreditId);
+        const meta = await fetchCreditMetaIfNeeded(modalCreditId);
+        modalCreditNumber = meta.number || "";
+        modalCreditAlreadySent = !!meta.alreadySent;
+
         pubCreditNumberPill.textContent = modalCreditNumber || "—";
         chkCreditWrap.style.display = "";
         chkCredit.checked = !!modalCreditNumber;
@@ -858,10 +918,19 @@
 
       publishModal.style.display = "block";
       publishModal.setAttribute("aria-hidden","false");
+
+      // ✅ apply disable state for publish button
+      refreshPublishBtnState();
     }
 
-    chkInvoice.addEventListener("change", ()=>{ pubText.value = buildDefaultMessage(); });
-    chkCredit.addEventListener("change", ()=>{ pubText.value = buildDefaultMessage(); });
+    chkInvoice.addEventListener("change", ()=>{
+      pubText.value = buildDefaultMessage();
+      refreshPublishBtnState();
+    });
+    chkCredit.addEventListener("change", ()=>{
+      pubText.value = buildDefaultMessage();
+      refreshPublishBtnState();
+    });
 
     // ===== Planning marker patch (events) =====
     async function patchEventAsInvoiced(invoiceDocId, inv){
@@ -930,39 +999,30 @@
     }
 
     function buildEmailBody(){
-  const msg = String(pubText.value || "").trim();
+      const msg = String(pubText.value || "").trim();
 
-  const invNum = String(modalItem?.invoiceNumber || "").trim();
-  const creditNum = String(modalCreditNumber || "").trim();
+      const invNum = String(modalItem?.invoiceNumber || "").trim();
+      const creditNum = String(modalCreditNumber || "").trim();
 
-  const sendInv = !!chkInvoice.checked && !!invNum;
-  const sendCred = !!chkCredit.checked && !!creditNum;
+      const sendInv = !!chkInvoice.checked && !!invNum;
+      const sendCred = !!chkCredit.checked && !!creditNum;
 
-  // (devis pas encore intégré)
-  // const sendQuote = ...
+      let intro = "Veuillez trouver ci-joint le document.";
+      if(sendInv && sendCred) intro = `Veuillez trouver ci-joint la facture ${invNum} ainsi que l’avoir ${creditNum}.`;
+      else if(sendInv) intro = `Veuillez trouver ci-joint la facture ${invNum}.`;
+      else if(sendCred) intro = `Veuillez trouver ci-joint l’avoir ${creditNum}.`;
 
-  // Intro selon sélection
-  let intro = "Veuillez trouver ci-joint le document.";
-  if(sendInv && sendCred) intro = `Veuillez trouver ci-joint la facture ${invNum} ainsi que l’avoir ${creditNum}.`;
-  else if(sendInv) intro = `Veuillez trouver ci-joint la facture ${invNum}.`;
-  else if(sendCred) intro = `Veuillez trouver ci-joint l’avoir ${creditNum}.`;
+      const lines = [];
+      if(msg) lines.push(msg);
+      lines.push(intro);
+      lines.push("");
+      lines.push("Pièce jointe : merci de joindre le PDF du/des document(s) (généré(s) depuis CleanUp).");
+      lines.push("Bonne réception,");
+      lines.push("Cordialement,");
+      lines.push(String(conciergerieCompanyName || "Votre conciergerie").trim());
 
-  const lines = [];
-  if(msg) lines.push(msg);
-  lines.push(intro);
-  lines.push("");
-
-  // ✅ on garde ta phrase PJ
-  lines.push("Pièce jointe : merci de joindre le PDF du/des document(s) (généré(s) depuis CleanUp).");
-
-// formule de politesse + signature
-  lines.push("Bonne réception,");
-  lines.push("Cordialement,");
-  lines.push(String(conciergerieCompanyName || "Votre conciergerie").trim());
-
-      
-  return lines.join("\n");
-}
+      return lines.join("\n");
+    }
 
     // ✅ Préparer email (dans bandeau succès aussi)
     function openMailDraft(){
@@ -1010,6 +1070,14 @@
         return showPubModalAlert("Choisis au moins un document à envoyer (facture et/ou avoir).");
       }
 
+      // ✅ hard-block if nothing needs publishing (already sent), but still allow email
+      const invNeeds = sendInv && !modalInvoiceAlreadySent;
+      const credNeeds = sendCred && !modalCreditAlreadySent;
+      if(!invNeeds && !credNeeds){
+        refreshPublishBtnState();
+        return showPubModalAlert("ℹ️ Déjà publié : rien à republier. (Tu peux préparer l’email.)", true);
+      }
+
       pubDoBtn.disabled = true;
       pubMailBtn.disabled = true;
       pubCancelBtn.disabled = true;
@@ -1023,7 +1091,7 @@
         const homeName = String(modalItem.homeName || "").trim();
 
         // 1) INVOICE
-        if(sendInv){
+        if(invNeeds){
           await updateDoc(doc(db,"salesDocuments", invoiceDocId), {
             ownerUid,
             ownerVisible: true,
@@ -1051,7 +1119,7 @@
         }
 
         // 2) CREDIT
-        if(sendCred){
+        if(credNeeds){
           const cs = await getDoc(doc(db,"salesDocuments", modalCreditId));
           if(!cs.exists()) throw new Error("Avoir introuvable (creditDocId).");
           const cd = cs.data() || {};
@@ -1086,12 +1154,17 @@
         }
 
         // ✅ bandeau succès + hint
-        const hint = sendInv && sendCred ? "Facture + Avoir" : (sendInv ? "Facture" : "Avoir");
+        const hint = (invNeeds && credNeeds) ? "Facture + Avoir" : (invNeeds ? "Facture" : "Avoir");
         showPubSuccess(hint);
         showPubModalAlert("✅ Publication effectuée côté propriétaire.", true);
 
-        // ✅ rafraîchir la liste derrière (utile si statut change en SENT)
+        // ✅ refresh list and modal flags so publish becomes disabled after success
         await loadInvoices(currentUser.uid);
+
+        modalInvoiceAlreadySent = true; // invoice now sent (if it was sent)
+        if(credNeeds) modalCreditAlreadySent = true;
+
+        refreshPublishBtnState();
 
       }catch(e){
         console.error(e);
@@ -1105,6 +1178,8 @@
 
         pubDoBtn.style.opacity = "1";
         pubMailBtn.style.opacity = "1";
+
+        refreshPublishBtnState();
       }
     }
 
@@ -1309,7 +1384,7 @@
 
       helloLine.textContent = "Bonjour,";
       conciergerieCompanyName = await loadCompanyName(user.uid);
-companyLine.textContent = conciergerieCompanyName;
+      companyLine.textContent = conciergerieCompanyName;
 
       hideAlert();
       try{
@@ -1322,8 +1397,3 @@ companyLine.textContent = conciergerieCompanyName;
   </script>
 </body>
 </html>
-
-
-
-
-
