@@ -1,4 +1,4 @@
-<!-- docs/owner-dashboard.html (FINAL — guard ownerDocId+conciergerieUid + unread messages realtime + billing badge from salesDocuments) -->
+<!-- docs/owner-dashboard.html (FINAL — guard owner role + ownerDocId+conciergerieUid + unread messages realtime + billing badge ownerVisible) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -239,6 +239,11 @@
   let unsubThreads = null;
   let unsubBilling = null;
 
+  let gotThreadsOnce = false;
+  let gotBillingOnce = false;
+  let lastUnreadMsg = 0;
+  let lastBillingCount = 0;
+
   function setCount(el, n){
     const v = Number(n||0);
     if(v > 0){
@@ -251,11 +256,17 @@
   }
 
   function refreshBadges(){
-    const um = Number(localStorage.getItem("cm_owner_unread_messages") || 0);
-    const ub = Number(localStorage.getItem("cm_owner_unread_billing") || 0);
-    setCount(countMsg, um);
-    setCount(countBill, ub);
-    alertsLine.textContent = `💬 Messages non lus : ${um}\n🧾 Devis/Factures : ${ub}`;
+    setCount(countMsg, lastUnreadMsg);
+    setCount(countBill, lastBillingCount);
+
+    if(!(gotThreadsOnce && gotBillingOnce)){
+      alertsLine.textContent = "Chargement…";
+      return;
+    }
+
+    alertsLine.textContent =
+      `💬 Messages non lus : ${Number(lastUnreadMsg||0)}\n` +
+      `🧾 Documents : ${Number(lastBillingCount||0)}`;
   }
 
   function hardRequireOwnerLinked(userDoc){
@@ -274,34 +285,55 @@
     unsubBilling = null;
   }
 
-  function startUnreadThreadsListener(ownerUid){
+  function startUnreadThreadsListener(ownerUid, conciergerieUid, ownerDocId){
     stopThreads();
-    const q = query(collection(db,"threads"), where("ownerUid","==", String(ownerUid)));
+    gotThreadsOnce = false;
+
+    // ✅ multi-tenant safe: filtre conciergerieUid (et ownerDocId si présent dans thread)
+    const filters = [
+      where("ownerUid","==", String(ownerUid)),
+      where("conciergerieUid","==", String(conciergerieUid))
+    ];
+    // si tes threads stockent ownerDocId (chez toi oui), on l’ajoute
+    if(ownerDocId){
+      filters.push(where("ownerDocId","==", String(ownerDocId)));
+    }
+
+    const q = query(collection(db,"threads"), ...filters);
+
     unsubThreads = onSnapshot(q, (snap)=>{
       let totalUnread = 0;
       snap.forEach(d=>{
         const t = d.data() || {};
         totalUnread += Number(t.unreadForOwner || 0);
       });
-      localStorage.setItem("cm_owner_unread_messages", String(totalUnread));
+      lastUnreadMsg = totalUnread;
+      gotThreadsOnce = true;
       refreshBadges();
     }, (err)=>{
       console.warn("threads unread listener:", err?.message || err);
     });
   }
 
-  // ✅ simple badge billing: nombre de documents (devis+factures) liés au owner
-  function startBillingBadge(ownerUid){
+  // ✅ badge billing: uniquement docs visibles propriétaire
+  function startBillingBadge(ownerUid, conciergerieUid){
     stopBilling();
-    const qb = query(collection(db,"salesDocuments"), where("ownerUid","==", String(ownerUid)));
+    gotBillingOnce = false;
+
+    // 🔥 important: ownerVisible == true sinon tu comptes aussi les brouillons internes
+    const qb = query(
+      collection(db,"salesDocuments"),
+      where("ownerUid","==", String(ownerUid)),
+      where("conciergerieUid","==", String(conciergerieUid)),
+      where("ownerVisible","==", true)
+    );
+
     unsubBilling = onSnapshot(qb, (snap)=>{
-      // on met un compteur "il y a X documents", et tu raffineras plus tard (ex: devis à valider)
-      const total = snap.size || 0;
-      localStorage.setItem("cm_owner_unread_billing", String(total));
+      lastBillingCount = snap.size || 0;
+      gotBillingOnce = true;
       refreshBadges();
     }, (err)=>{
       console.warn("billing badge listener:", err?.message || err);
-      // ne pas bloquer le dashboard
     });
   }
 
@@ -317,13 +349,19 @@
       return;
     }
 
-    if(!localStorage.getItem("cm_owner_unread_messages")) localStorage.setItem("cm_owner_unread_messages","0");
-    if(!localStorage.getItem("cm_owner_unread_billing")) localStorage.setItem("cm_owner_unread_billing","0");
     refreshBadges();
 
     try{
       const us = await getDoc(doc(db,"users", user.uid));
       const ud = us.exists()? (us.data()||{}) : {};
+
+      // ✅ garde-fou: mauvais rôle -> dehors
+      const role = String(ud.role || "").toLowerCase().trim();
+      if(role && role !== "proprietaire"){
+        stopThreads(); stopBilling();
+        location.replace("login.html?role=proprietaire");
+        return;
+      }
 
       const link = hardRequireOwnerLinked(ud);
       if(!link.ok){
@@ -338,10 +376,9 @@
 
       ownerNameLine.textContent = "Bonjour et bienvenue " + (name ? name : (user.email || "Propriétaire"));
 
-      startUnreadThreadsListener(user.uid);
+      startUnreadThreadsListener(user.uid, link.conciergerieUid, link.ownerDocId);
 
-      // ✅ badge facturation basé sur salesDocuments (robuste, pas besoin de requests)
-      startBillingBadge(user.uid);
+      startBillingBadge(user.uid, link.conciergerieUid);
 
       refreshBadges();
 
