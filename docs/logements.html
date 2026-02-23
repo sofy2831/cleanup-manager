@@ -714,7 +714,7 @@
   function getExistingOwnerForHome(home){
     const emailLower = normEmail(home.ownerAccountEmail || home.ownerEmail || home.pendingOwnerEmail || "");
     if(!emailLower) return null;
-    return ownersByEmailLower.get(emailLower) || null; // owner.id = ownerDocId, owner.uid = auth uid (si accepté)
+    return ownersByEmailLower.get(emailLower) || null; // owner.id = ownerDocId, owner.ownerUid = auth uid (si accepté)
   }
 
   // ✅ COHÉRENT: homes.ownerDocId = owners doc id ; homes.ownerUid = auth uid (si connu)
@@ -722,7 +722,9 @@
     if(!homeId || !owner?.id) return;
 
     const ownerDocId = String(owner.id).trim();
-    const ownerUid = String(owner.uid || "").trim(); // auth uid (peut être vide si owner pas encore accepté)
+
+    // ✅ FIX IMPORTANT: ownerUid canon, uid seulement compat
+    const ownerUid = String(owner.ownerUid || owner.uid || "").trim(); // auth uid (peut être vide si owner pas encore accepté)
 
     try{
       await updateDoc(doc(db,"homes", homeId), {
@@ -1404,12 +1406,11 @@
     }
   });
 
-      // ===== Booking dates guard: départ < arrivée interdit =====
+  // ===== Booking dates guard: départ < arrivée interdit =====
   function compareDateKeys(aKey, bKey){
     const a = parseDateKey(aKey);
     const b = parseDateKey(bKey);
     if(!a || !b) return null;
-    // normalise à minuit local (parseDateKey le fait déjà)
     if(a.getTime() === b.getTime()) return 0;
     return (a.getTime() < b.getTime()) ? -1 : 1;
   }
@@ -1417,9 +1418,9 @@
   function validateBookingDates(showMessage=false){
     const aDate = (arrivalDateInput.value || "").trim();
     const dDate = (departureDateInput.value || "").trim();
-    if(!aDate || !dDate) return true; // on laisse les required gérer
+    if(!aDate || !dDate) return true;
 
-    const cmp = compareDateKeys(dDate, aDate); // compare départ vs arrivée
+    const cmp = compareDateKeys(dDate, aDate);
     if(cmp === null) return true;
 
     if(cmp < 0){
@@ -1429,21 +1430,13 @@
       return false;
     }
 
-    // Option UX: si arrivée renseignée et départ vide, on aligne. Ici on ne force pas.
     if(showMessage) hideBookingAlert();
     return true;
   }
 
-  // validation live
-  arrivalDateInput.addEventListener("change", ()=>{
-    // si départ déjà rempli et désormais < arrivée => alerte
-    validateBookingDates(true);
-  });
-  departureDateInput.addEventListener("change", ()=>{
-    validateBookingDates(true);
-  });
+  arrivalDateInput.addEventListener("change", ()=>{ validateBookingDates(true); });
+  departureDateInput.addEventListener("change", ()=>{ validateBookingDates(true); });
 
-    
   // ===== Create booking (icalEvents) =====
   bookingForm.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -1464,10 +1457,7 @@
 
     if (!homeId) return showBookingAlert("Choisis un logement.");
     if (!aDate || !dDate) return showBookingAlert("Dates arrivée + départ obligatoires.");
-        // ✅ guard dates
-    if(!validateBookingDates(true)){
-      return;
-    }
+    if(!validateBookingDates(true)) return;
     if (!aTime || !dTime) return showBookingAlert("Heures arrivée + départ obligatoires.");
 
     const h = allHomes.find(x => x.id === homeId);
@@ -1594,4 +1584,3 @@
 
 </body>
 </html>
-
