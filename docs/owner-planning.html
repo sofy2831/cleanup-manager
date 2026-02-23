@@ -1,4 +1,4 @@
-<!-- docs/owner-planning.html (FINAL FIX — list follows selected day + no duplicates for missions) -->
+<!-- docs/owner-planning.html (FINAL — lignes = Réservation + Logement/Ville + Arrivée + Départ + missionTypes si présent) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -521,7 +521,7 @@ function fillHomes(){
   }
 }
 
-/* ---------- LIST RENDER (FIXED) ---------- */
+/* ---------- LIST RENDER (1 LINE / EVENT) ---------- */
 function renderList(){
   planningList.innerHTML = "";
   emptyBox.style.display = "none";
@@ -534,7 +534,7 @@ function renderList(){
     filtered = filtered.filter(e => String(e.homeId||"") === String(chosen));
   }
 
-  // ✅ filtre date = selectedKey
+  // filtre date = selectedKey (dateKey des events)
   filtered = filtered.filter(e => {
     const dk = String(e.dateKey || e.arrivalDateKey || "").trim();
     return dk === selectedKey;
@@ -546,7 +546,7 @@ function renderList(){
     return;
   }
 
-  // tri heure
+  // tri
   filtered.sort((a,b)=>{
     const at = String(a.time||a.arrivalTime||a.departureTime||"");
     const bt = String(b.time||b.arrivalTime||b.departureTime||"");
@@ -562,57 +562,48 @@ function renderList(){
     return "—";
   };
 
-  const lines = [];
+  const niceMissionTypes = (mtUpper)=>{
+    // ✅ ne montre que Ménage / Check-in / Check-out si présents
+    const allow = new Set(["MENAGE","CHECKIN","CHECKOUT"]);
+    const map = { "MENAGE":"Ménage", "CHECKIN":"Check-in", "CHECKOUT":"Check-out" };
+    const picked = (Array.isArray(mtUpper) ? mtUpper : [])
+      .map(x=>String(x||"").toUpperCase())
+      .filter(x=>allow.has(x));
+    // unique
+    const uniq = Array.from(new Set(picked));
+    return uniq.map(x=>map[x] || x).join(" / ");
+  };
+
   for(const e of filtered){
-    const homeName = e.homeName || (homesById.get(e.homeId||"")?.name) || "Logement";
-    const city = e.homeCity || (homesById.get(e.homeId||"")?.city) || "";
-    const placeLine = `${homeName}${city ? (" • " + city) : ""}`;
+    const h = homesById.get(String(e.homeId||""));
+    const homeName = String(e.homeName || h?.name || "Logement").trim();
+    const city = String(e.homeCity || h?.city || "").trim();
 
-    const time = String(e.time || e.arrivalTime || e.departureTime || "").trim();
-    const { isReservation, hasMissions, mt } = classifyEvent(e);
-    const extra = (e.status && String(e.status).trim()) ? ` • ${String(e.status).trim()}` : "";
+    const { isReservation, mt } = classifyEvent(e);
 
-    // --- RESERVATION : affiche arrivée + départ + logement (logique)
-    if(isReservation && !hasMissions){
-      const arr = niceDT(e.arrivalDateKey, e.arrivalTime);
-      const dep = niceDT(e.departureDateKey, e.departureTime);
+    const reservationLabel = isReservation ? "Réservation" : "Mission";
+    const place = city ? `${homeName} / ${city}` : homeName;
 
-      let mainTime = "";
-      if(selectedKey === String(e.arrivalDateKey||"") && e.arrivalTime) mainTime = String(e.arrivalTime);
-      else if(selectedKey === String(e.departureDateKey||"") && e.departureTime) mainTime = String(e.departureTime);
+    const arr = niceDT(e.arrivalDateKey, e.arrivalTime);
+    const dep = niceDT(e.departureDateKey, e.departureTime);
 
-      const title = `${mainTime ? (mainTime+" — ") : ""}Réservation${extra}`;
-      const details = `Arrivée : ${arr}\nDépart : ${dep}`;
+    const mtText = niceMissionTypes(mt);
+    const mtPart = mtText ? ` • ${mtText}` : "";
 
-      lines.push(`${title}\n${placeLine}\n${details}`);
-      continue;
-    }
+    // ✅ 1 seule ligne
+    const line = `${reservationLabel} • ${place} • Arrivée ${arr} • Départ ${dep}${mtPart}`;
 
-    // --- MISSIONS : PAS DE DOUBLON logement/arr/dep
-    if(hasMissions){
-      const map = { "CHECKIN":"Check-in", "CHECKOUT":"Check-out", "MENAGE":"Ménage" };
-      const nice = mt.map(x=> map[x] || x).join(" • ");
-      const title = `${time ? (time+" — ") : ""}${(nice || "Intervention")}${extra}`;
-
-      // 👉 Ici on affiche juste la mission + logement (pas les dates/arr/dep)
-      lines.push(`${title}\n${placeLine}`);
-      continue;
-    }
-
-    // --- fallback
-    lines.push(`${time ? (time+" — ") : ""}Événement${extra}\n${placeLine}`);
+    const div = document.createElement("div");
+    div.className = "item";
+    div.innerHTML = `
+      <div class="meta">
+        <span>${esc(fmtDateKey(selectedKey))}</span>
+        <span>${esc(String(e.id || ""))}</span>
+      </div>
+      <p class="msg">${esc(line)}</p>
+    `;
+    planningList.appendChild(div);
   }
-
-  const block = document.createElement("div");
-  block.className = "item";
-  block.innerHTML = `
-    <div class="meta">
-      <span>${esc(fmtDateKey(selectedKey))}</span>
-      <span>${esc(String(filtered.length))} élément(s)</span>
-    </div>
-    <p class="msg">${esc(lines.join("\n\n"))}</p>
-  `;
-  planningList.appendChild(block);
 }
 /* ---------- /LIST RENDER ---------- */
 
@@ -798,7 +789,7 @@ function listenHomesForOwner(){
 
   unsubHomes = onSnapshot(qh, (snap)=>{
     homes = snap.docs.map(d=>({ id:d.id, ...(d.data()||{}) }));
-    homes.sort((a,b)=> (String(a.name||"")).localeCompare(String(b.name||"")));
+    homes.sort((a,b)=> (String(a.name||"")).localeCompare(String(b.name||"")) );
     homesById = new Map(homes.map(h=>[h.id,h]));
     ownedHomeIds = homes.map(h=>h.id);
 
