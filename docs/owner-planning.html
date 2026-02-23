@@ -1,4 +1,4 @@
-<!-- docs/owner-planning.html (FINAL FIX — list follows selected day: only selectedKey) -->
+<!-- docs/owner-planning.html (FINAL FIX — list follows selected day + no duplicates for missions) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -521,6 +521,7 @@ function fillHomes(){
   }
 }
 
+/* ---------- LIST RENDER (FIXED) ---------- */
 function renderList(){
   planningList.innerHTML = "";
   emptyBox.style.display = "none";
@@ -552,70 +553,55 @@ function renderList(){
     return (selectedKey+" "+at).localeCompare(selectedKey+" "+bt);
   });
 
-  // rendu
+  const niceDT = (k, t)=>{
+    const kk = String(k||"").trim();
+    const tt = String(t||"").trim();
+    if(isDateKey(kk) && tt) return `${fmtDateKey(kk)} ${tt}`;
+    if(isDateKey(kk)) return `${fmtDateKey(kk)}`;
+    if(tt) return tt;
+    return "—";
+  };
+
   const lines = [];
   for(const e of filtered){
     const homeName = e.homeName || (homesById.get(e.homeId||"")?.name) || "Logement";
     const city = e.homeCity || (homesById.get(e.homeId||"")?.city) || "";
+    const placeLine = `${homeName}${city ? (" • " + city) : ""}`;
+
     const time = String(e.time || e.arrivalTime || e.departureTime || "").trim();
+    const { isReservation, hasMissions, mt } = classifyEvent(e);
+    const extra = (e.status && String(e.status).trim()) ? ` • ${String(e.status).trim()}` : "";
 
-          const { isReservation, hasMissions, mt } = classifyEvent(e);
+    // --- RESERVATION : affiche arrivée + départ + logement (logique)
+    if(isReservation && !hasMissions){
+      const arr = niceDT(e.arrivalDateKey, e.arrivalTime);
+      const dep = niceDT(e.departureDateKey, e.departureTime);
 
-      // --- logement ---
-      const placeLine = `${homeName}${city ? (" • " + city) : ""}`;
+      let mainTime = "";
+      if(selectedKey === String(e.arrivalDateKey||"") && e.arrivalTime) mainTime = String(e.arrivalTime);
+      else if(selectedKey === String(e.departureDateKey||"") && e.departureTime) mainTime = String(e.departureTime);
 
-      // --- statut ---
-      const extra = (e.status && String(e.status).trim()) ? ` • ${String(e.status).trim()}` : "";
+      const title = `${mainTime ? (mainTime+" — ") : ""}Réservation${extra}`;
+      const details = `Arrivée : ${arr}\nDépart : ${dep}`;
 
-      // --- helper affichage date+heure ---
-      const niceDT = (k, t)=>{
-        const kk = String(k||"").trim();
-        const tt = String(t||"").trim();
-        if(isDateKey(kk) && tt) return `${fmtDateKey(kk)} ${tt}`;
-        if(isDateKey(kk)) return `${fmtDateKey(kk)}`;
-        if(tt) return tt;
-        return "—";
-      };
+      lines.push(`${title}\n${placeLine}\n${details}`);
+      continue;
+    }
 
-      // --- RESERVATION : on affiche arrivée + départ (dates+heures) ---
-      if(isReservation && !hasMissions){
-        const arr = niceDT(e.arrivalDateKey, e.arrivalTime);
-        const dep = niceDT(e.departureDateKey, e.departureTime);
+    // --- MISSIONS : PAS DE DOUBLON logement/arr/dep
+    if(hasMissions){
+      const map = { "CHECKIN":"Check-in", "CHECKOUT":"Check-out", "MENAGE":"Ménage" };
+      const nice = mt.map(x=> map[x] || x).join(" • ");
+      const title = `${time ? (time+" — ") : ""}${(nice || "Intervention")}${extra}`;
 
-        // si tu veux garder une heure "principale" dans l’ordre du jour :
-        // - priorité : arrivalTime si dateKey == arrivalDateKey
-        // - sinon departureTime si dateKey == departureDateKey
-        let mainTime = "";
-        const dk0 = String(dk||"");
-        if(dk0 && dk0 === String(e.arrivalDateKey||"") && e.arrivalTime) mainTime = String(e.arrivalTime);
-        else if(dk0 && dk0 === String(e.departureDateKey||"") && e.departureTime) mainTime = String(e.departureTime);
+      // 👉 Ici on affiche juste la mission + logement (pas les dates/arr/dep)
+      lines.push(`${title}\n${placeLine}`);
+      continue;
+    }
 
-        const title = `${mainTime ? (mainTime+" — ") : ""}Réservation${extra}`;
-        const details = `Arrivée : ${arr}\nDépart : ${dep}`;
-
-        lines.push(`${title}\n${placeLine}\n${details}`);
-        continue;
-      }
-
-      // --- MISSIONS : seulement si missionTypes existe vraiment ---
-      if(hasMissions){
-        const map = { "CHECKIN":"Check-in", "CHECKOUT":"Check-out", "MENAGE":"Ménage" };
-        const nice = mt.map(x=> map[x] || x).join(" • ");
-        const title = `${time ? (time+" — ") : ""}${(nice || "Intervention")}${extra}`;
-
-        // si tu veux aussi rappeler arrivée/départ quand ils existent (optionnel, utile)
-        const arrOk = isDateKey(e.arrivalDateKey) || String(e.arrivalTime||"").trim();
-        const depOk = isDateKey(e.departureDateKey) || String(e.departureTime||"").trim();
-        const details = [];
-        if(arrOk) details.push(`Arrivée : ${niceDT(e.arrivalDateKey, e.arrivalTime)}`);
-        if(depOk) details.push(`Départ : ${niceDT(e.departureDateKey, e.departureTime)}`);
-
-        lines.push(`${title}\n${placeLine}${details.length ? ("\n"+details.join("\n")) : ""}`);
-        continue;
-      }
-
-      // --- fallback événement ---
-      lines.push(`${time ? (time+" — ") : ""}Événement${extra}\n${placeLine}`);
+    // --- fallback
+    lines.push(`${time ? (time+" — ") : ""}Événement${extra}\n${placeLine}`);
+  }
 
   const block = document.createElement("div");
   block.className = "item";
@@ -628,6 +614,7 @@ function renderList(){
   `;
   planningList.appendChild(block);
 }
+/* ---------- /LIST RENDER ---------- */
 
 function clearCalendar(){ calGrid.innerHTML = ""; }
 function dateKeyFromYMD(y,m,d){ return `${y}-${pad2(m+1)}-${pad2(d)}`; }
@@ -696,7 +683,6 @@ function renderCalendar(){
     }
 
     cell.addEventListener("click", ()=> setSelectedKey(dk));
-
     calGrid.appendChild(cell);
   }
 }
@@ -797,7 +783,6 @@ function listenEventsByHomeIds(){
 
 function listenHomesForOwner(){
   stopHomesListener();
-
   if(!currentUser) return;
 
   const qh = (ownerDocId && conciergerieUid)
@@ -826,8 +811,14 @@ function listenHomesForOwner(){
 }
 
 /* UI handlers */
-homeSelect.addEventListener("change", ()=>{ refreshSubtitle(); renderList(); listenEventsByHomeIds(); });
-rangeSelect.addEventListener("change", ()=>{ refreshSubtitle(); renderList(); listenEventsByHomeIds(); });
+homeSelect.addEventListener("change", ()=>{
+  refreshSubtitle();
+  listenEventsByHomeIds();
+});
+rangeSelect.addEventListener("change", ()=>{
+  refreshSubtitle();
+  listenEventsByHomeIds();
+});
 
 prevMonthBtn.addEventListener("click", ()=>{
   viewMonth = new Date(viewMonth.getFullYear(), viewMonth.getMonth()-1, 1);
@@ -858,7 +849,8 @@ onAuthStateChanged(auth, async (user)=>{
   }
 
   if(!isDateKey(selectedKey)) selectedKey = todayKey;
-  viewMonth = new Date(dateFromKey(selectedKey).getFullYear(), dateFromKey(selectedKey).getMonth(), 1);
+  const d = dateFromKey(selectedKey);
+  viewMonth = new Date(d.getFullYear(), d.getMonth(), 1);
 
   refreshSubtitle();
   renderCalendar();
@@ -868,4 +860,3 @@ onAuthStateChanged(auth, async (user)=>{
 </script>
 </body>
 </html>
-
