@@ -1,4 +1,4 @@
-<!-- docs/owner-planning.html (FINAL FIX — selected day not frozen + highlight selected + scroll-to-day + URL param dateKey) -->
+<!-- docs/owner-planning.html (FINAL FIX — list follows selected day: only selectedKey) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -25,10 +25,10 @@
       --bg2:#EDE6FF;
 
       /* couleurs planning */
-      --c-arr:#1b8f4d;   /* arrivée = vert */
-      --c-dep:#FF3B3B;   /* départ  = rouge (tu peux passer orange si tu veux) */
-      --c-mis: var(--violet-main); /* missions = violet */
-      --c-res:#111;      /* réservation (fallback) = noir */
+      --c-arr:#1b8f4d;            /* arrivée = vert */
+      --c-dep:#FF3B3B;            /* départ  = rouge */
+      --c-mis: var(--violet-main);/* missions = violet */
+      --c-res:#111;               /* réservation = noir */
     }
     *{ box-sizing:border-box; font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; }
     body{ margin:0; background:linear-gradient(180deg,var(--bg1),var(--bg2)); color:var(--text); }
@@ -168,14 +168,11 @@
     }
     .day.muted .dayNum{ color:#bbb; }
 
-    /* Aujourd'hui = léger */
     .day.today{
       outline:2px solid rgba(122,92,255,.25);
       outline-offset:-2px;
       background:rgba(122,92,255,0.05);
     }
-
-    /* ✅ Jour sélectionné = fort */
     .day.selected{
       outline:3px solid rgba(122,92,255,.75);
       outline-offset:-3px;
@@ -306,11 +303,11 @@
 
       <div class="item emptyBox" id="emptyBox">
         <div class="meta"><span>Aucun élément</span><span>—</span></div>
-        <p class="msg">Rien sur la période sélectionnée.</p>
+        <p class="msg" id="emptyMsg">Rien ce jour-là.</p>
       </div>
 
       <div class="tiny">
-        Calendrier = points (arrivée / départ / missions). Liste = détail par date.
+        Points : arrivée (vert) • départ (rouge) • missions (violet) • réservation (noir).
       </div>
     </div>
   </div>
@@ -369,6 +366,7 @@ const rangeSelect  = document.getElementById("rangeSelect");
 const subtitleLine = document.getElementById("subtitleLine");
 const planningList = document.getElementById("planningList");
 const emptyBox     = document.getElementById("emptyBox");
+const emptyMsg     = document.getElementById("emptyMsg");
 const alertBox     = document.getElementById("alertBox");
 
 const calTitle     = document.getElementById("calTitle");
@@ -408,7 +406,7 @@ let eventsByDate = new Map();   // dateKey -> counts
 let viewMonth = new Date();
 viewMonth = new Date(viewMonth.getFullYear(), viewMonth.getMonth(), 1);
 
-/* ✅ selected day (fix freeze) */
+/* Selected day */
 const todayKey = toKey(new Date());
 const urlParams = new URLSearchParams(location.search);
 let selectedKey =
@@ -421,18 +419,16 @@ function setSelectedKey(k){
   selectedKey = k;
   localStorage.setItem("owner_planning_selectedKey", selectedKey);
 
-  // optionnel : sync URL sans recharger
   const u = new URL(location.href);
   u.searchParams.set("dateKey", selectedKey);
   history.replaceState({}, "", u.toString());
 
-  // bascule mois visible si besoin
   const d = dateFromKey(selectedKey);
   viewMonth = new Date(d.getFullYear(), d.getMonth(), 1);
 
+  refreshSubtitle();
   renderCalendar();
-  renderList();   // affiche le jour sélectionné en premier (voir plus bas)
-  scrollToDate(selectedKey);
+  renderList();
 }
 
 /* Business */
@@ -525,89 +521,68 @@ function fillHomes(){
   }
 }
 
-function scrollToDate(dk){
-  const anchor = document.getElementById("day_"+dk);
-  if(anchor){
-    anchor.scrollIntoView({ behavior:"smooth", block:"start" });
-  }
-}
-
 function renderList(){
   planningList.innerHTML = "";
   emptyBox.style.display = "none";
 
-  if(!events.length){
-    emptyBox.style.display = "block";
-    return;
-  }
+  const chosen = homeSelect.value || "__all__";
 
-  const chosen = homeSelect.value;
+  // filtre logement
   let filtered = events.slice();
-  if(chosen && chosen !== "__all__"){
+  if(chosen !== "__all__"){
     filtered = filtered.filter(e => String(e.homeId||"") === String(chosen));
   }
 
+  // ✅ filtre date = selectedKey
+  filtered = filtered.filter(e => {
+    const dk = String(e.dateKey || e.arrivalDateKey || "").trim();
+    return dk === selectedKey;
+  });
+
   if(!filtered.length){
+    emptyMsg.textContent = `Rien le ${fmtDateKey(selectedKey)}.`;
     emptyBox.style.display = "block";
     return;
   }
 
-  // group by dateKey
-  const groups = new Map();
+  // tri heure
+  filtered.sort((a,b)=>{
+    const at = String(a.time||a.arrivalTime||a.departureTime||"");
+    const bt = String(b.time||b.arrivalTime||b.departureTime||"");
+    return (selectedKey+" "+at).localeCompare(selectedKey+" "+bt);
+  });
+
+  // rendu
+  const lines = [];
   for(const e of filtered){
-    const dk = String(e.dateKey || e.arrivalDateKey || "").trim();
-    if(!isDateKey(dk)) continue;
-    if(!groups.has(dk)) groups.set(dk, []);
-    groups.get(dk).push(e);
-  }
+    const homeName = e.homeName || (homesById.get(e.homeId||"")?.name) || "Logement";
+    const city = e.homeCity || (homesById.get(e.homeId||"")?.city) || "";
+    const time = String(e.time || e.arrivalTime || e.departureTime || "").trim();
 
-  let dates = Array.from(groups.keys()).sort((a,b)=> a.localeCompare(b));
+    const { isReservation, hasMissions, mt } = classifyEvent(e);
 
-  // ✅ mettre le jour sélectionné en tête s'il existe
-  if(isDateKey(selectedKey) && groups.has(selectedKey)){
-    dates = [selectedKey, ...dates.filter(x=>x!==selectedKey)];
-  }
-
-  for(const dk of dates){
-    const dayItems = groups.get(dk) || [];
-    dayItems.sort((a,b)=>{
-      const at = String(a.time||a.arrivalTime||a.departureTime||"");
-      const bt = String(b.time||b.arrivalTime||b.departureTime||"");
-      return (dk+" "+at).localeCompare(dk+" "+bt);
-    });
-
-    const lines = [];
-    for(const e of dayItems){
-      const homeName = e.homeName || (homesById.get(e.homeId||"")?.name) || "Logement";
-      const city = e.homeCity || (homesById.get(e.homeId||"")?.city) || "";
-      const time = String(e.time || e.arrivalTime || e.departureTime || "").trim();
-
-      const { isReservation, hasMissions, mt } = classifyEvent(e);
-
-      let label = "Événement";
-      if(isReservation && !hasMissions) label = "Réservation";
-      if(hasMissions){
-        const map = { "CHECKIN":"Check-in", "CHECKOUT":"Check-out", "MENAGE":"Ménage" };
-        const nice = mt.map(x=> map[x] || x).join(" • ");
-        label = nice || "Intervention";
-      }
-
-      const extra = (e.status && String(e.status).trim()) ? ` • ${String(e.status)}` : "";
-      lines.push(`${time ? (time+" — ") : ""}${label}${extra}\n${homeName}${city ? (" • "+city) : ""}`);
+    let label = "Événement";
+    if(isReservation && !hasMissions) label = "Réservation";
+    if(hasMissions){
+      const map = { "CHECKIN":"Check-in", "CHECKOUT":"Check-out", "MENAGE":"Ménage" };
+      const nice = mt.map(x=> map[x] || x).join(" • ");
+      label = nice || "Intervention";
     }
 
-    const block = document.createElement("div");
-    block.className = "item";
-    block.id = "day_"+dk; // ✅ anchor scroll
-    block.innerHTML = `
-      <div class="meta">
-        <span>${esc(fmtDateKey(dk))}${dk===selectedKey ? " • sélection" : ""}</span>
-        <span>${esc(String(dayItems.length))} élément(s)</span>
-      </div>
-      <p class="msg">${esc(lines.join("\n\n"))}</p>
-    `;
-    planningList.appendChild(block);
+    const extra = (e.status && String(e.status).trim()) ? ` • ${String(e.status)}` : "";
+    lines.push(`${time ? (time+" — ") : ""}${label}${extra}\n${homeName}${city ? (" • "+city) : ""}`);
   }
+
+  const block = document.createElement("div");
+  block.className = "item";
+  block.innerHTML = `
+    <div class="meta">
+      <span>${esc(fmtDateKey(selectedKey))}</span>
+      <span>${esc(String(filtered.length))} élément(s)</span>
+    </div>
+    <p class="msg">${esc(lines.join("\n\n"))}</p>
+  `;
+  planningList.appendChild(block);
 }
 
 function clearCalendar(){ calGrid.innerHTML = ""; }
@@ -676,9 +651,7 @@ function renderCalendar(){
       cell.appendChild(dots);
     }
 
-    cell.addEventListener("click", ()=>{
-      setSelectedKey(dk);
-    });
+    cell.addEventListener("click", ()=> setSelectedKey(dk));
 
     calGrid.appendChild(cell);
   }
@@ -703,7 +676,7 @@ function refreshSubtitle(){
   const titleHome = (chosen === "__all__")
     ? "Tous les logements"
     : (homesById.get(chosen)?.name || "Logement");
-  subtitleLine.textContent = `${titleHome} • ${fmtDateKey(minKey)} → ${fmtDateKey(maxKey)} • Sélection : ${fmtDateKey(selectedKey)}`;
+  subtitleLine.textContent = `${titleHome} • ${fmtDateKey(minKey)} → ${fmtDateKey(maxKey)} • Jour : ${fmtDateKey(selectedKey)}`;
 }
 
 function listenEventsByHomeIds(){
@@ -762,10 +735,6 @@ function listenEventsByHomeIds(){
       rebuildMaps();
       renderCalendar();
       renderList();
-
-      // ✅ si on arrive sur une dateKey depuis URL/localStorage, on scroll une fois
-      if(isDateKey(selectedKey)) setTimeout(()=>scrollToDate(selectedKey), 50);
-
     }, (err)=>{
       console.error(err);
       const m = String(err?.message||"").toLowerCase();
@@ -813,8 +782,8 @@ function listenHomesForOwner(){
 }
 
 /* UI handlers */
-homeSelect.addEventListener("change", ()=> listenEventsByHomeIds());
-rangeSelect.addEventListener("change", ()=> listenEventsByHomeIds());
+homeSelect.addEventListener("change", ()=>{ refreshSubtitle(); renderList(); listenEventsByHomeIds(); });
+rangeSelect.addEventListener("change", ()=>{ refreshSubtitle(); renderList(); listenEventsByHomeIds(); });
 
 prevMonthBtn.addEventListener("click", ()=>{
   viewMonth = new Date(viewMonth.getFullYear(), viewMonth.getMonth()-1, 1);
@@ -833,7 +802,6 @@ onAuthStateChanged(auth, async (user)=>{
   }
   currentUser = user;
 
-  // users/{uid} -> ownerDocId + conciergerieUid
   try{
     const us = await getDoc(doc(db,"users", user.uid));
     const ud = us.exists() ? (us.data()||{}) : {};
@@ -845,12 +813,12 @@ onAuthStateChanged(auth, async (user)=>{
     showAlert("⚠️ Compte pas encore rattaché (ownerDocId/conciergerieUid). Va sur Profil puis Enregistrer.", false);
   }
 
-  // ✅ init mois + render
   if(!isDateKey(selectedKey)) selectedKey = todayKey;
   viewMonth = new Date(dateFromKey(selectedKey).getFullYear(), dateFromKey(selectedKey).getMonth(), 1);
 
-  renderCalendar();
   refreshSubtitle();
+  renderCalendar();
+  renderList();        // vide au départ
   listenHomesForOwner();
 });
 </script>
