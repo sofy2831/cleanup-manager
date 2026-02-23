@@ -1,4 +1,4 @@
-<!-- docs/owner-homes.html (FINAL — tenant-safe homes list + request add_home) -->
+<!-- docs/owner-homes.html (FINAL — owner read-only homes list, no add request, no tech chips, no logout) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -83,77 +83,6 @@
 
     h1{ margin:0; font-size:20px; font-weight:900; }
     .subtitle{ margin-top:6px; font-size:12px; font-weight:900; color:#444; }
-    .hint{
-      margin-top:8px;
-      font-size:12px;
-      font-weight:900;
-      color:#444;
-      display:flex;
-      gap:8px;
-      flex-wrap:wrap;
-      align-items:center;
-    }
-    .chip{
-      display:inline-flex;
-      align-items:center;
-      gap:6px;
-      padding:4px 10px;
-      border-radius:999px;
-      background:#fff;
-      border:1px solid var(--border);
-      font-size:11px;
-      font-weight:1000;
-      color:#555;
-      white-space:nowrap;
-    }
-    .chip.ok{ border-color: rgba(27,143,77,0.25); color:var(--ok); }
-    .chip.bad{ border-color: rgba(179,38,30,0.25); color:var(--bad); }
-
-    label{
-      display:block;
-      font-size:12px;
-      font-weight:900;
-      color:#333;
-      margin:10px 0 4px;
-    }
-    input, select, textarea{
-      width:100%;
-      padding:10px 12px;
-      border-radius:12px;
-      border:1px solid #D3C7FF;
-      font-size:14px;
-      background:#fff;
-      font-weight:800;
-      outline:none;
-    }
-    textarea{ min-height:90px; resize:vertical; }
-
-    .actions{
-      display:flex;
-      gap:8px;
-      flex-wrap:wrap;
-      margin-top:10px;
-    }
-
-    .btn{
-      border:none;
-      border-radius:999px;
-      padding:10px 14px;
-      font-size:13px;
-      font-weight:900;
-      cursor:pointer;
-      background:#fff;
-      color:var(--violet-main);
-      border:2px solid var(--violet-main);
-      box-shadow:0 3px 10px rgba(0,0,0,.06);
-      white-space:nowrap;
-    }
-    .btn.primary{
-      background:linear-gradient(90deg,var(--violet-main),var(--violet-dark));
-      border-color:transparent;
-      color:#fff;
-    }
-    .btn:disabled{ opacity:.65; cursor:not-allowed; }
 
     .alert{
       display:none;
@@ -232,53 +161,22 @@
 
   <div class="topbar">
     <a class="pill" href="owner-dashboard.html">← Dashboard</a>
-    <button class="pill" id="logoutBtn" type="button">Déconnexion</button>
+    <!-- pas de déconnexion ici (déjà dans dashboard) -->
   </div>
 
   <div class="wrap">
 
     <div class="card">
-      <h1>Ajouter un logement</h1>
-      <div class="subtitle">Demande d’ajout à transmettre à la conciergerie</div>
-
-      <div class="hint" id="linkStatus">
-        <span class="chip">Chargement profil…</span>
-      </div>
+      <h1>Mes logements</h1>
+      <div class="subtitle">Seuls tes logements rattachés sont visibles ici.</div>
 
       <div class="alert" id="alertBox"></div>
-
-      <label>Nom du logement</label>
-      <input id="homeName" placeholder="Ex. T2 Centre" />
-
-      <label>Ville</label>
-      <input id="homeCity" placeholder="Ex. Toulouse" />
-
-      <label>Type</label>
-      <select id="homeType">
-        <option>Studio</option>
-        <option>T1</option>
-        <option>T2</option>
-        <option>T3</option>
-        <option>T4 et +</option>
-        <option>Maison</option>
-      </select>
-
-      <label>Message (optionnel)</label>
-      <textarea id="homeMsg" placeholder="Informations utiles"></textarea>
-
-      <div class="actions">
-        <button class="btn primary" id="sendBtn" type="button">Envoyer</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <h1>Mes logements</h1>
 
       <div id="homesList" class="list"></div>
 
       <div id="emptyHomes" class="item" style="display:none;">
         <div class="meta"><span>Aucun logement</span><span>—</span></div>
-        <p class="msg">Aucun logement n’est encore visible.</p>
+        <p class="msg">Aucun logement n’est encore visible. Écris à ta conciergerie via Messages.</p>
       </div>
     </div>
 
@@ -294,31 +192,26 @@
 
 <script type="module">
 import { auth, db } from "./firebase-init.js";
-import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
 import {
   collection, query, where, onSnapshot,
-  addDoc, serverTimestamp, doc, getDoc
+  doc, getDoc
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
 const homesList = document.getElementById("homesList");
 const emptyHomes = document.getElementById("emptyHomes");
 const alertBox = document.getElementById("alertBox");
-const linkStatus = document.getElementById("linkStatus");
-
-const logoutBtn = document.getElementById("logoutBtn");
-const sendBtn = document.getElementById("sendBtn");
-const homeName = document.getElementById("homeName");
-const homeCity = document.getElementById("homeCity");
-const homeType = document.getElementById("homeType");
-const homeMsg  = document.getElementById("homeMsg");
 
 function showAlert(msg, ok=false){
   alertBox.style.display="block";
   alertBox.classList.toggle("ok",!!ok);
   alertBox.textContent=msg;
 }
-function hideAlert(){ alertBox.style.display="none"; alertBox.classList.remove("ok"); alertBox.textContent=""; }
-function lock(btn,l){ btn.disabled=l; btn.style.opacity=l?"0.7":"1"; }
+function hideAlert(){
+  alertBox.style.display="none";
+  alertBox.classList.remove("ok");
+  alertBox.textContent="";
+}
 
 function esc(s){
   return String(s ?? "")
@@ -329,42 +222,48 @@ function esc(s){
     .replaceAll("'","&#039;");
 }
 
-let currentUser = null;
-let ownerDocId = "";
-let conciergerieUid = "";
 let unsubHomes = null;
 
-function renderLinkStatus(){
-  const ok = (ownerDocId && conciergerieUid);
-  linkStatus.innerHTML = `
-    <span class="chip ${ok ? "ok" : "bad"}">${ok ? "Rattaché ✅" : "Non rattaché ⛔"}</span>
-    <span class="chip">ownerDocId: ${esc(ownerDocId || "—")}</span>
-    <span class="chip">conciergerieUid: ${esc(conciergerieUid || "—")}</span>
-  `;
+async function loadOwnerContext(user){
+  // source de vérité = users/{uid}
+  try{
+    const us = await getDoc(doc(db,"users", user.uid));
+    const ud = us.exists() ? (us.data()||{}) : {};
+    const ownerDocId = String(ud.ownerDocId || "").trim();
+    const conciergerieUid = String(ud.conciergerieUid || "").trim();
+
+    return { ownerDocId, conciergerieUid };
+  }catch(_){
+    return { ownerDocId:"", conciergerieUid:"" };
+  }
 }
 
-function subscribeHomes(){
+function subscribeHomes(user, ctx){
   if(unsubHomes) unsubHomes();
   unsubHomes = null;
 
-  const qHomes = (ownerDocId && conciergerieUid)
+  // ✅ on privilégie le mode tenant-safe canon: conciergerieUid + ownerDocId
+  // fallback compat: ownerUid == uid
+  const qHomes = (ctx.ownerDocId && ctx.conciergerieUid)
     ? query(
         collection(db,"homes"),
-        where("conciergerieUid","==", conciergerieUid),
-        where("ownerDocId","==", ownerDocId)
+        where("conciergerieUid","==", ctx.conciergerieUid),
+        where("ownerDocId","==", ctx.ownerDocId)
       )
     : query(
         collection(db,"homes"),
-        where("ownerUid","==", currentUser.uid)
+        where("ownerUid","==", user.uid)
       );
 
   unsubHomes = onSnapshot(qHomes, (snap)=>{
     homesList.innerHTML="";
+
     if(snap.empty){
       emptyHomes.style.display="block";
       return;
     }
     emptyHomes.style.display="none";
+    hideAlert();
 
     const rows = snap.docs.map(d=>({ id:d.id, ...(d.data()||{}) }));
     rows.sort((a,b)=> (b.createdAt?.seconds ?? 0) - (a.createdAt?.seconds ?? 0));
@@ -393,89 +292,20 @@ function subscribeHomes(){
   });
 }
 
-async function loadProfileForOwner(user){
-  ownerDocId = "";
-  conciergerieUid = "";
-
-  try{
-    const us = await getDoc(doc(db,"users", user.uid));
-    const ud = us.exists() ? (us.data()||{}) : {};
-    ownerDocId = String(ud.ownerDocId || "").trim();
-    conciergerieUid = String(ud.conciergerieUid || "").trim();
-  }catch(_){}
-
-  renderLinkStatus();
-
-  // warning si pas rattaché
-  if(!ownerDocId || !conciergerieUid){
-    showAlert("⚠️ Ton compte n’est pas rattaché (ownerDocId/conciergerieUid manquant). Va sur Profil puis Enregistrer.", false);
-  }else{
-    hideAlert();
-  }
-}
-
-sendBtn.addEventListener("click", async ()=>{
-  hideAlert();
-  if(!currentUser) return;
-
-  if(!ownerDocId || !conciergerieUid){
-    return showAlert(
-      "Ton compte n’est pas rattaché correctement (ownerDocId/conciergerieUid manquant).\n" +
-      "Va sur Profil puis Enregistrer.",
-      false
-    );
-  }
-
-  const nm = homeName.value.trim();
-  const ct = homeCity.value.trim();
-  const tp = String(homeType.value || "").trim();
-  const msg = String(homeMsg.value || "").trim();
-
-  if(!nm || !ct){
-    return showAlert("Nom et ville requis.", false);
-  }
-
-  lock(sendBtn,true);
-  try{
-    await addDoc(collection(db,"requests"),{
-      conciergerieUid,
-      ownerDocId,
-      ownerUid: currentUser.uid,
-      ownerEmail: currentUser.email || "",
-      type: "home_add",
-      title: `Ajout logement – ${nm}`,
-      message: msg,
-      payload: { name:nm, city:ct, type:tp },
-      status:"pending",
-      createdAt:serverTimestamp(),
-      createdAtMs: Date.now()
-    });
-
-    showAlert("✅ Demande envoyée.",true);
-    homeName.value=""; homeCity.value=""; homeMsg.value=""; homeType.value="Studio";
-  }catch(e){
-    console.error(e);
-    showAlert("Erreur : " + (e?.message || "inconnue"), false);
-  }finally{
-    lock(sendBtn,false);
-  }
-});
-
-logoutBtn.addEventListener("click", async ()=>{
-  await signOut(auth);
-  try{ localStorage.removeItem("cm_auth"); }catch(_){}
-  location.href = "login.html?role=proprietaire";
-});
-
 onAuthStateChanged(auth, async (user)=>{
   if(!user){
     location.href="login.html?role=proprietaire";
     return;
   }
-  currentUser = user;
 
-  await loadProfileForOwner(user);
-  subscribeHomes();
+  const ctx = await loadOwnerContext(user);
+
+  // si pas rattaché, on reste clean côté UI
+  if(!ctx.ownerDocId || !ctx.conciergerieUid){
+    showAlert("Ton compte n’est pas encore rattaché à une conciergerie. Va dans Messages pour demander le rattachement.", false);
+  }
+
+  subscribeHomes(user, ctx);
 });
 </script>
 </body>
