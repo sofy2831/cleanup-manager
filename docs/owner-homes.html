@@ -1,4 +1,4 @@
-<!-- docs/owner-homes.html (FINAL — owner guard + add_home request + homes list tenant-safe) -->
+<!-- docs/owner-homes.html (FINAL — tenant-safe homes list + request add_home) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -40,7 +40,7 @@
       width:100%;
       max-width:980px;
       display:flex;
-      justify-content:flex-start;
+      justify-content:space-between;
       align-items:center;
       position:sticky;
       top:0;
@@ -48,6 +48,7 @@
       padding:10px 0;
       background:rgba(248,244,255,.85);
       backdrop-filter: blur(6px);
+      gap:10px;
     }
     .pill{
       padding:8px 12px;
@@ -59,6 +60,7 @@
       font-size:13px;
       text-decoration:none;
       cursor:pointer;
+      white-space:nowrap;
     }
 
     .wrap{
@@ -81,6 +83,31 @@
 
     h1{ margin:0; font-size:20px; font-weight:900; }
     .subtitle{ margin-top:6px; font-size:12px; font-weight:900; color:#444; }
+    .hint{
+      margin-top:8px;
+      font-size:12px;
+      font-weight:900;
+      color:#444;
+      display:flex;
+      gap:8px;
+      flex-wrap:wrap;
+      align-items:center;
+    }
+    .chip{
+      display:inline-flex;
+      align-items:center;
+      gap:6px;
+      padding:4px 10px;
+      border-radius:999px;
+      background:#fff;
+      border:1px solid var(--border);
+      font-size:11px;
+      font-weight:1000;
+      color:#555;
+      white-space:nowrap;
+    }
+    .chip.ok{ border-color: rgba(27,143,77,0.25); color:var(--ok); }
+    .chip.bad{ border-color: rgba(179,38,30,0.25); color:var(--bad); }
 
     label{
       display:block;
@@ -97,6 +124,7 @@
       font-size:14px;
       background:#fff;
       font-weight:800;
+      outline:none;
     }
     textarea{ min-height:90px; resize:vertical; }
 
@@ -118,6 +146,7 @@
       color:var(--violet-main);
       border:2px solid var(--violet-main);
       box-shadow:0 3px 10px rgba(0,0,0,.06);
+      white-space:nowrap;
     }
     .btn.primary{
       background:linear-gradient(90deg,var(--violet-main),var(--violet-dark));
@@ -137,6 +166,7 @@
       font-size:12px;
       font-weight:900;
       white-space:pre-wrap;
+      color:#444;
     }
     .alert.ok{ border-left-color:var(--ok); }
 
@@ -202,6 +232,7 @@
 
   <div class="topbar">
     <a class="pill" href="owner-dashboard.html">← Dashboard</a>
+    <button class="pill" id="logoutBtn" type="button">Déconnexion</button>
   </div>
 
   <div class="wrap">
@@ -209,6 +240,10 @@
     <div class="card">
       <h1>Ajouter un logement</h1>
       <div class="subtitle">Demande d’ajout à transmettre à la conciergerie</div>
+
+      <div class="hint" id="linkStatus">
+        <span class="chip">Chargement profil…</span>
+      </div>
 
       <div class="alert" id="alertBox"></div>
 
@@ -232,7 +267,7 @@
       <textarea id="homeMsg" placeholder="Informations utiles"></textarea>
 
       <div class="actions">
-        <button class="btn primary" id="sendBtn">Envoyer</button>
+        <button class="btn primary" id="sendBtn" type="button">Envoyer</button>
       </div>
     </div>
 
@@ -250,7 +285,7 @@
   </div>
 </div>
 
-<nav class="bottom-nav">
+<nav class="bottom-nav" aria-label="Navigation propriétaire">
   <a href="owner-dashboard.html">Dashboard</a>
   <a href="owner-planning.html">Planning</a>
   <a class="active" href="owner-homes.html">Logements</a>
@@ -259,7 +294,7 @@
 
 <script type="module">
 import { auth, db } from "./firebase-init.js";
-import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
 import {
   collection, query, where, onSnapshot,
   addDoc, serverTimestamp, doc, getDoc
@@ -268,7 +303,9 @@ import {
 const homesList = document.getElementById("homesList");
 const emptyHomes = document.getElementById("emptyHomes");
 const alertBox = document.getElementById("alertBox");
+const linkStatus = document.getElementById("linkStatus");
 
+const logoutBtn = document.getElementById("logoutBtn");
 const sendBtn = document.getElementById("sendBtn");
 const homeName = document.getElementById("homeName");
 const homeCity = document.getElementById("homeCity");
@@ -292,36 +329,24 @@ function esc(s){
     .replaceAll("'","&#039;");
 }
 
+let currentUser = null;
+let ownerDocId = "";
+let conciergerieUid = "";
 let unsubHomes = null;
 
-onAuthStateChanged(auth, async (user)=>{
-  if(!user){
-    location.href="login.html?role=proprietaire";
-    return;
-  }
+function renderLinkStatus(){
+  const ok = (ownerDocId && conciergerieUid);
+  linkStatus.innerHTML = `
+    <span class="chip ${ok ? "ok" : "bad"}">${ok ? "Rattaché ✅" : "Non rattaché ⛔"}</span>
+    <span class="chip">ownerDocId: ${esc(ownerDocId || "—")}</span>
+    <span class="chip">conciergerieUid: ${esc(conciergerieUid || "—")}</span>
+  `;
+}
 
-  hideAlert();
-
-  // Source de vérité users/{uid}
-  let ownerDocId = "";
-  let conciergerieUid = "";
-  try{
-    const us = await getDoc(doc(db,"users", user.uid));
-    const ud = us.exists() ? (us.data()||{}) : {};
-    ownerDocId = String(ud.ownerDocId || "").trim();
-    conciergerieUid = String(ud.conciergerieUid || "").trim();
-  }catch(_){}
-
+function subscribeHomes(){
   if(unsubHomes) unsubHomes();
   unsubHomes = null;
 
-  // Si non rattaché : on peut encore afficher via fallback ownerUid, mais on prévient
-  if(!ownerDocId || !conciergerieUid){
-    showAlert("⚠️ Ton compte n’est pas encore rattaché (ownerDocId/conciergerieUid). Va sur Profil puis Enregistrer.", false);
-  }
-
-  // Query principale : homes liés via ownerDocId + conciergerieUid
-  // Fallback : homes.ownerUid == auth.uid (anciens docs)
   const qHomes = (ownerDocId && conciergerieUid)
     ? query(
         collection(db,"homes"),
@@ -330,7 +355,7 @@ onAuthStateChanged(auth, async (user)=>{
       )
     : query(
         collection(db,"homes"),
-        where("ownerUid","==", user.uid)
+        where("ownerUid","==", currentUser.uid)
       );
 
   unsubHomes = onSnapshot(qHomes, (snap)=>{
@@ -364,54 +389,93 @@ onAuthStateChanged(auth, async (user)=>{
     }
   }, (err)=>{
     console.error(err);
-    showAlert("Impossible de charger tes logements.", false);
+    showAlert("Impossible de charger tes logements : " + (err?.message || "erreur"), false);
   });
+}
 
-  // Demande ajout logement (routage conciergerie)
-  sendBtn.onclick = async ()=>{
+async function loadProfileForOwner(user){
+  ownerDocId = "";
+  conciergerieUid = "";
+
+  try{
+    const us = await getDoc(doc(db,"users", user.uid));
+    const ud = us.exists() ? (us.data()||{}) : {};
+    ownerDocId = String(ud.ownerDocId || "").trim();
+    conciergerieUid = String(ud.conciergerieUid || "").trim();
+  }catch(_){}
+
+  renderLinkStatus();
+
+  // warning si pas rattaché
+  if(!ownerDocId || !conciergerieUid){
+    showAlert("⚠️ Ton compte n’est pas rattaché (ownerDocId/conciergerieUid manquant). Va sur Profil puis Enregistrer.", false);
+  }else{
     hideAlert();
+  }
+}
 
-    if(!ownerDocId || !conciergerieUid){
-      return showAlert(
-        "Ton compte n’est pas encore rattaché correctement (ownerDocId/conciergerieUid manquant).\n" +
-        "Va sur Profil puis Enregistrer.",
-        false
-      );
-    }
+sendBtn.addEventListener("click", async ()=>{
+  hideAlert();
+  if(!currentUser) return;
 
-    if(!homeName.value.trim() || !homeCity.value.trim()){
-      return showAlert("Nom et ville requis.", false);
-    }
+  if(!ownerDocId || !conciergerieUid){
+    return showAlert(
+      "Ton compte n’est pas rattaché correctement (ownerDocId/conciergerieUid manquant).\n" +
+      "Va sur Profil puis Enregistrer.",
+      false
+    );
+  }
 
-    lock(sendBtn,true);
-    try{
-      await addDoc(collection(db,"requests"),{
-        conciergerieUid,
-        ownerDocId,
-        ownerUid: user.uid,
-        ownerEmail: user.email || "",
-        type:"home_add",
-        title:`Ajout logement – ${homeName.value.trim()}`,
-        message:(homeMsg.value||"").trim(),
-        payload:{
-          name:homeName.value.trim(),
-          city:homeCity.value.trim(),
-          type:homeType.value
-        },
-        status:"pending",
-        createdAt:serverTimestamp(),
-        createdAtMs: Date.now()
-      });
+  const nm = homeName.value.trim();
+  const ct = homeCity.value.trim();
+  const tp = String(homeType.value || "").trim();
+  const msg = String(homeMsg.value || "").trim();
 
-      showAlert("✅ Demande envoyée.",true);
-      homeName.value=""; homeCity.value=""; homeMsg.value=""; homeType.value="Studio";
-    }catch(e){
-      console.error(e);
-      showAlert("Erreur : "+(e?.message||"inconnue"));
-    }finally{
-      lock(sendBtn,false);
-    }
-  };
+  if(!nm || !ct){
+    return showAlert("Nom et ville requis.", false);
+  }
+
+  lock(sendBtn,true);
+  try{
+    await addDoc(collection(db,"requests"),{
+      conciergerieUid,
+      ownerDocId,
+      ownerUid: currentUser.uid,
+      ownerEmail: currentUser.email || "",
+      type: "home_add",
+      title: `Ajout logement – ${nm}`,
+      message: msg,
+      payload: { name:nm, city:ct, type:tp },
+      status:"pending",
+      createdAt:serverTimestamp(),
+      createdAtMs: Date.now()
+    });
+
+    showAlert("✅ Demande envoyée.",true);
+    homeName.value=""; homeCity.value=""; homeMsg.value=""; homeType.value="Studio";
+  }catch(e){
+    console.error(e);
+    showAlert("Erreur : " + (e?.message || "inconnue"), false);
+  }finally{
+    lock(sendBtn,false);
+  }
+});
+
+logoutBtn.addEventListener("click", async ()=>{
+  await signOut(auth);
+  try{ localStorage.removeItem("cm_auth"); }catch(_){}
+  location.href = "login.html?role=proprietaire";
+});
+
+onAuthStateChanged(auth, async (user)=>{
+  if(!user){
+    location.href="login.html?role=proprietaire";
+    return;
+  }
+  currentUser = user;
+
+  await loadProfileForOwner(user);
+  subscribeHomes();
 });
 </script>
 </body>
