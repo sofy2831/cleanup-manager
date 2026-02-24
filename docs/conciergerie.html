@@ -1,4 +1,4 @@
-<!-- docs/conciergerie.html (FINAL — + badge Déclarations (URSSAF ou TVA) + recouvrement scope FIX) -->
+<!-- docs/conciergerie.html (FINAL — badge Déclarations SUPPRIMÉ + recouvrement scope FIX) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -437,15 +437,6 @@
           <span class="mini-badge warn" id="statRecouvrementHint">impayés</span>
         </div>
       </div>
-
-      <!-- ✅ Déclarations (URSSAF ou TVA) -->
-      <div class="stat" id="statDeclarationsCard" title="Indicateur mois en cours (info)">
-        <div class="label" id="statDeclarationsLabel">Déclarations<br>(mois en cours)</div>
-        <div class="value">
-          <span id="statDeclarationsMain">—</span>
-          <span class="mini-badge" id="statDeclarationsHint">—</span>
-        </div>
-      </div>
     </section>
 
     <div class="alert" id="alertBox"></div>
@@ -554,12 +545,6 @@
     const statRecouvrement = document.getElementById("statRecouvrement");
     const statRecouvrementHint = document.getElementById("statRecouvrementHint");
 
-    // ✅ Déclarations
-    const statDeclarationsLabel = document.getElementById("statDeclarationsLabel");
-    const statDeclarationsMain = document.getElementById("statDeclarationsMain");
-    const statDeclarationsHint = document.getElementById("statDeclarationsHint");
-
-    let vatCfg = { enabled:false, rate:0 };
     let lastRec = { today:0, late:0 };
 
     function showAlert(msg, ok=false){
@@ -596,33 +581,15 @@
       el.textContent = Number.isFinite(n) ? String(n) : "—";
     }
 
-    function fmtMoney(n){
-      const x = Number(n);
-      if(!Number.isFinite(x)) return "—";
-      return x.toLocaleString("fr-FR",{minimumFractionDigits:0, maximumFractionDigits:0}) + " €";
-    }
-    function fmtMoney2(n){
-      const x = Number(n);
-      if(!Number.isFinite(x)) return "—";
-      return x.toLocaleString("fr-FR",{minimumFractionDigits:2, maximumFractionDigits:2}) + " €";
-    }
-
-    // ✅ Profil conciergerie = companyName + VAT config
+    // ✅ Profil conciergerie = companyName
     async function loadCompanyProfile(user){
       try{
         const uSnap = await getDoc(doc(db, "users", user.uid));
         const data = uSnap.exists() ? (uSnap.data()||{}) : {};
         const company = String(data?.businessProfile?.companyName || "").trim();
         companyLine.textContent = company || "Conciergerie";
-
-        const vat = data?.businessProfile?.vat || {};
-        vatCfg = {
-          enabled: !!vat?.enabled,
-          rate: Number.isFinite(Number(vat?.rate)) ? Number(vat.rate) : 0
-        };
       }catch(e){
         companyLine.textContent = "Conciergerie";
-        vatCfg = { enabled:false, rate:0 };
       }
     }
 
@@ -767,86 +734,6 @@
       else location.href = "recouvrement.html";
     });
 
-    // ✅ Déclarations (CA du mois / CA HT + TVA)
-    function monthBounds(){
-      const now = new Date();
-      const from = new Date(now.getFullYear(), now.getMonth(), 1, 0,0,0,0).getTime();
-      const to = now.getTime();
-      return { from, to };
-    }
-    function getIssuedAtMs(x){
-      return toMillis(x?.invoiceIssuedAt) || toMillis(x?.createdAt) || toMillis(x?.createdAtMs) || toMillis(x?.snapAtMs) || 0;
-    }
-    function isInvoiceDoc(x){
-      const listable = (x?.listable !== false);
-      if(!listable) return false;
-      const type = String(x?.type || "").toUpperCase().trim();
-      const docType = String(x?.docType || "").toUpperCase().trim();
-      return (type === "INVOICE" || docType === "INVOICE_EVENT" || docType === "INVOICE");
-    }
-    function computeHT(lines){
-      if(!Array.isArray(lines)) return 0;
-      return lines.reduce((s,l)=> s + (Number(l?.qty)||0) * (Number(l?.unitPrice)||0), 0);
-    }
-    function getTotalTTC(inv){
-      const n = Number(inv?.totalTTC);
-      if(Number.isFinite(n) && n >= 0) return n;
-      // fallback TTC = HT + TVA (mono taux)
-      const ht = computeHT(inv?.lines);
-      const tva = vatCfg.enabled ? (ht * (Number(vatCfg.rate)||0)) : 0;
-      return ht + tva;
-    }
-
-    async function loadDeclarationsKpi(user){
-      const uid = user.uid;
-      const { from, to } = monthBounds();
-
-      const qInv = query(
-        collection(db, "salesDocuments"),
-        where("conciergerieUid","==",uid),
-        limit(700)
-      );
-
-      const snap = await getDocs(qInv);
-      const docs = snap.docs.map(d => ({ id:d.id, ...(d.data()||{}) }));
-
-      let sumTTC = 0;
-      let sumHT = 0;
-
-      for(const x of docs){
-        if(!isInvoiceDoc(x)) continue;
-
-        const st = String(x?.invoiceStatus||"").toUpperCase().trim();
-        if(["CANCELLED","CREDITED"].includes(st)) continue;
-
-        const ms = getIssuedAtMs(x);
-        if(!ms || ms < from || ms > to) continue;
-
-        // TTC
-        const ttc = getTotalTTC(x);
-        sumTTC += Number.isFinite(ttc) ? ttc : 0;
-
-        // HT (si TVA)
-        const ht = computeHT(x?.lines);
-        sumHT += Number.isFinite(ht) ? ht : 0;
-      }
-
-      if(!vatCfg.enabled){
-        statDeclarationsLabel.innerHTML = "CA du mois<br>(URSSAF)";
-        statDeclarationsMain.textContent = fmtMoney(sumTTC);
-        statDeclarationsHint.textContent = "info";
-        statDeclarationsHint.classList.remove("bad","warn");
-        return;
-      }
-
-      const tva = sumHT * (Number(vatCfg.rate)||0);
-
-      statDeclarationsLabel.innerHTML = "CA HT / TVA<br>(info)";
-      statDeclarationsMain.textContent = fmtMoney(sumHT);
-      statDeclarationsHint.textContent = `TVA : ${fmtMoney2(tva)}`;
-      statDeclarationsHint.classList.remove("bad","warn");
-    }
-
     logoutBtn.addEventListener("click", async ()=>{
       await signOut(auth);
       try{ localStorage.removeItem("cm_auth"); }catch(_){}
@@ -884,14 +771,6 @@
       }catch(e){
         setStat(statRecouvrement, NaN);
         statRecouvrementHint.textContent = "impayés : —";
-      }
-
-      try{
-        await loadDeclarationsKpi(user);
-      }catch(e){
-        statDeclarationsLabel.innerHTML = "Déclarations<br>(mois en cours)";
-        statDeclarationsMain.textContent = "—";
-        statDeclarationsHint.textContent = "—";
       }
     });
   </script>
