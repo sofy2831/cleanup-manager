@@ -1,4 +1,4 @@
-<!-- docs/equipe.html (FINAL — KPI par agent (mois) + liste prestations/logements ; no texte technique) -->
+<!-- docs/equipe.html (FINAL — KPI par agent (mois) + liste prestations/logements ; no logout ; logique finishAll via opStatus/proofToken) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -96,9 +96,7 @@
       align-items:center;
       margin-top:10px;
     }
-    @media(max-width:980px){
-      .toolbar{ grid-template-columns: 1fr; }
-    }
+    @media(max-width:980px){ .toolbar{ grid-template-columns: 1fr; } }
 
     .select, .input{
       width:100%;
@@ -122,7 +120,6 @@
       background:rgba(122,92,255,0.12); color:#5b45c8;
     }
     .badge.ok{ background:rgba(27,143,77,0.14); color:var(--ok); }
-    .badge.warn{ background:rgba(176,107,0,0.14); color:var(--warn); }
 
     .list{ display:flex; flex-direction:column; gap:10px; margin-top:12px; }
 
@@ -205,9 +202,7 @@
   <div class="page">
     <div class="topbar">
       <a class="pill" href="planning.html">← Planning</a>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-        
-      </div>
+      <span></span>
     </div>
 
     <div class="wrap">
@@ -255,19 +250,13 @@
 
   <script type="module">
     import { auth, db } from "./firebase-init.js";
-    import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+    import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
       doc, getDoc,
       collection, query, where, orderBy, limit, getDocs
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const emailLine = document.getElementById("emailLine");
-    const logoutBtn = document.getElementById("logoutBtn");
-logoutBtn?.addEventListener("click", async ()=>{
-  await signOut(auth);
-  try{ localStorage.removeItem("cm_auth"); }catch(_){}
-  location.href = "index.html";
-});
     const refreshBtn = document.getElementById("refreshBtn");
     const alertBox = document.getElementById("alertBox");
 
@@ -321,7 +310,7 @@ logoutBtn?.addEventListener("click", async ()=>{
     function fmtTimeFromEvent(e){
       const t = String(e?.time || e?.arrivalTime || "").trim();
       if(t) return t;
-      const ms = toMs(e?.agentDoneAt || e?.updatedAt || e?.createdAt);
+      const ms = toMs(e?.updatedAt || e?.createdAt);
       if(!ms) return "";
       const d = new Date(ms);
       return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
@@ -343,7 +332,6 @@ logoutBtn?.addEventListener("click", async ()=>{
         return { fromMs: from, toMs: to };
       }
 
-      // THIS_MONTH default
       const from = new Date(now.getFullYear(), now.getMonth(), 1, 0,0,0,0).getTime();
       const to = new Date(now.getFullYear(), now.getMonth()+1, 1, 0,0,0,0).getTime() - 1;
       return { fromMs: from, toMs: to };
@@ -360,20 +348,23 @@ logoutBtn?.addEventListener("click", async ()=>{
       return t || "—";
     }
 
+    // ✅ “Fait par agent” = finishAll de agent.html => opStatus/status + proofToken
     function isDoneEvent(e){
       const st = String(e?.status || "").toUpperCase().trim();
       const op = String(e?.opStatus || "").toUpperCase().trim();
-      const agentDone = !!e?.agentDone;
       const okStatus = (st === "A_VALIDER" || st === "VALIDEE" || op === "A_VALIDER" || op === "VALIDEE");
-      return agentDone && okStatus;
+      const hasProof = !!String(e?.proofToken || "").trim();
+      return okStatus && hasProof;
     }
 
     function pickDoneMs(e){
-      let ms = toMs(e?.agentDoneAt) || toMs(e?.updatedAt) || toMs(e?.createdAt);
+      // pas de agentDoneAt dans events => on prend updatedAt sinon createdAt
+      let ms = toMs(e?.updatedAt) || toMs(e?.createdAt);
       if(ms) return ms;
 
-      const dk = String(e?.dateKey || "").trim(); // "YYYY-MM-DD"
-      const tt = String(e?.time || "").trim();   // "HH:mm"
+      // fallback dateKey+time si dispo
+      const dk = String(e?.dateKey || "").trim();
+      const tt = String(e?.time || "").trim();
       if(dk && /^\d{4}-\d{2}-\d{2}$/.test(dk)){
         const iso = tt && /^\d{2}:\d{2}$/.test(tt) ? `${dk}T${tt}:00` : `${dk}T00:00:00`;
         const d = new Date(iso);
@@ -408,11 +399,9 @@ logoutBtn?.addEventListener("click", async ()=>{
         }
         m.get(key).items.push(r);
       }
-      // sort items by date desc
       for(const g of m.values()){
         g.items.sort((a,b)=>(b.doneMs||0)-(a.doneMs||0));
       }
-      // sort agents by count desc then name
       return Array.from(m.values()).sort((a,b)=>{
         const ca = a.items.length, cb = b.items.length;
         if(cb !== ca) return cb - ca;
@@ -499,7 +488,7 @@ logoutBtn?.addEventListener("click", async ()=>{
         limit(MAX_EVENTS)
       );
 
-      showAlert(`Chargement…`, true);
+      showAlert("Chargement…", true);
 
       const snap = await getDocs(qE);
       const events = snap.docs.map(d=>({ id:d.id, ...(d.data()||{}) }));
@@ -537,13 +526,6 @@ logoutBtn?.addEventListener("click", async ()=>{
       }
     }
 
-    // Logout
-    logoutBtn.addEventListener("click", async ()=>{
-      await signOut(auth);
-      try{ localStorage.removeItem("cm_auth"); }catch(_){}
-      location.href = "index.html";
-    });
-
     filterPeriod.addEventListener("change", render);
     searchInput.addEventListener("input", render);
     refreshBtn.addEventListener("click", ()=> loadEvents().catch(err=>{
@@ -574,5 +556,3 @@ logoutBtn?.addEventListener("click", async ()=>{
   </script>
 </body>
 </html>
-
-
