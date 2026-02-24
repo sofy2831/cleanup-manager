@@ -1,4 +1,4 @@
-<!-- docs/journal-reglements.html (FINAL v1.1 — FIX perf MVP: limits + skip missing dates + progress visible) -->
+<!-- docs/journal-reglements.html (FINAL v1.2 — URL filters (?period=?year=?q), query invoice less strict, keeps MVP limits + progress) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -209,7 +209,6 @@
     .right{ text-align:right; }
     .ellipsis{ max-width:260px; overflow:hidden; text-overflow:ellipsis; }
 
-    /* ✅ PRINT */
     @media print{
       body{ background:#fff; }
       .topbar, .bottom-nav, .toolbar, #exportBtn, #printBtn { display:none !important; }
@@ -373,8 +372,22 @@
     const kpisBox = document.getElementById("kpisBox");
     const tbody = document.getElementById("tbody");
 
-    let invoices = [];   // salesDocuments (INVOICE)
+    let invoices = [];   // salesDocuments (INVOICE-like)
     let payments = [];   // flattened lines
+
+    // ✅ URL params: ?period=THIS_MONTH|LAST_MONTH|THIS_YEAR|ALL|CUSTOM  (optional) ?year=2026  (optional) ?q=texte
+    const params = new URLSearchParams(location.search);
+    const urlPeriod = (params.get("period") || "").toUpperCase().trim();
+    const urlYear = (params.get("year") || "").trim();
+    const urlQ = (params.get("q") || "").trim();
+
+    function applyUrlFilters(){
+      if(["ALL","THIS_MONTH","LAST_MONTH","THIS_YEAR","CUSTOM"].includes(urlPeriod)){
+        filterPeriod.value = urlPeriod;
+      }
+      if(urlQ) searchInput.value = urlQ;
+      setCustomDatesVisible();
+    }
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -434,17 +447,10 @@
       return m || "—";
     }
 
-    // --- Crash trap visible ---
-    window.addEventListener("error", (e)=>{
-      try{ showAlert("⛔ Erreur JS : " + (e?.message || "inconnue")); }catch{}
-    });
-    window.addEventListener("unhandledrejection", (e)=>{
-      try{ showAlert("⛔ Promise rejetée : " + (e?.reason?.message || e?.reason || "inconnue")); }catch{}
-    });
+    window.addEventListener("error", (e)=>{ try{ showAlert("⛔ Erreur JS : " + (e?.message || "inconnue")); }catch{} });
+    window.addEventListener("unhandledrejection", (e)=>{ try{ showAlert("⛔ Promise rejetée : " + (e?.reason?.message || e?.reason || "inconnue")); }catch{} });
 
-    function yearFromMs(ms){
-      return String(new Date(ms).getFullYear());
-    }
+    function yearFromMs(ms){ return String(new Date(ms).getFullYear()); }
 
     function renderYearOptions(){
       const years = new Set();
@@ -458,7 +464,8 @@
         `<option value="ALL">Toutes années</option>` +
         sorted.map(y=>`<option value="${esc(y)}">${esc(y)}</option>`).join("");
 
-      if(sorted.includes(cur)) filterYear.value = cur;
+      if(urlYear && sorted.includes(urlYear)) filterYear.value = urlYear;
+      else if(sorted.includes(cur)) filterYear.value = cur;
       else filterYear.value = "ALL";
     }
 
@@ -497,18 +504,14 @@
     }
 
     function matchesFilters(p){
-      // ✅ pas de date => on ne garde pas (sinon year=1970 et filtres incohérents)
       if(!p.dateMs) return false;
 
-      // year
       const fy = filterYear.value;
       if(fy !== "ALL" && yearFromMs(p.dateMs) !== String(fy)) return false;
 
-      // period
       const { fromMs, toMs } = periodRange();
       if(!(p.dateMs >= fromMs && p.dateMs <= toMs)) return false;
 
-      // search
       const q = (searchInput.value||"").trim().toLowerCase();
       if(q){
         const hay = [
@@ -524,8 +527,20 @@
       return true;
     }
 
-    function getFiltered(){
-      return payments.filter(matchesFilters);
+    function getFiltered(){ return payments.filter(matchesFilters); }
+
+    function labelPeriod(){
+      const p = filterPeriod.value;
+      if(p === "ALL") return "Toute période";
+      if(p === "THIS_MONTH") return "Ce mois";
+      if(p === "LAST_MONTH") return "Mois dernier";
+      if(p === "THIS_YEAR") return "Cette année";
+      if(p === "CUSTOM"){
+        const a = dateFrom.value ? fmtDateFR(dateFrom.value) : "—";
+        const b = dateTo.value ? fmtDateFR(dateTo.value) : "—";
+        return `${a} → ${b}`;
+      }
+      return "—";
     }
 
     function renderKPIs(rows){
@@ -544,7 +559,6 @@
         modes.set(k, (modes.get(k)||0) + 1);
       }
 
-      // top 2 modes
       const top = Array.from(modes.entries()).sort((a,b)=>b[1]-a[1]).slice(0,2);
       const topTxt = top.length ? top.map(([k,v])=>`${modeLabel(k)}: ${v}`).join(" • ") : "—";
 
@@ -555,20 +569,6 @@
         <div class="kpi"><div class="t">Période</div><div class="v">${esc(labelPeriod())}</div></div>
         <div class="kpi"><div class="t">Modes (top)</div><div class="v" style="font-size:12px; font-weight:900;">${esc(topTxt)}</div></div>
       `;
-    }
-
-    function labelPeriod(){
-      const p = filterPeriod.value;
-      if(p === "ALL") return "Toute période";
-      if(p === "THIS_MONTH") return "Ce mois";
-      if(p === "LAST_MONTH") return "Mois dernier";
-      if(p === "THIS_YEAR") return "Cette année";
-      if(p === "CUSTOM"){
-        const a = dateFrom.value ? fmtDateFR(dateFrom.value) : "—";
-        const b = dateTo.value ? fmtDateFR(dateTo.value) : "—";
-        return `${a} → ${b}`;
-      }
-      return "—";
     }
 
     function render(){
@@ -598,10 +598,7 @@
     }
 
     function toCSV(rows){
-      const header = [
-        "date_reglement","invoice_number","client","logement","mode","reference","montant","note"
-      ];
-
+      const header = ["date_reglement","invoice_number","client","logement","mode","reference","montant","note"];
       const escCSV = (v)=>{
         const s = String(v ?? "");
         if(/[",;\n]/.test(s)) return `"${s.replaceAll('"','""')}"`;
@@ -609,7 +606,6 @@
       };
 
       const lines = [header.join(";")];
-
       for(const p of rows){
         const row = [
           fmtDateFR(p.dateObj || p.dateMs),
@@ -621,10 +617,8 @@
           String(Number(p.amount)||0),
           p.note || ""
         ].map(escCSV).join(";");
-
         lines.push(row);
       }
-
       return "\uFEFF" + lines.join("\n");
     }
 
@@ -640,9 +634,7 @@
       setTimeout(()=> URL.revokeObjectURL(url), 600);
     }
 
-    function openPrint(){
-      window.print();
-    }
+    function openPrint(){ window.print(); }
 
     async function loadCompanyName(uid){
       try{
@@ -655,12 +647,18 @@
       }
     }
 
+    function isInvoiceLike(x){
+      if(x?.listable === false) return false;
+      const type = String(x?.type || "").toUpperCase().trim();
+      const docType = String(x?.docType || "").toUpperCase().trim();
+      return (type === "INVOICE" || docType === "INVOICE" || docType === "INVOICE_EVENT");
+    }
+
     async function loadInvoices(uid){
-      // Factures listables, puis subcollection payments (MVP)
+      // ✅ moins strict: on récupère les salesDocuments listables, puis filtre INVOICE-like côté client
       const qInv = query(
         collection(db, "salesDocuments"),
         where("conciergerieUid","==",uid),
-        where("type","==","INVOICE"),
         where("listable","==",true),
         orderBy("createdAt","desc"),
         limit(MAX_INVOICES)
@@ -669,7 +667,8 @@
       showAlert(`Chargement des factures… (max ${MAX_INVOICES})`, true);
 
       const snap = await getDocs(qInv);
-      invoices = snap.docs.map(d => ({ id:d.id, ...(d.data()||{}) }));
+      const allDocs = snap.docs.map(d => ({ id:d.id, ...(d.data()||{}) }));
+      invoices = allDocs.filter(isInvoiceLike);
 
       if(!invoices.length){
         payments = [];
@@ -700,16 +699,14 @@
           const sPay = await getDocs(qPay);
           payDocs = sPay.docs.map(d => ({ id:d.id, ...(d.data()||{}) }));
         }catch(e){
-          // fallback sans index payments/dateReglement
           const sPay = await getDocs(payCol);
           payDocs = sPay.docs.map(d => ({ id:d.id, ...(d.data()||{}) }));
-          // on limite quand même côté client
           payDocs = payDocs.slice(0, MAX_PAYMENTS_PER_INVOICE);
         }
 
         for(const p of payDocs){
           const ms = toMs(p.dateReglement || p.createdAt);
-          if(!ms) continue; // ✅ ignore paiements sans date
+          if(!ms) continue;
 
           out.push({
             invoiceDocId: invId,
@@ -753,10 +750,7 @@
       }
     }
 
-    filterPeriod.addEventListener("change", ()=>{
-      setCustomDatesVisible();
-      render();
-    });
+    filterPeriod.addEventListener("change", ()=>{ setCustomDatesVisible(); render(); });
     filterYear.addEventListener("change", render);
     searchInput.addEventListener("input", render);
     dateFrom.addEventListener("change", render);
@@ -783,7 +777,7 @@
       helloLine.textContent = "Bonjour,";
       companyLine.textContent = await loadCompanyName(user.uid);
 
-      setCustomDatesVisible();
+      applyUrlFilters();
       hideAlert();
 
       try{
