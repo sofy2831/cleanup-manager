@@ -498,7 +498,7 @@
           <button class="btn primary" id="markSentBtn" type="button">Marquer “Envoyé”</button>
         </div>
 
-        <!-- ===== Publier au propriétaire (même modale, bloc séparé) ===== -->
+        <!-- ===== Publier au propriétaire ===== -->
         <div class="ownerBox" id="ownerBox">
           <div class="ownerHead">
             <div class="t">Publier au propriétaire (lecture seule)</div>
@@ -784,12 +784,10 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
     }
 
     function isQuoteAlreadyPublishedToOwner(d){
-      // ici on assume que "publié propriétaire" = ownerVisible true (et ownerUid présent)
       return d?.ownerVisible === true && !!String(d?.ownerUid || "").trim();
     }
 
     function buildOwnerQuoteLink(docId){
-      // owner=1 comme facture-apercu : owner-only UX, page déjà existante côté owner (à toi de gérer l’accès)
       const u = new URL("devis-apercu.html", location.href);
       u.searchParams.set("docId", String(docId||"").trim());
       u.searchParams.set("owner","1");
@@ -866,7 +864,7 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
         ? "Déjà publié : le propriétaire le voit déjà. (Tu peux recopier le lien.)"
         : "Publier rend le devis visible côté propriétaire (ownerUid + ownerVisible).";
 
-      publishOwnerBtn.disabled = alreadyPub; // on bloque le republish (comme factures)
+      publishOwnerBtn.disabled = alreadyPub;
       copyOwnerLinkBtn.disabled = false;
     }
 
@@ -909,7 +907,6 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
           ? Number(d.totalTTC)
           : Number(computeTotals(d).ttc) || 0;
 
-        // 1) write on sales doc
         await updateDoc(doc(db,"salesDocuments", quoteDocId), {
           ownerUid,
           ownerVisible: true,
@@ -917,7 +914,6 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
           updatedAt: serverTimestamp()
         });
 
-        // 2) request for owner inbox
         await upsertOwnerRequestForQuote({
           quoteDocId,
           ownerUid,
@@ -925,15 +921,13 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
           number: num,
           homeName,
           totalTTC,
-          note: "" // optionnel : ici rien, tu peux ajouter un champ dans la modale si tu veux
+          note: ""
         });
 
-        // UI + refresh local state
         const ownerLink = buildOwnerQuoteLink(quoteDocId);
         showPubSuccess("Devis", ownerLink);
         showModalAlert("✅ Publié côté propriétaire.", true);
 
-        // refresh list & modal
         await loadQuotes(currentUser.uid);
         const fresh = allItems.find(x => x.id === quoteDocId);
         if(fresh){
@@ -954,7 +948,6 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
         await navigator.clipboard.writeText(String(text||""));
         return true;
       }catch{
-        // fallback
         try{
           const ta = document.createElement("textarea");
           ta.value = String(text||"");
@@ -994,7 +987,6 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
       const totals = computeTotals(d);
       const st = statusLabel(d);
 
-      const alreadySent = isQuoteAlreadySent(d);
       const isAccepted = quoteStatusRaw(d) === "ACCEPTED";
       const canAccept = !isAccepted;
 
@@ -1193,18 +1185,15 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
         afterMailBtn.setAttribute("aria-disabled","true");
       }
 
-      // client "Envoyé"
       const alreadySent = isQuoteAlreadySent(d);
       markSentBtn.disabled = alreadySent;
       markSentBtn.title = alreadySent ? "Déjà marqué comme envoyé." : "";
 
-      // owner publish block
       ownerBox.style.display = "";
       hydrateOwnerBox(d).then(()=>{
         refreshOwnerPublishUI(d);
       });
 
-      // owner link (always computed; may be unusable if not publishable)
       const ownerLink = buildOwnerQuoteLink(item.id);
       pubOpenOwnerBtn.href = ownerLink;
 
@@ -1226,7 +1215,6 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
         await loadQuotes(currentUser.uid);
         applySearch();
 
-        // refresh modal data
         const fresh = allItems.find(x => x.id === modalQuote.id);
         if(fresh){
           modalQuote = { id: fresh.id, data: fresh.data };
