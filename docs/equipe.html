@@ -1,4 +1,4 @@
-<!-- docs/equipe.html (FINAL — KPI par agent (mois) + liste prestations/logements ; no logout ; logique finishAll via opStatus/proofToken) -->
+<!-- docs/equipe.html (FINAL — KPI par agent (mois) + total facturé + liste prestations/logements ; no logout ; finishAll via opStatus/status) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -315,6 +315,11 @@
       const d = new Date(ms);
       return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
     }
+    function fmtMoney2(n){
+      const x = Number(n);
+      if(!Number.isFinite(x)) return "—";
+      return x.toLocaleString("fr-FR",{minimumFractionDigits:2, maximumFractionDigits:2}) + " €";
+    }
 
     function monthBounds(which){
       const now = new Date();
@@ -348,23 +353,23 @@
       return t || "—";
     }
 
-    // ✅ “Fait par agent” = finishAll de agent.html => opStatus/status + proofToken
+    // ✅ “Fait par agent” = finishAll de agent.html => opStatus/status
     function isDoneEvent(e){
-  const st = String(e?.status || "").toUpperCase().trim();
-  const op = String(e?.opStatus || "").toUpperCase().trim();
+      const st = String(e?.status || "").toUpperCase().trim();
+      const op = String(e?.opStatus || "").toUpperCase().trim();
 
-  const DONE_STATUSES = new Set([
-    "REALISEE",
-    "A_VALIDER",
-    "VALIDEE"
-  ]);
+      const DONE_STATUSES = new Set([
+        "REALISEE",
+        "A_VALIDER",
+        "VALIDEE"
+      ]);
 
-  const okStatus = DONE_STATUSES.has(st) || DONE_STATUSES.has(op);
+      const okStatus = DONE_STATUSES.has(st) || DONE_STATUSES.has(op);
 
-  const hasAgent = !!(e?.agentDoneByEmail || e?.assignedToEmail);
+      const hasAgent = !!(e?.agentDoneByEmail || e?.assignedToEmail);
 
-  return okStatus && hasAgent;
-}
+      return okStatus && hasAgent;
+    }
 
     function pickDoneMs(e){
       // pas de agentDoneAt dans events => on prend updatedAt sinon createdAt
@@ -400,16 +405,18 @@
     let rawRows = [];
 
     function groupByAgent(rows){
-      const m = new Map(); // key -> {name,email,items:[]}
+      const m = new Map(); // key -> {agentName,agentEmail,items:[], totalAmount}
       for(const r of rows){
         const key = r.agentEmail || r.agentName;
         if(!m.has(key)){
-          m.set(key, { agentName:r.agentName, agentEmail:r.agentEmail, items:[] });
+          m.set(key, { agentName:r.agentName, agentEmail:r.agentEmail, items:[], totalAmount:0 });
         }
-        m.get(key).items.push(r);
+        const g = m.get(key);
+        g.items.push(r);
       }
       for(const g of m.values()){
         g.items.sort((a,b)=>(b.doneMs||0)-(a.doneMs||0));
+        g.totalAmount = g.items.reduce((s,x)=> s + (Number(x.amount)||0), 0);
       }
       return Array.from(m.values()).sort((a,b)=>{
         const ca = a.items.length, cb = b.items.length;
@@ -423,7 +430,7 @@
     function matchesSearch(r){
       const q = norm(searchInput.value || "");
       if(!q) return true;
-      const hay = norm([r.agentName,r.agentEmail,r.homeName,r.homeCity,r.type].filter(Boolean).join(" "));
+      const hay = norm([r.agentName,r.agentEmail,r.homeName,r.homeCity,r.homeType,r.type].filter(Boolean).join(" "));
       return hay.includes(q);
     }
 
@@ -461,8 +468,9 @@
               <div class="aName">${esc(g.agentName || "Agent")}</div>
               <div class="aMail">${esc(g.agentEmail || "—")}</div>
             </div>
-            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-              <span class="badge ok">${esc(String(g.items.length))} prestation(s)</span>
+            <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
+              <span class="badge ok">${esc(String(g.items.length))} prestation(s) • ${esc(fmtMoney2(g.totalAmount))}</span>
+              <span class="tiny">Total facturé au client (≠ paie agent)</span>
             </div>
           </div>
 
@@ -471,12 +479,12 @@
               <div class="line">
                 <span class="mut">${esc(r.date)}${r.time ? " " + esc(r.time) : ""}</span>
                 <div class="txt">
-                 <div class="ellipsis">
-  ${esc(r.type)} — 
-  ${esc(r.homeName)}
-  ${r.homeType ? " (" + esc(r.homeType) + ")" : ""}
-  ${r.homeCity ? " • " + esc(r.homeCity) : ""}
-</div>
+                  <div class="ellipsis">
+                    ${esc(r.type)} —
+                    ${esc(r.homeName)}
+                    ${r.homeType ? " (" + esc(r.homeType) + ")" : ""}
+                    ${r.homeCity ? " • " + esc(r.homeCity) : ""}
+                  </div>
                 </div>
               </div>
             `).join("")}
@@ -517,6 +525,7 @@
         if(!agentEmail && !agentName) continue;
 
         const doneMs = pickDoneMs(e);
+
         out.push({
           doneMs,
           date: fmtDate(doneMs),
@@ -527,6 +536,7 @@
           homeCity: String(e?.homeCity || e?.city || "").trim(),
           homeType: String(e?.homeType || "").trim(),
           type: typeLabel(e),
+          amount: Number(e?.total || 0)  // ✅ total facturé au client
         });
       }
 
@@ -571,5 +581,3 @@
   </script>
 </body>
 </html>
-
-
