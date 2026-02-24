@@ -480,9 +480,6 @@ const bizLinesEl = document.getElementById("bizLines");
 const clientNameEl = document.getElementById("clientName");
 const clientLinesEl = document.getElementById("clientLines");
 
-const thTVA = document.getElementById("thTVA");
-const linesTbody = document.getElementById("linesTbody");
-const linesCards = document.getElementById("linesCards");
 const totalsBox = document.getElementById("totalsBox");
 
 const invoiceNotesEl = document.getElementById("invoiceNotes");
@@ -496,7 +493,19 @@ const penaltyTextEl  = document.getElementById("penaltyText");
 const showCancelChk  = document.getElementById("showCancelChk");
 const backLink = document.getElementById("backLink");
 
-const templateSel = document.getElementById("templateSel");
+/* ===== LIGNES (mode devis) ===== */
+const productSelect = document.getElementById("productSelect");
+const otherNameWrap = document.getElementById("otherNameWrap");
+const otherNameEl   = document.getElementById("otherName");
+const qtyEl         = document.getElementById("qty");
+const unitEl        = document.getElementById("unit");
+const unitPriceEl   = document.getElementById("unitPrice");
+const lineNoteEl    = document.getElementById("lineNote");
+const lineClientNoteEl = document.getElementById("lineClientNote");
+const addLineBtn    = document.getElementById("addLineBtn");
+const suggestLine   = document.getElementById("suggestLine");
+const suggestText   = document.getElementById("suggestText");
+const linesList     = document.getElementById("linesList");
 
 /* ===== Helpers ===== */
 function showAlert(msg, ok=false){
@@ -517,10 +526,9 @@ function esc(s){
     .replaceAll('"',"&quot;")
     .replaceAll("'","&#039;");
 }
-function fmtMoney(v){
-  const n = Number(v);
-  if(!Number.isFinite(n)) return "—";
-  return n.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " €";
+function money(n){
+  const x = Number(n || 0);
+  return x.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " €";
 }
 function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
 function getParam(name){
@@ -604,7 +612,9 @@ async function ensureInvoiceNumber(uid, year){
   return `FA${year}-${padded}`;
 }
 
-/* ========= Produits (suggestions) ========= */
+/* ========= Produits (suggestions) =========
+   NOTE : si tu as déjà ./catalog-templates.js, remplace tout ce bloc par import { PRODUCT_TEMPLATES } ...
+*/
 const PRODUCT_TEMPLATES = [
   { key:"MENAGE_STANDARD", label:"Ménage standard (inter-séjour)", category:"Ménage", suggested:"Ex. 45€ (studio/1ch) • 60€ (2ch) • 75€ (3ch) • 90€ (4ch)", unit:"unité" },
   { key:"MENAGE_INTERMEDIAIRE", label:"Ménage intermédiaire (long séjour)", category:"Ménage", suggested:"Ex. +15€ supplément Long séjour", unit:"supplément" },
@@ -639,8 +649,200 @@ const PRODUCT_TEMPLATES = [
   { key:"__OTHER__", label:"Autre (texte libre)", category:"Autre", suggested:"", unit:"unité" }
 ];
 
-function getProductByKey(key){
-  return PRODUCT_TEMPLATES.find(p=>p.key===key) || PRODUCT_TEMPLATES[0];
+function getTemplateByKey(key){
+  return (Array.isArray(PRODUCT_TEMPLATES) ? PRODUCT_TEMPLATES : [])
+    .find(p => String(p.key||"").trim() === String(key||"").trim()) || null;
+}
+
+function buildProductSelect(){
+  const templates = Array.isArray(PRODUCT_TEMPLATES) ? PRODUCT_TEMPLATES : [];
+  const byCat = new Map();
+  for(const p of templates){
+    const cat = p.category || "Autre";
+    if(!byCat.has(cat)) byCat.set(cat, []);
+    byCat.get(cat).push(p);
+  }
+  const catOrder = ["Ménage","Linge","Check-in/out","Maintenance","Messages voyageurs","Kits & consommables","Essentiel","Autre"];
+  const cats = Array.from(byCat.keys()).sort((a,b)=>{
+    const ia = catOrder.indexOf(a), ib = catOrder.indexOf(b);
+    if(ia === -1 && ib === -1) return a.localeCompare(b);
+    if(ia === -1) return 1;
+    if(ib === -1) return -1;
+    return ia - ib;
+  });
+
+  const optGroups = cats.map(cat=>{
+    const opts = (byCat.get(cat) || []).map(p=>{
+      const key = String(p.key||"").trim();
+      const label = String(p.label||"").trim();
+      return `<option value="${esc(key)}">${esc(label)}</option>`;
+    }).join("");
+    return `<optgroup label="${esc(cat)}">${opts}</optgroup>`;
+  }).join("");
+
+  const otherOpt = `<option value="__OTHER__">Autre… (saisie manuelle)</option>`;
+  productSelect.innerHTML = `<option value="">— Choisir —</option>` + optGroups + otherOpt;
+}
+
+function refreshSuggest(){
+  const key = (productSelect.value || "").trim();
+  if(key === "__OTHER__"){
+    suggestLine.style.display = "none";
+    otherNameWrap.style.display = "block";
+    return;
+  }
+  otherNameWrap.style.display = "none";
+  otherNameEl.value = "";
+
+  const t = getTemplateByKey(key);
+  if(!t){ suggestLine.style.display = "none"; return; }
+  if(t.suggested){
+    suggestText.textContent = t.suggested;
+    suggestLine.style.display = "block";
+  }else{
+    suggestLine.style.display = "none";
+  }
+}
+productSelect.addEventListener("change", refreshSuggest);
+
+function validateLineInputs(){
+  const key = (productSelect.value || "").trim();
+  if(!key) return { ok:false, msg:"Choisis une prestation." };
+
+  let label = "";
+  if(key === "__OTHER__"){
+    label = (otherNameEl.value || "").trim();
+    if(!label) return { ok:false, msg:"Renseigne le nom du produit (Autre)." };
+  }else{
+    const t = getTemplateByKey(key);
+    label = (t?.label || "").trim();
+    if(!label) return { ok:false, msg:"Prestation invalide." };
+  }
+
+  const qty = Number(qtyEl.value);
+  if(!(qty > 0)) return { ok:false, msg:"Quantité invalide." };
+
+  const unit = (unitEl.value || "").trim() || "unité";
+
+  const unitPrice = Number(unitPriceEl.value);
+  if(!(unitPrice >= 0)) return { ok:false, msg:"Prix unitaire invalide." };
+
+  const note = (lineNoteEl.value || "").trim();
+  const clientNote = (lineClientNoteEl.value || "").trim();
+  const tpl = (key && key !== "__OTHER__") ? getTemplateByKey(key) : null;
+  const suggested = (tpl?.suggested || "");
+
+  return {
+    ok:true,
+    line: {
+      label,
+      ref: key === "__OTHER__" ? "" : key,
+      qty,
+      unit,
+      unitPrice,
+      note,
+      clientNote,
+      suggestedPrice: suggested
+    }
+  };
+}
+
+function resetLineBuilder(){
+  productSelect.value = "";
+  otherNameWrap.style.display = "none";
+  otherNameEl.value = "";
+  qtyEl.value = "1";
+  unitEl.value = "unité";
+  unitPriceEl.value = "";
+  lineNoteEl.value = "";
+  lineClientNoteEl.value = "";
+  suggestLine.style.display = "none";
+}
+
+function renderLines(){
+  linesList.innerHTML = "";
+
+  const lines = Array.isArray(newDocData?.lines) ? newDocData.lines : [];
+
+  if(!lines.length){
+    const empty = document.createElement("div");
+    empty.style.background = "#fff";
+    empty.style.borderRadius = "14px";
+    empty.style.boxShadow = "0 3px 10px rgba(0,0,0,.06)";
+    empty.style.padding = "11px";
+    empty.style.color = "#666";
+    empty.style.fontWeight = "900";
+    empty.style.fontSize = "12px";
+    empty.textContent = "Aucune ligne. Ajoute au moins une prestation.";
+    linesList.appendChild(empty);
+    return;
+  }
+
+  const bp = (profileData?.businessProfile || {});
+  const tvaEnabled = !!bp.vat?.enabled;
+  const tvaRate = Number.isFinite(Number(bp.vat?.rate)) ? Number(bp.vat.rate) : 0;
+
+  lines.forEach((l, idx)=>{
+    const qty = Number(l?.qty)||0;
+    const up = Number(l?.unitPrice)||0;
+    const ht = qty * up;
+    const tva = tvaEnabled ? (ht * tvaRate) : 0;
+    const ttc = ht + tva;
+
+    const div = document.createElement("div");
+    div.className = "line-item";
+    div.innerHTML = `
+      <div style="min-width:0;">
+        <div class="li-title">${esc(l.label || "Ligne")}</div>
+        <div class="li-sub">
+          <b>${esc(String(qty))}</b> ${esc(l.unit || "unité")}
+          • ${esc(money(up))} / ${esc(l.unit || "unité")}
+          • total <b>${esc(money(ttc))}</b>
+        </div>
+        ${l.clientNote ? `<div class="li-note client"><b>Note client :</b> ${esc(l.clientNote)}</div>` : ``}
+        ${l.note ? `<div class="li-note"><b>Interne :</b> ${esc(l.note)}</div>` : ``}
+        ${l.suggestedPrice ? `<div class="li-note"><b>Conseillé :</b> ${esc(l.suggestedPrice)}</div>` : ``}
+      </div>
+      <div class="li-actions">
+        <button class="mini-btn red" type="button" data-del="${idx}">Supprimer</button>
+      </div>
+    `;
+    linesList.appendChild(div);
+  });
+
+  linesList.querySelectorAll("button[data-del]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      const i = Number(btn.getAttribute("data-del"));
+      newDocData.lines.splice(i, 1);
+      renderLines();
+      refreshTotalsUI();
+    });
+  });
+}
+
+function refreshTotalsUI(){
+  const bp = (profileData?.businessProfile || {});
+  const tvaEnabled = !!bp.vat?.enabled;
+  const tvaRate = Number.isFinite(Number(bp.vat?.rate)) ? Number(bp.vat.rate) : 0;
+
+  const lines = Array.isArray(newDocData?.lines) ? newDocData.lines : [];
+  const totals = computeTotals(lines, tvaEnabled, tvaRate);
+
+  newDocData.totalHT  = Number(totals.ht)||0;
+  newDocData.totalTVA = Number(totals.tva)||0;
+  newDocData.totalTTC = Number(totals.ttc)||0;
+
+  const html = [];
+  html.push(`<div class="r"><span>Total facture (TTC)</span><span>${esc(money(totals.ttc))}</span></div>`);
+
+  if(tvaEnabled){
+    html.push(`<div class="r"><span class="mut">HT ${esc(money(totals.ht))} • TVA ${Math.round(tvaRate*100)}% ${esc(money(totals.tva))}</span><span class="mut">${esc(lines.length)} ligne${lines.length>1?"s":""}</span></div>`);
+  }else{
+    const ex = String(bp?.tvaExemptionText || "TVA non applicable (art. 293B CGI)").trim();
+    html.push(`<div class="r"><span class="mut">${esc(ex)}</span><span class="mut">${esc(lines.length)} ligne${lines.length>1?"s":""}</span></div>`);
+  }
+
+  totalsBox.innerHTML = html.join("");
 }
 
 /* ===== State ===== */
@@ -713,234 +915,6 @@ function getStayPeriod(d){
   if(a && !b) return { label:`À partir du ${a}` };
   if(!a && b) return { label:`Jusqu’au ${b}` };
   return { label:"—" };
-}
-
-/* ===== Lines editable ===== */
-function ensureLineShape(l){
-  return {
-    label: String(l?.label||"").trim(),
-    qty: Number(l?.qty)||0,
-    unit: String(l?.unit||"unité").trim(),
-    unitPrice: Number(l?.unitPrice)||0,
-    category: String(l?.category||"").trim(),
-    note: String(l?.note||"").trim(),
-    suggestedPrice: String(l?.suggestedPrice||"").trim()
-  };
-}
-
-function renderLinesAndTotals(){
-  const bp = (profileData?.businessProfile || {});
-  const tvaEnabled = !!bp.vat?.enabled;
-  const tvaRate = Number.isFinite(Number(bp.vat?.rate)) ? Number(bp.vat.rate) : 0;
-
-  thTVA.style.display = tvaEnabled ? "" : "none";
-  linesTbody.innerHTML = "";
-  linesCards.innerHTML = "";
-
-  const lines = Array.isArray(newDocData?.lines) ? newDocData.lines : [];
-
-  lines.forEach((raw, idx)=>{
-    const l = ensureLineShape(raw);
-    const lineHT = (Number(l.qty)||0) * (Number(l.unitPrice)||0);
-    const lineTVA = tvaEnabled ? (lineHT * tvaRate) : 0;
-    const lineTTC = lineHT + lineTVA;
-
-    const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td class="designation">
-        <div style="display:flex; flex-direction:column; gap:6px;">
-          <input data-k="label" data-i="${idx}" value="${esc(l.label)}"
-                 style="width:100%; padding:8px 10px; border:1px solid #D3C7FF; border-radius:10px; font-weight:900;">
-          <input data-k="category" data-i="${idx}" value="${esc(l.category)}" placeholder="Catégorie"
-                 style="width:100%; padding:8px 10px; border:1px solid #D3C7FF; border-radius:10px; font-weight:800; font-size:12.5px;">
-          <div style="font-size:12px; color:#666; font-weight:800;">
-            <span style="display:inline-block; padding:3px 8px; border-radius:999px; background:rgba(248,244,255,.8); border:1px solid rgba(122,92,255,0.18);">
-              Suggestion : ${esc(l.suggestedPrice || "—")}
-            </span>
-          </div>
-        </div>
-      </td>
-      <td class="num">
-        <input data-k="qty" data-i="${idx}" type="number" step="1" min="0" value="${esc(l.qty)}"
-               style="width:86px; text-align:right; padding:8px 10px; border:1px solid #D3C7FF; border-radius:10px; font-weight:900;">
-      </td>
-      <td>
-        <input data-k="unit" data-i="${idx}" value="${esc(l.unit)}"
-               style="width:110px; padding:8px 10px; border:1px solid #D3C7FF; border-radius:10px; font-weight:900;">
-      </td>
-      <td class="num">
-        <input data-k="unitPrice" data-i="${idx}" type="number" step="0.01" min="0" value="${esc(l.unitPrice)}"
-               style="width:110px; text-align:right; padding:8px 10px; border:1px solid #D3C7FF; border-radius:10px; font-weight:900;">
-      </td>
-      <td class="num" style="${tvaEnabled ? "" : "display:none;"}">${tvaEnabled ? esc(fmtMoney(lineTVA)) : ""}</td>
-      <td class="num">
-        <div style="display:flex; align-items:center; justify-content:flex-end; gap:8px;">
-          <span>${esc(fmtMoney(lineTTC))}</span>
-          <button data-del="${idx}" title="Supprimer"
-                  style="border:1px solid rgba(0,0,0,0.08); background:#fff; border-radius:10px; padding:6px 10px; cursor:pointer; font-weight:1000;">
-            ✕
-          </button>
-        </div>
-      </td>
-    `;
-    linesTbody.appendChild(tr);
-
-    const card = document.createElement("div");
-    card.className = "lineCard";
-    card.innerHTML = `
-      <div class="t">${esc(l.label || "Ligne")}</div>
-      <div class="g">
-        <div><b>Qté</b> : ${esc(l.qty)}</div>
-        <div><b>Unité</b> : ${esc(l.unit)}</div>
-        <div><b>PU HT</b> : ${esc(fmtMoney(l.unitPrice))}</div>
-        <div><b>Total TTC</b> : ${esc(fmtMoney(lineTTC))}</div>
-      </div>
-      <div style="margin-top:8px; font-size:12px; color:#666; font-weight:800;">
-        Suggestion : ${esc(l.suggestedPrice || "—")}
-      </div>
-      <div style="margin-top:8px; display:flex; gap:8px;">
-        <button data-del="${idx}" style="flex:1; border:2px solid var(--violet-main); background:#fff; color:var(--violet-main); border-radius:999px; padding:9px 12px; font-weight:1000; cursor:pointer;">
-          Supprimer
-        </button>
-      </div>
-    `;
-    linesCards.appendChild(card);
-  });
-
-  const totals = computeTotals(lines, tvaEnabled, tvaRate);
-  newDocData.totalHT  = Number(totals.ht)||0;
-  newDocData.totalTVA = Number(totals.tva)||0;
-  newDocData.totalTTC = Number(totals.ttc)||0;
-
-  const html = [];
-  if(tvaEnabled){
-    html.push(`<div class="r"><span>Total HT</span><span>${esc(fmtMoney(totals.ht))}</span></div>`);
-    html.push(`<div class="r"><span>TVA (${Math.round(tvaRate*100)}%)</span><span>${esc(fmtMoney(totals.tva))}</span></div>`);
-    html.push(`<div class="r"><span>Total TTC</span><span>${esc(fmtMoney(totals.ttc))}</span></div>`);
-  }else{
-    html.push(`<div class="r"><span>Total TTC</span><span>${esc(fmtMoney(totals.ttc))}</span></div>`);
-    const ex = String(bp?.tvaExemptionText || "TVA non applicable (art. 293B CGI)").trim();
-    if(ex) html.push(`<div class="mutedLine">${esc(ex)}</div>`);
-  }
-  totalsBox.innerHTML = html.join("");
-
-  const issued = !!String(newDocData?.invoiceNumber||"").trim();
-  Array.from(document.querySelectorAll('[data-k],[data-del]')).forEach(el=>{
-    if(el.matches('[data-k]')) el.disabled = issued;
-    if(el.matches('[data-del]')) el.disabled = issued;
-  });
-}
-
-function attachLinesEvents(){
-  document.addEventListener("input", (e)=>{
-    const t = e.target;
-    if(!(t instanceof HTMLElement)) return;
-    const k = t.getAttribute("data-k");
-    const i = t.getAttribute("data-i");
-    if(!k || i===null) return;
-    if(!newDocData?.lines) return;
-
-    const idx = Number(i);
-    const l = ensureLineShape(newDocData.lines[idx] || {});
-    if(k === "qty" || k === "unitPrice") l[k] = Number(t.value)||0;
-    else l[k] = String(t.value||"");
-    newDocData.lines[idx] = l;
-    renderLinesAndTotals();
-  });
-
-  document.addEventListener("click", (e)=>{
-    const t = e.target;
-    if(!(t instanceof HTMLElement)) return;
-    const del = t.getAttribute("data-del");
-    if(del===null) return;
-    if(!newDocData?.lines) return;
-
-    const idx = Number(del);
-    newDocData.lines.splice(idx, 1);
-    if(newDocData.lines.length === 0){
-      newDocData.lines.push(ensureLineShape({ label:"", qty:1, unit:"unité", unitPrice:0, category:"Autre", suggestedPrice:"" }));
-    }
-    renderLinesAndTotals();
-  });
-}
-
-/* ===== UI inject : bouton + ajout produit ===== */
-function injectAddButtons(){
-  if(document.getElementById("addLineBtn")) return;
-
-  const host = templateSel?.closest("div")?.parentElement;
-  if(!host) return;
-
-  // renomme le label "Modèle" en "Produit (suggestion)" si tu veux (sans toucher HTML)
-  const lab = host.querySelector('label[for="templateSel"]');
-  if(lab) lab.textContent = "Produit (suggestion)";
-
-  const row = document.createElement("div");
-  row.style.display = "flex";
-  row.style.gap = "8px";
-  row.style.marginTop = "6px";
-
-  const addProd = document.createElement("button");
-  addProd.id = "addProductBtn";
-  addProd.type = "button";
-  addProd.className = "btn";
-  addProd.textContent = "+ Ajouter ce produit";
-  addProd.style.flex = "1";
-
-  const addLine = document.createElement("button");
-  addLine.id = "addLineBtn";
-  addLine.type = "button";
-  addLine.className = "btn";
-  addLine.textContent = "+ Ligne libre";
-  addLine.style.flex = "1";
-
-  addProd.addEventListener("click", ()=>{
-    addProductLine(templateSel.value);
-  });
-
-  addLine.addEventListener("click", ()=>{
-    if(!newDocData?.lines) newDocData.lines = [];
-    newDocData.lines.push(ensureLineShape({
-      label:"",
-      qty:1,
-      unit:"unité",
-      unitPrice:0,
-      category:"Autre",
-      suggestedPrice:""
-    }));
-    renderLinesAndTotals();
-  });
-
-  row.appendChild(addProd);
-  row.appendChild(addLine);
-  host.appendChild(row);
-}
-
-function fillProductSelect(){
-  templateSel.innerHTML = PRODUCT_TEMPLATES
-    .map(p=>`<option value="${esc(p.key)}">${esc(p.category)} — ${esc(p.label)}</option>`)
-    .join("");
-  templateSel.value = PRODUCT_TEMPLATES[0]?.key || "";
-}
-
-function addProductLine(productKey){
-  if(!newDocData?.lines) newDocData.lines = [];
-  const p = getProductByKey(productKey);
-
-  // Autre => label vide pour obliger le texte libre (mais on met catégorie)
-  const isOther = p.key === "__OTHER__";
-
-  newDocData.lines.push(ensureLineShape({
-    label: isOther ? "" : p.label,
-    qty: 1,
-    unit: p.unit || "unité",
-    unitPrice: 0,
-    category: p.category || "Autre",
-    suggestedPrice: p.suggested || "",
-    note: ""
-  }));
-
-  renderLinesAndTotals();
 }
 
 /* ===== Paiement / pénalités / conditions / banque ===== */
@@ -1022,7 +996,8 @@ function renderRecap(){
   renderBusinessHeader();
   renderClientHeader(newDocData);
 
-  renderLinesAndTotals();
+  renderLines();
+  refreshTotalsUI();
   renderPaymentControls();
   renderPenalty();
   renderConditions();
@@ -1104,7 +1079,6 @@ function buildNewDraftFromSource(sourceInvoice, creditDoc){
     sourceKind: "REDO",
     invoiceKind: "RECREATED",
 
-    // compat + cohérence
     redoFromInvoiceId: String(src.id || ""),
     redoFromInvoiceNumber: String(src.invoiceNumber || ""),
     replacesInvoiceDocId: String(src.id || ""),
@@ -1161,12 +1135,14 @@ function lockUI(locked){
   saveBtn.disabled = !!locked;
   previewBtn.disabled = !!locked;
 
-  templateSel.disabled = !!locked || issued;
-
-  const addProdBtn = document.getElementById("addProductBtn");
-  const addLineBtn = document.getElementById("addLineBtn");
-  if(addProdBtn) addProdBtn.disabled = !!locked || issued;
-  if(addLineBtn) addLineBtn.disabled = !!locked || issued;
+  addLineBtn.disabled = !!locked || issued;
+  productSelect.disabled = !!locked || issued;
+  qtyEl.disabled = !!locked || issued;
+  unitEl.disabled = !!locked || issued;
+  unitPriceEl.disabled = !!locked || issued;
+  lineNoteEl.disabled = !!locked || issued;
+  lineClientNoteEl.disabled = !!locked || issued;
+  otherNameEl.disabled = !!locked || issued;
 
   payModeSel.disabled = issued || !!locked;
   payTermSel.disabled = issued || !!locked;
@@ -1174,7 +1150,31 @@ function lockUI(locked){
   penaltyTextEl.disabled = issued || !!locked;
   showCancelChk.disabled = issued || !!locked;
   invoiceNotesEl.disabled = issued || !!locked;
+
+  // disable delete buttons (lines cards)
+  Array.from(document.querySelectorAll("button[data-del]")).forEach(b=>{
+    b.disabled = issued || !!locked;
+  });
 }
+
+/* ===== Builder actions ===== */
+addLineBtn.addEventListener("click", ()=>{
+  hideAlert();
+  if(!newDocData) return;
+  const issued = !!String(newDocData?.invoiceNumber||"").trim();
+  if(issued) return;
+
+  const v = validateLineInputs();
+  if(!v.ok) return showAlert(v.msg);
+
+  if(!Array.isArray(newDocData.lines)) newDocData.lines = [];
+  newDocData.lines.push(v.line);
+
+  showAlert("✅ Ligne ajoutée.", true);
+  renderLines();
+  refreshTotalsUI();
+  resetLineBuilder();
+});
 
 /* ===== Preview / Save ===== */
 previewBtn.addEventListener("click", ()=>{
@@ -1223,6 +1223,9 @@ saveBtn.addEventListener("click", async ()=>{
     newDocData.invoicePenaltyText = String(penaltyTextEl.value || "").trim();
     newDocData.invoiceShowCancellation = !!showCancelChk.checked;
 
+    // totals recalcul
+    refreshTotalsUI();
+
     // snapshot
     newDocData.businessSnapshot = buildBusinessSnapshotFromProfile();
 
@@ -1259,8 +1262,6 @@ backLink.href = "factures-liste.html";
 backLink.textContent = "← Retour";
 
 /* ===== Boot ===== */
-attachLinesEvents();
-
 onAuthStateChanged(auth, async (user)=>{
   if(!user){ location.href="login.html?role=conciergerie"; return; }
   currentUser = user;
@@ -1278,18 +1279,19 @@ onAuthStateChanged(auth, async (user)=>{
 
     buildNewDraftFromSource(sourceDocData, creditDoc);
 
-    // init select produits + boutons
-    fillProductSelect();
-    injectAddButtons();
-
-    // par défaut : on ajoute une première ligne “produit” (sinon page vide)
-    addProductLine(templateSel.value);
+    // init produits + builder
+    buildProductSelect();
+    refreshSuggest();
+    resetLineBuilder();
 
     // init pénalités
     if(!String(penaltyTextEl.value||"").trim()){
       penaltyTextEl.value = String(newDocData.invoicePenaltyText||"").trim() || getPenaltyTemplate(penaltyModeSel.value);
     }
     showCancelChk.checked = true;
+
+    // OPTION : tu peux laisser vide, ou pré-remplir une ligne “MENAGE_STANDARD”
+    // newDocData.lines.push({ label:"Ménage standard (inter-séjour)", ref:"MENAGE_STANDARD", qty:1, unit:"unité", unitPrice:0, note:"", clientNote:"", suggestedPrice:"Ex. 45€..." });
 
     lockUI(false);
     renderRecap();
