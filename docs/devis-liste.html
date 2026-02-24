@@ -1,4 +1,4 @@
-<!-- docs/devis-liste.html (FINAL — QUOTE list: modale Envoyer alignée factures-liste + ✅ Publier au propriétaire (ownerUid+ownerVisible) + lien owner) -->
+<!-- docs/devis-liste.html (FINAL — QUOTE list + Publier au propriétaire (ownerUid+ownerVisible) SANS requests) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -231,7 +231,7 @@
       .page{ padding-bottom: 24px; }
     }
 
-    /* ===== MODAL ENVOYER (style factures: bandeau succès) ===== */
+    /* ===== MODAL ENVOYER ===== */
     .modalMask{
       position:fixed; inset:0; z-index:200;
       background:rgba(0,0,0,.35);
@@ -326,7 +326,7 @@
       white-space:nowrap;
     }
 
-    /* ===== SECTION OWNER PUBLISH (dans modale envoyer) ===== */
+    /* ===== SECTION OWNER PUBLISH ===== */
     .ownerBox{
       margin-top:12px;
       border:1px solid rgba(122,92,255,0.18);
@@ -552,7 +552,7 @@
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
       doc, getDoc, collection, query, where, orderBy, limit, getDocs,
-      updateDoc, serverTimestamp, setDoc
+      updateDoc, serverTimestamp
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const alertBox = document.getElementById("alertBox");
@@ -794,36 +794,6 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
       return u.toString();
     }
 
-    function requestIdForQuote(docId){
-      return `quote_${String(docId||"").trim()}`;
-    }
-
-    async function upsertOwnerRequestForQuote({ quoteDocId, ownerUid, ownerDocId, number, homeName, totalTTC, note }){
-      const rid = requestIdForQuote(quoteDocId);
-      const rRef = doc(db,"requests", rid);
-      const exists = await getDoc(rRef);
-
-      const payload = {
-        type: "quote",
-        status: "sent",
-        conciergerieUid: currentUser.uid,
-        ownerUid: String(ownerUid||"").trim(),
-        ownerDocId: String(ownerDocId||"").trim(),
-        salesDocId: String(quoteDocId||"").trim(),
-        number: String(number||"").trim(),
-        homeName: String(homeName||"").trim(),
-        totalTTC: Number(totalTTC)||0,
-        note: String(note||"").trim(),
-        updatedAt: serverTimestamp()
-      };
-
-      if(exists.exists()){
-        await setDoc(rRef, payload, { merge:true });
-      }else{
-        await setDoc(rRef, { ...payload, createdAt: serverTimestamp() }, { merge:true });
-      }
-    }
-
     function resetSendSuccess(){
       sendSuccessHint.textContent = "—";
       sendSuccessBar.style.display = "none";
@@ -901,27 +871,11 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
 
       publishOwnerBtn.disabled = true;
       try{
-        const num = String(d?.quoteNumber || d?.number || "").trim() || "—";
-        const homeName = String(d?.homeName || d?.homeTitle || d?.home || "").trim();
-        const totalTTC = Number.isFinite(Number(d?.totalTTC))
-          ? Number(d.totalTTC)
-          : Number(computeTotals(d).ttc) || 0;
-
         await updateDoc(doc(db,"salesDocuments", quoteDocId), {
           ownerUid,
           ownerVisible: true,
           ownerPublishedAt: serverTimestamp(),
           updatedAt: serverTimestamp()
-        });
-
-        await upsertOwnerRequestForQuote({
-          quoteDocId,
-          ownerUid,
-          ownerDocId,
-          number: num,
-          homeName,
-          totalTTC,
-          note: ""
         });
 
         const ownerLink = buildOwnerQuoteLink(quoteDocId);
