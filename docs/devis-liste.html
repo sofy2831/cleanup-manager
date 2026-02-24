@@ -1,4 +1,4 @@
-<!-- docs/devis-liste.html (FINAL — QUOTE list: modale Envoyer alignée factures-liste, sans sentAt/ownerVisible) -->
+<!-- docs/devis-liste.html (FINAL — QUOTE list: modale Envoyer alignée factures-liste + ✅ Publier au propriétaire (ownerUid+ownerVisible) + lien owner) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -132,6 +132,11 @@
       box-shadow:0 3px 10px rgba(0,0,0,.06);
       white-space:nowrap;
       user-select:none;
+      text-decoration:none;
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      gap:8px;
     }
     .btn.primary{
       background:linear-gradient(90deg,var(--violet),var(--violet2));
@@ -295,7 +300,6 @@
       justify-content:flex-end;
     }
 
-    /* success bar (comme factures) */
     .successBar{
       display:none;
       margin-bottom:10px;
@@ -321,6 +325,60 @@
       font-size:11px; font-weight:1000; color:#4b2cff;
       white-space:nowrap;
     }
+
+    /* ===== SECTION OWNER PUBLISH (dans modale envoyer) ===== */
+    .ownerBox{
+      margin-top:12px;
+      border:1px solid rgba(122,92,255,0.18);
+      border-radius:16px;
+      padding:12px;
+      background:#fff;
+      box-shadow:0 3px 10px rgba(0,0,0,.06);
+    }
+    .ownerHead{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+      flex-wrap:wrap;
+    }
+    .ownerHead .t{
+      font-weight:1000;
+      font-size:12.5px;
+      color:#111;
+    }
+    .ownerMeta{
+      margin-top:8px;
+      display:grid;
+      grid-template-columns: 120px 1fr;
+      gap:8px 10px;
+      font-size:12px;
+      font-weight:900;
+      color:#333;
+    }
+    .ownerMeta div:nth-child(odd){ color:#666; font-weight:900; }
+    .ownerHint{
+      margin-top:10px;
+      font-size:12px;
+      font-weight:850;
+      color:#444;
+      line-height:1.35;
+    }
+
+    .modalAlert{
+      display:none;
+      margin-top:10px;
+      padding:10px 12px;
+      border-radius:14px;
+      background:#fff;
+      border-left:5px solid var(--bad);
+      box-shadow:0 3px 10px rgba(0,0,0,.06);
+      font-size:12px;
+      font-weight:900;
+      color:#444;
+      white-space:pre-wrap;
+    }
+    .modalAlert.ok{ border-left-color: var(--ok); }
 
     /* ===== MODAL ACCEPT ===== */
     .textBlock2{
@@ -394,10 +452,10 @@
       </div>
       <div class="modalBody">
 
-        <!-- ✅ bandeau succès -->
+        <!-- ✅ bandeau succès (client) -->
         <div id="sendSuccessBar" class="successBar" role="status" aria-live="polite">
           <div class="left">
-            <span>✅ Devis marqué comme envoyé.</span>
+            <span>✅ Devis marqué comme envoyé (client).</span>
             <span class="pillMini" id="sendSuccessHint">—</span>
           </div>
           <div class="right">
@@ -405,6 +463,20 @@
             <button class="btn primary" id="afterCloseBtn" type="button">Fermer</button>
           </div>
         </div>
+
+        <!-- ✅ bandeau succès (proprio) -->
+        <div id="pubSuccessBar" class="successBar" role="status" aria-live="polite">
+          <div class="left">
+            <span>✅ Publié côté propriétaire.</span>
+            <span class="pillMini" id="pubSuccessHint">—</span>
+          </div>
+          <div class="right">
+            <a class="btn" id="pubOpenOwnerBtn" href="#" target="_blank" rel="noopener">Ouvrir côté propriétaire</a>
+            <button class="btn primary" id="pubAfterCloseBtn" type="button">Fermer</button>
+          </div>
+        </div>
+
+        <div id="modalAlert" class="modalAlert"></div>
 
         <div class="mini" id="modalSubtitleSend" style="margin-bottom:10px;">—</div>
 
@@ -422,11 +494,33 @@
         <div class="textBlock" id="sendText">—</div>
 
         <div class="copyRow">
-          <!-- ✅ on garde toujours possible l'email -->
           <a class="btn" id="openEmailSendBtn" href="#" target="_blank" rel="noopener">Préparer email</a>
-          <!-- ✅ bouton "Envoyer" = marquer SENT (désactivé si déjà envoyé) -->
           <button class="btn primary" id="markSentBtn" type="button">Marquer “Envoyé”</button>
         </div>
+
+        <!-- ===== Publier au propriétaire (même modale, bloc séparé) ===== -->
+        <div class="ownerBox" id="ownerBox">
+          <div class="ownerHead">
+            <div class="t">Publier au propriétaire (lecture seule)</div>
+            <span class="pillMini" id="ownerPublishState">—</span>
+          </div>
+
+          <div class="ownerMeta">
+            <div>Propriétaire</div><div id="oName">—</div>
+            <div>Email</div><div id="oEmail">—</div>
+            <div>OwnerDocId</div><div id="oDocId">—</div>
+          </div>
+
+          <div class="ownerHint" id="ownerHint">
+            Ce bouton rend le devis visible côté propriétaire (via ownerUid + ownerVisible).
+          </div>
+
+          <div class="copyRow">
+            <button class="btn" id="copyOwnerLinkBtn" type="button">Copier lien</button>
+            <button class="btn primary" id="publishOwnerBtn" type="button">Publier</button>
+          </div>
+        </div>
+
       </div>
     </div>
   </div>
@@ -458,7 +552,7 @@
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
       doc, getDoc, collection, query, where, orderBy, limit, getDocs,
-      updateDoc, serverTimestamp
+      updateDoc, serverTimestamp, setDoc
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const alertBox = document.getElementById("alertBox");
@@ -488,13 +582,28 @@
     const sEmail = document.getElementById("sEmail");
     const sQuote = document.getElementById("sQuote");
     const sAmount = document.getElementById("sAmount");
-
     const markSentBtn = document.getElementById("markSentBtn");
 
     const sendSuccessBar = document.getElementById("sendSuccessBar");
     const sendSuccessHint = document.getElementById("sendSuccessHint");
     const afterMailBtn = document.getElementById("afterMailBtn");
     const afterCloseBtn = document.getElementById("afterCloseBtn");
+
+    // Publish (owner) inside same modal
+    const modalAlert = document.getElementById("modalAlert");
+    const ownerBox = document.getElementById("ownerBox");
+    const ownerPublishState = document.getElementById("ownerPublishState");
+    const oName = document.getElementById("oName");
+    const oEmail = document.getElementById("oEmail");
+    const oDocId = document.getElementById("oDocId");
+    const ownerHint = document.getElementById("ownerHint");
+    const publishOwnerBtn = document.getElementById("publishOwnerBtn");
+    const copyOwnerLinkBtn = document.getElementById("copyOwnerLinkBtn");
+
+    const pubSuccessBar = document.getElementById("pubSuccessBar");
+    const pubSuccessHint = document.getElementById("pubSuccessHint");
+    const pubOpenOwnerBtn = document.getElementById("pubOpenOwnerBtn");
+    const pubAfterCloseBtn = document.getElementById("pubAfterCloseBtn");
 
     // Accept modal
     const modalMaskAccept = document.getElementById("modalMaskAccept");
@@ -509,6 +618,7 @@
     let vatRate = 0;
 
     let modalQuote = null; // {id, data}
+    let conciergerieCompanyName = "Conciergerie";
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -520,6 +630,18 @@
       alertBox.classList.remove("ok");
       alertBox.textContent = "";
     }
+
+    function showModalAlert(msg, ok=false){
+      modalAlert.style.display = "block";
+      modalAlert.classList.toggle("ok", !!ok);
+      modalAlert.textContent = msg;
+    }
+    function hideModalAlert(){
+      modalAlert.style.display = "none";
+      modalAlert.classList.remove("ok");
+      modalAlert.textContent = "";
+    }
+
     function esc(s){
       return String(s||"")
         .replaceAll("&","&amp;")
@@ -568,10 +690,8 @@
     }
 
     function isQuoteAlreadySent(d){
-      // ✅ on ne dépend PAS de sentAt/ownerVisible
       const st = quoteStatusRaw(d);
       if(st === "SENT") return true;
-      // si tu as déjà l'historique
       if(d?.quoteFollowup?.lastSentAt) return true;
       return false;
     }
@@ -601,7 +721,7 @@ Veuillez trouver ci-joint le devis ${num} d’un montant total de ${amount}.
 Merci de nous confirmer votre accord par retour de mail.
 
 Cordialement,
-${String(pageTitleEl.textContent||"").trim() || "Votre conciergerie"}`.trim();
+${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
     }
 
     function openModal(maskEl){
@@ -614,12 +734,255 @@ ${String(pageTitleEl.textContent||"").trim() || "Votre conciergerie"}`.trim();
     }
 
     async function markQuoteSent(docId){
-      // ✅ pas de sentAt/ownerVisible => zero friction avec tes données
       await updateDoc(doc(db,"salesDocuments",docId), {
         quoteStatus: "SENT",
         "quoteFollowup.lastSentAt": serverTimestamp(),
         updatedAt: serverTimestamp()
       });
+    }
+
+    // ===== Owner publish helpers (devis) =====
+    function getOwnerDocIdFromQuote(d){
+      const a = String(d?.clientOwnerDocId || "").trim();
+      if(a) return a;
+      const b = String(d?.ownerDocId || d?.clientOwnerId || d?.ownerId || "").trim();
+      if(b) return b;
+      return "";
+    }
+    function getOwnerUidFast(d){
+      const a = String(d?.ownerUid || "").trim();
+      if(a) return a;
+      const b = String(d?.clientOwnerUid || "").trim();
+      if(b) return b;
+      return "";
+    }
+
+    async function resolveOwnerUidFromOwnerDoc(ownerDocId){
+      if(!ownerDocId) return "";
+      try{
+        const snap = await getDoc(doc(db,"owners", ownerDocId));
+        if(!snap.exists()) return "";
+        const o = snap.data() || {};
+        return String(o.ownerUid || o.userUid || "").trim();
+      }catch{ return ""; }
+    }
+
+    async function resolveOwnerNameEmail(ownerDocId, fallbackName, fallbackEmail){
+      let name = String(fallbackName || "Propriétaire").trim() || "Propriétaire";
+      let email = String(fallbackEmail || "").trim();
+      if(!ownerDocId) return { name, email };
+
+      try{
+        const snap = await getDoc(doc(db,"owners", ownerDocId));
+        if(snap.exists()){
+          const o = snap.data() || {};
+          name = String(o.displayName || o.name || name).trim() || name;
+          email = String(o.email || email).trim();
+        }
+      }catch{}
+      return { name, email };
+    }
+
+    function isQuoteAlreadyPublishedToOwner(d){
+      // ici on assume que "publié propriétaire" = ownerVisible true (et ownerUid présent)
+      return d?.ownerVisible === true && !!String(d?.ownerUid || "").trim();
+    }
+
+    function buildOwnerQuoteLink(docId){
+      // owner=1 comme facture-apercu : owner-only UX, page déjà existante côté owner (à toi de gérer l’accès)
+      const u = new URL("devis-apercu.html", location.href);
+      u.searchParams.set("docId", String(docId||"").trim());
+      u.searchParams.set("owner","1");
+      return u.toString();
+    }
+
+    function requestIdForQuote(docId){
+      return `quote_${String(docId||"").trim()}`;
+    }
+
+    async function upsertOwnerRequestForQuote({ quoteDocId, ownerUid, ownerDocId, number, homeName, totalTTC, note }){
+      const rid = requestIdForQuote(quoteDocId);
+      const rRef = doc(db,"requests", rid);
+      const exists = await getDoc(rRef);
+
+      const payload = {
+        type: "quote",
+        status: "sent",
+        conciergerieUid: currentUser.uid,
+        ownerUid: String(ownerUid||"").trim(),
+        ownerDocId: String(ownerDocId||"").trim(),
+        salesDocId: String(quoteDocId||"").trim(),
+        number: String(number||"").trim(),
+        homeName: String(homeName||"").trim(),
+        totalTTC: Number(totalTTC)||0,
+        note: String(note||"").trim(),
+        updatedAt: serverTimestamp()
+      };
+
+      if(exists.exists()){
+        await setDoc(rRef, payload, { merge:true });
+      }else{
+        await setDoc(rRef, { ...payload, createdAt: serverTimestamp() }, { merge:true });
+      }
+    }
+
+    function resetSendSuccess(){
+      sendSuccessHint.textContent = "—";
+      sendSuccessBar.style.display = "none";
+    }
+    function showSendSuccess(hint){
+      sendSuccessHint.textContent = String(hint || "OK").trim() || "OK";
+      sendSuccessBar.style.display = "flex";
+    }
+
+    function resetPubSuccess(){
+      pubSuccessHint.textContent = "—";
+      pubSuccessBar.style.display = "none";
+      pubOpenOwnerBtn.href = "#";
+    }
+    function showPubSuccess(hint, ownerLink){
+      pubSuccessHint.textContent = String(hint || "OK").trim() || "OK";
+      pubOpenOwnerBtn.href = ownerLink || "#";
+      pubSuccessBar.style.display = "flex";
+    }
+
+    function refreshOwnerPublishUI(d){
+      const ownerDocId = getOwnerDocIdFromQuote(d);
+      const alreadyPub = isQuoteAlreadyPublishedToOwner(d);
+
+      ownerPublishState.textContent = alreadyPub ? "déjà publié" : (ownerDocId ? "prêt" : "impossible");
+      ownerPublishState.style.borderColor = alreadyPub ? "rgba(27,143,77,0.25)" : "rgba(122,92,255,0.25)";
+      ownerPublishState.style.background = alreadyPub ? "rgba(27,143,77,0.06)" : "rgba(122,92,255,0.06)";
+      ownerPublishState.style.color = alreadyPub ? "#0f5f31" : "#4b2cff";
+
+      if(!ownerDocId){
+        ownerHint.textContent = "Envoi impossible : ownerDocId / clientOwnerDocId manquant sur ce devis (devis non rattaché à un logement).";
+        publishOwnerBtn.disabled = true;
+        copyOwnerLinkBtn.disabled = true;
+        return;
+      }
+
+      ownerHint.textContent = alreadyPub
+        ? "Déjà publié : le propriétaire le voit déjà. (Tu peux recopier le lien.)"
+        : "Publier rend le devis visible côté propriétaire (ownerUid + ownerVisible).";
+
+      publishOwnerBtn.disabled = alreadyPub; // on bloque le republish (comme factures)
+      copyOwnerLinkBtn.disabled = false;
+    }
+
+    async function publishQuoteToOwner(){
+      hideModalAlert();
+      resetPubSuccess();
+
+      if(!currentUser?.uid) return showModalAlert("Session invalide.");
+      if(!modalQuote?.id) return showModalAlert("Aucun devis sélectionné.");
+
+      const quoteDocId = modalQuote.id;
+      const d = modalQuote.data || {};
+
+      const ownerDocId = getOwnerDocIdFromQuote(d);
+      if(!ownerDocId){
+        refreshOwnerPublishUI(d);
+        return showModalAlert("⛔ Publication impossible : clientOwnerDocId / ownerDocId manquant.", false);
+      }
+
+      let ownerUid = String(getOwnerUidFast(d) || "").trim();
+      if(!ownerUid){
+        ownerUid = await resolveOwnerUidFromOwnerDoc(ownerDocId);
+      }
+      if(!ownerUid){
+        return showModalAlert("⛔ Publication impossible : ownerUid introuvable (owners.ownerUid).", false);
+      }
+
+      if(isQuoteAlreadyPublishedToOwner(d)){
+        refreshOwnerPublishUI(d);
+        const link = buildOwnerQuoteLink(quoteDocId);
+        showPubSuccess("Devis", link);
+        return showModalAlert("ℹ️ Déjà publié. (Lien disponible.)", true);
+      }
+
+      publishOwnerBtn.disabled = true;
+      try{
+        const num = String(d?.quoteNumber || d?.number || "").trim() || "—";
+        const homeName = String(d?.homeName || d?.homeTitle || d?.home || "").trim();
+        const totalTTC = Number.isFinite(Number(d?.totalTTC))
+          ? Number(d.totalTTC)
+          : Number(computeTotals(d).ttc) || 0;
+
+        // 1) write on sales doc
+        await updateDoc(doc(db,"salesDocuments", quoteDocId), {
+          ownerUid,
+          ownerVisible: true,
+          ownerPublishedAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        });
+
+        // 2) request for owner inbox
+        await upsertOwnerRequestForQuote({
+          quoteDocId,
+          ownerUid,
+          ownerDocId,
+          number: num,
+          homeName,
+          totalTTC,
+          note: "" // optionnel : ici rien, tu peux ajouter un champ dans la modale si tu veux
+        });
+
+        // UI + refresh local state
+        const ownerLink = buildOwnerQuoteLink(quoteDocId);
+        showPubSuccess("Devis", ownerLink);
+        showModalAlert("✅ Publié côté propriétaire.", true);
+
+        // refresh list & modal
+        await loadQuotes(currentUser.uid);
+        const fresh = allItems.find(x => x.id === quoteDocId);
+        if(fresh){
+          modalQuote = { id: fresh.id, data: fresh.data };
+          await hydrateOwnerBox(modalQuote.data);
+          refreshOwnerPublishUI(modalQuote.data);
+        }
+
+      }catch(e){
+        console.warn("publishQuoteToOwner failed:", e?.message || e);
+        publishOwnerBtn.disabled = false;
+        showModalAlert("⛔ Erreur publication : " + (e?.message || "inconnue"), false);
+      }
+    }
+
+    async function copyToClipboard(text){
+      try{
+        await navigator.clipboard.writeText(String(text||""));
+        return true;
+      }catch{
+        // fallback
+        try{
+          const ta = document.createElement("textarea");
+          ta.value = String(text||"");
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand("copy");
+          document.body.removeChild(ta);
+          return true;
+        }catch{ return false; }
+      }
+    }
+
+    async function hydrateOwnerBox(d){
+      const ownerDocId = getOwnerDocIdFromQuote(d);
+      oDocId.textContent = ownerDocId || "—";
+
+      if(!ownerDocId){
+        oName.textContent = "—";
+        oEmail.textContent = "—";
+        return;
+      }
+
+      const fallbackName = String(d?.ownerName || d?.clientName || "Propriétaire").trim();
+      const fallbackEmail = String(d?.ownerEmail || d?.clientEmail || "").trim();
+      const meta = await resolveOwnerNameEmail(ownerDocId, fallbackName, fallbackEmail);
+
+      oName.textContent = meta.name || "—";
+      oEmail.textContent = meta.email || "—";
     }
 
     // ====== Render ======
@@ -642,6 +1005,7 @@ ${String(pageTitleEl.textContent||"").trim() || "Votre conciergerie"}`.trim();
           <div class="row1">
             <span class="num">DEVIS N° ${esc(num)}</span>
             <span class="statusPill ${esc(st.cls)}">${esc(st.txt)}</span>
+            ${isQuoteAlreadyPublishedToOwner(d) ? `<span class="statusPill ok">PROPRIO</span>` : ``}
           </div>
           <div class="meta">
             <div><span class="mut">Client :</span> ${esc(client)}${email ? ` <span class="mut">•</span> ${esc(email)}` : ""}</div>
@@ -650,7 +1014,7 @@ ${String(pageTitleEl.textContent||"").trim() || "Votre conciergerie"}`.trim();
         </div>
         <div class="right">
           <button class="btn primary" data-preview="${esc(id)}" type="button">Aperçu</button>
-          <button class="btn" data-send="${esc(id)}" type="button" ${alreadySent ? `aria-disabled="true"` : ""}>Envoyer</button>
+          <button class="btn" data-send="${esc(id)}" type="button">Envoyer</button>
           <button class="btn danger" data-accept="${esc(id)}" type="button" ${canAccept ? "" : `aria-disabled="true"`}>Accepter</button>
         </div>
       `;
@@ -662,7 +1026,6 @@ ${String(pageTitleEl.textContent||"").trim() || "Votre conciergerie"}`.trim();
       });
 
       card.querySelector('button[data-send]')?.addEventListener("click", ()=>{
-        if(alreadySent) return;
         openSendModal({ id, data:d });
       });
 
@@ -728,7 +1091,8 @@ ${String(pageTitleEl.textContent||"").trim() || "Votre conciergerie"}`.trim();
         const hay = [
           d.quoteNumber, d.number,
           d.clientName, d.clientEmail,
-          d.clientCity, d.clientZip
+          d.clientCity, d.clientZip,
+          d.homeName, d.ownerDocId, d.clientOwnerDocId
         ].map(x=>normalize(x)).join(" | ");
         return hay.includes(q);
       });
@@ -747,9 +1111,11 @@ ${String(pageTitleEl.textContent||"").trim() || "Votre conciergerie"}`.trim();
       vatEnabled = !!vat.enabled;
       vatRate = Number.isFinite(Number(vat.rate)) ? Number(vat.rate) : 0;
 
-      pageTitleEl.textContent = cName || "Conciergerie";
-      document.title = `${cName || "Conciergerie"} — Devis`;
-      companyBadge.textContent = cName || "Conciergerie";
+      conciergerieCompanyName = cName || "Conciergerie";
+
+      pageTitleEl.textContent = conciergerieCompanyName;
+      document.title = `${conciergerieCompanyName} — Devis`;
+      companyBadge.textContent = conciergerieCompanyName;
 
       if(logoUrl){
         logoImg.src = logoUrl;
@@ -786,18 +1152,15 @@ ${String(pageTitleEl.textContent||"").trim() || "Votre conciergerie"}`.trim();
     }
 
     // ====== SEND modal ======
-    function resetSendSuccess(){
-      sendSuccessHint.textContent = "—";
-      sendSuccessBar.style.display = "none";
-    }
-    function showSendSuccess(hint){
-      sendSuccessHint.textContent = String(hint || "OK").trim() || "OK";
-      sendSuccessBar.style.display = "flex";
+    function resetAllModalState(){
+      resetSendSuccess();
+      resetPubSuccess();
+      hideModalAlert();
     }
 
     function openSendModal(item){
       modalQuote = item;
-      resetSendSuccess();
+      resetAllModalState();
 
       const d = item.data || {};
       const num = String(d?.quoteNumber || d?.number || "—").trim();
@@ -830,19 +1193,29 @@ ${String(pageTitleEl.textContent||"").trim() || "Votre conciergerie"}`.trim();
         afterMailBtn.setAttribute("aria-disabled","true");
       }
 
-      // ✅ disable markSent if already sent
+      // client "Envoyé"
       const alreadySent = isQuoteAlreadySent(d);
       markSentBtn.disabled = alreadySent;
       markSentBtn.title = alreadySent ? "Déjà marqué comme envoyé." : "";
+
+      // owner publish block
+      ownerBox.style.display = "";
+      hydrateOwnerBox(d).then(()=>{
+        refreshOwnerPublishUI(d);
+      });
+
+      // owner link (always computed; may be unusable if not publishable)
+      const ownerLink = buildOwnerQuoteLink(item.id);
+      pubOpenOwnerBtn.href = ownerLink;
 
       openModal(modalMaskSend);
     }
 
     closeSendBtn.addEventListener("click", ()=> closeModal(modalMaskSend));
     afterCloseBtn.addEventListener("click", ()=> closeModal(modalMaskSend));
+    pubAfterCloseBtn.addEventListener("click", ()=> closeModal(modalMaskSend));
     modalMaskSend.addEventListener("click",(e)=>{ if(e.target===modalMaskSend) closeModal(modalMaskSend); });
 
-    // ✅ Marquer "Envoyé" (FireStore: quoteStatus + quoteFollowup.lastSentAt)
     markSentBtn.addEventListener("click", async ()=>{
       if(!modalQuote?.id) return;
       try{
@@ -850,13 +1223,28 @@ ${String(pageTitleEl.textContent||"").trim() || "Votre conciergerie"}`.trim();
         showSendSuccess("Devis");
         markSentBtn.disabled = true;
 
-        // refresh liste
         await loadQuotes(currentUser.uid);
         applySearch();
+
+        // refresh modal data
+        const fresh = allItems.find(x => x.id === modalQuote.id);
+        if(fresh){
+          modalQuote = { id: fresh.id, data: fresh.data };
+        }
       }catch(e){
         console.warn("markQuoteSent failed:", e?.message || e);
-        showAlert("⛔ " + (e?.message || "Erreur enregistrement statut envoyé."), false);
+        showModalAlert("⛔ " + (e?.message || "Erreur enregistrement statut envoyé."), false);
       }
+    });
+
+    publishOwnerBtn.addEventListener("click", publishQuoteToOwner);
+
+    copyOwnerLinkBtn.addEventListener("click", async ()=>{
+      if(!modalQuote?.id) return;
+      const link = buildOwnerQuoteLink(modalQuote.id);
+      const ok = await copyToClipboard(link);
+      showModalAlert(ok ? "✅ Lien copié." : "⛔ Copie impossible (navigateur).", !!ok);
+      setTimeout(()=> hideModalAlert(), 1200);
     });
 
     // ====== ACCEPT modal ======
