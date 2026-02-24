@@ -1,4 +1,4 @@
-<!-- docs/devis-apercu.html (FINAL — draft=1: sessionStorage prioritaire + fallback Firestore, retour origin, bankLine virement) -->
+<!-- docs/devis-apercu.html (FINAL — owner=1 support + security ownerUid+ownerVisible + backLink owner + forbid owner on draft=1) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -311,24 +311,22 @@
       .sigGrid{ grid-template-columns: 1fr 1fr !important; }
 
       .footer{
-    position: fixed;
-    left: 0;
-    right: 0;
-    bottom: 6mm;              /* <-- au-dessus du bord imprimable */
-    border-top: 1px dashed rgba(0,0,0,0.25);
-    padding-top: 4px;
-    font-size: 10px !important;
-    line-height: 1.2 !important;
-    text-align: center;
-    background:#fff;
-    z-index: 9999;
-  }
-
-            /* réserve de la place pour éviter que le contenu passe derrière le footer */
-  .paper{
-    padding-bottom: 22mm !important;  /* <-- plus large que bottom du footer */
-  }
-}
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 6mm;
+        border-top: 1px dashed rgba(0,0,0,0.25);
+        padding-top: 4px;
+        font-size: 10px !important;
+        line-height: 1.2 !important;
+        text-align: center;
+        background:#fff;
+        z-index: 9999;
+      }
+      .paper{
+        padding-bottom: 22mm !important;
+      }
+    }
   </style>
 </head>
 
@@ -496,7 +494,6 @@
     const footerEl = document.getElementById("footer");
 
     let docData = null;
-    let isDraftPreview = false;
 
     function showError(msg){
       alertBox.style.display = "block";
@@ -710,7 +707,6 @@
     }
 
     function getCreatedDate(d){
-      // draft: on accepte Date string/Date
       try{
         if(d?.createdAt?.toDate?.()) return d.createdAt.toDate();
       }catch{}
@@ -724,7 +720,7 @@
 
     function renderDocHeader(d){
       const qn = String(d?.quoteNumber || "").trim();
-      docTitleEl.textContent = qn ? `DEVIS N° ${qn}` : `DEVIS N° — (BROUILLON)`;
+      docTitleEl.textContent = qn ? `DEVIS N° ${qn}` : `DEVIS N° —`;
 
       const created = getCreatedDate(d);
       const offerDays = Number.isFinite(Number(d?.quoteOfferValidityDays)) ? Number(d.quoteOfferValidityDays) : 30;
@@ -744,7 +740,6 @@
       payModeEl.textContent = `Mode : ${modeLabel(mode)}`;
       payTermEl.textContent = `Délai : ${termLabel(term)}`;
 
-      // banque (afficher seulement si virement + infos présentes)
       const bank = bs?.bank || {};
       const iban = String(bank?.iban || "").trim();
       const bic  = String(bank?.bic || "").trim();
@@ -780,7 +775,6 @@
         cond2.textContent = "";
       }
 
-      // cond3 = texte TVA (utile sur devis imprimé)
       if(!!bs?.vat?.enabled){
         const r = Number.isFinite(Number(bs?.vat?.rate)) ? Number(bs.vat.rate) : 0;
         cond3.innerHTML = `<b>TVA</b> : ${esc(String(Math.round(r*100)))}% (si applicable)`;
@@ -814,38 +808,58 @@
       }
     }
 
-    function setBackLink(docId){
+    function setBackLink(docId, ownerView){
       const origin = getParam("origin");
+      const token = getParam("token");
       if(origin){
         backLink.href = origin;
         return;
       }
-      // fallback propre
+      if(ownerView){
+        backLink.href = token
+          ? `owner-facturation.html?token=${encodeURIComponent(token)}`
+          : `owner-facturation.html`;
+        return;
+      }
       backLink.href = docId ? `devis.html?docId=${encodeURIComponent(docId)}` : "devis-liste.html";
+    }
+
+    function buildOwnerLoginRedirect(){
+      const tok = getParam("token");
+      return "login.html?role=proprietaire" + (tok ? ("&token=" + encodeURIComponent(tok)) : "");
+    }
+    function buildConciergerieLoginRedirect(){
+      return "login.html?role=conciergerie";
     }
 
     printBtn.addEventListener("click", ()=> window.print());
 
     onAuthStateChanged(auth, async (user)=>{
+      const ownerView = (getParam("owner") === "1");
+      const isDraftPreview = (getParam("draft") === "1");
+      const docId = getParam("docId");
+
       if(!user){
-        location.href = "login.html?role=conciergerie";
+        location.href = ownerView ? buildOwnerLoginRedirect() : buildConciergerieLoginRedirect();
         return;
       }
 
-      const docId = getParam("docId");
-      isDraftPreview = (getParam("draft") === "1");
+      setBackLink(docId, ownerView);
 
-      setBackLink(docId);
+      // ⛔ owner ne doit JAMAIS voir un aperçu brouillon (sessionStorage)
+      if(ownerView && isDraftPreview){
+        showError("Aperçu brouillon interdit côté propriétaire.");
+        return;
+      }
 
       try{
         // ===== source data =====
         if(isDraftPreview){
-          // 1) priorité sessionStorage (exactement ce que tu avais sur devis.html)
+          // conciergerie uniquement (ownerView déjà bloqué)
           const draft = loadDraftFromSession();
           if(draft){
             docData = { ...draft };
           }else{
-            // 2) fallback Firestore si sessionStorage vide
             if(!docId){
               showError("Aperçu brouillon introuvable (sessionStorage) et docId manquant.");
               return;
@@ -864,7 +878,7 @@
           }
         }else{
           if(!docId){
-            showError("docId manquant (hors draft=1).");
+            showError("docId manquant.");
             return;
           }
           const snap = await getDoc(doc(db, "salesDocuments", docId));
@@ -874,9 +888,22 @@
           }
           docData = { id: snap.id, ...(snap.data()||{}) };
 
-          if(String(docData.conciergerieUid||"") && String(docData.conciergerieUid) !== String(user.uid)){
-            showError("Accès refusé (document d’une autre conciergerie).");
-            return;
+          if(ownerView){
+            const ownerUid = String(docData.ownerUid || "").trim();
+            const ownerVisible = docData.ownerVisible === true;
+            if(!ownerUid || ownerUid !== String(user.uid)){
+              showError("Accès refusé (ownerUid).");
+              return;
+            }
+            if(!ownerVisible){
+              showError("Document non publié au propriétaire.");
+              return;
+            }
+          }else{
+            if(String(docData.conciergerieUid||"") && String(docData.conciergerieUid) !== String(user.uid)){
+              showError("Accès refusé (document d’une autre conciergerie).");
+              return;
+            }
           }
         }
 
@@ -900,4 +927,3 @@
   </script>
 </body>
 </html>
-
