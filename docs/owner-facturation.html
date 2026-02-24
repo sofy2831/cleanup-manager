@@ -1,4 +1,4 @@
-<!-- docs/owner-facturation.html (FINAL ROBUST — history from salesDocuments ownerUid + ownerVisible=true, pending optional from requests) -->
+<!-- docs/owner-facturation.html (FINAL — OPTION A: Historique ONLY from salesDocuments ownerUid + ownerVisible=true) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -156,11 +156,6 @@
       border-color:transparent; color:#fff;
       box-shadow:0 10px 22px rgba(0,0,0,0.10);
     }
-    .btn.danger{
-      border-color: var(--bad);
-      color: var(--bad);
-    }
-    .btn:disabled{ opacity:.65; cursor:not-allowed; }
 
     .status{
       display:inline-flex;
@@ -219,20 +214,10 @@
     <div class="wrap">
       <section class="card">
         <div class="cardTitle">
-          <span>À valider</span>
-          <span class="tiny" id="pendingCount">—</span>
-        </div>
-       
-        <div class="alert" id="alertPending"></div>
-        <div id="pendingList" class="list"></div>
-      </section>
-
-      <section class="card">
-        <div class="cardTitle">
           <span>Historique</span>
           <span class="tiny" id="historyCount">—</span>
         </div>
-        
+
         <div class="alert" id="alertHistory"></div>
         <div id="historyList" class="list"></div>
       </section>
@@ -251,15 +236,11 @@
   import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
   import {
     doc, getDoc,
-    collection, query, where, orderBy, onSnapshot,
-    updateDoc, serverTimestamp
+    collection, query, where, orderBy, onSnapshot
   } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
-  const pendingList   = document.getElementById("pendingList");
   const historyList   = document.getElementById("historyList");
-  const pendingCount  = document.getElementById("pendingCount");
   const historyCount  = document.getElementById("historyCount");
-  const alertPending  = document.getElementById("alertPending");
   const alertHistory  = document.getElementById("alertHistory");
 
   function showAlert(el, msg, ok=false){
@@ -289,7 +270,7 @@
   }
   function fmt(ts){
     try{
-      const d = ts?.toDate ? ts.toDate() : new Date(ts || Date.now());
+      const d = ts?.toDate ? ts.toDate() : (ts?.seconds ? new Date(ts.seconds*1000) : new Date(ts || Date.now()));
       const dd = String(d.getDate()).padStart(2,"0");
       const mm = String(d.getMonth()+1).padStart(2,"0");
       const yyyy = d.getFullYear();
@@ -327,7 +308,6 @@
   }
 
   let unsubSales = null;
-  let unsubRequests = null;
 
   async function guardOwnerProfile(user){
     const us = await getDoc(doc(db, "users", user.uid));
@@ -345,137 +325,6 @@
     return { ok:true, ownerDocId: od };
   }
 
-  // --------- OPTIONAL requests (accept/refuse) ----------
-  async function setDecision(requestId, status, note=""){
-    const ref = doc(db, "requests", requestId);
-    await updateDoc(ref, {
-      status,
-      decisionNote: note || "",
-      decisionAt: serverTimestamp(),
-      updatedAt: serverTimestamp()
-    });
-  }
-  function buildOpenHrefFromRequest(r){
-    const salesDocId = String(r.salesDocId || r.docId || "").trim();
-    const dtype = String(r.docType || "").toLowerCase();
-    if(!salesDocId) return "";
-    if(dtype === "invoice") return `facture-apercu.html?docId=${encodeURIComponent(salesDocId)}&owner=1`;
-    if(dtype === "quote") return `devis-apercu.html?docId=${encodeURIComponent(salesDocId)}&owner=1`;
-    if(dtype === "credit") return `avoir-apercu.html?docId=${encodeURIComponent(salesDocId)}&owner=1`;
-    return `facture-apercu.html?docId=${encodeURIComponent(salesDocId)}&owner=1`;
-  }
-  function renderPendingRequestRow(r){
-    const type = "Devis";
-    const number = r.number ? `#${esc(r.number)}` : "—";
-    const home = esc(r.homeName || r.home || "—");
-    const total = money(r.totalTTC);
-    const when = fmt(r.createdAt);
-    const note = String(r.note || "").trim();
-    const openHref = buildOpenHrefFromRequest(r);
-
-    const el = document.createElement("div");
-    el.className = "item";
-
-    const bodyLines = [
-      `Logement : ${home}`,
-      `Montant TTC : ${esc(total)}`
-    ];
-    if(note) bodyLines.push(`Message : ${esc(note)}`);
-
-    el.innerHTML = `
-      <div class="meta">
-        <span><b>${esc(type)}</b> • ${number}</span>
-        <span>${esc(when)} <span class="status">à valider</span></span>
-      </div>
-      <p class="msg">${bodyLines.join("\n")}</p>
-      <div class="row">
-        <span></span>
-        <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;">
-          ${openHref ? `<a class="btn" href="${esc(openHref)}">Ouvrir</a>` : ``}
-          <button class="btn primary" data-act="accept">Accepter</button>
-          <button class="btn danger" data-act="refuse">Refuser</button>
-        </div>
-      </div>
-    `;
-
-    const acceptBtn = el.querySelector('[data-act="accept"]');
-    const refuseBtn = el.querySelector('[data-act="refuse"]');
-
-    acceptBtn?.addEventListener("click", async ()=>{
-      if(!confirm("Confirmer l’acceptation de ce devis ?")) return;
-      acceptBtn.disabled = true; refuseBtn.disabled = true;
-      try{
-        await setDecision(r.id, "accepted", "");
-      }catch(err){
-        console.error(err);
-        showAlert(alertPending, "Erreur acceptation : " + (err?.message || "inconnue"));
-      }finally{
-        acceptBtn.disabled = false; refuseBtn.disabled = false;
-      }
-    });
-
-    refuseBtn?.addEventListener("click", async ()=>{
-      const note = prompt("Motif du refus (optionnel) :", "") ?? "";
-      if(!confirm("Confirmer le refus ?")) return;
-      acceptBtn.disabled = true; refuseBtn.disabled = true;
-      try{
-        await setDecision(r.id, "refused", note.trim());
-      }catch(err){
-        console.error(err);
-        showAlert(alertPending, "Erreur refus : " + (err?.message || "inconnue"));
-      }finally{
-        acceptBtn.disabled = false; refuseBtn.disabled = false;
-      }
-    });
-
-    return el;
-  }
-
-  function listenOptionalRequests(uid){
-    if(unsubRequests) unsubRequests();
-    pendingList.innerHTML = "";
-    pendingCount.textContent = "0";
-    hideAlert(alertPending);
-
-    const qb = query(
-      collection(db, "requests"),
-      where("ownerUid", "==", uid),
-      where("type", "==", "billing"),
-      where("status", "==", "pending_owner")
-    );
-
-    unsubRequests = onSnapshot(qb, (snap)=>{
-      const items = snap.docs.map(d => ({ id:d.id, ...(d.data()||{}) }))
-        .filter(x => String(x.docType||"").toLowerCase() === "quote");
-
-      pendingCount.textContent = String(items.length);
-      pendingList.innerHTML = "";
-
-      if(!items.length){
-        pendingList.innerHTML = `
-          <div class="item">
-            <div class="meta"><span>Aucun devis à valider</span><span>—</span></div>
-           
-          </div>
-        `;
-      }else{
-        for(const r of items){
-          pendingList.appendChild(renderPendingRequestRow(r));
-        }
-      }
-    }, (err)=>{
-      console.warn("requests listener:", err?.message || err);
-      pendingCount.textContent = "—";
-      pendingList.innerHTML = `
-        <div class="item">
-          <div class="meta"><span>À valider indisponible</span><span>—</span></div>
-          <p class="msg">La partie “validation” n’est pas activée (rules/index/collection). Aucun blocage : l’historique reste disponible.</p>
-        </div>
-      `;
-    });
-  }
-
-  // --------- HISTORY from salesDocuments (source of truth) ----------
   function buildOpenHrefFromSales(d){
     const id = String(d.id || "").trim();
     if(!id) return "";
@@ -497,14 +346,13 @@
     const when = fmt(d.createdAt || d.updatedAt);
     const openHref = buildOpenHrefFromSales(d);
 
-    const status =
-      String(d.type || "").toUpperCase().trim() === "INVOICE"
-        ? statusPill(d.invoiceStatus || d.commercialStatus || "")
-        : `<span class="status">${esc(String(d.quoteStatus || d.commercialStatus || "—").toLowerCase())}</span>`;
+    const isInvoice = String(d.type || "").toUpperCase().trim() === "INVOICE";
+    const status = isInvoice
+      ? statusPill(d.invoiceStatus || d.commercialStatus || "")
+      : `<span class="status">${esc(String(d.quoteStatus || d.commercialStatus || "—").toLowerCase())}</span>`;
 
     const el = document.createElement("div");
     el.className = "item";
-
     el.innerHTML = `
       <div class="meta">
         <span><b>${esc(type)}</b> • ${number}</span>
@@ -530,7 +378,6 @@
     historyList.innerHTML = "";
     historyCount.textContent = "—";
 
-    // ✅ IMPORTANT: ownerVisible == true est requis par la rule (owner read = published)
     const qs = query(
       collection(db, "salesDocuments"),
       where("ownerUid", "==", uid),
@@ -548,7 +395,7 @@
         historyList.innerHTML = `
           <div class="item">
             <div class="meta"><span>Aucun document</span><span>—</span></div>
-            <p class="msg">Aucune facture/avoir publié pour le moment.</p>
+            <p class="msg">Aucun devis/facture/avoir publié pour le moment.</p>
           </div>
         `;
       }else{
@@ -558,11 +405,12 @@
       }
 
       resetUnreadBilling();
-
     }, (err)=>{
       console.error(err);
       const msg = String(err?.message || "");
-      if(msg.toLowerCase().includes("index")){
+      const low = msg.toLowerCase();
+
+      if(low.includes("index")){
         showAlert(
           alertHistory,
           "⛔ Index Firestore manquant.\n" +
@@ -570,7 +418,7 @@
           "Puis recharge.",
           false
         );
-      }else if(msg.toLowerCase().includes("permission")){
+      }else if(low.includes("permission")){
         showAlert(
           alertHistory,
           "⛔ Permission refusée sur salesDocuments.\n" +
@@ -594,12 +442,7 @@
     if(!g.ok) return;
 
     resetUnreadBilling();
-
-    // ✅ history = salesDocuments (obligatoire)
     listenSalesHistory(user.uid);
-
-    // ✅ pending = requests (optionnel, ne doit jamais bloquer)
-    listenOptionalRequests(user.uid);
   });
 
   window.addEventListener("focus", ()=> resetUnreadBilling());
@@ -607,6 +450,3 @@
 
 </body>
 </html>
-
-
-
