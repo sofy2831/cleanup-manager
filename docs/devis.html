@@ -1,4 +1,4 @@
-<!-- docs/devis.html (FINAL — mapping client: displayName + email + address1/2 + zip + city | FIX ids + FIX client inputs) -->
+<!-- docs/devis.html (FINAL — owners picker uses owners.fullname + owners.emailLower + owners.address.{street,address2,zip,city} | FIX ids + FIX client inputs) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -322,10 +322,10 @@
           <button class="btnline" type="button" id="clearClientBtn">↺ Nouveau client</button>
         </div>
         <div class="hintline">
-          <span class="sugg">Astuce : cherche par nom ou email, puis sélectionne pour pré-remplir.</span>
+          <span class="sugg">Astuce : cherche par nom, email, ville, CP ou adresse. Puis sélectionne pour pré-remplir.</span>
         </div>
 
-        <label for="clientDisplayNameInput">Nom (displayName) *</label>
+        <label for="clientDisplayNameInput">Nom *</label>
         <input id="clientDisplayNameInput" type="text" placeholder="Nom du client">
 
         <label for="clientEmailInput">Email *</label>
@@ -542,7 +542,7 @@
         <button type="button" id="ownerCloseBtn" class="mini-btn red">✕</button>
       </div>
 
-      <div class="modalHint">Recherche sur ta collection <b>owners</b> (nom ou email). Puis clique pour pré-remplir le client.</div>
+      <div class="modalHint">Recherche sur ta collection <b>owners</b> (nom, email, adresse, CP, ville). Puis clique pour pré-remplir le client.</div>
 
       <div class="searchbarModal" title="Recherche">
         <span class="s-ico">🔎</span>
@@ -581,7 +581,7 @@
     const pageTitleEl = document.getElementById("pageTitle");
     const bankKv = document.getElementById("bankKv");
 
-    // ✅ FIX ids (matching HTML)
+    // FIX ids (matching HTML)
     const clientDisplayNameInput = document.getElementById("clientDisplayNameInput");
     const clientEmailInput = document.getElementById("clientEmailInput");
     const clientAddress1Input = document.getElementById("clientAddress1Input");
@@ -701,14 +701,14 @@
       clientCityInput.value = "";
     }
 
-    // ✅ mapping client = displayName + email + address1/2 + zip + city
-    function fillClientFromOwner(o){
-      clientDisplayNameInput.value = String(o?.displayName || o?.name || o?.ownerName || o?.fullName || "").trim();
-      clientEmailInput.value = normalizeEmail(String(o?.email || o?.ownerEmail || ""));
-      clientAddress1Input.value = String(o?.address1 || o?.address?.street || o?.street || "").trim();
-      clientAddress2Input.value = String(o?.address2 || o?.address?.extra || o?.extra || "").trim();
-      clientZipInput.value = String(o?.zip || o?.address?.zip || "").trim();
-      clientCityInput.value = String(o?.city || o?.address?.city || "").trim();
+    // ✅ mapping owners -> client inputs (owners schema)
+    function fillClientFromOwner(owner){
+      clientDisplayNameInput.value = String(owner?.fullname || "").trim();
+      clientEmailInput.value = normalizeEmail(String(owner?.emailLower || owner?.email || ""));
+      clientAddress1Input.value = String(owner?.address?.street || "").trim();
+      clientAddress2Input.value = String(owner?.address?.address2 || "").trim();
+      clientZipInput.value = String(owner?.address?.zip || "").trim();
+      clientCityInput.value = String(owner?.address?.city || "").trim();
     }
 
     // Query sans orderBy => évite index composite
@@ -727,32 +727,31 @@
 
         const list = snap.docs.map(d=>({ id:d.id, ...(d.data()||{}) }));
 
-        const filtered = list.filter(client => {
-  const name = String(
-    client.displayName || 
-    client.name || 
-    client.ownerName || 
-    client.fullName || 
-    ""
-  ).toLowerCase();
+        const filtered = list.filter(owner => {
+          const name = String(owner.fullname || "").toLowerCase();
+          const email = String(owner.emailLower || owner.email || "").toLowerCase();
+          const addr = [
+            owner.address?.street,
+            owner.address?.address2,
+            owner.address?.zip,
+            owner.address?.city
+          ].filter(Boolean).join(" ").toLowerCase();
 
-  const email = String(
-    client.email || 
-    client.ownerEmail || 
-    ""
-  ).toLowerCase();
+          return name.includes(q) || email.includes(q) || addr.includes(q);
+        }).slice(0, 30);
 
-  return name.includes(q) || email.includes(q);
-}).slice(0, 30);
-
-        return filtered.map(o=>({
-          id: o.id,
-          displayName: String(o.displayName || o.name || o.ownerName || o.fullName || "").trim(),
-          email: String(o.email || o.ownerEmail || "").trim(),
-          address1: String(o.address1 || o.address?.street || o.street || "").trim(),
-          address2: String(o.address2 || o.address?.extra || o.extra || "").trim(),
-          zip: String(o.zip || o.address?.zip || "").trim(),
-          city: String(o.city || o.address?.city || "").trim()
+        // on renvoie EXACTEMENT le shape owners
+        return filtered.map(owner => ({
+          id: owner.id,
+          fullname: String(owner.fullname || "").trim(),
+          emailLower: String(owner.emailLower || "").trim(),
+          email: String(owner.email || "").trim(),
+          address: {
+            street: String(owner.address?.street || "").trim(),
+            address2: String(owner.address?.address2 || "").trim(),
+            zip: String(owner.address?.zip || "").trim(),
+            city: String(owner.address?.city || "").trim(),
+          }
         }));
       }catch(e){
         console.error(e);
@@ -763,7 +762,7 @@
     function renderOwnerResults(arr){
       ownerResults.innerHTML = "";
       if(!arr.length){
-        ownerResults.innerHTML = `<div class="resultBtn" style="cursor:default;"><div class="a">Aucun résultat</div><div class="b">Vérifie le nom / email, ou crée le client manuellement.</div></div>`;
+        ownerResults.innerHTML = `<div class="resultBtn" style="cursor:default;"><div class="a">Aucun résultat</div><div class="b">Vérifie la saisie, ou crée le client manuellement.</div></div>`;
         return;
       }
 
@@ -772,9 +771,9 @@
         btn.type = "button";
         btn.className = "resultBtn";
         btn.innerHTML = `
-          <div class="a">${esc(o.displayName || "—")}</div>
-          <div class="b">${esc(o.email || "")}</div>
-          <div class="c">${esc([o.address1, o.zip, o.city].filter(Boolean).join(" • "))}</div>
+          <div class="a">${esc(o.fullname || "—")}</div>
+          <div class="b">${esc(o.emailLower || o.email || "")}</div>
+          <div class="c">${esc([o.address?.street, o.address?.zip, o.address?.city].filter(Boolean).join(" • "))}</div>
         `;
         btn.addEventListener("click", ()=>{
           fillClientFromOwner(o);
@@ -1034,7 +1033,7 @@
       clearClientBtn.disabled = !!locked;
     }
 
-    // ✅ client mapping in quote = displayName + email + address1/2 + zip + city
+    // client mapping in quote = displayName + email + address1/2 + zip + city
     function readClientInputs(){
       return {
         clientDisplayName: (clientDisplayNameInput.value || "").trim(),
@@ -1047,7 +1046,6 @@
     }
 
     function renderClientInputsFromDoc(d){
-      // compat: accepte anciens champs clientName, mais préfère clientDisplayName
       clientDisplayNameInput.value = String(d.clientDisplayName || d.clientName || "").trim();
       clientEmailInput.value = String(d.clientEmail || "").trim();
       clientAddress1Input.value = String(d.clientAddress1 || "").trim();
@@ -1332,7 +1330,7 @@
 
       const client = readClientInputs();
       if(!client.clientDisplayName || !client.clientEmail){
-        throw new Error("Client : nom (displayName) + email obligatoires (création devis).");
+        throw new Error("Client : nom + email obligatoires (création devis).");
       }
 
       const newRef = doc(collection(db, "salesDocuments"));
@@ -1352,9 +1350,8 @@
         quoteStatus: "DRAFT",
         commercialStatus: "DEVIS",
 
-        // ✅ on stocke les champs habituels + le champ displayName (compat)
         clientDisplayName: client.clientDisplayName,
-        clientName: client.clientDisplayName,  // compat avec le reste de l'app si elle lit clientName
+        clientName: client.clientDisplayName,  // compat
         clientEmail: client.clientEmail,
         clientAddress1: client.clientAddress1,
         clientAddress2: client.clientAddress2,
@@ -1392,7 +1389,7 @@
 
       const client = readClientInputs();
       if(!client.clientDisplayName || !client.clientEmail){
-        throw new Error("Client : nom (displayName) + email obligatoires.");
+        throw new Error("Client : nom + email obligatoires.");
       }
       if(requireLines && !lines.length){
         throw new Error("Ajoute au moins une ligne au devis.");
@@ -1587,5 +1584,3 @@
   </script>
 </body>
 </html>
-
-
