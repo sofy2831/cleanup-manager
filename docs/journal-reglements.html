@@ -1,4 +1,4 @@
-<!-- docs/journal-reglements.html (FINAL v2.2 — HARDEN: no-blank crash + loading progress + print window + sort/filter/export consistent) -->
+<!-- docs/journal-reglements.html (FINAL v2.3 — FIX last_month + esc + anti overlay fantôme + print window + sort/filter/export consistent) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -22,9 +22,19 @@
     body{ margin:0; background:linear-gradient(180deg,var(--bg1) 0%,var(--bg2) 80%); color:var(--text); }
     .page{ min-height:100vh; display:flex; flex-direction:column; align-items:center; padding:16px 16px 32px; padding-bottom:96px; }
 
+    /* 🔒 Anti “overlay/modale fantôme” (si un bloc modal traîne dans le DOM) */
+    .modalOverlay, .modal-overlay, .overlay, .backdrop,
+    #modalOverlay, #sendModalOverlay, #overlay, #backdrop{
+      display:none;
+    }
+    .modalOverlay.open, .modal-overlay.open, .overlay.open, .backdrop.open,
+    #modalOverlay.open, #sendModalOverlay.open, #overlay.open, #backdrop.open{
+      display:flex;
+    }
+
     .topbar{
       width:100%; max-width:1180px;
-      position:sticky; top:0; z-index:10;
+      position:sticky; top:0; z-index:50; /* ↑ au-dessus des cards */
       display:flex; justify-content:space-between; align-items:center; gap:10px;
       padding:10px 0;
       background:rgba(248,244,255,.85);
@@ -64,6 +74,8 @@
       padding:14px 14px;
       backdrop-filter: blur(10px);
       min-width:0;
+      position:relative;
+      z-index:1;
     }
 
     .alert{
@@ -86,6 +98,8 @@
       gap:10px;
       align-items:center;
       min-width:0;
+      position:relative;
+      z-index:5; /* ↑ important : évite “select sous un overlay bizarre” */
     }
     @media(max-width:980px){
       .toolbar{ grid-template-columns: 1fr; }
@@ -196,8 +210,6 @@
     tbody tr:last-child td{ border-bottom:none; }
     .right{ text-align:right; }
     .ellipsis{ max-width:260px; overflow:hidden; text-overflow:ellipsis; }
-
-    /* PRINT is done in popup window, so no need @media print here */
 
     .bottom-nav{
       position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
@@ -380,14 +392,17 @@
         loadLine.textContent = txt;
       }
     }
+
+    // ✅ escape HTML propre (et pas le bug &quot;)
     function esc(s){
-      return String(s||"")
+      return String(s ?? "")
         .replaceAll("&","&amp;")
         .replaceAll("<","&lt;")
         .replaceAll(">","&gt;")
-        .replaceAll('"',"quot;")
+        .replaceAll('"',"&quot;")
         .replaceAll("'","&#039;");
     }
+
     function fmtMoney(v){
       const n = Number(v);
       if(!Number.isFinite(n)) return "—";
@@ -433,6 +448,19 @@
     window.addEventListener("error", (e)=>{ try{ showAlert("⛔ Erreur JS : " + (e?.message || "inconnue")); }catch{} });
     window.addEventListener("unhandledrejection", (e)=>{ try{ showAlert("⛔ Promise rejetée : " + (e?.reason?.message || e?.reason || "inconnue")); }catch{} });
 
+    // 🔒 si un overlay “reste ouvert” sans .open, on le neutralise
+    function hideStrayOverlays(){
+      const suspects = document.querySelectorAll(
+        ".modalOverlay,.modal-overlay,.overlay,.backdrop,#modalOverlay,#sendModalOverlay,#overlay,#backdrop"
+      );
+      suspects.forEach(el=>{
+        if(!el.classList.contains("open")){
+          el.style.display = "none";
+          el.style.pointerEvents = "none";
+        }
+      });
+    }
+
     function yearFromMs(ms){ return String(new Date(ms).getFullYear()); }
 
     function renderYearOptions(){
@@ -454,29 +482,26 @@
 
     function periodRange(){
       const now = new Date();
-      const start = new Date(now);
-      const end = new Date(now);
-
       const p = filterPeriod?.value || "ALL";
 
       if(p === "ALL") return { fromMs: 0, toMs: Number.MAX_SAFE_INTEGER };
 
       if(p === "THIS_MONTH"){
-        start.setDate(1); start.setHours(0,0,0,0);
-        end.setMonth(end.getMonth()+1, 1); end.setHours(0,0,0,0);
+        const start = new Date(now.getFullYear(), now.getMonth(), 1, 0,0,0,0);
+        const end   = new Date(now.getFullYear(), now.getMonth()+1, 1, 0,0,0,0);
         return { fromMs: start.getTime(), toMs: end.getTime()-1 };
       }
 
       if(p === "LAST_MONTH"){
-        // ✅ FIX: fin = début du mois courant (pas du mois prochain)
+        // ✅ FIX : mois dernier = [1er du mois-1 ; 1er du mois courant[
         const startLM = new Date(now.getFullYear(), now.getMonth()-1, 1, 0,0,0,0);
         const endLM   = new Date(now.getFullYear(), now.getMonth(),   1, 0,0,0,0);
         return { fromMs: startLM.getTime(), toMs: endLM.getTime()-1 };
       }
 
       if(p === "THIS_YEAR"){
-        start.setMonth(0,1); start.setHours(0,0,0,0);
-        end.setFullYear(end.getFullYear()+1, 0, 1); end.setHours(0,0,0,0);
+        const start = new Date(now.getFullYear(), 0, 1, 0,0,0,0);
+        const end   = new Date(now.getFullYear()+1, 0, 1, 0,0,0,0);
         return { fromMs: start.getTime(), toMs: end.getTime()-1 };
       }
 
@@ -488,6 +513,7 @@
           toMs: b ? b.getTime() : Number.MAX_SAFE_INTEGER
         };
       }
+
       return { fromMs: 0, toMs: Number.MAX_SAFE_INTEGER };
     }
 
@@ -861,6 +887,7 @@
     });
 
     onAuthStateChanged(auth, async (user)=>{
+      hideStrayOverlays(); // 🔒 dès le départ
       if(!user){ location.href="login.html?role=conciergerie"; return; }
 
       if(helloLine) helloLine.textContent = "Bonjour,";
