@@ -1,4 +1,4 @@
-<!-- docs/devis-liste.html (FINAL — QUOTE list: 1 bouton (Aperçu), Envoi simple sans stockage PDF, Acceptation -> logements.html) -->
+<!-- docs/devis-liste.html (FINAL — QUOTE list: modale Envoyer alignée factures-liste, sans sentAt/ownerVisible) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -143,7 +143,7 @@
       border-color: rgba(179,38,30,0.45);
     }
     .btn[aria-disabled="true"]{ opacity:.55; pointer-events:none; }
-    .btn:disabled{ opacity:.65; cursor:not-allowed; }
+    .btn:disabled{ opacity:.65; cursor:not-allowed; pointer-events:none; }
 
     .alert{
       margin-top:8px; padding:9px 11px; background:#fff; border-radius:14px;
@@ -226,7 +226,7 @@
       .page{ padding-bottom: 24px; }
     }
 
-    /* ===== MODAL ENVOYER ===== */
+    /* ===== MODAL ENVOYER (style factures: bandeau succès) ===== */
     .modalMask{
       position:fixed; inset:0; z-index:200;
       background:rgba(0,0,0,.35);
@@ -293,6 +293,33 @@
       gap:8px;
       flex-wrap:wrap;
       justify-content:flex-end;
+    }
+
+    /* success bar (comme factures) */
+    .successBar{
+      display:none;
+      margin-bottom:10px;
+      padding:10px 12px;
+      border-radius:14px;
+      border:1px solid rgba(27,143,77,0.25);
+      background: rgba(27,143,77,0.06);
+      box-shadow:0 3px 10px rgba(0,0,0,.06);
+      font-size:12px;
+      font-weight:1000;
+      color:#0f5f31;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+    }
+    .successBar .left{ display:flex; align-items:center; gap:10px; }
+    .successBar .right{ display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
+    .pillMini{
+      display:inline-flex; align-items:center; gap:6px;
+      padding:4px 10px; border-radius:999px;
+      border:1px solid rgba(122,92,255,0.25);
+      background:rgba(122,92,255,0.06);
+      font-size:11px; font-weight:1000; color:#4b2cff;
+      white-space:nowrap;
     }
 
     /* ===== MODAL ACCEPT ===== */
@@ -366,6 +393,19 @@
         <button class="btn" id="closeSendBtn" type="button">Fermer</button>
       </div>
       <div class="modalBody">
+
+        <!-- ✅ bandeau succès -->
+        <div id="sendSuccessBar" class="successBar" role="status" aria-live="polite">
+          <div class="left">
+            <span>✅ Devis marqué comme envoyé.</span>
+            <span class="pillMini" id="sendSuccessHint">—</span>
+          </div>
+          <div class="right">
+            <a class="btn" id="afterMailBtn" href="#" target="_blank" rel="noopener">Préparer email</a>
+            <button class="btn primary" id="afterCloseBtn" type="button">Fermer</button>
+          </div>
+        </div>
+
         <div class="mini" id="modalSubtitleSend" style="margin-bottom:10px;">—</div>
 
         <div class="textBlock" style="margin-top:0;">
@@ -382,7 +422,10 @@
         <div class="textBlock" id="sendText">—</div>
 
         <div class="copyRow">
-          <a class="btn primary" id="openEmailSendBtn" href="#" target="_blank" rel="noopener">✉️ Ouvrir email</a>
+          <!-- ✅ on garde toujours possible l'email -->
+          <a class="btn" id="openEmailSendBtn" href="#" target="_blank" rel="noopener">Préparer email</a>
+          <!-- ✅ bouton "Envoyer" = marquer SENT (désactivé si déjà envoyé) -->
+          <button class="btn primary" id="markSentBtn" type="button">Marquer “Envoyé”</button>
         </div>
       </div>
     </div>
@@ -406,8 +449,6 @@
           <button class="btn" id="acceptOnlyBtn" type="button">Valider “Accepté”</button>
           <button class="btn primary" id="goCreateHomeBtn" type="button">Créer un logement</button>
         </div>
-
-        
       </div>
     </div>
   </div>
@@ -448,6 +489,13 @@
     const sQuote = document.getElementById("sQuote");
     const sAmount = document.getElementById("sAmount");
 
+    const markSentBtn = document.getElementById("markSentBtn");
+
+    const sendSuccessBar = document.getElementById("sendSuccessBar");
+    const sendSuccessHint = document.getElementById("sendSuccessHint");
+    const afterMailBtn = document.getElementById("afterMailBtn");
+    const afterCloseBtn = document.getElementById("afterCloseBtn");
+
     // Accept modal
     const modalMaskAccept = document.getElementById("modalMaskAccept");
     const closeAcceptBtn = document.getElementById("closeAcceptBtn");
@@ -456,7 +504,7 @@
     const goCreateHomeBtn = document.getElementById("goCreateHomeBtn");
 
     let currentUser = null;
-    let allItems = []; // cache pour filtre recherche
+    let allItems = [];
     let vatEnabled = false;
     let vatRate = 0;
 
@@ -519,6 +567,15 @@
       return String(d?.quoteStatus || "").toUpperCase().trim();
     }
 
+    function isQuoteAlreadySent(d){
+      // ✅ on ne dépend PAS de sentAt/ownerVisible
+      const st = quoteStatusRaw(d);
+      if(st === "SENT") return true;
+      // si tu as déjà l'historique
+      if(d?.quoteFollowup?.lastSentAt) return true;
+      return false;
+    }
+
     function statusLabel(d){
       const st = quoteStatusRaw(d);
       if(st === "ACCEPTED") return { txt:"ACCEPTÉ", cls:"ok" };
@@ -557,6 +614,7 @@ ${String(pageTitleEl.textContent||"").trim() || "Votre conciergerie"}`.trim();
     }
 
     async function markQuoteSent(docId){
+      // ✅ pas de sentAt/ownerVisible => zero friction avec tes données
       await updateDoc(doc(db,"salesDocuments",docId), {
         quoteStatus: "SENT",
         "quoteFollowup.lastSentAt": serverTimestamp(),
@@ -573,6 +631,7 @@ ${String(pageTitleEl.textContent||"").trim() || "Votre conciergerie"}`.trim();
       const totals = computeTotals(d);
       const st = statusLabel(d);
 
+      const alreadySent = isQuoteAlreadySent(d);
       const isAccepted = quoteStatusRaw(d) === "ACCEPTED";
       const canAccept = !isAccepted;
 
@@ -591,7 +650,7 @@ ${String(pageTitleEl.textContent||"").trim() || "Votre conciergerie"}`.trim();
         </div>
         <div class="right">
           <button class="btn primary" data-preview="${esc(id)}" type="button">Aperçu</button>
-          <button class="btn" data-send="${esc(id)}" type="button">Envoyer</button>
+          <button class="btn" data-send="${esc(id)}" type="button" ${alreadySent ? `aria-disabled="true"` : ""}>Envoyer</button>
           <button class="btn danger" data-accept="${esc(id)}" type="button" ${canAccept ? "" : `aria-disabled="true"`}>Accepter</button>
         </div>
       `;
@@ -603,6 +662,7 @@ ${String(pageTitleEl.textContent||"").trim() || "Votre conciergerie"}`.trim();
       });
 
       card.querySelector('button[data-send]')?.addEventListener("click", ()=>{
+        if(alreadySent) return;
         openSendModal({ id, data:d });
       });
 
@@ -726,8 +786,18 @@ ${String(pageTitleEl.textContent||"").trim() || "Votre conciergerie"}`.trim();
     }
 
     // ====== SEND modal ======
+    function resetSendSuccess(){
+      sendSuccessHint.textContent = "—";
+      sendSuccessBar.style.display = "none";
+    }
+    function showSendSuccess(hint){
+      sendSuccessHint.textContent = String(hint || "OK").trim() || "OK";
+      sendSuccessBar.style.display = "flex";
+    }
+
     function openSendModal(item){
       modalQuote = item;
+      resetSendSuccess();
 
       const d = item.data || {};
       const num = String(d?.quoteNumber || d?.number || "—").trim();
@@ -748,30 +818,44 @@ ${String(pageTitleEl.textContent||"").trim() || "Votre conciergerie"}`.trim();
 
       const subject = `Devis ${num}`;
       if(email){
-        openEmailSendBtn.href = makeMailto(email, subject, body);
+        const href = makeMailto(email, subject, body);
+        openEmailSendBtn.href = href;
+        afterMailBtn.href = href;
         openEmailSendBtn.removeAttribute("aria-disabled");
+        afterMailBtn.removeAttribute("aria-disabled");
       }else{
         openEmailSendBtn.href = "#";
+        afterMailBtn.href = "#";
         openEmailSendBtn.setAttribute("aria-disabled","true");
+        afterMailBtn.setAttribute("aria-disabled","true");
       }
+
+      // ✅ disable markSent if already sent
+      const alreadySent = isQuoteAlreadySent(d);
+      markSentBtn.disabled = alreadySent;
+      markSentBtn.title = alreadySent ? "Déjà marqué comme envoyé." : "";
 
       openModal(modalMaskSend);
     }
 
     closeSendBtn.addEventListener("click", ()=> closeModal(modalMaskSend));
+    afterCloseBtn.addEventListener("click", ()=> closeModal(modalMaskSend));
     modalMaskSend.addEventListener("click",(e)=>{ if(e.target===modalMaskSend) closeModal(modalMaskSend); });
 
-    // ✅ Au clic "Ouvrir email" => considéré comme envoyé => on met quoteStatus=SENT
-    openEmailSendBtn.addEventListener("click", async ()=>{
+    // ✅ Marquer "Envoyé" (FireStore: quoteStatus + quoteFollowup.lastSentAt)
+    markSentBtn.addEventListener("click", async ()=>{
       if(!modalQuote?.id) return;
       try{
         await markQuoteSent(modalQuote.id);
-        // refresh léger (pas bloquant)
+        showSendSuccess("Devis");
+        markSentBtn.disabled = true;
+
+        // refresh liste
         await loadQuotes(currentUser.uid);
         applySearch();
       }catch(e){
-        // on n'empêche pas l'ouverture email
         console.warn("markQuoteSent failed:", e?.message || e);
+        showAlert("⛔ " + (e?.message || "Erreur enregistrement statut envoyé."), false);
       }
     });
 
@@ -865,11 +949,8 @@ ${String(pageTitleEl.textContent||"").trim() || "Votre conciergerie"}`.trim();
       }catch(e){
         console.error(e);
         showAlert("⛔ " + (e?.message || "Erreur chargement devis"), false);
-        // Si Firestore => "requires an index" : crée l'index via le lien, puis recharge.
       }
     });
   </script>
 </body>
 </html>
-
-
