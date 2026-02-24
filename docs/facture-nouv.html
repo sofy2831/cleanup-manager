@@ -458,10 +458,7 @@
 <script type="module">
 import { auth, db } from "./firebase-init.js";
 import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-import {
-  doc, getDoc, updateDoc, addDoc, serverTimestamp, runTransaction,
-  collection
-} from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+import { doc, getDoc, addDoc, serverTimestamp, runTransaction, collection } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
 /* ===== UI ===== */
 const alertBox = document.getElementById("alertBox");
@@ -607,82 +604,49 @@ async function ensureInvoiceNumber(uid, year){
   return `FA${year}-${padded}`;
 }
 
-/* ===== Templates lignes (NOUVELLES PRESTATIONS) =====
-   Tu modifies ici tes modèles.
-*/
+/* ===== Templates (base) ===== */
 const NEW_PRESTA_TEMPLATES = [
-  {
-    key: "MENAGE_STD",
-    label: "Ménage standard",
-    lines: [
-      { label:"Ménage standard (inter-séjour)", qty:1, unit:"unité", unitPrice:60, category:"Ménage", note:"" },
-    ]
-  },
-  {
-    key: "MENAGE_LINGE",
-    label: "Ménage + Linge",
-    lines: [
-      { label:"Ménage standard (inter-séjour)", qty:1, unit:"unité", unitPrice:60, category:"Ménage", note:"" },
-      { label:"Rechange linge (rotation complète)", qty:1, unit:"passage", unitPrice:15, category:"Linge", note:"" },
-    ]
-  },
-  {
-    key: "CHECKIN_CHECKOUT",
-    label: "Check-in + Check-out",
-    lines: [
-      { label:"Check-in physique", qty:1, unit:"passage", unitPrice:20, category:"Check-in/out", note:"" },
-      { label:"Check-out", qty:1, unit:"passage", unitPrice:15, category:"Check-in/out", note:"" },
-    ]
-  },
-  {
-    key: "MAINTENANCE",
-    label: "Petite maintenance",
-    lines: [
-      { label:"Petite maintenance (ampoule, joint…)", qty:1, unit:"unité", unitPrice:15, category:"Maintenance", note:"" }
-    ]
-  }
+  { key:"MENAGE_STD", label:"Ménage standard", lines:[{ label:"Ménage standard (inter-séjour)", qty:1, unit:"unité", unitPrice:60, category:"Ménage", note:"" }] },
+  { key:"MENAGE_LINGE", label:"Ménage + Linge", lines:[
+    { label:"Ménage standard (inter-séjour)", qty:1, unit:"unité", unitPrice:60, category:"Ménage", note:"" },
+    { label:"Rechange linge (rotation complète)", qty:1, unit:"passage", unitPrice:15, category:"Linge", note:"" },
+  ]},
+  { key:"CHECKIN_CHECKOUT", label:"Check-in + Check-out", lines:[
+    { label:"Check-in physique", qty:1, unit:"passage", unitPrice:20, category:"Check-in/out", note:"" },
+    { label:"Check-out", qty:1, unit:"passage", unitPrice:15, category:"Check-in/out", note:"" },
+  ]},
+  { key:"MAINTENANCE", label:"Petite maintenance", lines:[{ label:"Petite maintenance (ampoule, joint…)", qty:1, unit:"unité", unitPrice:15, category:"Maintenance", note:"" }] }
 ];
-
 function getTemplateByKey(key){
-  return NEW_PRESTA_TEMPLATES.find(t=>t.key === key) || NEW_PRESTA_TEMPLATES[0];
+  return NEW_PRESTA_TEMPLATES.find(t=>t.key===key) || NEW_PRESTA_TEMPLATES[0];
 }
 
 /* ===== State ===== */
 let currentUser = null;
 let profileData = null;
-
-let sourceDocData = null; // facture d'origine
-let newDocRef = null;
-let newDocData = null;    // nouvelle facture (draft en mémoire)
-let templateLines = [];
+let sourceDocData = null; // facture origine
+let newDocData = null;    // nouvelle facture (draft mémoire)
 
 /* ===== Business Header ===== */
 function applyLogoFromProfile(profile){
   const bp = (profile?.businessProfile || {});
   const url = String(bp.logoUrl || "").trim();
-
   if(url){
-    logoImg.src = url; logoImg.style.display = "block"; logoFallback.style.display = "none";
+    logoImg.src = url; logoImg.style.display="block"; logoFallback.style.display="none";
+    bizLogoImg.src = url; bizLogoImg.style.display="block"; bizLogoFallback.style.display="none";
   }else{
-    logoImg.style.display = "none"; logoFallback.style.display = "block";
-  }
-  if(url){
-    bizLogoImg.src = url; bizLogoImg.style.display = "block"; bizLogoFallback.style.display = "none";
-  }else{
-    bizLogoImg.style.display = "none"; bizLogoFallback.style.display = "block";
+    logoImg.style.display="none"; logoFallback.style.display="block";
+    bizLogoImg.style.display="none"; bizLogoFallback.style.display="block";
   }
 }
 function renderBusinessHeader(){
   const bp = (profileData?.businessProfile || {});
   const cName = String(bp.companyName || "Conciergerie").trim();
-
   const street = String(bp.address?.street || "").trim();
   const zip = String(bp.address?.zip || "").trim();
   const city = String(bp.address?.city || "").trim();
-
   const siret = String(bp.registration?.siret || "").trim();
   const ape = String(bp.registration?.ape || "").trim();
-
   const mail = String(bp.billingEmail || profileData?.email || "").trim();
   const phone = String(bp.phone || "").trim();
 
@@ -692,40 +656,34 @@ function renderBusinessHeader(){
   const lines = [];
   if(street) lines.push(esc(street));
   if(zip || city) lines.push(esc([zip, city].filter(Boolean).join(" ")));
-
   const legal = [siret ? `SIRET ${siret}` : "", ape ? `APE ${ape}` : ""].filter(Boolean).join(" • ");
   if(legal) lines.push(`<span class="mut">${esc(legal)}</span>`);
-
-  const contact = [mail ? mail : "", phone ? phone : ""].filter(Boolean).join(" • ");
+  const contact = [mail || "", phone || ""].filter(Boolean).join(" • ");
   if(contact) lines.push(`<span class="mut">${esc(contact)}</span>`);
-
   bizLinesEl.innerHTML = lines.length ? lines.join("<br>") : "—";
+
   applyLogoFromProfile(profileData);
 }
 function renderClientHeader(d){
   const name = String(d?.clientName || "—").trim();
-
   const a1 = String(d?.clientAddress1 || "").trim();
   const a2 = String(d?.clientAddress2 || "").trim();
   const zip = String(d?.clientZip || "").trim();
   const city = String(d?.clientCity || "").trim();
-
   clientNameEl.textContent = name || "—";
 
   const lines = [];
   if(a1) lines.push(esc(a1));
   if(a2) lines.push(esc(a2));
   if(zip || city) lines.push(esc([zip, city].filter(Boolean).join(" ")));
-
   const mail = String(d?.clientEmail || "").trim();
   const tel  = String(d?.clientPhone || "").trim();
   const contact = [mail, tel].filter(Boolean).join(" • ");
   if(contact) lines.push(`<span class="mut">${esc(contact)}</span>`);
-
   clientLinesEl.innerHTML = lines.length ? lines.join("<br>") : `<span class="mut">Adresse manquante</span>`;
 }
 
-/* ===== Récap + lignes template ===== */
+/* ===== Recap / dates ===== */
 function getStayPeriod(d){
   const a = String(d?.arrivalDateKey || "").trim();
   const b = String(d?.departureDateKey || "").trim();
@@ -735,7 +693,23 @@ function getStayPeriod(d){
   return { label:"—" };
 }
 
-function renderTemplateLinesAndTotals(baseDoc){
+/* =========================================================
+   LIGNES EDITABLES (ajout / modif / suppression)
+   ========================================================= */
+
+function ensureLineShape(l){
+  return {
+    label: String(l?.label||"").trim(),
+    qty: Number(l?.qty)||0,
+    unit: String(l?.unit||"unité").trim(),
+    unitPrice: Number(l?.unitPrice)||0,
+    category: String(l?.category||"").trim(),
+    note: String(l?.note||"").trim(),
+    suggestedPrice: String(l?.suggestedPrice||"").trim()
+  };
+}
+
+function renderLinesAndTotals(){
   const bp = (profileData?.businessProfile || {});
   const tvaEnabled = !!bp.vat?.enabled;
   const tvaRate = Number.isFinite(Number(bp.vat?.rate)) ? Number(bp.vat.rate) : 0;
@@ -744,44 +718,75 @@ function renderTemplateLinesAndTotals(baseDoc){
   linesTbody.innerHTML = "";
   linesCards.innerHTML = "";
 
-  const lines = Array.isArray(templateLines) ? templateLines : [];
+  const lines = Array.isArray(newDocData?.lines) ? newDocData.lines : [];
 
-  for(const l of lines){
-    const label = l?.label || "Ligne";
-    const qty = Number(l?.qty)||0;
-    const unit = l?.unit || "unité";
-    const up = Number(l?.unitPrice)||0;
-
-    const lineHT = qty * up;
+  // table desktop
+  lines.forEach((raw, idx)=>{
+    const l = ensureLineShape(raw);
+    const lineHT = (Number(l.qty)||0) * (Number(l.unitPrice)||0);
     const lineTVA = tvaEnabled ? (lineHT * tvaRate) : 0;
-    const lineTotal = lineHT + lineTVA;
+    const lineTTC = lineHT + lineTVA;
 
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td class="designation">${esc(label)}</td>
-      <td class="num">${esc(qty)}</td>
-      <td>${esc(unit)}</td>
-      <td class="num">${esc(fmtMoney(up))}</td>
+      <td class="designation">
+        <div style="display:flex; flex-direction:column; gap:6px;">
+          <input data-k="label" data-i="${idx}" value="${esc(l.label)}"
+                 style="width:100%; padding:8px 10px; border:1px solid #D3C7FF; border-radius:10px; font-weight:900;">
+          <input data-k="category" data-i="${idx}" value="${esc(l.category)}" placeholder="Catégorie (optionnel)"
+                 style="width:100%; padding:8px 10px; border:1px solid #D3C7FF; border-radius:10px; font-weight:800; font-size:12.5px;">
+        </div>
+      </td>
+      <td class="num">
+        <input data-k="qty" data-i="${idx}" type="number" step="1" min="0" value="${esc(l.qty)}"
+               style="width:86px; text-align:right; padding:8px 10px; border:1px solid #D3C7FF; border-radius:10px; font-weight:900;">
+      </td>
+      <td>
+        <input data-k="unit" data-i="${idx}" value="${esc(l.unit)}"
+               style="width:110px; padding:8px 10px; border:1px solid #D3C7FF; border-radius:10px; font-weight:900;">
+      </td>
+      <td class="num">
+        <input data-k="unitPrice" data-i="${idx}" type="number" step="0.01" min="0" value="${esc(l.unitPrice)}"
+               style="width:110px; text-align:right; padding:8px 10px; border:1px solid #D3C7FF; border-radius:10px; font-weight:900;">
+      </td>
       <td class="num" style="${tvaEnabled ? "" : "display:none;"}">${tvaEnabled ? esc(fmtMoney(lineTVA)) : ""}</td>
-      <td class="num">${esc(fmtMoney(lineTotal))}</td>
+      <td class="num">
+        <div style="display:flex; align-items:center; justify-content:flex-end; gap:8px;">
+          <span>${esc(fmtMoney(lineTTC))}</span>
+          <button data-del="${idx}" title="Supprimer"
+                  style="border:1px solid rgba(0,0,0,0.08); background:#fff; border-radius:10px; padding:6px 10px; cursor:pointer; font-weight:1000;">
+            ✕
+          </button>
+        </div>
+      </td>
     `;
     linesTbody.appendChild(tr);
 
+    // cards mobile (non-editables, mais cohérents)
     const card = document.createElement("div");
     card.className = "lineCard";
     card.innerHTML = `
-      <div class="t">${esc(label)}</div>
+      <div class="t">${esc(l.label || "Ligne")}</div>
       <div class="g">
-        <div><b>Qté</b> : ${esc(qty)}</div>
-        <div><b>Unité</b> : ${esc(unit)}</div>
-        <div><b>PU HT</b> : ${esc(fmtMoney(up))}</div>
-        <div><b>Total TTC</b> : ${esc(fmtMoney(lineTotal))}</div>
+        <div><b>Qté</b> : ${esc(l.qty)}</div>
+        <div><b>Unité</b> : ${esc(l.unit)}</div>
+        <div><b>PU HT</b> : ${esc(fmtMoney(l.unitPrice))}</div>
+        <div><b>Total TTC</b> : ${esc(fmtMoney(lineTTC))}</div>
+      </div>
+      <div style="margin-top:8px; display:flex; gap:8px;">
+        <button data-del="${idx}" style="flex:1; border:2px solid var(--violet-main); background:#fff; color:var(--violet-main); border-radius:999px; padding:9px 12px; font-weight:1000; cursor:pointer;">
+          Supprimer
+        </button>
       </div>
     `;
     linesCards.appendChild(card);
-  }
+  });
 
+  // totals
   const totals = computeTotals(lines, tvaEnabled, tvaRate);
+  newDocData.totalHT  = Number(totals.ht)||0;
+  newDocData.totalTVA = Number(totals.tva)||0;
+  newDocData.totalTTC = Number(totals.ttc)||0;
 
   const html = [];
   if(tvaEnabled){
@@ -795,50 +800,75 @@ function renderTemplateLinesAndTotals(baseDoc){
   }
   totalsBox.innerHTML = html.join("");
 
-  // garde en mémoire (pour save/preview)
-  newDocData.totalHT = Number(totals.ht)||0;
-  newDocData.totalTVA = Number(totals.tva)||0;
-  newDocData.totalTTC = Number(totals.ttc)||0;
+  // lock edits if issued
+  const issued = !!String(newDocData?.invoiceNumber||"").trim();
+  Array.from(document.querySelectorAll('[data-k],[data-del]')).forEach(el=>{
+    if(el.matches('[data-k]')) el.disabled = issued;
+    if(el.matches('[data-del]')) el.disabled = issued;
+  });
 }
 
-function renderRecap(){
-  const d = newDocData || sourceDocData || {};
-  const period = getStayPeriod(d);
+function attachLinesEvents(){
+  // input edits
+  document.addEventListener("input", (e)=>{
+    const t = e.target;
+    if(!(t instanceof HTMLElement)) return;
+    const k = t.getAttribute("data-k");
+    const i = t.getAttribute("data-i");
+    if(!k || i===null) return;
+    if(!newDocData?.lines) return;
 
-  const homeAddr = String(d.homeAddress || "").trim();
-  const homeZip  = (d.homeZip || d.zip || d.postalCode || "").toString().trim();
-  const homeCity = String(d.homeCity || "").trim();
-  const homeAddrFull = [homeAddr, [homeZip, homeCity].filter(Boolean).join(" ")].filter(Boolean).join(" • ");
+    const idx = Number(i);
+    const l = ensureLineShape(newDocData.lines[idx] || {});
+    if(k === "qty" || k === "unitPrice"){
+      l[k] = Number(t.value)||0;
+    }else{
+      l[k] = String(t.value||"");
+    }
+    newDocData.lines[idx] = l;
+    renderLinesAndTotals(); // recalcul live
+  });
 
-  const recap = [];
-  if(homeAddrFull) recap.push(`<div class="line"><b>Adresse logement</b> : ${esc(homeAddrFull)}</div>`);
-  recap.push(`<div class="line"><b>Période</b> : ${esc(period.label)}</div>`);
-  if(sourceDocData?.invoiceNumber){
-    recap.push(`<div class="line"><b>Facture d’origine</b> : ${esc(sourceDocData.invoiceNumber)}</div>`);
-  }
-  const fromAvoirId = getParam("fromAvoirId");
-  if(fromAvoirId){
-    recap.push(`<div class="line"><b>Avoir lié</b> : ${esc(fromAvoirId)}</div>`);
-  }
-  recapKv.innerHTML = recap.join("");
-
-  const invNum = String(newDocData.invoiceNumber || "").trim();
-  statusBadge.textContent = invNum ? invoiceStatusLabel("ISSUED") : "BROUILLON";
-  docBannerInner.textContent = `FACTURE N° ${invNum || "—"}`;
-
-  renderBusinessHeader();
-  renderClientHeader(newDocData);
-
-  renderTemplateLinesAndTotals(newDocData);
-  renderPaymentControls();
-  renderPenalty();
-  renderConditions();
-  renderBank();
-
-  saveBtn.disabled = false;
-  previewBtn.disabled = false;
+  // delete line
+  document.addEventListener("click", (e)=>{
+    const t = e.target;
+    if(!(t instanceof HTMLElement)) return;
+    const del = t.getAttribute("data-del");
+    if(del===null) return;
+    if(!newDocData?.lines) return;
+    const idx = Number(del);
+    newDocData.lines.splice(idx, 1);
+    if(newDocData.lines.length === 0){
+      // garde au moins une ligne vide (sinon facture vide)
+      newDocData.lines.push(ensureLineShape({ label:"", qty:1, unit:"unité", unitPrice:0 }));
+    }
+    renderLinesAndTotals();
+  });
 }
 
+/* Ajout manuel de ligne (bouton injecté sous le select template) */
+function injectAddLineButton(){
+  if(document.getElementById("addLineBtn")) return;
+  const host = templateSel?.closest("div")?.parentElement;
+  if(!host) return;
+
+  const btn = document.createElement("button");
+  btn.id = "addLineBtn";
+  btn.type = "button";
+  btn.className = "btn";
+  btn.textContent = "+ Ajouter une ligne";
+  btn.style.marginTop = "6px";
+
+  btn.addEventListener("click", ()=>{
+    if(!newDocData?.lines) newDocData.lines = [];
+    newDocData.lines.push(ensureLineShape({ label:"", qty:1, unit:"unité", unitPrice:0, category:"", note:"" }));
+    renderLinesAndTotals();
+  });
+
+  host.appendChild(btn);
+}
+
+/* ===== Paiement / pénalités / conditions / banque ===== */
 function renderPaymentControls(){
   const d = newDocData || {};
   const hasInvoice = !!String(d.invoiceNumber || "").trim();
@@ -848,11 +878,9 @@ function renderPaymentControls(){
   if(!payModeSel.value) payModeSel.value = String(d.invoicePaymentMode || "VIREMENT").toUpperCase();
   if(!payTermSel.value) payTermSel.value = String(d.invoicePaymentTerm || "RECEPTION").toUpperCase();
 }
-
 function renderPenalty(){
   const d = newDocData || {};
   const hasInvoice = !!String(d.invoiceNumber || "").trim();
-
   penaltyModeSel.disabled = hasInvoice;
   penaltyTextEl.disabled = hasInvoice;
 
@@ -862,32 +890,28 @@ function renderPenalty(){
   if(!String(penaltyTextEl.value||"").trim()){
     penaltyTextEl.value = String(d.invoicePenaltyText||"").trim() || getPenaltyTemplate(penaltyModeSel.value);
   }
-
   penaltyKv.innerHTML = `<div class="line">${esc(String(penaltyTextEl.value || "").trim() || "—")}</div>`;
 }
-
 function renderConditions(){
   const d = newDocData || {};
   const bp = (profileData?.businessProfile || {});
-
   const term = String(payTermSel?.value || d?.invoicePaymentTerm || "RECEPTION").toUpperCase();
   const issued = String(d?.invoiceIssuedDate || todayIso()).trim();
   const dueDate = addDaysLabel(issued, termToDays(term));
-
   const cancelPct = Number.isFinite(Number(bp?.conditions?.cancellationPercent))
     ? Number(bp.conditions.cancellationPercent)
     : 30;
 
   const lines = [];
   lines.push(`<div class="line"><b>Échéance de paiement</b> : ${esc(dueDate)} (${esc(dueLabel(term))})</div>`);
-
   if(!!showCancelChk.checked){
     lines.push(`<div class="line"><b>Annulation</b> : ${esc(cancelPct)} % du montant en cas d’annulation moins de 48 h avant l’intervention</div>`);
   }
   conditionsKv.innerHTML = lines.join("");
 }
-
 function renderBank(){
+  // IMPORTANT : toi tu as businessSnapshot.bank sur salesDocuments.
+  // Ici on affiche depuis le profil, MAIS au save on snapshottera.
   const bp = (profileData?.businessProfile || {});
   const bank = (bp.bank || {});
   const name = String(bank.name || "").trim();
@@ -901,40 +925,147 @@ function renderBank(){
   bankKv.innerHTML = lines.length ? lines.join("") : `<div class="line">—</div>`;
 }
 
-/* ===== Data load ===== */
+/* ===== Recap render ===== */
+function renderRecap(){
+  const d = newDocData || sourceDocData || {};
+  const period = getStayPeriod(d);
+
+  const homeAddr = String(d.homeAddress || "").trim();
+  const homeZip  = String(d.homeZip || "").trim();
+  const homeCity = String(d.homeCity || "").trim();
+  const homeAddrFull = [homeAddr, [homeZip, homeCity].filter(Boolean).join(" ")].filter(Boolean).join(" • ");
+
+  const recap = [];
+  if(homeAddrFull) recap.push(`<div class="line"><b>Adresse logement</b> : ${esc(homeAddrFull)}</div>`);
+  recap.push(`<div class="line"><b>Période</b> : ${esc(period.label)}</div>`);
+
+  if(sourceDocData?.invoiceNumber){
+    recap.push(`<div class="line"><b>Facture d’origine</b> : ${esc(sourceDocData.invoiceNumber)}</div>`);
+  }
+  if(newDocData?.fromCreditNumber){
+    recap.push(`<div class="line"><b>Avoir</b> : ${esc(newDocData.fromCreditNumber)}</div>`);
+  }
+
+  recapKv.innerHTML = recap.join("");
+
+  const invNum = String(newDocData.invoiceNumber || "").trim();
+  statusBadge.textContent = invNum ? invoiceStatusLabel(newDocData.invoiceStatus || "ISSUED") : "BROUILLON";
+  docBannerInner.textContent = `FACTURE N° ${invNum || "—"}`;
+
+  renderBusinessHeader();
+  renderClientHeader(newDocData);
+
+  renderLinesAndTotals();
+  renderPaymentControls();
+  renderPenalty();
+  renderConditions();
+  renderBank();
+
+  saveBtn.disabled = false;
+  previewBtn.disabled = false;
+}
+
+/* ===== Loaders ===== */
 async function loadProfile(uid){
   const ref = doc(db, "users", uid);
   const snap = await getDoc(ref);
   profileData = snap.exists() ? (snap.data() || {}) : {};
 }
-
 async function loadSourceInvoice(fromDocId){
   const r = doc(db,"salesDocuments", fromDocId);
   const s = await getDoc(r);
   if(!s.exists()) throw new Error("Facture d’origine introuvable (fromDocId).");
   const d = { id:s.id, ...(s.data()||{}) };
-
   if(String(d.conciergerieUid||"") !== String(currentUser.uid)){
     throw new Error("Accès refusé (facture d’une autre conciergerie).");
+  }
+  if(String(d.type||"").toUpperCase() !== "INVOICE"){
+    // pas bloquant, mais on signale
+    console.warn("Source doc n'est pas type INVOICE:", d.type);
   }
   sourceDocData = d;
 }
 
-/* ===== Create new draft in memory from source ===== */
-function buildNewDraftFromSource(){
-  const src = sourceDocData || {};
+/* =========================================================
+   BUILD DRAFT COHERENT AVEC TES CHAMPS REELS
+   - replacesInvoiceDocId = facture origine
+   - fromCreditDocId = avoir
+   - on garde redoFromInvoiceId/Number (optionnel) pour compat
+   - businessSnapshot : snapshot au moment du save
+   ========================================================= */
+function buildBusinessSnapshotFromProfile(){
+  const bp = (profileData?.businessProfile || {});
+  return {
+    companyName: String(bp.companyName || "Conciergerie").trim(),
+    billingEmail: String(bp.billingEmail || profileData?.email || "").trim(),
+    phone: String(bp.phone || "").trim(),
+    logoUrl: String(bp.logoUrl || "").trim(),
+    snapAtMs: Date.now(),
+    address: {
+      street: String(bp.address?.street || "").trim(),
+      zip: String(bp.address?.zip || "").trim(),
+      city: String(bp.address?.city || "").trim()
+    },
+    registration: {
+      siret: String(bp.registration?.siret || "").trim(),
+      ape: String(bp.registration?.ape || "").trim()
+    },
+    vat: {
+      enabled: !!bp.vat?.enabled,
+      rate: Number.isFinite(Number(bp.vat?.rate)) ? Number(bp.vat.rate) : 0
+    },
+    tvaExemptionText: String(bp.tvaExemptionText || "").trim(),
+    bank: {
+      name: String(bp.bank?.name || "").trim(),
+      iban: String(bp.bank?.iban || "").trim(),
+      bic:  String(bp.bank?.bic  || "").trim()
+    },
+    conditions: {
+      cancellationPercent: Number.isFinite(Number(bp.conditions?.cancellationPercent))
+        ? Number(bp.conditions.cancellationPercent)
+        : 30
+    }
+  };
+}
 
-  // copie “tout” ce qui doit suivre, sauf lines/totaux
+async function loadCreditDoc(fromCreditDocId){
+  if(!fromCreditDocId) return null;
+  const r = doc(db,"salesDocuments", fromCreditDocId);
+  const s = await getDoc(r);
+  if(!s.exists()) throw new Error("Avoir introuvable (fromCreditDocId/fromAvoirId).");
+  const d = { id:s.id, ...(s.data()||{}) };
+  if(String(d.conciergerieUid||"") !== String(currentUser.uid)){
+    throw new Error("Accès refusé (avoir d’une autre conciergerie).");
+  }
+  if(String(d.type||"").toUpperCase() !== "CREDIT"){
+    console.warn("Doc avoir n'est pas type CREDIT:", d.type);
+  }
+  return d;
+}
+
+function buildNewDraftFromSource(sourceInvoice, creditDoc){
+  const src = sourceInvoice || {};
+  const cred = creditDoc || {};
+
   newDocData = {
     conciergerieUid: String(currentUser.uid),
 
     type: "INVOICE",
     docType: "INVOICE_REDO",
     sourceKind: "REDO",
+
+    // compat historique
     redoFromInvoiceId: String(src.id || ""),
     redoFromInvoiceNumber: String(src.invoiceNumber || ""),
-    fromAvoirId: getParam("fromAvoirId") || "",
 
+    // ✅ cohérence demandée
+    replacesInvoiceDocId: String(src.id || ""),
+    replacesInvoiceNumber: String(src.invoiceNumber || ""),
+
+    fromCreditDocId: String(cred.id || getParam("fromAvoirId") || ""),
+    fromCreditNumber: String(cred.creditNumber || ""),
+
+    // infos logement/période
     homeId: src.homeId || null,
     homeName: src.homeName || "",
     homeAddress: src.homeAddress || "",
@@ -943,6 +1074,7 @@ function buildNewDraftFromSource(){
     arrivalDateKey: src.arrivalDateKey || "",
     departureDateKey: src.departureDateKey || "",
 
+    // client
     clientOwnerDocId: src.clientOwnerDocId || null,
     clientName: src.clientName || "",
     clientEmail: normalizeEmail(src.clientEmail || ""),
@@ -954,18 +1086,26 @@ function buildNewDraftFromSource(){
     clientCountry: src.clientCountry || "FR",
     clientType: src.clientType || "",
 
-    invoiceNumber: "", // nouveau numéro au save
+    // facture
+    invoiceNumber: "",
     invoiceStatus: "DRAFT",
+    invoiceKind: "RECREATED", // tu l'as déjà dans Firestore
     invoiceNotes: "",
 
-    invoicePaymentMode: String(src.invoicePaymentMode || src.invoicePaymentMode || "VIREMENT").toUpperCase(),
+    invoicePaymentMode: String(src.invoicePaymentMode || "VIREMENT").toUpperCase(),
     invoicePaymentTerm: String(src.invoicePaymentTerm || "RECEPTION").toUpperCase(),
     invoicePenaltyMode: String(src.invoicePenaltyMode || "B2C").toUpperCase(),
     invoicePenaltyText: String(src.invoicePenaltyText || "").trim(),
     invoiceShowCancellation: (typeof src.invoiceShowCancellation === "boolean") ? src.invoiceShowCancellation : true,
 
-    // 🔥 lignes template à la place
+    // lignes (on mettra le template ensuite)
     lines: [],
+
+    // totaux calculés à l'écran
+    totalHT: 0, totalTVA: 0, totalTTC: 0,
+
+    // business snapshot au save (mais tu peux déjà l'afficher via profil)
+    businessSnapshot: null,
 
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
@@ -976,36 +1116,40 @@ function buildNewDraftFromSource(){
   showCancelChk.checked = true;
 }
 
+/* ===== Templates UI ===== */
 function fillTemplateSelect(){
   templateSel.innerHTML = NEW_PRESTA_TEMPLATES.map(t=>`<option value="${esc(t.key)}">${esc(t.label)}</option>`).join("");
   templateSel.value = NEW_PRESTA_TEMPLATES[0]?.key || "";
 }
-
 function applyTemplate(key){
   const t = getTemplateByKey(key);
-  templateLines = (t?.lines || []).map(l=>({
-    label: l.label || "",
-    qty: Number(l.qty)||0,
-    unit: l.unit || "unité",
-    unitPrice: Number(l.unitPrice)||0,
-    category: l.category || "",
-    note: l.note || ""
-  }));
-  newDocData.lines = templateLines;
+  const base = (t?.lines || []).map(l=>ensureLineShape(l));
+  // IMPORTANT : appliquer template = remplacer seulement si pas encore édité ? -> ici on remplace.
+  newDocData.lines = base.length ? base : [ensureLineShape({ label:"", qty:1, unit:"unité", unitPrice:0 })];
   renderRecap();
 }
 
-/* ===== Save / Preview ===== */
+/* ===== Lock UI ===== */
 function lockUI(locked){
+  const issued = !!String(newDocData?.invoiceNumber||"").trim();
   saveBtn.disabled = !!locked;
   previewBtn.disabled = !!locked;
-  templateSel.disabled = !!locked || !!String(newDocData?.invoiceNumber||"").trim();
+  templateSel.disabled = !!locked || issued;
+  const addLineBtn = document.getElementById("addLineBtn");
+  if(addLineBtn) addLineBtn.disabled = !!locked || issued;
+
+  payModeSel.disabled = issued || !!locked;
+  payTermSel.disabled = issued || !!locked;
+  penaltyModeSel.disabled = issued || !!locked;
+  penaltyTextEl.disabled = issued || !!locked;
+  showCancelChk.disabled = issued || !!locked;
+  invoiceNotesEl.disabled = issued || !!locked;
 }
 
+/* ===== Preview / Save ===== */
 previewBtn.addEventListener("click", ()=>{
   if(!newDocData) return;
 
-  // draft preview (sessionStorage) -> facture-apercu.html
   const draft = {
     ...newDocData,
     invoiceNotes: String(invoiceNotesEl.value || "").trim(),
@@ -1015,11 +1159,11 @@ previewBtn.addEventListener("click", ()=>{
     invoicePenaltyMode: String(penaltyModeSel.value || "B2C").toUpperCase(),
     invoicePenaltyText: String(penaltyTextEl.value || "").trim(),
     invoiceShowCancellation: !!showCancelChk.checked,
-    lines: templateLines
+    lines: Array.isArray(newDocData.lines) ? newDocData.lines : [],
+    // snapshot au preview pour affichage cohérent
+    businessSnapshot: buildBusinessSnapshotFromProfile()
   };
   sessionStorage.setItem("invoiceDraftPreview", JSON.stringify(draft));
-
-  // docId pas encore créé => on passe via draft=1 sans docId
   location.href = `facture-apercu.html?draft=1`;
 });
 
@@ -1027,14 +1171,16 @@ saveBtn.addEventListener("click", async ()=>{
   hideAlert();
   if(!newDocData) return showAlert("Document non prêt.");
 
+  // validation minimale
+  const lines = Array.isArray(newDocData.lines) ? newDocData.lines : [];
+  const hasAny = lines.some(l => String(l?.label||"").trim() && (Number(l?.qty)||0) > 0);
+  if(!hasAny) return showAlert("Ajoute au moins une ligne (désignation + quantité).");
+
   lockUI(true);
   try{
     const year = new Date().getFullYear();
-
-    // numéro
     const invoiceNumber = await ensureInvoiceNumber(currentUser.uid, year);
 
-    // patch fields
     newDocData.invoiceNumber = invoiceNumber;
     newDocData.invoiceStatus = "ISSUED";
     newDocData.invoiceIssuedAt = serverTimestamp();
@@ -1044,12 +1190,12 @@ saveBtn.addEventListener("click", async ()=>{
     newDocData.invoiceNotes = String(invoiceNotesEl.value || "").trim();
     newDocData.invoicePaymentMode = String(payModeSel.value || "VIREMENT").toUpperCase();
     newDocData.invoicePaymentTerm = String(payTermSel.value || "RECEPTION").toUpperCase();
-
     newDocData.invoicePenaltyMode = String(penaltyModeSel.value || "B2C").toUpperCase();
     newDocData.invoicePenaltyText = String(penaltyTextEl.value || "").trim();
     newDocData.invoiceShowCancellation = !!showCancelChk.checked;
 
-    newDocData.lines = templateLines;
+    // ✅ snapshot business dans le doc (comme ta facture d’origine)
+    newDocData.businessSnapshot = buildBusinessSnapshotFromProfile();
 
     newDocData.updatedAt = serverTimestamp();
     newDocData.commercialStatus = "FACTURE_EMISE";
@@ -1057,15 +1203,10 @@ saveBtn.addEventListener("click", async ()=>{
 
     // création doc salesDocuments
     const created = await addDoc(collection(db,"salesDocuments"), newDocData);
-    newDocRef = doc(db,"salesDocuments", created.id);
     newDocData.id = created.id;
 
     showAlert("✅ Nouvelle facture créée (émise).", true);
     renderRecap();
-
-    // redirige vers facture classique en lecture si tu veux
-    // location.href = `facture.html?docId=${encodeURIComponent(created.id)}`;
-
   }catch(err){
     console.error(err);
     showAlert("Erreur : " + (err?.message || "inconnue"));
@@ -1087,13 +1228,12 @@ penaltyTextEl.addEventListener("input", ()=>{ try{ renderPenalty(); }catch(e){} 
 showCancelChk.addEventListener("change", ()=>{ try{ renderConditions(); }catch(e){} });
 
 /* ===== Back link ===== */
-function buildBackLink(){
-  backLink.href = "factures-liste.html";
-  backLink.textContent = "← Retour";
-}
-buildBackLink();
+backLink.href = "factures-liste.html";
+backLink.textContent = "← Retour";
 
 /* ===== Boot ===== */
+attachLinesEvents();
+
 onAuthStateChanged(auth, async (user)=>{
   if(!user){ location.href="login.html?role=conciergerie"; return; }
   currentUser = user;
@@ -1102,22 +1242,27 @@ onAuthStateChanged(auth, async (user)=>{
     const fromDocId = getParam("fromDocId");
     if(!fromDocId) throw new Error("fromDocId manquant (URL). Exemple : facture-nouv.html?fromDocId=XXXX");
 
+    // ✅ le lien vers l'avoir vient du param fromAvoirId
+    const fromAvoirId = getParam("fromAvoirId");
+    if(!fromAvoirId) throw new Error("fromAvoirId manquant (URL). Exemple : facture-nouv.html?fromDocId=XXXX&fromAvoirId=YYYY");
+
     await loadProfile(currentUser.uid);
     await loadSourceInvoice(fromDocId);
 
-    // prépare draft
-    buildNewDraftFromSource();
+    const creditDoc = await loadCreditDoc(fromAvoirId);
 
-    // init template select
+    buildNewDraftFromSource(sourceDocData, creditDoc);
+
     fillTemplateSelect();
     applyTemplate(templateSel.value);
 
-    // init pénalités + annulation
+    // init pénalités / annulation (cohérent)
     if(!String(penaltyTextEl.value||"").trim()){
       penaltyTextEl.value = String(newDocData.invoicePenaltyText||"").trim() || getPenaltyTemplate(penaltyModeSel.value);
     }
     showCancelChk.checked = true;
 
+    injectAddLineButton();
     lockUI(false);
   }catch(e){
     showAlert("⛔ " + (e?.message || "Erreur chargement"), false);
