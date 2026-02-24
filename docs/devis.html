@@ -1,4 +1,4 @@
-<!-- docs/devis.html (FINAL — Aperçu: sessionStorage + origin + docId garanti, Enregistrer: numéro devis) -->
+<!-- docs/devis.html (FINAL — + recherche propriétaire existant (owners) + modale + reset client) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -217,6 +217,61 @@
       }
       .page{ padding-bottom: 28px; }
     }
+
+    /* Modal owner picker */
+    .modalBack{ display:none; position:fixed; inset:0; background:rgba(0,0,0,.35); z-index:9999; padding:16px; }
+    .modalBox{
+      max-width:720px; margin:6vh auto; background:#fff; border-radius:16px;
+      padding:14px; border:1px solid rgba(122,92,255,0.25);
+      box-shadow:0 14px 36px rgba(0,0,0,0.18);
+    }
+    .modalTitle{ display:flex; justify-content:space-between; align-items:center; gap:10px; font-weight:1000; }
+    .modalHint{ margin-top:10px; font-size:12px; color:#444; font-weight:850; }
+    .searchbarModal{
+      width:100%;
+      display:flex;
+      align-items:center;
+      gap:10px;
+      padding:10px 12px;
+      border-radius:14px;
+      background:#fff;
+      border:1px solid rgba(122,92,255,0.18);
+      box-shadow:0 3px 10px rgba(0,0,0,.06);
+      min-width:0;
+      margin-top:10px;
+    }
+    .searchbarModal .s-ico{ font-size:14px; opacity:.75; }
+    .searchbarModal .input{
+      flex:1;
+      border:none;
+      outline:none;
+      font-size:13px;
+      font-weight:900;
+      color:#111;
+      background:transparent;
+      min-width:0;
+    }
+    .results{
+      margin-top:10px;
+      display:flex;
+      flex-direction:column;
+      gap:8px;
+    }
+    .resultBtn{
+      width:100%;
+      text-align:left;
+      border:none;
+      border-radius:14px;
+      padding:10px 12px;
+      cursor:pointer;
+      background:#fff;
+      border:1px solid rgba(122,92,255,0.18);
+      box-shadow:0 3px 10px rgba(0,0,0,.06);
+    }
+    .resultBtn .a{ font-weight:1000; color:#111; font-size:13px; }
+    .resultBtn .b{ font-weight:900; color:#666; font-size:12px; margin-top:2px; }
+    .resultBtn .c{ font-weight:850; color:#666; font-size:12px; margin-top:2px; }
+    .modalActions{ display:flex; gap:8px; justify-content:flex-end; margin-top:12px; flex-wrap:wrap; }
   </style>
 </head>
 
@@ -261,6 +316,15 @@
       <!-- 2) Client -->
       <div class="box" id="boxClient">
         <div class="headTitle">Client</div>
+
+        <!-- ✅ NEW: owner picker -->
+        <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;">
+          <button class="btnline" type="button" id="pickOwnerBtn">🔎 Rechercher un propriétaire existant</button>
+          <button class="btnline" type="button" id="clearClientBtn">↺ Nouveau client</button>
+        </div>
+        <div class="hintline">
+          <span class="sugg">Astuce : cherche par nom ou email, puis sélectionne pour pré-remplir.</span>
+        </div>
 
         <label for="clientNameInput">Nom *</label>
         <input id="clientNameInput" type="text" placeholder="Nom du client">
@@ -471,11 +535,36 @@
     <a href="messagerie.html">Messages</a>
   </nav>
 
+  <!-- ✅ NEW: Modal propriétaire existant -->
+  <div id="ownerModal" class="modalBack" aria-hidden="true">
+    <div class="modalBox">
+      <div class="modalTitle">
+        <div>Choisir un propriétaire existant</div>
+        <button type="button" id="ownerCloseBtn" class="mini-btn red">✕</button>
+      </div>
+
+      <div class="modalHint">Recherche sur ta collection <b>owners</b> (nom ou email). Puis clique pour pré-remplir le client.</div>
+
+      <div class="searchbarModal" title="Recherche">
+        <span class="s-ico">🔎</span>
+        <input class="input" id="ownerSearchInput" type="search" placeholder="Nom ou email…" autocomplete="off" />
+      </div>
+
+      <div id="ownerResults" class="results"></div>
+
+      <div class="modalActions">
+        <button type="button" id="ownerClearBtn" class="btn">Vider recherche</button>
+        <button type="button" id="ownerCloseBtn2" class="btn primary">Fermer</button>
+      </div>
+    </div>
+  </div>
+
   <script type="module">
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
-      doc, collection, getDoc, setDoc, updateDoc, serverTimestamp, runTransaction
+      doc, collection, getDoc, setDoc, updateDoc, serverTimestamp, runTransaction,
+      getDocs, query, where, limit
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
     import { PRODUCT_TEMPLATES } from "./catalog-templates.js";
 
@@ -499,6 +588,17 @@
     const clientAddress2Input = document.getElementById("clientAddress2Input");
     const clientZipInput = document.getElementById("clientZipInput");
     const clientCityInput = document.getElementById("clientCityInput");
+
+    // ✅ NEW: owner picker UI
+    const pickOwnerBtn = document.getElementById("pickOwnerBtn");
+    const clearClientBtn = document.getElementById("clearClientBtn");
+
+    const ownerModal = document.getElementById("ownerModal");
+    const ownerCloseBtn = document.getElementById("ownerCloseBtn");
+    const ownerCloseBtn2 = document.getElementById("ownerCloseBtn2");
+    const ownerClearBtn = document.getElementById("ownerClearBtn");
+    const ownerSearchInput = document.getElementById("ownerSearchInput");
+    const ownerResults = document.getElementById("ownerResults");
 
     const amountEl = document.getElementById("amount");
     const privateNoteEl = document.getElementById("privateNote");
@@ -569,6 +669,142 @@
       const p = new URLSearchParams(location.search);
       return (p.get(name) || "").trim();
     }
+
+    // ===== ✅ NEW: Owner picker logic =====
+    function openOwnerModal(){
+      ownerModal.style.display = "block";
+      ownerModal.setAttribute("aria-hidden","false");
+      ownerSearchInput.value = "";
+      ownerResults.innerHTML = "";
+      ownerSearchInput.focus();
+    }
+    function closeOwnerModal(){
+      ownerModal.style.display = "none";
+      ownerModal.setAttribute("aria-hidden","true");
+    }
+
+    ownerCloseBtn.addEventListener("click", closeOwnerModal);
+    ownerCloseBtn2.addEventListener("click", closeOwnerModal);
+    ownerModal.addEventListener("click", (e)=>{ if(e.target === ownerModal) closeOwnerModal(); });
+    ownerClearBtn.addEventListener("click", ()=>{
+      ownerSearchInput.value = "";
+      ownerResults.innerHTML = "";
+      ownerSearchInput.focus();
+    });
+
+    function clearClient(){
+      clientNameInput.value = "";
+      clientEmailInput.value = "";
+      clientAddress1Input.value = "";
+      clientAddress2Input.value = "";
+      clientZipInput.value = "";
+      clientCityInput.value = "";
+    }
+
+    function fillClientFromOwner(o){
+      clientNameInput.value = String(o?.name || "").trim();
+      clientEmailInput.value = normalizeEmail(String(o?.email || ""));
+      clientAddress1Input.value = String(o?.address1 || "").trim();
+      clientAddress2Input.value = String(o?.address2 || "").trim();
+      clientZipInput.value = String(o?.zip || "").trim();
+      clientCityInput.value = String(o?.city || "").trim();
+    }
+
+    // Query sans orderBy => évite index composite
+    async function searchOwners(term){
+      const q = String(term || "").trim().toLowerCase();
+      if(q.length < 2) return [];
+
+      try{
+        const ref = collection(db, "owners");
+        const qq = query(
+          ref,
+          where("conciergerieUid", "==", currentUser.uid),
+          limit(250)
+        );
+        const snap = await getDocs(qq);
+
+        const list = snap.docs.map(d=>({ id:d.id, ...(d.data()||{}) }));
+
+        const filtered = list.filter(o=>{
+          const name = String(o.name || o.ownerName || o.fullName || "").toLowerCase();
+          const email = String(o.email || o.ownerEmail || "").toLowerCase();
+          return name.includes(q) || email.includes(q);
+        }).slice(0, 30);
+
+        return filtered.map(o=>({
+          id: o.id,
+          name: String(o.name || o.ownerName || o.fullName || "").trim(),
+          email: String(o.email || o.ownerEmail || "").trim(),
+          address1: String(o.address1 || o.address?.street || o.street || "").trim(),
+          address2: String(o.address2 || o.address?.extra || o.extra || "").trim(),
+          zip: String(o.zip || o.address?.zip || "").trim(),
+          city: String(o.city || o.address?.city || "").trim()
+        }));
+      }catch(e){
+        console.error(e);
+        return [];
+      }
+    }
+
+    function renderOwnerResults(arr){
+      ownerResults.innerHTML = "";
+      if(!arr.length){
+        ownerResults.innerHTML = `<div class="resultBtn" style="cursor:default;"><div class="a">Aucun résultat</div><div class="b">Vérifie le nom / email, ou crée le client manuellement.</div></div>`;
+        return;
+      }
+
+      for(const o of arr){
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "resultBtn";
+        btn.innerHTML = `
+          <div class="a">${esc(o.name || "—")}</div>
+          <div class="b">${esc(o.email || "")}</div>
+          <div class="c">${esc([o.address1, o.zip, o.city].filter(Boolean).join(" • "))}</div>
+        `;
+        btn.addEventListener("click", ()=>{
+          fillClientFromOwner(o);
+          closeOwnerModal();
+          showAlert("✅ Client pré-rempli depuis un propriétaire existant.", true);
+        });
+        ownerResults.appendChild(btn);
+      }
+    }
+
+    let ownerSearchTimer = null;
+    ownerSearchInput.addEventListener("input", ()=>{
+      clearTimeout(ownerSearchTimer);
+      ownerSearchTimer = setTimeout(async ()=>{
+        const term = ownerSearchInput.value || "";
+        if(term.trim().length < 2){
+          ownerResults.innerHTML = "";
+          return;
+        }
+        ownerResults.innerHTML = `<div class="resultBtn" style="cursor:default;"><div class="a">Recherche…</div><div class="b">Patiente une seconde.</div></div>`;
+        const res = await searchOwners(term);
+        renderOwnerResults(res);
+      }, 180);
+    });
+    ownerSearchInput.addEventListener("keydown", async (e)=>{
+      if(e.key !== "Enter") return;
+      const term = ownerSearchInput.value || "";
+      ownerResults.innerHTML = `<div class="resultBtn" style="cursor:default;"><div class="a">Recherche…</div><div class="b">Patiente une seconde.</div></div>`;
+      const res = await searchOwners(term);
+      renderOwnerResults(res);
+    });
+
+    pickOwnerBtn.addEventListener("click", ()=>{
+      hideAlert();
+      if(!currentUser?.uid) return showAlert("⛔ Session invalide.", false);
+      openOwnerModal();
+    });
+    clearClientBtn.addEventListener("click", ()=>{
+      clearClient();
+      showAlert("✅ Bloc client réinitialisé (nouveau client).", true);
+    });
+
+    // ===== reste de ton code (inchangé) =====
     function todayDdmmyyyy(){
       const d = new Date();
       const dd = String(d.getDate()).padStart(2,"0");
@@ -781,6 +1017,8 @@
       saveBtn.disabled = !!locked;
       previewBtn.disabled = !!locked;
       addLineBtn.disabled = !!locked;
+      pickOwnerBtn.disabled = !!locked;
+      clearClientBtn.disabled = !!locked;
     }
 
     function readClientInputs(){
@@ -1195,7 +1433,6 @@
       renderRecap();
     }
 
-    // ✅ IMPORTANT : snapshot complet pour l'aperçu (sessionStorage)
     function buildDraftPreviewObject(){
       const client = readClientInputs();
       const bs = buildBusinessSnapshotFromProfile();
@@ -1255,22 +1492,17 @@
       }
     });
 
-    // ✅ Aperçu : docId garanti + snapshot sessionStorage + origin pour retour sans reset
     previewBtn.addEventListener("click", async ()=>{
       hideAlert();
       lockUI(true);
       try{
-        // 1) docId garanti (retour propre + fallback Firestore possible)
         await createNewDocIfNeeded();
 
-        // 2) snapshot EXACT pour l'aperçu
         const draft = buildDraftPreviewObject();
         sessionStorage.setItem("quoteDraftPreview", JSON.stringify(draft));
 
-        // 3) on persiste le brouillon (pour conserver l'état au retour)
         await saveToFirestore({ requireLines:false, makeListable:false });
 
-        // 4) navigation vers aperçu
         const u = new URL("devis-apercu.html", location.href);
         u.searchParams.set("draft", "1");
         u.searchParams.set("docId", docId);
