@@ -1,4 +1,4 @@
-<!-- docs/conciergerie.html (FINAL — badge Recouvrement cliquable + bouton Boutique -> catalogue.html) -->
+<!-- docs/conciergerie.html (FINAL — + badge Déclarations (URSSAF ou TVA) + recouvrement scope FIX) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -142,6 +142,7 @@
       font-size:22px;
       font-weight:1000;
       letter-spacing:-0.2px;
+      flex-wrap:wrap;
     }
     .mini-badge{
       font-size:11px;
@@ -428,12 +429,21 @@
         </div>
       </div>
 
-      <!-- ✅ Recouvrement (badge cliquable avec libellé) -->
+      <!-- ✅ Recouvrement -->
       <div class="stat clickable" id="statRecouvrementCard" title="Ouvrir le recouvrement">
         <div class="label">Recouvrement<br>(à faire)</div>
         <div class="value">
           <span id="statRecouvrement">—</span>
           <span class="mini-badge warn" id="statRecouvrementHint">impayés</span>
+        </div>
+      </div>
+
+      <!-- ✅ Déclarations (URSSAF ou TVA) -->
+      <div class="stat" id="statDeclarationsCard" title="Indicateur mois en cours (info)">
+        <div class="label" id="statDeclarationsLabel">Déclarations<br>(mois en cours)</div>
+        <div class="value">
+          <span id="statDeclarationsMain">—</span>
+          <span class="mini-badge" id="statDeclarationsHint">—</span>
         </div>
       </div>
     </section>
@@ -455,11 +465,10 @@
 
       <div class="card">
         <h2>Comptabilité</h2>
-        <p>Ventes • paiements & retards • journaux • export CSV.</p>
+        <p>Ventes • journaux • suivi & recouvrement.</p>
         <a class="cta" href="compta.html">Comptabilité</a>
       </div>
 
-      <!-- ✅ Remplace le bouton Recouvrement par Boutique -->
       <div class="card">
         <h2>Boutique</h2>
         <p>Catalogue kits / consommables (préparation commande).</p>
@@ -518,7 +527,7 @@
       <a href="prestations.html">Production</a>
       <a href="logements.html">Logements</a>
       <a href="import-ical.html">iCal</a>
-   <a href="conciergerie-messages.html">Messages</a>
+      <a href="conciergerie-messages.html">Messages</a>
     </nav>
   </div>
 
@@ -532,7 +541,6 @@
 
     const alertBox = document.getElementById("alertBox");
     const logoutBtn = document.getElementById("logoutBtn");
-
     const companyLine = document.getElementById("companyLine");
 
     const statClients = document.getElementById("statClients");
@@ -545,6 +553,14 @@
     const statRecouvrementCard = document.getElementById("statRecouvrementCard");
     const statRecouvrement = document.getElementById("statRecouvrement");
     const statRecouvrementHint = document.getElementById("statRecouvrementHint");
+
+    // ✅ Déclarations
+    const statDeclarationsLabel = document.getElementById("statDeclarationsLabel");
+    const statDeclarationsMain = document.getElementById("statDeclarationsMain");
+    const statDeclarationsHint = document.getElementById("statDeclarationsHint");
+
+    let vatCfg = { enabled:false, rate:0 };
+    let lastRec = { today:0, late:0 };
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -580,14 +596,33 @@
       el.textContent = Number.isFinite(n) ? String(n) : "—";
     }
 
-    // ✅ Nom conciergerie = users/{uid}.businessProfile.companyName
-    async function loadCompanyName(user){
+    function fmtMoney(n){
+      const x = Number(n);
+      if(!Number.isFinite(x)) return "—";
+      return x.toLocaleString("fr-FR",{minimumFractionDigits:0, maximumFractionDigits:0}) + " €";
+    }
+    function fmtMoney2(n){
+      const x = Number(n);
+      if(!Number.isFinite(x)) return "—";
+      return x.toLocaleString("fr-FR",{minimumFractionDigits:2, maximumFractionDigits:2}) + " €";
+    }
+
+    // ✅ Profil conciergerie = companyName + VAT config
+    async function loadCompanyProfile(user){
       try{
         const uSnap = await getDoc(doc(db, "users", user.uid));
-        const company = uSnap.exists() ? (uSnap.data()?.businessProfile?.companyName || "") : "";
-        companyLine.textContent = (company || "").trim() || "Conciergerie";
+        const data = uSnap.exists() ? (uSnap.data()||{}) : {};
+        const company = String(data?.businessProfile?.companyName || "").trim();
+        companyLine.textContent = company || "Conciergerie";
+
+        const vat = data?.businessProfile?.vat || {};
+        vatCfg = {
+          enabled: !!vat?.enabled,
+          rate: Number.isFinite(Number(vat?.rate)) ? Number(vat.rate) : 0
+        };
       }catch(e){
         companyLine.textContent = "Conciergerie";
+        vatCfg = { enabled:false, rate:0 };
       }
     }
 
@@ -655,7 +690,7 @@
       const st = String(x?.invoiceStatus||"").toUpperCase().trim();
       return ["PAID","CREDITED","CANCELLED"].includes(st);
     }
-    function getDueAmount(x){
+    function getDueAmountQuick(x){
       const total = Number(x?.totalTTC);
       const paid = Number(x?.paidAmount);
       const t = Number.isFinite(total) ? total : 0;
@@ -663,7 +698,7 @@
       return Math.max(0, t - p);
     }
     function isActionable(x){
-      const due = getDueAmount(x);
+      const due = getDueAmountQuick(x);
       return !isClosedByStatus(x) && due > 0.000001;
     }
     function getNextActionAtMs(x){
@@ -708,10 +743,11 @@
         else if(ms <= eod) today++;
       }
 
+      lastRec = { today, late };
+
       const total = today + late;
       setStat(statRecouvrement, total);
 
-      // libellé explicite
       if(total === 0){
         statRecouvrementHint.textContent = "impayés : 0";
         statRecouvrementHint.classList.remove("bad");
@@ -724,10 +760,92 @@
       }
     }
 
-    // click recouvrement badge -> recouvrement.html?scope=TODO
+    // ✅ click recouvrement badge -> scope compatible (LATE/TODAY/NONE)
     statRecouvrementCard.addEventListener("click", ()=>{
-      location.href = "recouvrement.html?scope=TODO";
+      if(lastRec.late > 0) location.href = "recouvrement.html?scope=LATE";
+      else if(lastRec.today > 0) location.href = "recouvrement.html?scope=TODAY";
+      else location.href = "recouvrement.html";
     });
+
+    // ✅ Déclarations (CA du mois / CA HT + TVA)
+    function monthBounds(){
+      const now = new Date();
+      const from = new Date(now.getFullYear(), now.getMonth(), 1, 0,0,0,0).getTime();
+      const to = now.getTime();
+      return { from, to };
+    }
+    function getIssuedAtMs(x){
+      return toMillis(x?.invoiceIssuedAt) || toMillis(x?.createdAt) || toMillis(x?.createdAtMs) || toMillis(x?.snapAtMs) || 0;
+    }
+    function isInvoiceDoc(x){
+      const listable = (x?.listable !== false);
+      if(!listable) return false;
+      const type = String(x?.type || "").toUpperCase().trim();
+      const docType = String(x?.docType || "").toUpperCase().trim();
+      return (type === "INVOICE" || docType === "INVOICE_EVENT" || docType === "INVOICE");
+    }
+    function computeHT(lines){
+      if(!Array.isArray(lines)) return 0;
+      return lines.reduce((s,l)=> s + (Number(l?.qty)||0) * (Number(l?.unitPrice)||0), 0);
+    }
+    function getTotalTTC(inv){
+      const n = Number(inv?.totalTTC);
+      if(Number.isFinite(n) && n >= 0) return n;
+      // fallback TTC = HT + TVA (mono taux)
+      const ht = computeHT(inv?.lines);
+      const tva = vatCfg.enabled ? (ht * (Number(vatCfg.rate)||0)) : 0;
+      return ht + tva;
+    }
+
+    async function loadDeclarationsKpi(user){
+      const uid = user.uid;
+      const { from, to } = monthBounds();
+
+      const qInv = query(
+        collection(db, "salesDocuments"),
+        where("conciergerieUid","==",uid),
+        limit(700)
+      );
+
+      const snap = await getDocs(qInv);
+      const docs = snap.docs.map(d => ({ id:d.id, ...(d.data()||{}) }));
+
+      let sumTTC = 0;
+      let sumHT = 0;
+
+      for(const x of docs){
+        if(!isInvoiceDoc(x)) continue;
+
+        const st = String(x?.invoiceStatus||"").toUpperCase().trim();
+        if(["CANCELLED","CREDITED"].includes(st)) continue;
+
+        const ms = getIssuedAtMs(x);
+        if(!ms || ms < from || ms > to) continue;
+
+        // TTC
+        const ttc = getTotalTTC(x);
+        sumTTC += Number.isFinite(ttc) ? ttc : 0;
+
+        // HT (si TVA)
+        const ht = computeHT(x?.lines);
+        sumHT += Number.isFinite(ht) ? ht : 0;
+      }
+
+      if(!vatCfg.enabled){
+        statDeclarationsLabel.innerHTML = "CA du mois<br>(URSSAF)";
+        statDeclarationsMain.textContent = fmtMoney(sumTTC);
+        statDeclarationsHint.textContent = "info";
+        statDeclarationsHint.classList.remove("bad","warn");
+        return;
+      }
+
+      const tva = sumHT * (Number(vatCfg.rate)||0);
+
+      statDeclarationsLabel.innerHTML = "CA HT / TVA<br>(info)";
+      statDeclarationsMain.textContent = fmtMoney(sumHT);
+      statDeclarationsHint.textContent = `TVA : ${fmtMoney2(tva)}`;
+      statDeclarationsHint.classList.remove("bad","warn");
+    }
 
     logoutBtn.addEventListener("click", async ()=>{
       await signOut(auth);
@@ -749,7 +867,7 @@
       }
       hideAlert();
 
-      await loadCompanyName(user);
+      await loadCompanyProfile(user);
 
       try{
         await loadStatsFromEvents(user);
@@ -766,6 +884,14 @@
       }catch(e){
         setStat(statRecouvrement, NaN);
         statRecouvrementHint.textContent = "impayés : —";
+      }
+
+      try{
+        await loadDeclarationsKpi(user);
+      }catch(e){
+        statDeclarationsLabel.innerHTML = "Déclarations<br>(mois en cours)";
+        statDeclarationsMain.textContent = "—";
+        statDeclarationsHint.textContent = "—";
       }
     });
   </script>
