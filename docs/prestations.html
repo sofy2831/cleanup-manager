@@ -1,4 +1,4 @@
-<!-- docs/prestations.html (COMPLET + PATCH MODALE: typo moins grasse + boutons redondants supprimés + croix à la place de Fermer) -->
+<!-- docs/prestations.html (COMPLET — onboarding agents + guard conciergerie (abonnement + profil) SANS CASSER) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -308,6 +308,94 @@
       font-size:12px;
     }
 
+    /* ✅ Onboarding */
+    .onb{
+      display:none;
+      background:rgba(255,255,255,0.90);
+      border:1px solid rgba(122,92,255,0.22);
+      border-radius:18px;
+      box-shadow:var(--shadow);
+      backdrop-filter:blur(10px);
+      padding:12px;
+      overflow:hidden;
+    }
+    .onb-top{
+      display:flex;
+      align-items:flex-start;
+      justify-content:space-between;
+      gap:10px;
+    }
+    .onb-title{
+      font-size:15px;
+      font-weight:900;
+      margin:0;
+    }
+    .onb-sub{
+      margin-top:4px;
+      font-size:12px;
+      font-weight:800;
+      color:#555;
+      line-height:1.35;
+    }
+    .onb-steps{
+      margin-top:10px;
+      display:flex;
+      flex-direction:column;
+      gap:8px;
+    }
+    .onb-step{
+      background:#fff;
+      border:1px dashed rgba(122,92,255,0.25);
+      border-radius:14px;
+      padding:10px 10px;
+      display:flex;
+      align-items:flex-start;
+      gap:10px;
+    }
+    .onb-num{
+      width:22px;height:22px;border-radius:50%;
+      display:inline-flex;align-items:center;justify-content:center;
+      background:rgba(122,92,255,0.12);
+      border:1px solid rgba(122,92,255,0.25);
+      color:#5b45c8;
+      font-weight:1000;
+      flex-shrink:0;
+      margin-top:1px;
+      font-size:12px;
+    }
+    .onb-step .txt{
+      display:flex;
+      flex-direction:column;
+      gap:2px;
+      min-width:0;
+    }
+    .onb-step .txt strong{
+      font-size:12px;
+      font-weight:1000;
+      color:#222;
+      line-height:1.2;
+    }
+    .onb-step .txt span{
+      font-size:11px;
+      color:#666;
+      font-weight:800;
+      line-height:1.35;
+    }
+    .onb-actions{
+      margin-top:10px;
+      display:flex;
+      gap:8px;
+      flex-wrap:wrap;
+      justify-content:flex-end;
+    }
+    .xsmall{
+      margin-top:8px;
+      font-size:11px;
+      font-weight:800;
+      color:#666;
+      line-height:1.35;
+    }
+
     /* Bottom nav (même que conciergerie.html) */
     .bottom-nav{
       position: fixed;
@@ -570,6 +658,25 @@
     <div class="alert" id="alertBox"></div>
 
     <div class="layout">
+      <!-- ✅ ONBOARDING AGENT (affiché si besoin) -->
+      <section class="onb" id="onboardingCard" aria-label="Onboarding">
+        <div class="onb-top">
+          <div style="min-width:0;">
+            <div class="onb-title">Dernière étape : lancer la production</div>
+            <div class="onb-sub" id="onbSubtitle">—</div>
+          </div>
+          <button class="mini" id="onbDismissBtn" type="button">J’ai compris</button>
+        </div>
+
+        <div class="onb-steps" id="onbSteps"></div>
+
+        <div class="onb-actions" id="onbActions"></div>
+
+        <div class="xsmall">
+          Info : l’agent ne voit <b>pas</b> les tarifs. Il voit uniquement ses missions + checklists + photos à déposer.
+        </div>
+      </section>
+
       <section class="card">
         <div class="card-title">
           <span>Prestations</span>
@@ -741,6 +848,13 @@
     const listEl = document.getElementById("list");
     const countLabel = document.getElementById("countLabel");
 
+    // onboarding
+    const onboardingCard = document.getElementById("onboardingCard");
+    const onbSubtitle = document.getElementById("onbSubtitle");
+    const onbSteps = document.getElementById("onbSteps");
+    const onbActions = document.getElementById("onbActions");
+    const onbDismissBtn = document.getElementById("onbDismissBtn");
+
     // search
     const searchInput = document.getElementById("searchInput");
     const clearSearchBtn = document.getElementById("clearSearchBtn");
@@ -888,8 +1002,39 @@
       if(t && t.unit) newUnit.value = t.unit;
     });
 
-    // ===== Guard placeholder =====
-    async function guardConciergerie(user){ return true; }
+    // ===== Guard conciergerie (comme conciergerie.html) =====
+    const FREE_EMAILS = new Set([
+      "mathilde.debout31@gmail.com",
+      "s.dumas974@gmail.com"
+    ]);
+
+    async function guardConciergerie(user){
+      const email = (user.email || "").toLowerCase();
+      const isAdmin = FREE_EMAILS.has(email);
+
+      try{
+        const snap = await getDoc(doc(db, "users", user.uid));
+        if(!snap.exists()) return { ok:false, reason:"no_profile" };
+
+        const data = snap.data() || {};
+        const roleOk = (data.role === "conciergerie" || data.role === "admin");
+        if(!roleOk) return { ok:false, reason:"bad_role" };
+
+        if(isAdmin || data.role === "admin") return { ok:true, data };
+
+        if(String(data.subscriptionStatus || "").toLowerCase() !== "active"){
+          return { ok:false, reason:"sub_inactive" };
+        }
+
+        if(!data.billingReady){
+          return { ok:false, reason:"profile_missing" };
+        }
+
+        return { ok:true, data };
+      }catch(e){
+        return { ok:false, reason:"error" };
+      }
+    }
 
     // ✅ Nom conciergerie = users/{uid}.businessProfile.companyName (comme conciergerie.html)
     async function loadCompanyName(user){
@@ -927,6 +1072,113 @@
       applySearchUI();
       renderList();
       searchInput?.focus();
+    });
+
+    // ===== Onboarding =====
+    const ONB_KEY = "cm_onb_prestations_v1";
+
+    function setOnboardingVisible(visible){
+      if(!onboardingCard) return;
+      onboardingCard.style.display = visible ? "block" : "none";
+    }
+
+    function makeStep(n, title, sub){
+      return `
+        <div class="onb-step">
+          <span class="onb-num">${n}</span>
+          <div class="txt">
+            <strong>${esc(title)}</strong>
+            <span>${esc(sub)}</span>
+          </div>
+        </div>
+      `;
+    }
+
+    function setOnboardingContent({ subtitle, stepsHtml, actionsHtml }){
+      if(onbSubtitle) onbSubtitle.textContent = subtitle || "";
+      if(onbSteps) onbSteps.innerHTML = stepsHtml || "";
+      if(onbActions) onbActions.innerHTML = actionsHtml || "";
+    }
+
+    function computeAgentCountFromItems(arr){
+      const set = new Set();
+      for(const it of (arr || [])){
+        const a = String(it?.agentEmail || it?.assignedToEmail || it?.assignedTo || "").trim().toLowerCase();
+        if(a) set.add(a);
+      }
+      return set.size;
+    }
+
+    function renderOnboarding(){
+      try{
+        const dismissed = localStorage.getItem(ONB_KEY) === "1";
+        if(dismissed){ setOnboardingVisible(false); return; }
+
+        const prestaCount = items.length;
+        const agentCount = computeAgentCountFromItems(items);
+
+        // 1) aucune prestation -> guider vers planning
+        if(prestaCount === 0){
+          setOnboardingContent({
+            subtitle: "Tu n’as aucune prestation pour l’instant. Crée d’abord une réservation/intervention depuis le planning.",
+            stepsHtml: [
+              makeStep(1, "Créer une prestation", "Va sur Planning, clique sur une réservation, puis crée une prestation (ex : ménage arrivée / ménage départ)."),
+              makeStep(2, "Revenir ici", "Tu verras tes prestations ici, et tu pourras ouvrir “Intervention” pour inviter un agent.")
+            ].join(""),
+            actionsHtml: `
+              <a class="mini primary" href="planning.html">Aller au Planning</a>
+              <button class="mini" type="button" id="onbDismissInline">Plus tard</button>
+            `
+          });
+          setOnboardingVisible(true);
+
+          document.getElementById("onbDismissInline")?.addEventListener("click", ()=>{
+            localStorage.setItem(ONB_KEY, "1");
+            setOnboardingVisible(false);
+          });
+
+          return;
+        }
+
+        // 2) prestations ok mais aucun agent “vu” -> proposer d’ouvrir intervention sur la dernière presta
+        if(agentCount === 0){
+          const first = items[0];
+          const pid = first?.id ? String(first.id) : "";
+          const href = pid ? `intervention.html?prestationId=${encodeURIComponent(pid)}` : "intervention.html";
+
+          setOnboardingContent({
+            subtitle: "Maintenant : invite ton 1er agent pour exécuter les missions (photos incluses).",
+            stepsHtml: [
+              makeStep(1, "Ouvrir une intervention", "Clique “Intervention” sur une prestation, ou utilise le bouton ci-dessous."),
+              makeStep(2, "Inviter l’agent", "Nom + email. Il reçoit un lien, voit ses missions, coche et ajoute ses photos."),
+              makeStep(3, "Valider ensuite", "Quand l’agent a fini : tu valides, et tu peux passer en facture.")
+            ].join(""),
+            actionsHtml: `
+              <a class="mini primary" href="${esc(href)}">Inviter un agent</a>
+              <a class="mini" href="prestations.html?open=${encodeURIComponent(pid)}">Ouvrir la dernière prestation</a>
+              <button class="mini" type="button" id="onbDismissInline">J’ai compris</button>
+            `
+          });
+          setOnboardingVisible(true);
+
+          document.getElementById("onbDismissInline")?.addEventListener("click", ()=>{
+            localStorage.setItem(ONB_KEY, "1");
+            setOnboardingVisible(false);
+          });
+
+          return;
+        }
+
+        // 3) agent(s) ok -> pas d’onboarding
+        setOnboardingVisible(false);
+      }catch(_){
+        setOnboardingVisible(false);
+      }
+    }
+
+    onbDismissBtn?.addEventListener("click", ()=>{
+      try{ localStorage.setItem(ONB_KEY, "1"); }catch(_){}
+      setOnboardingVisible(false);
     });
 
     // ===== Modales =====
@@ -1172,6 +1424,7 @@
         closeDetailModal();
         renderList();
         renderDetail();
+        renderOnboarding(); // ✅ update
         showAlert("✅ Prestation supprimée.", true);
       }catch(err){
         console.error(err);
@@ -1304,6 +1557,7 @@
       });
 
       closeEditModal();
+      renderOnboarding(); // ✅ update (au cas où agent/flow)
     });
 
     // ===== Open param =====
@@ -1363,6 +1617,10 @@
         ownerName: x.ownerName || "",
         ownerPhone: x.ownerPhone || x.phone || "",
 
+        // ✅ agent hints (pour onboarding / futur)
+        agentEmail: x.assignedToEmail || x.agentEmail || "",
+        assignedToEmail: x.assignedToEmail || x.agentEmail || "",
+
         meta: x.meta || "",
         summary: x.summary || "",
         lines,
@@ -1395,6 +1653,7 @@
 
       renderList();
       renderDetail();
+      renderOnboarding(); // ✅ after data
       await autoOpenFromQuery();
     }
 
@@ -1405,9 +1664,19 @@
         return;
       }
 
-      const ok = await guardConciergerie(user);
-      if(!ok){
-        location.href = "abonnement.html?plan=starter";
+      const res = await guardConciergerie(user);
+      if(!res.ok){
+        if(res.reason === "sub_inactive"){
+          showAlert("⛔ Abonnement inactif. Merci de choisir une offre.", false);
+          setTimeout(()=> location.href = "abonnement.html?plan=free", 500);
+          return;
+        }
+        if(res.reason === "profile_missing"){
+          showAlert("⚠️ Profil conciergerie à compléter (obligatoire).", false);
+          setTimeout(()=> location.href = "profil-conciergerie.html", 500);
+          return;
+        }
+        location.href = "login.html?role=conciergerie";
         return;
       }
 
