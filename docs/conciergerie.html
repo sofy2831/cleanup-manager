@@ -1,4 +1,4 @@
-<!-- docs/conciergerie.html (FINAL — badge Déclarations SUPPRIMÉ + recouvrement scope FIX) -->
+<!-- docs/conciergerie.html (FINAL — profil obligatoire + abonnement guard + recouvrement scope FIX) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -563,17 +563,37 @@
       "s.dumas974@gmail.com"
     ]);
 
+    // ✅ guard : rôle + abonnement + profil obligatoire (billingReady)
     async function guardConciergerie(user){
       const email = (user.email || "").toLowerCase();
-      if(FREE_EMAILS.has(email)) return true;
+      const isAdmin = FREE_EMAILS.has(email);
 
       try{
         const snap = await getDoc(doc(db, "users", user.uid));
-        if(!snap.exists()) return false;
+        if(!snap.exists()) return { ok:false, reason:"no_profile" };
+
         const data = snap.data() || {};
-        return (data.role === "conciergerie" || data.role === "admin") && (data.subscriptionStatus === "active");
+        const roleOk = (data.role === "conciergerie" || data.role === "admin");
+
+        if(!roleOk) return { ok:false, reason:"bad_role" };
+
+        // admin bypass
+        if(isAdmin || data.role === "admin") return { ok:true, data };
+
+        // abonnement obligatoire
+        if(String(data.subscriptionStatus || "").toLowerCase() !== "active"){
+          return { ok:false, reason:"sub_inactive" };
+        }
+
+        // profil obligatoire
+        if(!data.billingReady){
+          return { ok:false, reason:"profile_missing" };
+        }
+
+        return { ok:true, data };
+
       }catch(e){
-        return false;
+        return { ok:false, reason:"error" };
       }
     }
 
@@ -746,10 +766,19 @@
         return;
       }
 
-      const ok = await guardConciergerie(user);
-      if(!ok){
-        showAlert("⛔ Abonnement inactif. Merci de choisir une offre.", false);
-        setTimeout(()=> location.href = "abonnement.html?plan=starter", 700);
+      const res = await guardConciergerie(user);
+      if(!res.ok){
+        if(res.reason === "sub_inactive"){
+          showAlert("⛔ Abonnement inactif. Merci de choisir une offre.", false);
+          setTimeout(()=> location.href = "abonnement.html?plan=free", 500);
+          return;
+        }
+        if(res.reason === "profile_missing"){
+          showAlert("⚠️ Profil conciergerie à compléter (obligatoire).", false);
+          setTimeout(()=> location.href = "profil-conciergerie.html", 500);
+          return;
+        }
+        location.href = "login.html?role=conciergerie";
         return;
       }
       hideAlert();
