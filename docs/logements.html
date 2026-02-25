@@ -1,4 +1,4 @@
-<!-- docs/logements.html (COMPLET — COHÉRENT: homes.ownerDocId (owners docId) + homes.ownerUid (auth uid) + "Associer" si owner existe + compteur par ownerDocId) -->
+<!-- docs/logements.html (UPDATED — onboarding "lier propriétaire" + scroll vers logement à lier, sans casser le reste) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -114,6 +114,67 @@
       font-weight:900;
     }
 
+    /* ✅ Onboarding logement */
+    .onb{
+      width:100%;
+      max-width:980px;
+      margin-top:12px;
+      padding:12px 12px;
+      border-radius:16px;
+      background:rgba(122,92,255,.10);
+      border:1px solid rgba(122,92,255,.18);
+      box-shadow:0 10px 24px rgba(0,0,0,0.06);
+      display:none;
+    }
+    .onb-title{
+      font-weight:1000;
+      font-size:13px;
+      color:#2b2b2b;
+      margin:0 0 8px;
+    }
+    .onb-text{
+      margin:0;
+      font-size:12.5px;
+      color:#444;
+      line-height:1.4;
+      font-weight:750;
+    }
+    .onb-list{
+      margin:8px 0 0;
+      padding-left:18px;
+      font-size:12.5px;
+      color:#444;
+      line-height:1.4;
+      font-weight:750;
+    }
+    .onb-list li{ margin:6px 0; }
+    .onb-actions{
+      margin-top:10px;
+      display:flex;
+      gap:8px;
+      flex-wrap:wrap;
+      justify-content:flex-end;
+    }
+    .onb-btn{
+      border:none;
+      border-radius:999px;
+      padding:9px 12px;
+      font-size:12px;
+      font-weight:1000;
+      cursor:pointer;
+      background:#fff;
+      color:var(--violet-main);
+      border:2px solid var(--violet-main);
+      box-shadow:0 3px 10px rgba(0,0,0,.06);
+      white-space:nowrap;
+    }
+    .onb-btn.primary{
+      background:linear-gradient(90deg,var(--violet-main),var(--violet-dark));
+      border-color:transparent;
+      color:#fff;
+      box-shadow:0 4px 12px rgba(0,0,0,.15);
+    }
+
     .card{
       width:100%;
       max-width:980px;
@@ -205,6 +266,25 @@
       box-shadow:0 3px 10px rgba(0,0,0,.06);
       border-left:5px solid var(--violet-main);
       text-align:left;
+    }
+
+    /* ✅ highlight du 1er logement à lier */
+    .item.needs-link{
+      outline: 3px solid rgba(179,38,30,0.18);
+      box-shadow:0 12px 26px rgba(179,38,30,0.10);
+      position:relative;
+    }
+    .item.needs-link::before{
+      content:"À LIER";
+      position:absolute;
+      top:10px; right:10px;
+      font-size:11px;
+      font-weight:1000;
+      padding:4px 10px;
+      border-radius:999px;
+      background:rgba(179,38,30,0.10);
+      color:var(--bad);
+      border:1px solid rgba(179,38,30,0.20);
     }
 
     .item-top{
@@ -390,6 +470,23 @@
     <div class="subtitle">Logements</div>
     <div class="badge" id="badgeLine">Chargement…</div>
 
+    <!-- ✅ ONBOARDING : lier le propriétaire -->
+    <section class="onb" id="onbBox" aria-label="Démarrage guidé">
+      <div class="onb-title">Étape 2/4 — Lier le logement au propriétaire</div>
+      <p class="onb-text">
+        Tant que le propriétaire n’a pas accepté (compte lié), les réservations sont bloquées.
+      </p>
+      <ul class="onb-list">
+        <li>Si le propriétaire existe déjà → clique <b>Associer</b>.</li>
+        <li>Sinon → clique <b>Inviter</b> (il reçoit un lien).</li>
+      </ul>
+      <div class="onb-actions">
+        <button class="onb-btn primary" type="button" id="onbGoBtn">Aller au logement à lier</button>
+        <button class="onb-btn" type="button" id="onbOkBtn">J’ai compris</button>
+        <button class="onb-btn" type="button" id="onbLaterBtn">Plus tard</button>
+      </div>
+    </section>
+
     <div class="card">
       <div class="card-title">
         <span>Vos logements</span>
@@ -536,6 +633,14 @@
   const alertBox = document.getElementById("alertBox");
   const badgeLine = document.getElementById("badgeLine");
 
+  // onboarding
+  const onbBox = document.getElementById("onbBox");
+  const onbGoBtn = document.getElementById("onbGoBtn");
+  const onbOkBtn = document.getElementById("onbOkBtn");
+  const onbLaterBtn = document.getElementById("onbLaterBtn");
+  let onbDismissed = false;
+  let firstNeedsLinkId = null;
+
   // home modal
   const modalBackdrop = document.getElementById("modalBackdrop");
   const modalTitle = document.getElementById("modalTitle");
@@ -662,6 +767,61 @@
       return false;
     }
   }
+
+  // ===== Onboarding persistence =====
+  function setOnbVisible(v){
+    onbBox.style.display = v ? "block" : "none";
+  }
+
+  async function loadOnboardingState(uid){
+    onbDismissed = false;
+    try{
+      const us = await getDoc(doc(db,"users", uid));
+      const data = us.exists() ? (us.data()||{}) : {};
+      const dismissed = !!(data?.onboarding?.homes?.dismissed);
+      onbDismissed = dismissed;
+    }catch(_){}
+  }
+
+  async function persistOnboardingDismiss(uid, mode){
+    try{
+      const patch = {
+        updatedAt: serverTimestamp(),
+        onboarding: {
+          homes: {
+            dismissed: (mode === "dismiss"),
+            snoozedAt: (mode === "snooze") ? serverTimestamp() : null,
+            updatedAt: serverTimestamp()
+          }
+        }
+      };
+      await updateDoc(doc(db,"users", uid), patch);
+    }catch(e){
+      // pas bloquant
+      console.warn("persistOnboardingDismiss:", e?.message || e);
+    }
+  }
+
+  onbGoBtn.addEventListener("click", ()=>{
+    if(!firstNeedsLinkId) return;
+    const el = document.getElementById("home_" + firstNeedsLinkId);
+    if(el){
+      el.scrollIntoView({ behavior:"smooth", block:"center" });
+    }
+  });
+
+  onbOkBtn.addEventListener("click", async ()=>{
+    setOnbVisible(false);
+    const user = auth.currentUser;
+    if(user?.uid) await persistOnboardingDismiss(user.uid, "dismiss");
+    onbDismissed = true;
+  });
+
+  onbLaterBtn.addEventListener("click", async ()=>{
+    setOnbVisible(false);
+    const user = auth.currentUser;
+    if(user?.uid) await persistOnboardingDismiss(user.uid, "snooze");
+  });
 
   // ===== Data =====
   let currentUid = null;
@@ -1023,6 +1183,20 @@
     return "invite-proprietaire.html?" + p.toString();
   }
 
+  function computeOnboardingVisibility(filteredHomes){
+    // show uniquement si on a au moins 1 logement actif ET au moins 1 non lié (ownerUid vide)
+    if(onbDismissed) return false;
+
+    const active = filteredHomes.filter(h => !isArchived(h));
+    if(!active.length) return false;
+
+    const needs = active.filter(h => !String(h.ownerUid || "").trim());
+    if(!needs.length) return false;
+
+    firstNeedsLinkId = needs[0].id || null;
+    return true;
+  }
+
   function render(){
     const q = norm(searchInputEl.value);
     let homes = allHomes.slice();
@@ -1051,6 +1225,9 @@
       return hay.includes(q);
     });
 
+    // onboarding toggle (on ne dépend pas du search)
+    setOnbVisible(computeOnboardingVisibility(homes));
+
     countLabelEl.textContent = filtered.length + " / " + homes.length;
     homesListEl.innerHTML = "";
 
@@ -1064,6 +1241,9 @@
       return;
     }
 
+    // reset highlight marker (pour 1 seul logement)
+    let highlightApplied = false;
+
     filtered.forEach(h=>{
       // hydrate si ownerDocId présent
       if(String(h.ownerDocId || "").trim()){
@@ -1072,6 +1252,7 @@
 
       const item = document.createElement("div");
       item.className = "item";
+      item.id = "home_" + h.id;
 
       const addr = (h.homeAddress || h.address || "").trim();
       const zip = (h.homeZip || h.zip || "").toString().trim();
@@ -1088,6 +1269,13 @@
         || pendingEmail
         || ""
       );
+
+      // highlight du 1er logement à lier (si onboarding visible)
+      const isNeedLink = (!isArchived(h) && !ownerUid);
+      if(isNeedLink && !highlightApplied && onbBox.style.display !== "none"){
+        item.classList.add("needs-link");
+        highlightApplied = true;
+      }
 
       // si pas de liaison docId mais owner existe déjà (emailLower)
       const existingOwner = (!ownerDocId && !isArchived(h)) ? getExistingOwnerForHome(h) : null;
@@ -1578,6 +1766,8 @@
     }
 
     badgeLine.textContent = "Gestion des logements • " + (user.email || user.uid);
+
+    await loadOnboardingState(user.uid);
     await loadHomes();
   });
 </script>
