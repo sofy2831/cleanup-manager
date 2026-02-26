@@ -1,4 +1,4 @@
-<!-- docs/intervention.html (FINAL — 2 liens : checklist token + photos token ; Photos BYPASS = missions/PHOTOS ; resync missions non verrouillées ; crée missions/PHOTOS ; NO query()) -->
+<!-- docs/intervention.html (FINAL — missions avec créneau (scheduledDateKey/Time/AtMs) + CHECKIN/CHECKOUT auto + MAINTENANCE via champs optionnels ; Photos BYPASS = missions/PHOTOS ; resync missions non verrouillées ; crée missions/PHOTOS ; NO query()) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -392,6 +392,7 @@
     function normTxt(s){
       return String(s||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
     }
+
     function missionTypesFromLines(lines, fallbackType){
       const out = new Set();
       const ft = String(fallbackType||"").toUpperCase().trim();
@@ -418,6 +419,7 @@
       const order = ["MENAGE","CHECKIN","CHECKOUT","LINGE","MAINTENANCE","KITS"];
       return order.filter(x => out.has(x));
     }
+
     function missionLabel(t){
       const x = String(t||"").toUpperCase();
       if(x==="CHECKIN") return "Check-in";
@@ -426,7 +428,95 @@
       if(x==="LINGE") return "Linge";
       if(x==="MAINTENANCE") return "Maintenance";
       if(x==="KITS") return "Kits & conso";
+      if(x==="PHOTOS") return "Photos";
       return x || "—";
+    }
+
+    // ===== Scheduling helpers (crucial) =====
+    function isDateKey(s){ return /^\d{4}-\d{2}-\d{2}$/.test(String(s||"").trim()); }
+    function isTime(s){ return /^\d{2}:\d{2}$/.test(String(s||"").trim()); }
+
+    function toLocalMs(dateKey, timeHHmm){
+      // Interprété en heure locale du navigateur (OK pour tes agents en FR).
+      const d = String(dateKey||"").trim();
+      if(!isDateKey(d)) return 0;
+      const t = isTime(timeHHmm) ? String(timeHHmm).trim() : "00:00";
+      const dt = new Date(`${d}T${t}:00`);
+      const ms = dt.getTime();
+      return Number.isFinite(ms) ? ms : 0;
+    }
+
+    function pickFirst(...vals){
+      for(const v of vals){
+        const s = String(v || "").trim();
+        if(s) return s;
+      }
+      return "";
+    }
+
+    function computeScheduleForMission(eventDoc, missionType){
+      const e = eventDoc || {};
+      const type = String(missionType||"").toUpperCase().trim();
+
+      // Base arrival/departure (déjà standardisés dans tes events)
+      const aDate = pickFirst(e.arrivalDateKey, e.dateKey, e.date);
+      const aTime = pickFirst(e.arrivalTime, e.time);
+      const dDate = pickFirst(e.departureDateKey);
+      const dTime = pickFirst(e.departureTime);
+
+      // Maintenance (optionnel) : si tu n’as pas encore les champs, ça retombe sur arrivée
+      // Champs acceptés (tu peux en utiliser un seul) :
+      // - maintenanceDateKey / maintenanceTime
+      // - maintenanceScheduledDateKey / maintenanceScheduledTime
+      // - maintenanceDate / maintenanceHour
+      const mDate = pickFirst(e.maintenanceDateKey, e.maintenanceScheduledDateKey, e.maintenanceDate);
+      const mTime = pickFirst(e.maintenanceTime, e.maintenanceScheduledTime, e.maintenanceHour);
+
+      // Linge / kits (si un jour tu veux un créneau à part)
+      const lDate = pickFirst(e.lingeDateKey, e.lingeScheduledDateKey);
+      const lTime = pickFirst(e.lingeTime, e.lingeScheduledTime);
+      const kDate = pickFirst(e.kitsDateKey, e.kitsScheduledDateKey);
+      const kTime = pickFirst(e.kitsTime, e.kitsScheduledTime);
+
+      let scheduledDateKey = aDate;
+      let scheduledTime = aTime;
+      let scheduleSource = "ARRIVAL";
+
+      if(type === "CHECKOUT"){
+        scheduledDateKey = dDate || aDate;
+        scheduledTime = dTime || aTime;
+        scheduleSource = dDate ? "DEPARTURE" : "ARRIVAL";
+      } else if(type === "CHECKIN"){
+        scheduledDateKey = aDate;
+        scheduledTime = aTime;
+        scheduleSource = "ARRIVAL";
+      } else if(type === "MAINTENANCE"){
+        scheduledDateKey = mDate || aDate;
+        scheduledTime = mTime || aTime;
+        scheduleSource = mDate ? "MAINTENANCE" : "ARRIVAL";
+      } else if(type === "LINGE"){
+        scheduledDateKey = lDate || aDate;
+        scheduledTime = lTime || aTime;
+        scheduleSource = lDate ? "LINGE" : "ARRIVAL";
+      } else if(type === "KITS"){
+        scheduledDateKey = kDate || aDate;
+        scheduledTime = kTime || aTime;
+        scheduleSource = kDate ? "KITS" : "ARRIVAL";
+      } else {
+        // MENAGE par défaut -> ARRIVAL (si tu veux MENAGE sur départ, on changera ici)
+        scheduledDateKey = aDate;
+        scheduledTime = aTime;
+        scheduleSource = "ARRIVAL";
+      }
+
+      const scheduledAtMs = toLocalMs(scheduledDateKey, scheduledTime);
+
+      return {
+        scheduledDateKey: scheduledDateKey || "",
+        scheduledTime: scheduledTime || "",
+        scheduledAtMs: scheduledAtMs || 0,
+        scheduleSource
+      };
     }
 
     const prestationId = qs("prestationId");
@@ -610,7 +700,17 @@
       totalValue.textContent = money(total);
 
       inferredMissionTypes = missionTypesFromLines(lines, e.type);
-      missionsHint.innerHTML = `<b>Missions envoyées à l’agent :</b> ${esc(inferredMissionTypes.map(missionLabel).join(", "))}`;
+
+      // Affiche aussi les créneaux inférés (utile pour vérifier)
+      const schedPreview = inferredMissionTypes.map(t=>{
+        const s = computeScheduleForMission(currentEvent, t);
+        const when = s.scheduledDateKey
+          ? `${s.scheduledDateKey}${s.scheduledTime ? " • " + s.scheduledTime : ""}`
+          : "—";
+        return `${missionLabel(t)} (${when})`;
+      }).join(", ");
+
+      missionsHint.innerHTML = `<b>Missions envoyées à l’agent :</b> ${esc(schedPreview || inferredMissionTypes.map(missionLabel).join(", "))}`;
 
       agentName.value = e.assignedToName || "";
       agentEmail.value = e.assignedToEmail || "";
@@ -635,11 +735,19 @@
 
       if(locked) return;
 
+      const sched = computeScheduleForMission(currentEvent, missionType);
+
       await setDoc(mRef, {
         type: missionType,
         missionId: missionType,
         conciergerieUid: currentUser.uid,
         prestationId: String(prestationId),
+
+        // ===== dates clés pour "cochable au bon moment" côté agent =====
+        scheduledDateKey: sched.scheduledDateKey || "",
+        scheduledTime: sched.scheduledTime || "",
+        scheduledAtMs: Number(sched.scheduledAtMs || 0) || 0,
+        scheduleSource: sched.scheduleSource || "ARRIVAL",
 
         locked: false,
         agentDone: false,
@@ -721,6 +829,18 @@
         meta: (e.meta || "").trim()
       };
 
+      // BONUS : snapshot des schedules (pratique si un jour agent.html lit dayTokens au lieu de missions)
+      const missionSchedules = {};
+      for(const t of missionTypes){
+        const s = computeScheduleForMission(currentEvent, t);
+        missionSchedules[t] = {
+          scheduledDateKey: s.scheduledDateKey || "",
+          scheduledTime: s.scheduledTime || "",
+          scheduledAtMs: Number(s.scheduledAtMs || 0) || 0,
+          scheduleSource: s.scheduleSource || "ARRIVAL"
+        };
+      }
+
       // dayToken
       await setDoc(doc(db,"dayTokens",tokenId),{
         conciergerieUid: currentUser.uid,
@@ -731,6 +851,7 @@
         conciergerieName: (conciergerieName?.value || "").trim() || null,
 
         missionTypes,
+        missionSchedules,
         presta: prestaSnapshot,
 
         active:true,
