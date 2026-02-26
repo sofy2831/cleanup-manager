@@ -1,4 +1,4 @@
-<!-- docs/preuves-admin.html (PHOTOS — conciergerie view des proofPhotos sur toutes missions) -->
+<!-- docs/preuves-admin.html (FINAL — Admin proof validation writes into events) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -100,6 +100,61 @@
       border:1px solid rgba(0,0,0,0.06);
     }
 
+    /* ✅ Admin validate box */
+    .adminBox{
+      display:flex;
+      flex-direction:column;
+      gap:10px;
+    }
+    textarea{
+      width:100%;
+      border-radius:12px;
+      border:1px solid rgba(122,92,255,0.25);
+      padding:10px 10px;
+      font-size:13px;
+      outline:none;
+      background:#fff;
+      min-height:92px;
+      resize:vertical;
+      font-weight:600;
+      color:#111;
+    }
+    textarea:focus{
+      border-color:var(--violet);
+      box-shadow:0 0 0 3px rgba(122,92,255,.12);
+    }
+    .rowBtns{
+      display:flex;
+      gap:8px;
+      flex-wrap:wrap;
+      justify-content:flex-end;
+      align-items:center;
+    }
+    .btn{
+      border:none;
+      border-radius:999px;
+      padding:10px 12px;
+      font-weight:800;
+      cursor:pointer;
+      background:#fff;
+      color:var(--violet);
+      border:1px solid rgba(122,92,255,0.35);
+      box-shadow:0 2px 8px rgba(0,0,0,.05);
+      font-size:13px;
+      white-space:nowrap;
+    }
+    .btn.ok{
+      background:linear-gradient(90deg, rgba(27,143,77,.92), rgba(27,143,77,1));
+      border-color:transparent;
+      color:#fff;
+    }
+    .btn.ko{
+      background:linear-gradient(90deg, rgba(179,38,30,.92), rgba(179,38,30,1));
+      border-color:transparent;
+      color:#fff;
+    }
+    .btn:disabled{ opacity:.6; cursor:not-allowed; }
+
     /* viewer simple */
     .viewerBg{
       position:fixed; inset:0;
@@ -167,6 +222,21 @@
         <div style="margin-top:10px;" class="context-box" id="ctx">—</div>
       </section>
 
+      <!-- ✅ NEW: admin validation -->
+      <section class="card">
+        <div class="label">Validation admin</div>
+        <div class="adminBox" style="margin-top:10px;">
+          <div class="sub" id="adminStatusLine">—</div>
+
+          <textarea id="adminNote" placeholder="Note admin (optionnel) : défauts, manquants, OK…"></textarea>
+
+          <div class="rowBtns">
+            <button class="btn ko" id="btnKo" type="button">Refuser (KO)</button>
+            <button class="btn ok" id="btnOk" type="button">Valider (OK)</button>
+          </div>
+        </div>
+      </section>
+
       <section class="card">
         <div class="label">Photos par mission</div>
         <div style="margin-top:10px;" id="missionsWrap">
@@ -195,12 +265,19 @@
   <script type="module">
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-    import { doc, getDoc, collection, getDocs } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import {
+      doc, getDoc, collection, getDocs, updateDoc, serverTimestamp
+    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const alertBox = document.getElementById("alertBox");
     const subLine = document.getElementById("subLine");
     const ctx = document.getElementById("ctx");
     const missionsWrap = document.getElementById("missionsWrap");
+
+    const adminStatusLine = document.getElementById("adminStatusLine");
+    const adminNoteEl = document.getElementById("adminNote");
+    const btnOk = document.getElementById("btnOk");
+    const btnKo = document.getElementById("btnKo");
 
     const viewerBg = document.getElementById("viewerBg");
     const viewerClose = document.getElementById("viewerClose");
@@ -311,14 +388,102 @@
       }
     }
 
+    function flattenProofUrls(missions){
+      const urls = [];
+      for(const m of missions){
+        const photos = Array.isArray(m.proofPhotos) ? m.proofPhotos : [];
+        for(const p of photos){
+          const u = (p?.url || "").toString().trim();
+          if(u) urls.push(u);
+        }
+      }
+      // de-dup
+      return Array.from(new Set(urls));
+    }
+
     const prestationId = qs("prestationId");
     let currentUser = null;
+
+    let cachedEventDoc = null;
+    let cachedMissions = [];
+
+    function lockAdminButtons(lock){
+      btnOk.disabled = !!lock;
+      btnKo.disabled = !!lock;
+      adminNoteEl.disabled = !!lock;
+    }
+
+    function renderAdminStatusLine(eventDoc){
+      const s = String(eventDoc?.adminProofStatus || "NONE").toUpperCase();
+      const note = String(eventDoc?.adminProofNote || "").trim();
+      adminStatusLine.textContent =
+        `Statut actuel : ${s}` + (eventDoc?.adminProofAt?.seconds ? " • daté" : "") + (note ? " • note existante" : "");
+      if(!adminNoteEl.value.trim() && note) adminNoteEl.value = note;
+    }
+
+    async function setAdminProof(status){
+      hideAlert();
+
+      if(!cachedEventDoc) return showAlert("Prestation non chargée.");
+      if(!currentUser?.uid) return showAlert("Non connecté.");
+
+      const s = String(status || "").toUpperCase();
+      if(s !== "OK" && s !== "KO") return showAlert("Statut invalide.");
+
+      // Règle simple : si aucune photo, on empêche OK
+      const allUrls = flattenProofUrls(cachedMissions);
+      if(s === "OK" && allUrls.length === 0){
+        return showAlert("⛔ Impossible de valider OK : aucune photo trouvée sur les missions.");
+      }
+
+      if(!confirm(`Confirmer preuve admin = ${s} ?`)) return;
+
+      lockAdminButtons(true);
+
+      try{
+        const eRef = doc(db, "events", prestationId);
+        const note = (adminNoteEl.value || "").trim();
+
+        const payload = {
+          adminProofStatus: s,
+          adminProofAt: serverTimestamp(),
+          adminProofByUid: currentUser.uid,
+          adminProofNote: note,
+          adminProofUrls: allUrls,
+          updatedAt: serverTimestamp()
+        };
+
+        // ✅ si OK => on valide aussi l’event (facturation/stats)
+        if(s === "OK"){
+          payload.validatedAt = serverTimestamp();
+          payload.validatedBy = currentUser.uid;
+          payload.agentStatsCounted = false;
+        }
+
+        await updateDoc(eRef, payload);
+
+        // refresh local state
+        const fresh = await getDoc(eRef);
+        cachedEventDoc = fresh.exists() ? (fresh.data() || {}) : cachedEventDoc;
+
+        renderAdminStatusLine(cachedEventDoc);
+        showAlert(`✅ Preuve admin enregistrée : ${s}.`, true);
+      }catch(err){
+        console.error(err);
+        showAlert("Erreur sauvegarde preuve admin : " + (err?.message || "inconnue"));
+      }finally{
+        lockAdminButtons(false);
+      }
+    }
 
     async function load(){
       hideAlert();
       subLine.textContent = "Chargement…";
       ctx.innerHTML = "—";
       missionsWrap.innerHTML = `<div class="empty">—</div>`;
+      adminStatusLine.textContent = "—";
+      cachedEventDoc = null;
+      cachedMissions = [];
 
       if(!prestationId){
         subLine.textContent = "";
@@ -346,16 +511,29 @@
         return;
       }
 
+      cachedEventDoc = eventDoc;
+
       renderContext(eventDoc);
+      renderAdminStatusLine(eventDoc);
 
       const ms = await getDocs(collection(db,"events",prestationId,"missions"));
       const missions = [];
       ms.forEach(s=> missions.push({ id: s.id, ...(s.data()||{}) }));
       missions.sort((a,b)=> String(a.id).localeCompare(String(b.id)));
 
+      cachedMissions = missions;
+
       renderMissions(missions);
-      subLine.textContent = "";
+
+      // petit résumé
+      const urls = flattenProofUrls(missions);
+      subLine.textContent = `Missions : ${missions.length} • Photos total : ${urls.length}`;
+
+      // UX: si déjà OK/KO, tu peux laisser revalider (utile), mais tu vois le statut
     }
+
+    btnOk.addEventListener("click", ()=> setAdminProof("OK"));
+    btnKo.addEventListener("click", ()=> setAdminProof("KO"));
 
     onAuthStateChanged(auth, async (u)=>{
       if(!u){
