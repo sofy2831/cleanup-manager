@@ -199,7 +199,7 @@
   content:"";
   position:absolute;
   top:-9px;
-  left:22px; /* valeur par défaut, sera recalée en JS */
+  left: var(--arrow-x, 22px);
   width:18px;
   height:18px;
   background:#FFFBE0;
@@ -897,29 +897,73 @@
     document.querySelectorAll("[data-help-btn]").forEach(btn=> btn.setAttribute("aria-expanded","false"));
   }
 
-  function wireHelpBubbles(){
-    const wraps = document.querySelectorAll(".helpWrap[data-help-wrap]");
-    wraps.forEach(w=>{
-      if(w.dataset.wired === "1") return;
+  function clamp(n, min, max){ return Math.max(min, Math.min(max, n)); }
+  
+  function positionHelpBubble(btn, bub){
+  const r = btn.getBoundingClientRect();
+  const margin = 12;
 
-      const key = w.getAttribute("data-help-wrap");
-      const btn = w.querySelector(`[data-help-btn="${CSS.escape(key)}"]`);
-      const bub = w.querySelector(`[data-help-bubble="${CSS.escape(key)}"]`);
-      if(!btn || !bub) return;
+  // mesurer la bulle
+  bub.style.display = "block";
+  bub.style.visibility = "hidden";
 
-      w.dataset.wired = "1";
+  const bw = bub.offsetWidth;
+  const bh = bub.offsetHeight;
 
-      btn.addEventListener("click", (e)=>{
-        e.stopPropagation();
-        const isOpen = bub.style.display === "block";
-        closeAllHelpBubbles();
-        bub.style.display = isOpen ? "none" : "block";
-        btn.setAttribute("aria-expanded", isOpen ? "false" : "true");
-      });
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
 
-      bub.addEventListener("click", (e)=> e.stopPropagation());
-    });
+  // X: centré sur le bouton, puis clamp
+  const targetLeft = r.left + (r.width/2) - (bw/2);
+  const left = clamp(targetLeft, margin, vw - bw - margin);
+
+  // Y: sous le bouton, sinon au-dessus
+  let top = r.bottom + 10;
+  if(top + bh > vh - margin){
+    top = r.top - bh - 10;
   }
+  top = clamp(top, margin, vh - bh - margin);
+
+  bub.style.left = `${left}px`;
+  bub.style.top  = `${top}px`;
+
+  // flèche alignée sur le bouton
+  const arrowX = clamp((r.left + r.width/2) - left - 9, 16, bw - 34);
+  bub.style.setProperty("--arrow-x", `${arrowX}px`);
+
+  bub.style.visibility = "visible";
+}
+
+function wireHelpBubbles(){
+  const wraps = document.querySelectorAll(".helpWrap[data-help-wrap]");
+  wraps.forEach(w=>{
+    if(w.dataset.wired === "1") return;
+
+    const key = w.getAttribute("data-help-wrap");
+    const btn = w.querySelector(`[data-help-btn="${CSS.escape(key)}"]`);
+    const bub = w.querySelector(`[data-help-bubble="${CSS.escape(key)}"]`);
+    if(!btn || !bub) return;
+
+    w.dataset.wired = "1";
+
+    btn.addEventListener("click", (e)=>{
+      e.stopPropagation();
+      const isOpen = bub.style.display === "block";
+      closeAllHelpBubbles();
+
+      if(!isOpen){
+        positionHelpBubble(btn, bub);
+        bub.style.display = "block";
+        btn.setAttribute("aria-expanded","true");
+      }else{
+        bub.style.display = "none";
+        btn.setAttribute("aria-expanded","false");
+      }
+    });
+
+    bub.addEventListener("click", (e)=> e.stopPropagation());
+  });
+}
 
   document.addEventListener("click", ()=> closeAllHelpBubbles());
 
