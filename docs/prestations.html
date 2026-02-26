@@ -1,4 +1,4 @@
-<!-- docs/prestations.html (COMPLET — onboarding agents + guard conciergerie (abonnement + profil) SANS CASSER) -->
+<!-- docs/prestations.html (COMPLET — + badge preuve OK/KO + bouton Preuves dans modale détail + lecture adminProofStatus) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -376,6 +376,15 @@
       padding:6px 10px;
       font-size:12px;
       white-space:nowrap;
+    }
+    /* ✅ Badges preuve */
+    .badge.ok{
+      background: rgba(27,143,77,0.14);
+      color: #1b8f4d;
+    }
+    .badge.ko{
+      background: rgba(179,38,30,0.12);
+      color: #b3261e;
     }
 
     .empty{
@@ -814,6 +823,12 @@
       <div class="modal-body">
         <div class="context-box" id="detailModalContext"></div>
 
+        <!-- ✅ bouton preuves + statut -->
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center;">
+          <button class="mini" id="detailPhotosBtn" type="button">📷 Preuves</button>
+          <span class="tiny" id="detailProofStatus">Preuve : —</span>
+        </div>
+
         <div style="height:10px"></div>
 
         <div id="detailModalLines" style="display:flex;flex-direction:column;gap:8px;"></div>
@@ -960,6 +975,8 @@
     const detailModalContext = document.getElementById("detailModalContext");
     const detailModalLines = document.getElementById("detailModalLines");
     const detailModalTotalValue = document.getElementById("detailModalTotalValue");
+    const detailPhotosBtn = document.getElementById("detailPhotosBtn");
+    const detailProofStatus = document.getElementById("detailProofStatus");
 
     // (les boutons existent toujours dans JS d'origine, mais non dans le DOM => on ne les utilise pas)
     const detailEditBtn = null;
@@ -1129,7 +1146,8 @@
         d.ownerName, d.ownerPhone,
         d.meta, d.summary,
         d.arrivalDateKey, d.arrivalTime, d.departureDateKey, d.departureTime,
-        Array.isArray(d.lines) ? d.lines.map(l=>l?.label).join(" ") : ""
+        Array.isArray(d.lines) ? d.lines.map(l=>l?.label).join(" ") : "",
+        d.adminProofStatus
       ];
       return parts.filter(Boolean).join(" ").toLowerCase();
     }
@@ -1404,6 +1422,10 @@
     function goPhotos(prestationId){
       location.href = `preuves-admin.html?prestationId=${encodeURIComponent(prestationId)}`;
     }
+    detailPhotosBtn?.addEventListener("click", ()=>{
+      if(!selected?.id) return;
+      goPhotos(selected.id);
+    });
 
     // ===== List render =====
     function renderList(){
@@ -1426,6 +1448,10 @@
         const op = normalizeOpStatus(it.opStatus);
         const title = `${it.homeName || "Logement"}${it.homeCity ? " — " + it.homeCity : ""}${it.homeType ? " (" + it.homeType + ")" : ""}`;
 
+        const pstat = String(it.adminProofStatus || "NONE").toUpperCase();
+        const pClass = (pstat === "OK") ? "ok" : (pstat === "KO" ? "ko" : "");
+        const pLabel = (pstat === "OK") ? "PREUVE OK" : (pstat === "KO" ? "PREUVE KO" : "PREUVE —");
+
         const div = document.createElement("div");
         div.className = "item";
         div.innerHTML = `
@@ -1438,6 +1464,7 @@
               <button class="mini" type="button" data-photos="${esc(it.id)}" title="Photos">📷</button>
               ${ (op==="EN_COURS") ? `<button class="mini danger" type="button" data-del="${esc(it.id)}">Supprimer</button>` : `` }
               <button class="mini" type="button" data-program="${esc(it.id)}">Intervention</button>
+              <span class="badge ${pClass}">${esc(pLabel)}</span>
               <span class="badge">${esc(money(Number(it.total || 0)))}</span>
             </div>
           </div>
@@ -1482,6 +1509,7 @@
         detailModalContext.innerHTML = "";
         detailModalLines.innerHTML = "";
         detailModalTotalValue.textContent = money(0);
+        if(detailProofStatus) detailProofStatus.textContent = "Preuve : —";
         return;
       }
 
@@ -1522,6 +1550,11 @@
           <div class="v">${esc(owner)}</div>
         </div>
       `;
+
+      const pstat = (selected.adminProofStatus || "NONE").toUpperCase();
+      if(detailProofStatus){
+        detailProofStatus.textContent = `Preuve : ${pstat}`;
+      }
 
       const lines = Array.isArray(selected.lines) ? selected.lines : [];
       const total = Number(selected.total || computeTotalFromLines(lines));
@@ -1791,6 +1824,10 @@
         // ✅ agent hints (pour onboarding / futur)
         agentEmail: x.assignedToEmail || x.agentEmail || "",
         assignedToEmail: x.assignedToEmail || x.agentEmail || "",
+
+        // ✅ preuves admin
+        adminProofStatus: x.adminProofStatus || "",
+        adminProofAt: x.adminProofAt || null,
 
         meta: x.meta || "",
         summary: x.summary || "",
