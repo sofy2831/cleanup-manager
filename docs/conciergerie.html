@@ -102,11 +102,10 @@
 
     h1{ margin:0; font-size:26px; font-weight:900; letter-spacing:-0.2px; }
     .subtitle{ margin-top:2px; font-size:14px; color:#444; text-align:center; }
-    .helloLine{ margin-top:10px; font-size:13px; color:#333; font-weight:900; text-align:center; }
 
-    /* ✅ NOTE: ici on affiche companyName (pas l’email) — on réappliquera la même logique dans logements.html */
+    /* ✅ Sous-titre conciergerie = companyName (comme planning) */
     .companyLine{
-      margin-top:8px;
+      margin-top:10px;
       padding:4px 10px;
       border-radius:999px;
       background:#fff;
@@ -118,7 +117,7 @@
       font-weight:900;
     }
 
-    /* ✅ Aide bulle jaune (même style que logements.html, ancrée à droite, ne déborde pas) */
+    /* ✅ Aide bulle jaune (même logique que logements) */
     .helpWrap{
       display:flex;
       justify-content:flex-end;
@@ -475,17 +474,18 @@
     <div class="topbar">
       <a class="pill" href="index.html">← Accueil</a>
 
-      <!-- ✅ AIDE (seul bouton en haut à droite) -->
-      <div class="helpWrap" id="helpWrap" aria-label="Aide">
-        <button class="helpBtn" id="helpBtn" type="button" aria-expanded="false" aria-controls="helpBubble">
-          💡 Aide
-        </button>
+      <div style="display:flex; gap:10px; align-items:center;">
+        <!-- ✅ AIDE (bulle) -->
+        <div class="helpWrap" id="helpWrap" aria-label="Aide">
+          <button class="helpBtn" id="helpBtn" type="button" aria-expanded="false" aria-controls="helpBubble">
+            💡 Aide
+          </button>
 
-        <div class="helpBubble" id="helpBubble" role="dialog" aria-modal="false" aria-label="Aide">
-          <div class="hbTop">
-            <p class="hbTitle">Aide</p>
-          </div>
-          <p class="hbText">
+          <div class="helpBubble" id="helpBubble" role="dialog" aria-modal="false" aria-label="Aide">
+            <div class="hbTop">
+              <p class="hbTitle">Aide</p>
+            </div>
+            <p class="hbText">
 Tu es sur ton tableau de bord.
 
 Pour commencer :
@@ -493,8 +493,12 @@ Pour commencer :
 2) Puis clique sur “Logements”
 
 Une aide dédiée s’y trouve pour te guider pas à pas.
-          </p>
+            </p>
+          </div>
         </div>
+
+        <!-- ✅ Déconnexion conservée -->
+        <button class="pill" id="logoutBtn" type="button">Déconnexion</button>
       </div>
     </div>
 
@@ -505,7 +509,7 @@ Une aide dédiée s’y trouve pour te guider pas à pas.
 
     <div class="subtitle">Tableau de bord conciergerie</div>
 
-    <div class="helloLine" id="helloLine">Bonjour,</div>
+    <!-- ✅ Sous-titre conciergerie = companyName (on le remettra pareil dans logements.html) -->
     <div class="companyLine" id="companyLine">—</div>
 
     <!-- ✅ BADGES -->
@@ -645,16 +649,28 @@ Une aide dédiée s’y trouve pour te guider pas à pas.
 
   <script type="module">
     import { auth, db } from "./firebase-init.js";
-    import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+    import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
       doc, getDoc,
       collection, query, where, orderBy, limit, getDocs
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const alertBox = document.getElementById("alertBox");
+    const logoutBtn = document.getElementById("logoutBtn");
     const companyLine = document.getElementById("companyLine");
 
-    // help bubble
+    const statClients = document.getElementById("statClients");
+    const statClientsNoAccount = document.getElementById("statClientsNoAccount");
+    const statLogements = document.getElementById("statLogements");
+    const statHomesNoAccount = document.getElementById("statHomesNoAccount");
+    const statAgents = document.getElementById("statAgents");
+
+    // ✅ Recouvrement badge cliquable
+    const statRecouvrementCard = document.getElementById("statRecouvrementCard");
+    const statRecouvrement = document.getElementById("statRecouvrement");
+    const statRecouvrementHint = document.getElementById("statRecouvrementHint");
+
+    // ✅ AIDE
     const helpBtn = document.getElementById("helpBtn");
     const helpBubble = document.getElementById("helpBubble");
 
@@ -678,17 +694,6 @@ Une aide dédiée s’y trouve pour te guider pas à pas.
     window.addEventListener("keydown", (e)=>{
       if(e.key === "Escape") setHelpOpen(false);
     });
-
-    const statClients = document.getElementById("statClients");
-    const statClientsNoAccount = document.getElementById("statClientsNoAccount");
-    const statLogements = document.getElementById("statLogements");
-    const statHomesNoAccount = document.getElementById("statHomesNoAccount");
-    const statAgents = document.getElementById("statAgents");
-
-    // ✅ Recouvrement badge cliquable
-    const statRecouvrementCard = document.getElementById("statRecouvrementCard");
-    const statRecouvrement = document.getElementById("statRecouvrement");
-    const statRecouvrementHint = document.getElementById("statRecouvrementHint");
 
     let lastRec = { today:0, late:0 };
 
@@ -745,23 +750,13 @@ Une aide dédiée s’y trouve pour te guider pas à pas.
       el.textContent = Number.isFinite(n) ? String(n) : "—";
     }
 
-    // ✅ Profil conciergerie = companyName
+    // ✅ Profil conciergerie = companyName (businessProfile.companyName)
     async function loadCompanyProfile(user){
       try{
         const uSnap = await getDoc(doc(db, "users", user.uid));
         const data = uSnap.exists() ? (uSnap.data()||{}) : {};
-
-        // ✅ on essaie plusieurs emplacements (comme on fera dans logements.html ensuite)
-        const companyName = String(
-          data.companyName
-          || data.societe
-          || data.company
-          || data.displayName
-          || data?.businessProfile?.companyName
-          || ""
-        ).trim();
-
-        companyLine.textContent = companyName || "Conciergerie";
+        const company = String(data?.businessProfile?.companyName || "").trim();
+        companyLine.textContent = company || "Conciergerie";
       }catch(e){
         companyLine.textContent = "Conciergerie";
       }
@@ -906,6 +901,12 @@ Une aide dédiée s’y trouve pour te guider pas à pas.
       if(lastRec.late > 0) location.href = "recouvrement.html?scope=LATE";
       else if(lastRec.today > 0) location.href = "recouvrement.html?scope=TODAY";
       else location.href = "recouvrement.html";
+    });
+
+    logoutBtn.addEventListener("click", async ()=>{
+      await signOut(auth);
+      try{ localStorage.removeItem("cm_auth"); }catch(_){}
+      location.href = "index.html";
     });
 
     onAuthStateChanged(auth, async (user)=>{
