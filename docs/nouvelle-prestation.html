@@ -1,4 +1,4 @@
-<!-- docs/nouvelle-prestation.html (FINAL + PATCH AGENT LINK + INIT VALIDATION FIELDS) -->
+<!-- docs/nouvelle-prestation.html (FINAL + PACK TYPE + PACK TEMPLATES) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -346,6 +346,23 @@
         </div>
 
         <form id="jobForm" autocomplete="off" novalidate>
+
+          <!-- ✅ PACK TYPE -->
+          <div class="inline">
+            <div>
+              <label for="packType">Type de prestation</label>
+              <select id="packType" required>
+                <option value="PACK_ARRIVEE">Pack arrivée</option>
+                <option value="PACK_DEPART">Pack départ</option>
+                <option value="AUTRE">Autre (maintenance, urgent…)</option>
+              </select>
+              <div class="hintline">Règle : 1 prestation = 1 event = 1 intervention possible</div>
+            </div>
+            <div style="display:flex; align-items:flex-end;">
+              <button class="btn ghost" type="button" id="applyPackBtn">Appliquer le pack</button>
+            </div>
+          </div>
+
           <div class="inline">
             <div>
               <label for="dateKeyInput">Date (prestation)</label>
@@ -531,6 +548,10 @@
 
     const saveBtn = document.getElementById("saveBtn");
 
+    // ✅ pack
+    const packTypeEl = document.getElementById("packType");
+    const applyPackBtn = document.getElementById("applyPackBtn");
+
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
       alertBox.classList.toggle("ok", !!ok);
@@ -610,6 +631,20 @@
 
       { key:"__OTHER__", label:"Autre (texte libre)", category:"Autre", suggested:"", unit:"unité" }
     ];
+
+    // ✅ templates de pack : clés = PRODUCT_TEMPLATES.key
+    // Ajuste ici ta “liste standard”.
+    const PACK_LINE_TEMPLATES = {
+      PACK_ARRIVEE: [
+        { key: "CHECKIN_AUTONOME", qty: 1, unitPrice: 0 },
+        { key: "MENAGE_STANDARD", qty: 1, unitPrice: "" }
+      ],
+      PACK_DEPART: [
+        { key: "CHECKOUT", qty: 1, unitPrice: "" },
+        { key: "MENAGE_STANDARD", qty: 1, unitPrice: "" }
+      ],
+      AUTRE: []
+    };
 
     // ========= Data =========
     let currentUser = null;
@@ -873,8 +908,12 @@
       const qty = Number(qtyEl.value);
       if(!(qty > 0)) return { ok:false, msg:"Quantité invalide." };
       const unit = (unitEl.value || "").trim() || "unité";
-      const unitPrice = Number(unitPriceEl.value);
-      if(!(unitPrice >= 0)) return { ok:false, msg:"Prix unitaire invalide." };
+
+      // autorise vide -> 0 mais on garde validation strict : champ vide => NaN => message
+      const unitPriceRaw = unitPriceEl.value;
+      const unitPrice = Number(unitPriceRaw);
+      if(unitPriceRaw === "" || Number.isNaN(unitPrice) || unitPrice < 0) return { ok:false, msg:"Prix unitaire invalide." };
+
       const category = (categoryEl.value || "").trim();
       const note = (lineNoteEl.value || "").trim();
       const tpl = getTemplateByKey(key);
@@ -885,8 +924,16 @@
       };
     }
 
+    function packLabel(packType){
+      if(packType === "PACK_ARRIVEE") return "Pack arrivée";
+      if(packType === "PACK_DEPART") return "Pack départ";
+      return "Autre";
+    }
+
     function renderContext(){
-      contextTag.textContent = (from === "ical") ? "Réservation" : "Création manuelle";
+      const packType = (packTypeEl?.value || "AUTRE").trim();
+      const baseCtx = (from === "ical") ? "Réservation" : "Création manuelle";
+      contextTag.textContent = `${baseCtx} • ${packLabel(packType)}`;
 
       const homeName = (currentHome?.name || "").trim();
       const ht = (currentHome?.homeType || "").trim();
@@ -901,20 +948,20 @@
       const city = (currentHome?.city || "").trim();
 
       const rows = [];
+      rows.push(`<div><b>Type</b> : ${escapeHtml(packLabel(packType))}</div>`);
       rows.push(`<div><b>Logement</b> : ${escapeHtml(homeText)}</div>`);
       if(addr || zip || city){
         const adr = [addr, zip, city].filter(Boolean).join(", ");
         rows.push(`<div><b>Adresse</b> : ${escapeHtml(adr || "—")}</div>`);
       }
       if(city) rows.push(`<div><b>Ville</b> : ${escapeHtml(city)}</div>`);
-      if(ht) rows.push(`<div><b>Type</b> : ${escapeHtml(ht)}</div>`);
+      if(ht) rows.push(`<div><b>Catégorie logement</b> : ${escapeHtml(ht)}</div>`);
 
       rows.push(`<div><b>Propriétaire</b> : ${escapeHtml(ownerName)} • ${escapeHtml(ownerPhone)}</div>`);
 
       rows.push(`<div><b>Arrivée</b> : ${escapeHtml(stay.arrivalDateKey || "—")} • ${escapeHtml(arrivalTimeInput.value || "—")}</div>`);
       rows.push(`<div><b>Départ</b> : ${escapeHtml(departureDateKeyInput.value || "—")} • ${escapeHtml(departureTimeInput.value || "—")}</div>`);
 
-      // ✅ affichage agent si passé en URL
       if(assignedToUidParam || assignedToEmailParam || assignedToNameParam){
         rows.push(`<div><b>Agent</b> : ${escapeHtml(assignedToNameParam || assignedToEmailParam || assignedToUidParam)}</div>`);
       }
@@ -931,10 +978,20 @@
     function lockUI(locked){
       saveBtn.disabled = !!locked;
       addLineBtn.disabled = !!locked;
+      applyPackBtn.disabled = !!locked;
+      packTypeEl.disabled = !!locked;
+    }
+
+    function createDefaultMissionsIds(packType){
+      // Règle simple : missions par pack.
+      // Tu peux raffiner plus tard.
+      if(packType === "PACK_ARRIVEE") return ["CHECKIN","MENAGE"];
+      if(packType === "PACK_DEPART") return ["CHECKOUT","MENAGE"];
+      return ["CHECKIN","MENAGE","CHECKOUT"];
     }
 
     async function createDefaultMissions(eventId, payloadForMissions){
-      const ids = ["CHECKIN","MENAGE","CHECKOUT"];
+      const ids = payloadForMissions.missionTypes || ["CHECKIN","MENAGE","CHECKOUT"];
       const batch = writeBatch(db);
       const now = serverTimestamp();
 
@@ -963,7 +1020,6 @@
 
       const eRef = doc(db, "events", eventId);
       batch.update(eRef, {
-        missionTypes: ids,
         missionsInitialized: true,
         updatedAt: now
       });
@@ -971,12 +1027,63 @@
       await batch.commit();
     }
 
+    function templateLineFromKey(key, qty=1, unitPrice=""){
+      const t = getTemplateByKey(key);
+      if(!t) return null;
+      return {
+        label: t.label,
+        qty: Number(qty) || 1,
+        unit: t.unit || "unité",
+        unitPrice: (unitPrice === "" ? 0 : Number(unitPrice)), // par défaut 0 si vide dans template
+        category: t.category || "",
+        note: "",
+        suggestedPrice: t.suggested || ""
+      };
+    }
+
+    function applyPackTemplate(){
+      const packType = (packTypeEl.value || "AUTRE").trim();
+
+      // dates automatiques (sans surprendre l’utilisateur)
+      if(packType === "PACK_ARRIVEE" && stay.arrivalDateKey){
+        dateKeyInput.value = stay.arrivalDateKey;
+      }
+      if(packType === "PACK_DEPART" && stay.departureDateKey){
+        dateKeyInput.value = stay.departureDateKey;
+      }
+
+      const tpl = PACK_LINE_TEMPLATES[packType] || [];
+      if(!tpl.length){
+        showAlert("Pack appliqué : aucun template de lignes (mode libre).", true);
+        renderContext();
+        return;
+      }
+
+      // Ici je choisis volontairement : remplacer les lignes (plus clair en prod)
+      lines = [];
+      for(const item of tpl){
+        const l = templateLineFromKey(item.key, item.qty, item.unitPrice);
+        if(l) lines.push(l);
+      }
+
+      renderLines();
+      refreshTotals();
+      resetLineBuilder();
+      renderContext();
+      showAlert("✅ Pack appliqué : lignes pré-remplies. Ajuste les prix si besoin.", true);
+    }
+
     // ========= Events =========
     productSelect.addEventListener("change", refreshSuggest);
 
-    [dateKeyInput, timeEl, arrivalTimeInput, departureDateKeyInput, departureTimeInput, ownerNameEl, ownerPhoneEl].forEach(el=>{
+    [dateKeyInput, timeEl, arrivalTimeInput, departureDateKeyInput, departureTimeInput, ownerNameEl, ownerPhoneEl, packTypeEl].forEach(el=>{
       el.addEventListener("input", renderContext);
       el.addEventListener("change", renderContext);
+    });
+
+    applyPackBtn.addEventListener("click", ()=>{
+      hideAlert();
+      applyPackTemplate();
     });
 
     addLineBtn.addEventListener("click", ()=>{
@@ -1004,15 +1111,17 @@
       if(!dateKeyInput.value) return showAlert("Date obligatoire.");
       if(!lines.length) return showAlert("Ajoute au moins une ligne.");
 
+      const packType = (packTypeEl.value || "AUTRE").trim();
+
       const ownerName  = (ownerNameEl.value || currentHome.ownerName || "").trim();
       const ownerPhone = cleanPhone(ownerPhoneEl.value || currentHome.ownerPhone || "");
 
-      // ✅ agent (si fourni)
       const assignedToUid = (assignedToUidParam || "").trim();
       const assignedToName = (assignedToNameParam || "").trim();
       const assignedToEmail = (assignedToEmailParam || "").trim().toLowerCase();
 
-      // ✅ champs validation init
+      const missionTypes = createDefaultMissionsIds(packType);
+
       const basePayload = {
         conciergerieUid: currentUser.uid,
 
@@ -1022,6 +1131,9 @@
         homeType: (currentHome.homeType || ""),
         homeAddress: (currentHome.homeAddress || "").trim(),
         homeZip: (currentHome.homeZip || "").trim(),
+
+        // ✅ pack
+        packType: packType,
 
         dateKey: dateKeyInput.value,
         date:    dateKeyInput.value,
@@ -1065,16 +1177,13 @@
         })),
         total: computeTotal(),
 
-        // ✅ statut opérationnel
         status: "EN_COURS",
         opStatus: "EN_COURS",
 
-        // ✅ agent link (clé pour stats)
         assignedToUid: assignedToUid || "",
         assignedToName: assignedToName || "",
         assignedToEmail: assignedToEmail || "",
 
-        // ✅ init validation/stat counting
         validatedAt: null,
         validatedBy: "",
         agentStatsCounted: false,
@@ -1084,6 +1193,9 @@
         summary: summary || "",
         stayNote: (noteParam || ""),
 
+        missionTypes,
+        missionsInitialized: false,
+
         updatedAt: serverTimestamp()
       };
 
@@ -1091,8 +1203,6 @@
       try{
         if(!createdEventId){
           basePayload.createdAt = serverTimestamp();
-          basePayload.missionTypes = ["CHECKIN","MENAGE","CHECKOUT"];
-          basePayload.missionsInitialized = false;
 
           const ref = await addDoc(collection(db,"events"), basePayload);
           createdEventId = ref.id;
@@ -1130,7 +1240,6 @@
       }
 
       currentUser = user;
-
       await loadCompanyNameForHeader(user.uid, user.email);
 
       const baseDate = dateKeyParam || todayKey();
@@ -1171,6 +1280,9 @@
 
         if(ical.ownerName && !ownerNameEl.value) ownerNameEl.value = ical.ownerName;
         if(ical.meta && !jobNoteEl.value) jobNoteEl.value = ical.meta;
+
+        // par défaut si réservation : arrivée
+        packTypeEl.value = "PACK_ARRIVEE";
       } else {
         stay.arrivalDateKey = baseDate;
         stay.departureDateKey = "";
@@ -1182,6 +1294,8 @@
         departureDateKeyInput.value = "";
         departureTimeInput.value = "";
         timeEl.value = timeParam || "";
+
+        packTypeEl.value = "AUTRE";
       }
 
       arrivalTimeInput.readOnly = true;
