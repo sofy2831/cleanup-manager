@@ -1,4 +1,4 @@
-<!-- docs/prestations.html (COMPLET — V2 PACKS + Modifier -> nouvelle-prestation (homeId+eventId) + Interventions -> agent.html + Photos -> agent-photos.html) -->
+<!-- docs/prestations.html (COMPLET — V2 PACKS + Modifier -> nouvelle-prestation (homeId+eventId) + Interventions -> intervention.html + Photos -> agent-photos.html + RETOUR CONTEXTE) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -585,7 +585,8 @@
       <a class="pill" href="conciergerie.html">← Tableau de bord</a>
 
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-        <a class="pill primary" href="planning.html">Planning</a>
+        <!-- ✅ ce lien sera ré-écrit en JS si on a returnDate/returnBookingId -->
+        <a class="pill primary" id="planningLink" href="planning.html">Planning</a>
 
         <!-- Aide -->
         <div class="helpWrap" data-help-wrap="intervention">
@@ -595,7 +596,8 @@
             <p class="hbText">• “Interventions” = exécution des packs (arrivée / départ / autre).
 • Tu coches un pack quand il est fait (photos ensuite).
 • Tant qu’il reste un pack utile non coché, la prestation reste EN COURS.
-• “Modifier” renvoie sur nouvelle-prestation (mode édition), avec homeId + eventId.</p>
+• “Modifier” renvoie sur nouvelle-prestation (mode édition), avec homeId + eventId.
+• “Interventions” ouvre intervention.html (contexte conservé).</p>
           </div>
         </div>
       </div>
@@ -633,7 +635,8 @@
   </div>
 
   <nav class="bottom-nav" aria-label="Navigation">
-    <a href="planning.html">Planning</a>
+    <!-- ✅ ce lien sera ré-écrit en JS si on a returnDate/returnBookingId -->
+    <a id="planningNavLink" href="planning.html">Planning</a>
     <a class="active" href="prestations.html">Production</a>
     <a href="logements.html">Logements</a>
     <a href="import-ical.html">iCal</a>
@@ -674,6 +677,9 @@
     // ========= UI =========
     const helloLine = document.getElementById("helloLine");
     const companyLine = document.getElementById("companyLine");
+
+    const planningLink = document.getElementById("planningLink");
+    const planningNavLink = document.getElementById("planningNavLink");
 
     const alertBox = document.getElementById("alertBox");
     const listEl = document.getElementById("list");
@@ -719,6 +725,26 @@
     }
     function asRaw(s){ return String(s||"").toUpperCase().trim(); }
     function qs(name){ return new URLSearchParams(location.search).get(name) || ""; }
+
+    // ===== Contexte retour (depuis planning / nouvelle-prestation) =====
+    function buildPlanningReturnHref(){
+      // priorité: returnDate / returnBookingId
+      const returnDate = (qs("returnDate") || qs("date") || "").trim();
+      const returnBookingId = (qs("returnBookingId") || qs("bookingId") || "").trim();
+
+      const p = new URLSearchParams();
+      if(returnDate) p.set("date", returnDate);
+      if(returnBookingId) p.set("bookingId", returnBookingId);
+
+      const suffix = p.toString();
+      return suffix ? `planning.html?${suffix}` : "planning.html";
+    }
+
+    function wireReturnLinks(){
+      const href = buildPlanningReturnHref();
+      if(planningLink) planningLink.href = href;
+      if(planningNavLink) planningNavLink.href = href;
+    }
 
     /* ================= HELP BUBBLES (generic) ================= */
     function closeAllHelpBubbles(){
@@ -948,16 +974,40 @@
         return;
       }
 
-      location.href = `nouvelle-prestation.html?mode=edit&eventId=${encodeURIComponent(prestationId)}&homeId=${encodeURIComponent(homeId)}`;
+      // on propage le contexte retour (planning)
+      const returnDate = (qs("returnDate") || qs("date") || "").trim();
+      const returnBookingId = (qs("returnBookingId") || qs("bookingId") || "").trim();
+
+      const p = new URLSearchParams();
+      p.set("mode","edit");
+      p.set("eventId", prestationId);
+      p.set("homeId", homeId);
+
+      // important: on garde le retour vers planning dans l'URL
+      if(returnDate) p.set("returnDate", returnDate);
+      if(returnBookingId) p.set("returnBookingId", returnBookingId);
+      p.set("returnTo", "prestations");
+
+      location.href = `nouvelle-prestation.html?${p.toString()}`;
     }
 
     function goInterventions(prestationId){
-      // ✅ demandé: interventions -> agent.html
-      location.href = `agent.html?eventId=${encodeURIComponent(prestationId)}`;
+      // ✅ demandé: interventions -> intervention.html (pas agent.html)
+      // + on conserve le contexte retour (pour revenir ensuite si besoin)
+      const returnDate = (qs("returnDate") || qs("date") || "").trim();
+      const returnBookingId = (qs("returnBookingId") || qs("bookingId") || "").trim();
+
+      const p = new URLSearchParams();
+      p.set("prestationId", prestationId);
+      p.set("returnTo", "prestations");
+      if(returnDate) p.set("returnDate", returnDate);
+      if(returnBookingId) p.set("returnBookingId", returnBookingId);
+
+      location.href = `intervention.html?${p.toString()}`;
     }
 
     function goPhotos(prestationId){
-      // ✅ demandé: photos -> agent-photos.html (pas preuves-admin)
+      // Photos -> agent-photos.html (comme ton fichier)
       location.href = `agent-photos.html?eventId=${encodeURIComponent(prestationId)}`;
     }
 
@@ -1267,6 +1317,8 @@
       }
 
       currentUser = user;
+
+      wireReturnLinks();
 
       if(helloLine) helloLine.textContent = "Bonjour,";
       await loadCompanyName(user);
