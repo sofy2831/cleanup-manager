@@ -1,4 +1,4 @@
-<!-- docs/agent.html (FINAL — checklist via token ; BLOQUE par scheduledAtMs/DateKey ; redirige missionfini avec recap) -->
+<!-- docs/agent.html (FINAL — checklist via token ; ✅ PLUS AUCUN “TROP TÔT” ; redirige missionfini avec recap) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -144,6 +144,7 @@
       border-left:5px solid rgba(122,92,255,0.55);
       background:linear-gradient(180deg,#ffffff 0%, rgba(122,92,255,0.06) 100%);
     }
+    /* ✅ plus de tooEarly => on garde la classe mais elle ne sera jamais appliquée */
     .tooEarly{
       border-left:5px solid rgba(179,38,30,0.45);
       background:linear-gradient(180deg,#ffffff 0%, rgba(179,38,30,0.05) 100%);
@@ -318,6 +319,7 @@
       return false;
     }
 
+    /* ✅ On garde les helpers date (pas utilisés pour bloquer), mais inoffensifs */
     function isDateKey(s){ return /^\d{4}-\d{2}-\d{2}$/.test(String(s||"").trim()); }
     function isTime(s){ return /^\d{2}:\d{2}$/.test(String(s||"").trim()); }
     function toLocalMs(dateKey, timeHHmm){
@@ -529,25 +531,9 @@
         : "Toutes les missions sont terminées. Tu peux enregistrer la prestation.";
     }
 
-    function computeAvailableInfo(missionData){
-      const d = missionData || {};
-      const ms = Number(d.scheduledAtMs || 0) || 0;
-
-      const dk = String(d.scheduledDateKey || "").trim();
-      const tm = String(d.scheduledTime || "").trim();
-      const fallbackMs = (!ms && dk) ? toLocalMs(dk, tm) : 0;
-
-      const whenMs = ms || fallbackMs || 0;
-      const isSched = !!whenMs;
-
-      if(!isSched){
-        return { canStart:true, whenMs:0, whenTxt:"" };
-      }
-
-      const canStart = Date.now() >= whenMs;
-      const whenTxt = prettyExpiryFromMs(whenMs);
-
-      return { canStart, whenMs, whenTxt };
+    /* ✅ NO DATE GATING: toujours dispo si token OK (sauf locked/done) */
+    function computeAvailableInfo(){
+      return { canStart:true, whenMs:0, whenTxt:"" };
     }
 
     async function load(){
@@ -638,7 +624,7 @@
         const status = (d.status || "").toUpperCase() || "—";
 
         const avail = computeAvailableInfo(d);
-        const tooEarly = !locked && !done && !avail.canStart;
+        const tooEarly = false; // ✅ supprimé
 
         const tpl = compactChecklistTemplate(m.id);
         const savedItems = checklistToArray(extractChecklistRaw(d));
@@ -653,7 +639,7 @@
 
         const checklistHtml = items.map((it, idx)=>{
           const id = `chk_${m.id}_${idx}`;
-          const disabled = (locked || tooEarly) ? "disabled" : "";
+          const disabled = (locked) ? "disabled" : "";
           return `
             <div class="chk">
               <input type="checkbox" id="${id}" data-k="${esc(it.key)}" ${it.done ? "checked" : ""} ${disabled} />
@@ -665,25 +651,20 @@
           `;
         }).join("");
 
-        const whenLine = avail.whenTxt
-          ? `\nDisponible à partir de : ${avail.whenTxt}`
-          : "";
-
         const wrap = document.createElement("div");
         wrap.className =
           "mcard" +
           (done ? " done" : "") +
-          (locked ? " locked" : "") +
-          (tooEarly ? " tooEarly" : "");
+          (locked ? " locked" : "");
 
         wrap.innerHTML = `
           <div class="mhead">
             <div>
               <div class="mtitle">${missionTitle(d.missionId || d.type || m.id)} ${locked ? "• verrouillée" : ""}</div>
-              <div class="msub">Status : ${esc(status)} ${done ? "\n✔ Terminée" : ""}${tooEarly ? whenLine : ""}</div>
+              <div class="msub">Status : ${esc(status)} ${done ? "\n✔ Terminée" : ""}</div>
             </div>
             <div>
-              ${tooEarly ? `<span class="chip bad">TROP TÔT</span>` : chipFor(status)}
+              ${chipFor(status)}
             </div>
           </div>
 
@@ -692,7 +673,7 @@
           </div>
 
           <div class="actions">
-            <button class="btn" type="button" data-done="${esc(m.id)}" ${(locked || tooEarly) ? "disabled" : ""}>Terminer</button>
+            <button class="btn" type="button" data-done="${esc(m.id)}" ${(locked) ? "disabled" : ""}>Terminer</button>
           </div>
         `;
         missionsWrap.appendChild(wrap);
