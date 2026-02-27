@@ -85,6 +85,15 @@
       box-shadow:0 3px 10px rgba(0,0,0,.06);
     }
     .btn:disabled{ opacity:.6; cursor:not-allowed; }
+
+    /* fallback copy */
+    .srOnly{
+      position:absolute;
+      left:-9999px;
+      width:1px;height:1px;
+      overflow:hidden;
+      opacity:0;
+    }
   </style>
 </head>
 
@@ -104,8 +113,11 @@
         <div class="row"><div class="k">ID prestation</div><div class="v" id="rPresta">—</div></div>
       </div>
 
+      <textarea id="copyFallback" class="srOnly" aria-hidden="true"></textarea>
+
       <div class="actions">
         <button class="btn ghost" id="copyBtn" type="button" disabled>Copier le récap</button>
+        <button class="btn ghost" id="backBtn" type="button" style="display:none;">Retour</button>
         <button class="btn primary" id="closeBtn" type="button">Fermer</button>
       </div>
 
@@ -122,6 +134,7 @@
     const time = clean(qs("time"));
     const agent = clean(qs("agent"));
     const prestationId = clean(qs("prestationId"));
+    const returnUrl = clean(qs("return")); // optionnel
 
     const recapBox = document.getElementById("recapBox");
     const rHome = document.getElementById("rHome");
@@ -131,8 +144,10 @@
     const rPresta = document.getElementById("rPresta");
 
     const copyBtn = document.getElementById("copyBtn");
+    const backBtn = document.getElementById("backBtn");
     const closeBtn = document.getElementById("closeBtn");
     const tinyLine = document.getElementById("tinyLine");
+    const copyFallback = document.getElementById("copyFallback");
 
     const hasAny = !!(home || date || time || agent || prestationId);
 
@@ -149,6 +164,13 @@
       copyBtn.disabled = true;
     }
 
+    if(returnUrl){
+      backBtn.style.display = "inline-flex";
+      backBtn.addEventListener("click", ()=>{
+        try{ location.href = returnUrl; }catch{ history.back(); }
+      });
+    }
+
     function buildRecapText(){
       const lines = [
         "Mission terminée",
@@ -161,19 +183,40 @@
       return lines.join("\n");
     }
 
-    copyBtn.addEventListener("click", async ()=>{
+    async function copyText(text){
+      // 1) Clipboard API si possible
+      if(navigator.clipboard && window.isSecureContext){
+        try{
+          await navigator.clipboard.writeText(text);
+          return true;
+        }catch{}
+      }
+
+      // 2) fallback textarea + execCommand (legacy mais très compatible)
       try{
-        await navigator.clipboard.writeText(buildRecapText());
+        copyFallback.value = text;
+        copyFallback.focus();
+        copyFallback.select();
+        const ok = document.execCommand("copy");
+        copyFallback.blur();
+        return !!ok;
+      }catch{
+        return false;
+      }
+    }
+
+    copyBtn.addEventListener("click", async ()=>{
+      const ok = await copyText(buildRecapText());
+      if(ok){
         tinyLine.textContent = "Récap copié.";
         setTimeout(()=> tinyLine.textContent = "Vous pouvez fermer cette page.", 1200);
-      }catch(e){
+      }else{
         tinyLine.textContent = "Copie impossible : copie manuelle.";
         setTimeout(()=> tinyLine.textContent = "Vous pouvez fermer cette page.", 1600);
       }
     });
 
     closeBtn.addEventListener("click", ()=>{
-      // Certaines WebViews/PWA autorisent, sinon ça ne fait rien : on garde le fallback texte.
       window.close();
       tinyLine.textContent = "Si la fenêtre ne se ferme pas, fermez l’onglet.";
     });
