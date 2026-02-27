@@ -1,4 +1,4 @@
-<!-- docs/nouvelle-prestation.html (COMPLET — PACKS V2 + RÉCAP À GAUCHE + AIDE EN BULLE JAUNE (même comportement que prestations.html)) -->
+<!-- docs/nouvelle-prestation.html (COMPLET — PACKS V2 + MODE ÉDITION eventId + homeId obligatoire + redirection OK) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -68,7 +68,7 @@
       box-shadow:0 3px 10px rgba(0,0,0,.06);
     }
 
-    /* ================= AIDE (bulle) — même que prestations.html ================= */
+    /* ================= AIDE (bulle) ================= */
     .helpWrap{
       position:relative;
       display:inline-flex;
@@ -177,6 +177,7 @@
       font-size:12px;
       color:#444;
       white-space:pre-wrap;
+      font-weight:800;
     }
     .alert.ok{ border-left-color: var(--ok); }
 
@@ -458,7 +459,6 @@
       <a class="pill" href="planning.html">← Retour planning</a>
 
       <div class="topbar-right">
-        <!-- ✅ AIDE EN BULLE (pas modal) -->
         <div class="helpWrap" data-help-wrap="packs">
           <button class="helpBtn" type="button" data-help-btn="packs" aria-expanded="false">💡 Aide</button>
           <div class="helpBubble" data-help-bubble="packs" role="dialog" aria-modal="false" aria-label="Aide packs">
@@ -479,7 +479,7 @@
       <div class="logo-icon">✓</div>
       <h1>CleanUp Manager</h1>
     </div>
-    <div class="subtitle">Créer une prestation</div>
+    <div class="subtitle" id="pageSubtitle">Créer une prestation</div>
     <div class="emailLine" id="emailLine">—</div>
 
     <div class="alert" id="alertBox"></div>
@@ -503,7 +503,7 @@
 
       <div class="card right">
         <div class="card-title">
-          <span>Nouvelle prestation</span>
+          <span id="rightTitle">Nouvelle prestation</span>
           <span class="tiny" id="homeLabel">—</span>
         </div>
 
@@ -531,7 +531,7 @@
             </div>
           </div>
 
-          <!-- champ time conservé pour compat code/payload, mais invisible -->
+          <!-- compat payload -->
           <input id="time" type="time" style="display:none" aria-hidden="true" tabindex="-1"/>
 
           <div class="inline">
@@ -698,6 +698,9 @@
     const recapBox = document.getElementById("recapBox");
     const recapTotalTag = document.getElementById("recapTotalTag");
 
+    const pageSubtitle = document.getElementById("pageSubtitle");
+    const rightTitle = document.getElementById("rightTitle");
+
     const formEl = document.getElementById("jobForm");
     const dateKeyInput = document.getElementById("dateKeyInput");
     const timeEl = document.getElementById("time"); // caché (compat payload)
@@ -755,7 +758,7 @@
       alertBox.textContent = "";
     }
 
-    /* ================= HELP BUBBLES (generic — ✅ identique prestations/planning : portal to body) ================= */
+    /* ================= HELP BUBBLES (generic — portal to body) ================= */
     function closeAllHelpBubbles(){
       document.querySelectorAll("[data-help-bubble]").forEach(b=> b.style.display = "none");
       document.querySelectorAll("[data-help-btn]").forEach(btn=> btn.setAttribute("aria-expanded","false"));
@@ -764,15 +767,12 @@
 
     function portalBubbleToBody(bub){
       if(bub.dataset.portaled === "1") return;
-
       const ph = document.createElement("span");
       ph.style.display = "none";
       ph.dataset.helpPlaceholder = "1";
       ph.id = "hbph_" + Math.random().toString(16).slice(2);
-
       bub.parentNode?.insertBefore(ph, bub);
       bub.dataset.placeholderId = ph.id;
-
       document.body.appendChild(bub);
       bub.dataset.portaled = "1";
     }
@@ -866,21 +866,27 @@
       return (p.get(name) || "").trim();
     }
 
-    // ✅ compat : accepte aussi "homed" si jamais un ancien lien traîne
-    const homeId          = getParam("homeId") || getParam("homed");
-    const from            = getParam("from") || "manual";
-    const icalEventId     = getParam("icalEventId");
-    const summary         = getParam("summary");
-    const timeParam       = getParam("time");
-    const dateKeyParam    = getParam("dateKey");
-    const ownerNameParam  = getParam("ownerName");
-    const noteParam       = getParam("note");
-    const homeTypeParam   = getParam("homeType");
+    // ✅ mode édition
+    const mode = (getParam("mode") || "").toLowerCase();
+    const isEdit = mode === "edit";
 
-    // agent sélectionné côté création (passé en URL depuis prestations/planning)
-    const assignedToUidParam   = getParam("assignedToUid");     // string uid
-    const assignedToNameParam  = getParam("assignedToName");    // string
-    const assignedToEmailParam = getParam("assignedToEmail");   // string
+    // ✅ requis: homeId (edit comme create) + eventId en edit
+    const homeId = getParam("homeId") || getParam("homed");
+    const eventIdParam = getParam("eventId");
+
+    const from = getParam("from") || "manual";
+    const icalEventId = getParam("icalEventId");
+    const summary = getParam("summary");
+    const timeParam = getParam("time");
+    const dateKeyParam = getParam("dateKey");
+    const ownerNameParam = getParam("ownerName");
+    const noteParam = getParam("note");
+    const homeTypeParam = getParam("homeType");
+
+    // agent sélectionné côté création
+    const assignedToUidParam   = getParam("assignedToUid");
+    const assignedToNameParam  = getParam("assignedToName");
+    const assignedToEmailParam = getParam("assignedToEmail");
 
     // ========= Produits (suggestions) =========
     const PRODUCT_TEMPLATES = [
@@ -924,7 +930,7 @@
     let createdEventId = null;
     let createdEventRef = null;
 
-    // info séjour (source = icalEvents si from=ical)
+    // séjour
     let stay = {
       arrivalDateKey: "",
       departureDateKey: "",
@@ -933,7 +939,7 @@
       timezone: "Europe/Paris"
     };
 
-    // Packs V2 (état local)
+    // Packs V2 (local)
     const PACK_KEYS = { arrival:"arrival", departure:"departure", other:"other" };
     let activePackKey = PACK_KEYS.arrival;
 
@@ -943,11 +949,8 @@
       other:    { lines: [], note:"", validated:false, dateKey:"" }
     };
 
-    // Edition de ligne (par pack)
-    let editing = {
-      packKey: "",
-      index: -1
-    };
+    // Edition de ligne
+    let editing = { packKey:"", index:-1 };
 
     function escapeHtml(s){
       return String(s ?? "")
@@ -968,7 +971,6 @@
       const d = new Date();
       return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
     }
-
     function cleanPhone(s){
       return (s||"").toString().trim().replace(/\s+/g," ");
     }
@@ -985,9 +987,21 @@
       emailLine.textContent = company || fallbackEmail || uid;
     }
 
+    // ========= Guard params =========
+    function guardParamsOrDie(){
+      if(!homeId){
+        showAlert("⛔ homeId manquant (URL). Exemple : nouvelle-prestation.html?homeId=XXXX");
+        return false;
+      }
+      if(isEdit && !eventIdParam){
+        showAlert("⛔ eventId manquant en mode édition. Exemple : nouvelle-prestation.html?mode=edit&homeId=XXXX&eventId=YYYY");
+        return false;
+      }
+      return true;
+    }
+
     // ========= LOGEMENT =========
     async function loadHome(){
-      if(!homeId) throw new Error("homeId manquant (URL). Exemple : nouvelle-prestation.html?homeId=XXXX");
       const snap = await getDoc(doc(db, "homes", homeId));
       if(!snap.exists()) throw new Error("Logement introuvable (homeId).");
 
@@ -1031,6 +1045,79 @@
       if(d.conciergerieUid && currentUser?.uid && d.conciergerieUid !== currentUser.uid) return null;
 
       return { id: snap.id, ...d };
+    }
+
+    // ========= MODE EDIT : load event =========
+    async function loadExistingEventIfEdit(){
+      if(!isEdit) return null;
+
+      const eSnap = await getDoc(doc(db,"events", eventIdParam));
+      if(!eSnap.exists()) throw new Error("Prestation introuvable (eventId).");
+
+      const ev = eSnap.data() || {};
+      if(ev.conciergerieUid && currentUser?.uid && ev.conciergerieUid !== currentUser.uid){
+        throw new Error("Accès refusé : cette prestation n'appartient pas à ta conciergerie.");
+      }
+
+      // cohérence homeId: on impose l'URL, mais on tolère si event.homeId match
+      if(ev.homeId && homeId && ev.homeId !== homeId){
+        throw new Error("homeId incohérent : l'URL ne correspond pas au logement de la prestation.");
+      }
+
+      createdEventId = eventIdParam;
+      createdEventRef = doc(db,"events", createdEventId);
+
+      // hydrate champs
+      dateKeyInput.value = (ev.dateKey || ev.date || dateKeyInput.value || todayKey());
+      timeEl.value = (ev.time || "");
+
+      stay.arrivalDateKey = (ev.arrivalDateKey || "");
+      stay.departureDateKey = (ev.departureDateKey || "");
+      stay.arrivalTime = (ev.arrivalTime || "");
+      stay.departureTime = (ev.departureTime || "");
+      stay.timezone = (ev.timezone || "Europe/Paris");
+
+      arrivalTimeInput.value = stay.arrivalTime || "";
+      departureDateKeyInput.value = stay.departureDateKey || "";
+      departureTimeInput.value = stay.departureTime || "";
+
+      ownerNameEl.value = (ev.ownerName || ownerNameEl.value || "");
+      ownerPhoneEl.value = (ev.ownerPhone || ownerPhoneEl.value || "");
+      jobNoteEl.value = (ev.meta || "");
+
+      // packs
+      const p = (ev.packs && typeof ev.packs === "object") ? ev.packs : {};
+      function normPack(key){
+        const pk = p[key] || {};
+        const ls = Array.isArray(pk.lines) ? pk.lines : [];
+        return {
+          lines: ls.map(l=>({
+            label: String(l?.label || "").trim(),
+            qty: Number(l?.qty)||0,
+            unit: String(l?.unit || "unité"),
+            unitPrice: Number(l?.unitPrice)||0,
+            category: String(l?.category || "").trim(),
+            note: String(l?.note || "").trim(),
+            suggestedPrice: String(l?.suggestedPrice || "").trim()
+          })),
+          note: String(pk.note || "").trim(),
+          validated: !!pk.validatedAt, // compat: validatedAt => bool
+          dateKey: String(pk.dateKey || "").trim()
+        };
+      }
+
+      packs.arrival = normPack("arrival");
+      packs.departure = normPack("departure");
+      packs.other = normPack("other");
+
+      // dates de pack fallback si pas présentes
+      if(!packs.arrival.dateKey) packs.arrival.dateKey = (stay.arrivalDateKey || dateKeyInput.value || "");
+      if(!packs.departure.dateKey) packs.departure.dateKey = (stay.departureDateKey || departureDateKeyInput.value || "");
+      if(!packs.other.dateKey) packs.other.dateKey = (dateKeyInput.value || todayKey());
+
+      otherDateKeyInput.value = packs.other.dateKey || (dateKeyInput.value || todayKey());
+
+      return ev;
     }
 
     // ========= Produits select =========
@@ -1096,9 +1183,9 @@
       return (otherDateKeyInput.value || dateKeyInput.value || todayKey()).trim();
     }
     function ensurePackDates(){
-      packs.arrival.dateKey = getPackDateKey(PACK_KEYS.arrival);
-      packs.departure.dateKey = getPackDateKey(PACK_KEYS.departure);
-      packs.other.dateKey = getPackDateKey(PACK_KEYS.other);
+      packs.arrival.dateKey = packs.arrival.dateKey || getPackDateKey(PACK_KEYS.arrival);
+      packs.departure.dateKey = packs.departure.dateKey || getPackDateKey(PACK_KEYS.departure);
+      packs.other.dateKey = (otherDateKeyInput.value || packs.other.dateKey || getPackDateKey(PACK_KEYS.other));
     }
 
     function computePackTotal(packKey){
@@ -1121,17 +1208,12 @@
       packOtherBtn.disabled = !!locked;
     }
 
-    // ✅ redirection douce (garde l'UI visible + message avant de partir)
     let redirectTimer = null;
     function scheduleRedirect(url, delayMs = 900){
       if(redirectTimer) clearTimeout(redirectTimer);
-      redirectTimer = setTimeout(() => {
-        location.href = url;
-      }, delayMs);
+      redirectTimer = setTimeout(() => { location.href = url; }, delayMs);
     }
-    window.addEventListener("beforeunload", ()=>{
-      if(redirectTimer) clearTimeout(redirectTimer);
-    });
+    window.addEventListener("beforeunload", ()=>{ if(redirectTimer) clearTimeout(redirectTimer); });
 
     function resetLineBuilder(){
       productSelect.value = "";
@@ -1169,10 +1251,7 @@
       const note = (lineNoteEl.value || "").trim();
       const tpl = getTemplateByKey(key);
       const suggested = tpl?.suggested || "";
-      return {
-        ok:true,
-        line: { label, qty, unit, unitPrice, category: category || "", note, suggestedPrice: suggested }
-      };
+      return { ok:true, line: { label, qty, unit, unitPrice, category: category || "", note, suggestedPrice: suggested } };
     }
 
     function setActivePack(key){
@@ -1183,13 +1262,15 @@
       packOtherBtn.classList.toggle("active", key === PACK_KEYS.other);
 
       otherDateWrap.style.display = (key === PACK_KEYS.other) ? "block" : "none";
-
-      // Sync note input
       packNoteInput.value = packs[key]?.note || "";
 
-      // Labels
+      // date du pack : en edit on respecte packs.*.dateKey si présent
+      if(key === PACK_KEYS.other){
+        otherDateKeyInput.value = (packs.other.dateKey || otherDateKeyInput.value || dateKeyInput.value || todayKey());
+      }
+
       ensurePackDates();
-      const dk = packs[key]?.dateKey || getPackDateKey(key) || "—";
+      const dk = (packs[key]?.dateKey || getPackDateKey(key) || "—").trim();
       const v = packs[key]?.validated ? "✅ validé" : "⏳ non validé";
       packInfoTag.textContent = `${getPackTitle(key)} • ${dk} • ${v}`;
 
@@ -1202,7 +1283,7 @@
 
     function renderLines(){
       const ls = packs[activePackKey]?.lines || [];
-      const dk = packs[activePackKey]?.dateKey || getPackDateKey(activePackKey) || "—";
+      const dk = (packs[activePackKey]?.dateKey || getPackDateKey(activePackKey) || "—").trim();
       packLinesLabel.textContent = `Date : ${dk} • ${ls.length} ligne${ls.length>1?"s":""}`;
 
       linesList.innerHTML = "";
@@ -1291,7 +1372,7 @@
       function renderPackCard(key){
         const p = packs[key];
         const title = getPackTitle(key);
-        const dk = p.dateKey || "—";
+        const dk = (p.dateKey || "—").trim();
         const st = p.validated ? "✅ validé" : "⏳ non validé";
         const sub = money(computePackTotal(key));
         const note = (p.note || "").trim();
@@ -1335,7 +1416,7 @@
     }
 
     function renderContext(){
-      contextTag.textContent = (from === "ical") ? "Réservation" : "Création manuelle";
+      contextTag.textContent = isEdit ? "Édition prestation" : ((from === "ical") ? "Réservation" : "Création manuelle");
 
       const homeName = (currentHome?.name || "").trim();
       const ht = (currentHome?.homeType || "").trim();
@@ -1368,6 +1449,7 @@
 
       if(summary) rows.push(`<div><b>Réservation</b> : ${escapeHtml(summary)}</div>`);
       if(noteParam) rows.push(`<div><b>Note</b> : ${escapeHtml(noteParam)}</div>`);
+      if(isEdit && createdEventId) rows.push(`<div><b>Event</b> : ${escapeHtml(createdEventId)}</div>`);
 
       contextKv.innerHTML = rows.join("");
 
@@ -1378,7 +1460,7 @@
       renderRecap();
       refreshTotals();
 
-      const dk = packs[activePackKey]?.dateKey || getPackDateKey(activePackKey) || "—";
+      const dk = (packs[activePackKey]?.dateKey || getPackDateKey(activePackKey) || "—").trim();
       const v = packs[activePackKey]?.validated ? "✅ validé" : "⏳ non validé";
       packInfoTag.textContent = `${getPackTitle(activePackKey)} • ${dk} • ${v}`;
       packLinesLabel.textContent = `Date : ${dk} • ${(packs[activePackKey]?.lines||[]).length} ligne${(packs[activePackKey]?.lines||[]).length>1?"s":""}`;
@@ -1426,8 +1508,8 @@
     productSelect.addEventListener("change", refreshSuggest);
 
     [dateKeyInput, timeEl, arrivalTimeInput, departureDateKeyInput, departureTimeInput, ownerNameEl, ownerPhoneEl, otherDateKeyInput].forEach(el=>{
-      el.addEventListener("input", renderContext);
-      el.addEventListener("change", renderContext);
+      el.addEventListener("input", ()=>{ packs.other.dateKey = (otherDateKeyInput.value || packs.other.dateKey); renderContext(); });
+      el.addEventListener("change", ()=>{ packs.other.dateKey = (otherDateKeyInput.value || packs.other.dateKey); renderContext(); });
     });
 
     packNoteInput.addEventListener("input", ()=>{
@@ -1435,7 +1517,6 @@
       renderRecap();
     });
 
-    // ✅ ne valide pas un pack vide (sinon tu coches "validé" sans contenu)
     validatePackBtn.addEventListener("click", ()=>{
       ensurePackDates();
       const ls = packs[activePackKey]?.lines || [];
@@ -1475,7 +1556,6 @@
 
     formEl.addEventListener("submit", async (e)=>{
       e.preventDefault();
-      // ✅ anti double submit
       if(saveBtn.disabled) return;
 
       hideAlert();
@@ -1498,7 +1578,7 @@
 
       const packsPayload = {
         arrival: {
-          dateKey: packs.arrival.dateKey || "",
+          dateKey: (packs.arrival.dateKey || "").trim(),
           note: packs.arrival.note || "",
           validatedAt: packs.arrival.validated ? serverTimestamp() : null,
           lines: (packs.arrival.lines || []).map(l=>({
@@ -1512,7 +1592,7 @@
           }))
         },
         departure: {
-          dateKey: packs.departure.dateKey || "",
+          dateKey: (packs.departure.dateKey || "").trim(),
           note: packs.departure.note || "",
           validatedAt: packs.departure.validated ? serverTimestamp() : null,
           lines: (packs.departure.lines || []).map(l=>({
@@ -1526,7 +1606,7 @@
           }))
         },
         other: {
-          dateKey: packs.other.dateKey || "",
+          dateKey: (packs.other.dateKey || "").trim(),
           note: packs.other.note || "",
           validatedAt: packs.other.validated ? serverTimestamp() : null,
           lines: (packs.other.lines || []).map(l=>({
@@ -1613,7 +1693,6 @@
 
           await createDefaultMissions(createdEventId, basePayload);
 
-          // ✅ reste sur la page, affiche le message, puis redirige (évite "tout s’efface")
           showAlert("✅ Prestation enregistrée (packs inclus) + missions créées. Redirection…", true);
           lockUI(true);
           scheduleRedirect(`prestations.html?open=${encodeURIComponent(createdEventId)}`, 900);
@@ -1623,7 +1702,6 @@
           delete upd.createdAt;
           await updateDoc(createdEventRef, upd);
 
-          // option: pas de redirection obligatoire, mais cohérent
           showAlert("✅ Prestation mise à jour. Redirection…", true);
           lockUI(true);
           scheduleRedirect(`prestations.html?open=${encodeURIComponent(createdEventId)}`, 700);
@@ -1633,7 +1711,6 @@
         console.error(err);
         showAlert("Erreur enregistrement : " + (err?.message || "inconnue"));
       }finally{
-        // si on a planifié une redirection, on laisse l'UI lockée
         if(!redirectTimer) lockUI(false);
       }
     });
@@ -1650,16 +1727,25 @@
         return;
       }
 
-      currentUser = user;
+      if(!guardParamsOrDie()) return;
 
+      currentUser = user;
       await loadCompanyNameForHeader(user.uid, user.email);
+
+      // UI edit/create
+      if(isEdit){
+        pageSubtitle.textContent = "Éditer une prestation";
+        rightTitle.textContent = "Édition prestation";
+        saveBtn.textContent = "Mettre à jour la prestation";
+      }
 
       const baseDate = dateKeyParam || todayKey();
       dateKeyInput.value = baseDate;
 
       const ical = await loadIcalEventIfAny();
 
-      if (ical && ical.homeId && homeId && ical.homeId !== homeId) {
+      // si from=ical et ical.homeId différent => on force homeId (mais en edit on ne joue pas à ça)
+      if (!isEdit && ical && ical.homeId && homeId && ical.homeId !== homeId) {
         const p = new URLSearchParams(location.search);
         p.set("homeId", ical.homeId);
         location.replace(`nouvelle-prestation.html?${p.toString()}`);
@@ -1673,10 +1759,11 @@
         return;
       }
 
+      // valeurs URL
       if(ownerNameParam && !ownerNameEl.value.trim()) ownerNameEl.value = ownerNameParam.trim();
-      if(noteParam) jobNoteEl.value = noteParam;
+      if(noteParam && !jobNoteEl.value.trim()) jobNoteEl.value = noteParam;
 
-      if (ical) {
+      if (!isEdit && ical) {
         stay.arrivalDateKey = (ical.arrivalDateKey || ical.dateKey || baseDate || "").trim();
         stay.departureDateKey = (ical.departureDateKey || "").trim();
         stay.arrivalTime = (ical.arrivalTime || "").trim();
@@ -1692,7 +1779,7 @@
 
         if(ical.ownerName && !ownerNameEl.value) ownerNameEl.value = ical.ownerName;
         if(ical.meta && !jobNoteEl.value) jobNoteEl.value = ical.meta;
-      } else {
+      } else if(!isEdit) {
         stay.arrivalDateKey = baseDate;
         stay.departureDateKey = "";
         stay.arrivalTime = "";
@@ -1705,11 +1792,33 @@
         timeEl.value = timeParam || "";
       }
 
-      arrivalTimeInput.readOnly = true;
-      departureDateKeyInput.readOnly = true;
-      departureTimeInput.readOnly = true;
+      // en edit : on charge l'event, ça override les champs
+      try{
+        if(isEdit){
+          const ev = await loadExistingEventIfEdit();
 
-      otherDateKeyInput.value = dateKeyInput.value || todayKey();
+          // si l'event n'avait pas de stay, on fallback sans casser
+          if(!stay.arrivalDateKey) stay.arrivalDateKey = (ev?.arrivalDateKey || ev?.dateKey || dateKeyInput.value || "");
+          if(!stay.departureDateKey) stay.departureDateKey = (ev?.departureDateKey || departureDateKeyInput.value || "");
+
+          // en edit on autorise modifier les heures/dates
+          arrivalTimeInput.readOnly = false;
+          departureDateKeyInput.readOnly = false;
+          departureTimeInput.readOnly = false;
+        }else{
+          // create : comportement original (readonly)
+          arrivalTimeInput.readOnly = true;
+          departureDateKeyInput.readOnly = true;
+          departureTimeInput.readOnly = true;
+        }
+      }catch(e){
+        showAlert("⛔ " + (e.message || "Erreur édition"));
+        return;
+      }
+
+      // other date
+      if(!otherDateKeyInput.value) otherDateKeyInput.value = dateKeyInput.value || todayKey();
+      packs.other.dateKey = otherDateKeyInput.value;
 
       ensurePackDates();
 
@@ -1722,7 +1831,6 @@
 
       setActivePack(PACK_KEYS.arrival);
 
-      // ✅ branche bulle aide
       wireHelpBubbles();
     });
   </script>
