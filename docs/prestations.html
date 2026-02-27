@@ -1,4 +1,4 @@
-<!-- docs/prestations.html (COMPLET — + badge preuve OK/KO + bouton Preuves dans modale détail + lecture adminProofStatus) -->
+<!-- docs/prestations.html (COMPLET — cohérent Planning/Preuves + help bubbles portaled + statut A_VALIDER + packs conservés) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -123,7 +123,7 @@
       padding:12px 14px 12px;
 
       display:none;
-      z-index:9999;
+      z-index:2147483647; /* ✅ cohérent Planning (au-dessus de tout) */
 
       overflow:auto;
       isolation:isolate;
@@ -628,7 +628,7 @@
       justify-content:space-between;
       gap:10px;
       align-items:center;
-      font-weight:700; /* ✅ moins gras */
+      font-weight:700;
       font-size:12px;
     }
     .total-box .mut{ font-weight:600; color:#666; }
@@ -1042,12 +1042,27 @@
     function asRaw(s){ return String(s||"").toUpperCase().trim(); }
     function qs(name){ return new URLSearchParams(location.search).get(name) || ""; }
 
-    /* ================= HELP BUBBLES (generic) ================= */
+    /* ================= HELP BUBBLES (generic — ✅ identique Planning : portal to body) ================= */
     function closeAllHelpBubbles(){
       document.querySelectorAll("[data-help-bubble]").forEach(b=> b.style.display = "none");
       document.querySelectorAll("[data-help-btn]").forEach(btn=> btn.setAttribute("aria-expanded","false"));
     }
     function clamp(n, min, max){ return Math.max(min, Math.min(max, n)); }
+
+    function portalBubbleToBody(bub){
+      if(bub.dataset.portaled === "1") return;
+
+      const ph = document.createElement("span");
+      ph.style.display = "none";
+      ph.dataset.helpPlaceholder = "1";
+      ph.id = "hbph_" + Math.random().toString(16).slice(2);
+
+      bub.parentNode?.insertBefore(ph, bub);
+      bub.dataset.placeholderId = ph.id;
+
+      document.body.appendChild(bub);
+      bub.dataset.portaled = "1";
+    }
 
     function positionHelpBubble(btn, bub){
       const r = btn.getBoundingClientRect();
@@ -1099,6 +1114,7 @@
           closeAllHelpBubbles();
 
           if(!isOpen){
+            portalBubbleToBody(bub);          // ✅ fix cohérent Planning
             positionHelpBubble(btn, bub);
             bub.style.display = "block";
             btn.setAttribute("aria-expanded","true");
@@ -1118,10 +1134,12 @@
     window.addEventListener("keydown", (e)=>{
       if(e.key === "Escape") closeAllHelpBubbles();
     });
-    /* ================= HELP BUBBLES (generic) ================= */
+    /* ================= HELP BUBBLES ================= */
 
+    // ✅ Statuts alignés Planning (au moins reconnaître A_VALIDER)
     function normalizeOpStatus(s){
       const x = asRaw(s);
+      if(x === "A_VALIDER" || x === "À VALIDER") return "A_VALIDER";
       if(x === "DRAFT" || x === "BROUILLON" || x === "EN COURS") return "EN_COURS";
       if(x === "REALISEE" || x === "RÉALISÉE" || x === "DONE") return "REALISEE";
       if(x === "ANNULEE" || x === "ANNULÉE" || x === "CANCELLED") return "ANNULEE";
@@ -1130,6 +1148,7 @@
     function opLabel(st){
       const s = normalizeOpStatus(st);
       if(s==="EN_COURS") return "EN COURS";
+      if(s==="A_VALIDER") return "À VALIDER";
       if(s==="REALISEE") return "RÉALISÉE";
       if(s==="ANNULEE") return "ANNULÉE";
       return s;
@@ -1153,6 +1172,7 @@
     }
 
     // ========= Datalist produits =========
+    // ✅ Packs conservés (kits séjour Pack 2/4/6/8 pers)
     const PRODUCT_TEMPLATES = [
       { label:"Ménage standard (inter-séjour)", unit:"unité" },
       { label:"Ménage intermédiaire (long séjour)", unit:"supplément" },
@@ -1418,9 +1438,18 @@
     editBackdrop?.addEventListener("click",(e)=>{ if(e.target===editBackdrop) closeEditModal(); });
     editCancelBtn?.addEventListener("click", closeEditModal);
 
-    // ===== Photos =====
+    // ===== Photos / Preuves (✅ cohérent Planning : return + open + date) =====
     function goPhotos(prestationId){
-      location.href = `preuves-admin.html?prestationId=${encodeURIComponent(prestationId)}`;
+      const p = new URLSearchParams();
+      p.set("prestationId", prestationId);
+      p.set("return", "prestations");
+      p.set("open", prestationId);
+
+      // date de retour (si dispo) : arrivalDateKey > dateKey > today
+      const dk = (selected?.arrivalDateKey || selected?.dateKey || "").trim();
+      if(dk) p.set("date", dk);
+
+      location.href = `preuves-admin.html?${p.toString()}`;
     }
     detailPhotosBtn?.addEventListener("click", ()=>{
       if(!selected?.id) return;
@@ -1483,6 +1512,8 @@
         });
         div.querySelector("button[data-photos]")?.addEventListener("click",(e)=>{
           e.stopPropagation();
+          // ✅ on veut aussi date/retour : sélectionner avant
+          selectItem(it.id);
           goPhotos(it.id);
         });
         div.querySelector("button[data-program]")?.addEventListener("click",(e)=>{
@@ -1628,7 +1659,7 @@
         closeDetailModal();
         renderList();
         renderDetail();
-        renderOnboarding(); // ✅ update
+        renderOnboarding();
         showAlert("✅ Prestation supprimée.", true);
       }catch(err){
         console.error(err);
@@ -1761,7 +1792,7 @@
       });
 
       closeEditModal();
-      renderOnboarding(); // ✅ update (au cas où agent/flow)
+      renderOnboarding();
     });
 
     // ===== Open param =====
@@ -1861,7 +1892,7 @@
 
       renderList();
       renderDetail();
-      renderOnboarding(); // ✅ after data
+      renderOnboarding();
       await autoOpenFromQuery();
     }
 
@@ -1897,7 +1928,7 @@
 
       applySearchUI();
 
-      // ✅ branche la bulle d'aide topbar
+      // ✅ branche bulle aide topbar
       wireHelpBubbles();
 
       try{
