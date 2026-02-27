@@ -1,4 +1,4 @@
-<!-- docs/agent.html (FINAL — checklist ONLY via token ; aucun bouton Photos/Chat) -->
+<!-- docs/agent.html (FINAL — checklist via token ; BLOQUE par scheduledAtMs/DateKey ; redirige missionfini avec recap) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -143,6 +143,10 @@
     .locked{
       border-left:5px solid rgba(122,92,255,0.55);
       background:linear-gradient(180deg,#ffffff 0%, rgba(122,92,255,0.06) 100%);
+    }
+    .tooEarly{
+      border-left:5px solid rgba(179,38,30,0.45);
+      background:linear-gradient(180deg,#ffffff 0%, rgba(179,38,30,0.05) 100%);
     }
 
     .footerCard{ display:flex; flex-direction:column; gap:10px; }
@@ -312,6 +316,17 @@
       const ms = ts?.toMillis ? ts.toMillis() : NaN;
       if(Number.isFinite(ms)) return Date.now() < ms;
       return false;
+    }
+
+    function isDateKey(s){ return /^\d{4}-\d{2}-\d{2}$/.test(String(s||"").trim()); }
+    function isTime(s){ return /^\d{2}:\d{2}$/.test(String(s||"").trim()); }
+    function toLocalMs(dateKey, timeHHmm){
+      const d = String(dateKey||"").trim();
+      if(!isDateKey(d)) return 0;
+      const t = isTime(timeHHmm) ? String(timeHHmm).trim() : "00:00";
+      const dt = new Date(`${d}T${t}:00`);
+      const ms = dt.getTime();
+      return Number.isFinite(ms) ? ms : 0;
     }
 
     function compactChecklistTemplate(type){
@@ -514,6 +529,28 @@
         : "Toutes les missions sont terminées. Tu peux enregistrer la prestation.";
     }
 
+    function computeAvailableInfo(missionData){
+      const d = missionData || {};
+      const ms = Number(d.scheduledAtMs || 0) || 0;
+
+      // fallback si pas de ms : scheduledDateKey + scheduledTime
+      const dk = String(d.scheduledDateKey || "").trim();
+      const tm = String(d.scheduledTime || "").trim();
+      const fallbackMs = (!ms && dk) ? toLocalMs(dk, tm) : 0;
+
+      const whenMs = ms || fallbackMs || 0;
+      const isSched = !!whenMs;
+
+      if(!isSched){
+        return { canStart:true, whenMs:0, whenTxt:"" };
+      }
+
+      const canStart = Date.now() >= whenMs;
+      const whenTxt = prettyExpiryFromMs(whenMs);
+
+      return { canStart, whenMs, whenTxt };
+    }
+
     async function load(){
       hideAlert();
       missionsWrap.innerHTML = "";
@@ -601,6 +638,9 @@
         const done = !!d.agentDone;
         const status = (d.status || "").toUpperCase() || "—";
 
+        const avail = computeAvailableInfo(d);
+        const tooEarly = !locked && !done && !avail.canStart;
+
         const tpl = compactChecklistTemplate(m.id);
         const savedItems = checklistToArray(extractChecklistRaw(d));
         const doneByKey = {};
@@ -614,9 +654,10 @@
 
         const checklistHtml = items.map((it, idx)=>{
           const id = `chk_${m.id}_${idx}`;
+          const disabled = (locked || tooEarly) ? "disabled" : "";
           return `
             <div class="chk">
-              <input type="checkbox" id="${id}" data-k="${esc(it.key)}" ${it.done ? "checked" : ""} ${locked ? "disabled" : ""} />
+              <input type="checkbox" id="${id}" data-k="${esc(it.key)}" ${it.done ? "checked" : ""} ${disabled} />
               <div>
                 <label for="${id}">${esc(it.label)}</label>
                 <div class="hint">${it.done ? "fait" : "à faire"}</div>
@@ -625,15 +666,26 @@
           `;
         }).join("");
 
+        const whenLine = avail.whenTxt
+          ? `\nDisponible à partir de : ${avail.whenTxt}`
+          : "";
+
         const wrap = document.createElement("div");
-        wrap.className = "mcard" + (done ? " done" : "") + (locked ? " locked" : "");
+        wrap.className =
+          "mcard" +
+          (done ? " done" : "") +
+          (locked ? " locked" : "") +
+          (tooEarly ? " tooEarly" : "");
+
         wrap.innerHTML = `
           <div class="mhead">
             <div>
               <div class="mtitle">${missionTitle(d.missionId || d.type || m.id)} ${locked ? "• verrouillée" : ""}</div>
-              <div class="msub">Status : ${esc(status)} ${done ? "\n✔ Terminée" : ""}</div>
+              <div class="msub">Status : ${esc(status)} ${done ? "\n✔ Terminée" : ""}${tooEarly ? whenLine : ""}</div>
             </div>
-            <div>${chipFor(status)}</div>
+            <div>
+              ${tooEarly ? `<span class="chip bad">TROP TÔT</span>` : chipFor(status)}
+            </div>
           </div>
 
           <div class="checklist" data-m="${esc(m.id)}">
@@ -641,7 +693,7 @@
           </div>
 
           <div class="actions">
-            <button class="btn" type="button" data-done="${esc(m.id)}" ${locked ? "disabled" : ""}>Terminer</button>
+            <button class="btn" type="button" data-done="${esc(m.id)}" ${(locked || tooEarly) ? "disabled" : ""}>Terminer</button>
           </div>
         `;
         missionsWrap.appendChild(wrap);
@@ -660,7 +712,6 @@
             return { key, label, done: !!ch.checked };
           });
 
-          // blocage si incomplète + surlignage
           const notDone = newItems.filter(x => !x.done);
           checks.forEach(ch => ch.closest(".chk")?.classList.toggle("miss", !ch.checked));
           if(notDone.length){
@@ -721,16 +772,17 @@
           updatedAt: serverTimestamp()
         });
 
-       const presta = tokenDoc?.presta || {};
-const url =
-  "missionfini.html" +
-  `?prestationId=${encodeURIComponent(prestationId)}` +
-  `&home=${encodeURIComponent(presta.homeName || "")}` +
-  `&date=${encodeURIComponent(presta.arrivalDateKey || presta.dateKey || "")}` +
-  `&time=${encodeURIComponent(presta.arrivalTime || "")}` +
-  `&agent=${encodeURIComponent((tokenDoc.agentName||"") + (tokenDoc.agentEmail ? " • " + tokenDoc.agentEmail : ""))}`;
+        const presta = tokenDoc?.presta || {};
+        const url =
+          "missionfini.html" +
+          `?prestationId=${encodeURIComponent(prestationId)}` +
+          `&home=${encodeURIComponent(presta.homeName || "")}` +
+          `&date=${encodeURIComponent(presta.arrivalDateKey || presta.dateKey || "")}` +
+          `&time=${encodeURIComponent(presta.arrivalTime || "")}` +
+          `&agent=${encodeURIComponent((tokenDoc.agentName||"") + (tokenDoc.agentEmail ? " • " + tokenDoc.agentEmail : ""))}` +
+          `&prestationId=${encodeURIComponent(prestationId)}`;
 
-location.href = url;
+        location.href = url;
       }catch(err){
         console.error(err);
         showAlert("Erreur fin prestation : " + (err?.code || err?.message || "inconnue"));
@@ -746,4 +798,3 @@ location.href = url;
   </script>
 </body>
 </html>
-
