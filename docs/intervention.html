@@ -1,4 +1,4 @@
-<!-- docs/intervention.html (FINAL — missions avec créneau (scheduledDateKey/Time/AtMs) + CHECKIN/CHECKOUT auto + MAINTENANCE via champs optionnels ; Photos BYPASS = missions/PHOTOS ; resync missions non verrouillées ; crée missions/PHOTOS ; NO query()) -->
+<!-- docs/intervention.html (FINAL — FIX retour planning/prestations + guard conciergerieUid) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -127,9 +127,7 @@
     }
     .hintBox b{ font-weight:900; }
 
-    /* ===========================
-       Photos agent (BYPASS)
-       =========================== */
+    /* Photos agent (BYPASS) */
     .photosBox{
       margin-top:8px;
       background:#fff;
@@ -216,7 +214,7 @@
 <body>
   <div class="page">
     <div class="topbar">
-      <a class="pill" href="prestations.html">← Retour</a>
+      <a class="pill" id="backBtn" href="prestations.html">← Retour</a>
       <div style="display:flex;gap:8px;"></div>
     </div>
 
@@ -320,6 +318,7 @@
 
     const helloLine = document.getElementById("helloLine");
     const companyLine = document.getElementById("companyLine");
+    const backBtn = document.getElementById("backBtn");
 
     const alertBox = document.getElementById("alertBox");
     const subLine = document.getElementById("subLine");
@@ -369,6 +368,33 @@
         .replaceAll(">","&gt;")
         .replaceAll('"',"&quot;")
         .replaceAll("'","&#039;");
+    }
+
+    function isDateKey(s){ return /^\d{4}-\d{2}-\d{2}$/.test(String(s||"").trim()); }
+
+    function applyBackLink(){
+      const returnTo = (qs("returnTo") || "").toLowerCase().trim();
+      const returnDate = (qs("returnDate") || "").trim();
+
+      if(returnTo === "planning"){
+        const p = new URLSearchParams();
+        if(isDateKey(returnDate)) p.set("date", returnDate);
+        backBtn.href = `planning.html${p.toString() ? "?" + p.toString() : ""}`;
+        backBtn.textContent = "← Planning";
+        return;
+      }
+
+      // retour "production" : ouvre la prestation dans prestations.html
+      // (prestations.html sait gérer ?open=<eventId>)
+      const prestaId = qs("prestationId");
+      if(prestaId){
+        backBtn.href = `prestations.html?open=${encodeURIComponent(prestaId)}`;
+        backBtn.textContent = "← Production";
+        return;
+      }
+
+      backBtn.href = "prestations.html";
+      backBtn.textContent = "← Production";
     }
 
     function money(n){
@@ -432,12 +458,10 @@
       return x || "—";
     }
 
-    // ===== Scheduling helpers (crucial) =====
-    function isDateKey(s){ return /^\d{4}-\d{2}-\d{2}$/.test(String(s||"").trim()); }
+    // ===== Scheduling helpers =====
     function isTime(s){ return /^\d{2}:\d{2}$/.test(String(s||"").trim()); }
 
     function toLocalMs(dateKey, timeHHmm){
-      // Interprété en heure locale du navigateur (OK pour tes agents en FR).
       const d = String(dateKey||"").trim();
       if(!isDateKey(d)) return 0;
       const t = isTime(timeHHmm) ? String(timeHHmm).trim() : "00:00";
@@ -458,21 +482,14 @@
       const e = eventDoc || {};
       const type = String(missionType||"").toUpperCase().trim();
 
-      // Base arrival/departure (déjà standardisés dans tes events)
       const aDate = pickFirst(e.arrivalDateKey, e.dateKey, e.date);
       const aTime = pickFirst(e.arrivalTime, e.time);
       const dDate = pickFirst(e.departureDateKey);
       const dTime = pickFirst(e.departureTime);
 
-      // Maintenance (optionnel) : si tu n’as pas encore les champs, ça retombe sur arrivée
-      // Champs acceptés (tu peux en utiliser un seul) :
-      // - maintenanceDateKey / maintenanceTime
-      // - maintenanceScheduledDateKey / maintenanceScheduledTime
-      // - maintenanceDate / maintenanceHour
       const mDate = pickFirst(e.maintenanceDateKey, e.maintenanceScheduledDateKey, e.maintenanceDate);
       const mTime = pickFirst(e.maintenanceTime, e.maintenanceScheduledTime, e.maintenanceHour);
 
-      // Linge / kits (si un jour tu veux un créneau à part)
       const lDate = pickFirst(e.lingeDateKey, e.lingeScheduledDateKey);
       const lTime = pickFirst(e.lingeTime, e.lingeScheduledTime);
       const kDate = pickFirst(e.kitsDateKey, e.kitsScheduledDateKey);
@@ -503,7 +520,6 @@
         scheduledTime = kTime || aTime;
         scheduleSource = kDate ? "KITS" : "ARRIVAL";
       } else {
-        // MENAGE par défaut -> ARRIVAL (si tu veux MENAGE sur départ, on changera ici)
         scheduledDateKey = aDate;
         scheduledTime = aTime;
         scheduleSource = "ARRIVAL";
@@ -565,9 +581,7 @@
       }
     }
 
-    /* ===========================
-       Photos agent (BYPASS) : lecture uniquement missions/PHOTOS
-       =========================== */
+    // Photos agent (BYPASS) : lecture uniquement missions/PHOTOS
     function thumbHtml(p, idx){
       const url = p?.url || "";
       return `
@@ -665,6 +679,13 @@
       }
 
       const e = eSnap.data() || {};
+
+      // ✅ guard : la prestation doit appartenir à la conciergerie connectée
+      if(String(e.conciergerieUid || "") !== String(currentUser?.uid || "")){
+        subLine.textContent = "";
+        return showAlert("⛔ Accès refusé : cette prestation ne vous appartient pas.");
+      }
+
       currentEvent = { id: eSnap.id, ...e };
 
       homeLine.textContent = e.homeName || "Logement";
@@ -701,7 +722,6 @@
 
       inferredMissionTypes = missionTypesFromLines(lines, e.type);
 
-      // Affiche aussi les créneaux inférés (utile pour vérifier)
       const schedPreview = inferredMissionTypes.map(t=>{
         const s = computeScheduleForMission(currentEvent, t);
         const when = s.scheduledDateKey
@@ -715,7 +735,6 @@
       agentName.value = e.assignedToName || "";
       agentEmail.value = e.assignedToEmail || "";
 
-      // ✅ PHOTOS bypass : on lit missions/PHOTOS uniquement
       await loadPhotosByMission();
 
       subLine.textContent = "";
@@ -743,7 +762,6 @@
         conciergerieUid: currentUser.uid,
         prestationId: String(prestationId),
 
-        // ===== dates clés pour "cochable au bon moment" côté agent =====
         scheduledDateKey: sched.scheduledDateKey || "",
         scheduledTime: sched.scheduledTime || "",
         scheduledAtMs: Number(sched.scheduledAtMs || 0) || 0,
@@ -762,7 +780,7 @@
       }, { merge: true });
     }
 
-    // ✅ NEW : crée / met à jour missions/PHOTOS systématiquement
+    // crée / met à jour missions/PHOTOS systématiquement
     async function upsertPhotosMissionForToken({ tokenId }) {
       const mRef = doc(db, "events", prestationId, "missions", "PHOTOS");
 
@@ -829,7 +847,6 @@
         meta: (e.meta || "").trim()
       };
 
-      // BONUS : snapshot des schedules (pratique si un jour agent.html lit dayTokens au lieu de missions)
       const missionSchedules = {};
       for(const t of missionTypes){
         const s = computeScheduleForMission(currentEvent, t);
@@ -865,7 +882,7 @@
         await upsertMissionForToken({ tokenId, email, name, missionType: t });
       }
 
-      // ✅ crée PHOTOS à chaque fois (bypass)
+      // PHOTOS bypass
       await upsertPhotosMissionForToken({ tokenId });
 
       // parent event
@@ -878,12 +895,10 @@
 
       const base = location.href.split("?")[0];
 
-      // lien 1 : checklist
       const tokenLink =
         base.replace("intervention.html","agent.html")
         + `?token=${encodeURIComponent(tokenId)}&prestationId=${encodeURIComponent(prestationId)}`;
 
-      // ✅ lien 2 : photos (token) — SANS type
       const photosLink =
         base.replace("intervention.html","agent-photos.html")
         + `?token=${encodeURIComponent(tokenId)}&prestationId=${encodeURIComponent(prestationId)}`;
@@ -945,6 +960,7 @@
       if(!u) return location.href="login.html";
       currentUser = u;
 
+      applyBackLink();
       await loadCompanyName(u);
 
       try{
