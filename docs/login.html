@@ -1,4 +1,4 @@
-<!-- docs/login.html (SECURE — reset mdp + erreurs + flux owner/conciergerie + fallback anciens comptes) -->
+<!-- docs/login.html (SECURE — reset mdp + erreurs + flux owner/conciergerie + auto-heal identities manquantes) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -185,6 +185,43 @@ async function loadIdentity(uid){
   }
 }
 
+// ✅ Auto-heal identities/{uid} manquante (anciens comptes)
+// - Jamais admin/staff ici
+async function ensureIdentityDocIfMissing(user, profile){
+  const uid = user?.uid;
+  if(!uid) return null;
+
+  const existing = await loadIdentity(uid);
+  if(existing) return existing;
+
+  const safeRole = (requestedRole === "proprietaire" || requestedRole === "conciergerie")
+    ? requestedRole
+    : "";
+
+  if(!safeRole) return null;
+
+  // garde-fou propriétaire : seulement si déjà rattaché (sinon c'est l'invite qui doit faire le job)
+  if(safeRole === "proprietaire"){
+    const ownerDocId = String(profile?.ownerDocId || "").trim();
+    const concUid    = String(profile?.conciergerieUid || "").trim();
+    if(!ownerDocId || !concUid) return null;
+  }
+
+  try{
+    await setDoc(doc(db,"identities", uid), {
+      uid,
+      role: safeRole,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    }, { merge: true });
+
+    return { uid, role: safeRole };
+  }catch(e){
+    console.warn("ensureIdentityDocIfMissing:", e?.code || e?.message || e);
+    return null;
+  }
+}
+
 // ✅ 1) Filet de sécurité : s'assurer que clients/{c_owner_ownerDocId} existe
 async function ensureClientDocForOwner(user, userProfile){
   try{
@@ -192,7 +229,6 @@ async function ensureClientDocForOwner(user, userProfile){
     const ownerDocId = String(u.ownerDocId || "").trim();
     const conciergerieUid = String(u.conciergerieUid || "").trim();
 
-    // si pas encore finalisé, on ne force rien
     if(!ownerDocId || !conciergerieUid) return { ok:false, reason:"missing_ownerDocId_or_conciergerieUid" };
 
     const email = normEmail(user.email || u.email || "");
@@ -204,7 +240,7 @@ async function ensureClientDocForOwner(user, userProfile){
       clientKey: ownerDocId,
       ownerDocId: ownerDocId,
       ownerUid: user.uid,
-      uid: user.uid, // compat
+      uid: user.uid,
       email: email,
       emailLower: email,
       updatedAt: serverTimestamp()
@@ -227,25 +263,21 @@ async function ensureOwnerUidOnOwners(ownerDocId, ownerUid, expectedConciergerie
 
   const o = snap.data() || {};
 
-  // ✅ sécurité tenant
   const ownerConc = String(o.conciergerieUid || "").trim();
   if(expectedConciergerieUid && ownerConc && ownerConc !== String(expectedConciergerieUid)){
     return { ok:false, reason:"owner_tenant_mismatch" };
   }
 
   const cur = String(o.ownerUid || o.uid || o.userUid || "").trim();
-
-  // déjà OK
   if(cur === ownerUid) return { ok:true, already:true };
 
-  // sécurité : déjà lié à un autre compte
   if(cur && cur !== ownerUid){
     return { ok:false, reason:"ownerUid_already_set_other" };
   }
 
   const patch = {
-    ownerUid: ownerUid, // ✅ canon
-    uid: ownerUid,      // compat
+    ownerUid: ownerUid,
+    uid: ownerUid,
     updatedAt: serverTimestamp(),
     ownerUidLinkedAt: serverTimestamp()
   };
@@ -300,12 +332,14 @@ form.addEventListener("submit", async (e)=>{
       return;
     }
 
-    // ✅ routing : identities.role (priorité) -> users.role (fallback ancien) -> rôle demandé
-    const ident = await loadIdentity(user.uid);
-    const profile = await loadUserProfile(user.uid); // users conservé pour ownerDocId/conciergerieUid + métier
+    // users = métier; identities = rôle
+    const profile = await loadUserProfile(user.uid);
+
+    // auto-heal identities manquante (anciens comptes)
+    const ident = await ensureIdentityDocIfMissing(user, profile);
 
     const roleFromIdentity = String(ident?.role || "").toLowerCase().trim();
-    const roleFromUsers    = String(profile?.role || "").toLowerCase().trim();
+    const roleFromUsers    = String(profile?.role || "").toLowerCase().trim(); // compat anciens
     const effectiveRole = roleFromIdentity || roleFromUsers || requestedRole;
 
     // PROPRIÉTAIRE
@@ -345,8 +379,8 @@ form.addEventListener("submit", async (e)=>{
       return;
     }
 
-    // CONCIERGERIE (admin à migrer plus tard vers claims)
-    if(effectiveRole === "conciergerie" || effectiveRole === "admin"){
+    // CONCIERGERIE (+ admin si tu le mets en identities à la main)
+    if(effectiveRole === "conciergerie" || effectiveRole === "admin" || effectiveRole === "staff"){
       location.replace("conciergerie.html");
       return;
     }
