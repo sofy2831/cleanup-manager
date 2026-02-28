@@ -1,4 +1,4 @@
-<!-- docs/profil-proprietaire.html (SANS IDENTITIES — rôle via users.role + self only + safe fallbacks + token passthrough) -->
+<!-- docs/profil-proprietaire.html (FINAL — SANS identities, rôle via users.role + self only + safe fallbacks + token passthrough) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -261,6 +261,7 @@
   let ownerDocId = "";
   let conciergerieUid = "";
   let token = "";
+  let booted = false;
 
   function showAlert(msg, ok=false){
     alertBox.style.display = "block";
@@ -315,7 +316,7 @@
   async function loadSelfData(){
     hideAlert();
 
-    // 1) users/{uid} — source de vérité pour liaison + role
+    // users/{uid} = source de vérité
     let u = {};
     try{
       const us = await getDoc(doc(db,"users", currentUser.uid));
@@ -325,10 +326,9 @@
       return;
     }
 
-    // garde-fou rôle (ancien modèle)
+    // role guard (tolérant: si vide -> OK; si présent et != proprietaire -> dehors)
     const role = String(u.role || "").toLowerCase().trim();
     if(role && role !== "proprietaire"){
-      // mauvais compte -> dehors
       location.replace(withToken("login.html?role=proprietaire"));
       return;
     }
@@ -352,7 +352,7 @@
     ownerIdLine.textContent = "Owner ID : " + ownerDocId;
     copyBtn.disabled = false;
 
-    // 2) fallback clients/c_owner_{ownerDocId}
+    // fallback clients/c_owner_{ownerDocId}
     let c = null;
     try{
       const clientId = "c_owner_" + ownerDocId;
@@ -360,14 +360,13 @@
       c = cs.exists()? (cs.data()||null) : null;
     }catch(_){}
 
-    // 3) best effort owners/{ownerDocId}
+    // best effort owners/{ownerDocId}
     let o = null;
     try{
       const os = await getDoc(doc(db,"owners", ownerDocId));
       o = os.exists()? (os.data()||null) : null;
     }catch(_){}
 
-    // priorité affichage: owners > clients > users
     if(o) applyData(o);
     else if(c) applyData(c);
     else applyData(u);
@@ -376,6 +375,7 @@
   async function saveSelfData(){
     hideAlert();
     const p = serialize();
+
     if(!p.fullname){
       showAlert("⛔ Nom / Société obligatoire.");
       return;
@@ -388,7 +388,7 @@
     const uid = currentUser.uid;
     const emailLower = normEmail(currentUser.email || email.value || "");
 
-    // 1) users/{uid} — on remet role dans users (ancien système)
+    // users/{uid}
     await setDoc(doc(db,"users", uid), {
       uid,
       role: "proprietaire",
@@ -411,7 +411,7 @@
       updatedAt: serverTimestamp()
     }, { merge:true });
 
-    // 2) clients/c_owner_{ownerDocId} — canon facturation
+    // clients/c_owner_{ownerDocId}
     const clientId = "c_owner_" + ownerDocId;
     await setDoc(doc(db,"clients", clientId), {
       clientId,
@@ -439,7 +439,7 @@
       updatedAt: serverTimestamp()
     }, { merge:true });
 
-    // 3) owners/{ownerDocId} — best effort
+    // owners/{ownerDocId} — best effort
     try{
       await updateDoc(doc(db,"owners", ownerDocId), {
         ownerUid: uid,
@@ -481,11 +481,14 @@
   });
 
   saveBtn.addEventListener("click", async ()=>{
+    saveBtn.disabled = true;
     try{
       await saveSelfData();
     }catch(e){
       console.error(e);
       showAlert("⛔ Erreur enregistrement : " + (e?.code || e?.message || "inconnue"));
+    }finally{
+      setTimeout(()=>{ saveBtn.disabled = false; }, 350);
     }
   });
 
@@ -495,16 +498,20 @@
     location.replace(withToken("login.html?role=proprietaire"));
   });
 
-  // BOOT
+  // BOOT (single-run)
   await authReady;
   token = getParam("token");
+  backBtn.href = withToken("owner-dashboard.html");
 
-  // ✅ sans identities: on s’appuie sur Firebase Auth + users.role
   onAuthStateChanged(auth, async (user)=>{
+    if(booted) return;
+    booted = true;
+
     if(!user){
       location.replace(withToken("login.html?role=proprietaire"));
       return;
     }
+
     currentUser = user;
 
     email.value = user.email || "";
