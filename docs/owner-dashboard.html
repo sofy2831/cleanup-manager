@@ -1,4 +1,4 @@
-<!-- docs/owner-dashboard.html (CORRIGÉ + STABLE — guard via auth-guard.js + identities.role propriétaire + ownerDocId+conciergerieUid + realtime badges) -->
+<!-- docs/owner-dashboard.html (FINAL — guard via auth-guard.js + identities.role propriétaire + ownerDocId+conciergerieUid + realtime badges + token passthrough) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -127,11 +127,6 @@
       text-decoration:none;
       gap:10px;
     }
-    .btn.primary{
-      background:linear-gradient(90deg,var(--violet-main),var(--violet-dark));
-      color:#fff;
-      border:none;
-    }
 
     .count{
       min-width:26px;
@@ -199,15 +194,15 @@
       </div>
 
       <div class="grid">
-        <a class="btn" href="owner-homes.html">🏠 Logements</a>
-        <a class="btn" href="owner-planning.html">📅 Planning</a>
+        <a class="btn" id="homesLink" href="owner-homes.html">🏠 Logements</a>
+        <a class="btn" id="planningLink" href="owner-planning.html">📅 Planning</a>
 
-        <a class="btn" href="owner-messages.html">
+        <a class="btn" id="messagesLink" href="owner-messages.html">
           <span>💬 Messages</span>
           <span class="count" id="countMsg">0</span>
         </a>
 
-        <a class="btn" href="owner-facturation.html">
+        <a class="btn" id="billingLink" href="owner-facturation.html">
           <span>🧾 Facturation</span>
           <span class="count" id="countBill">0</span>
         </a>
@@ -217,25 +212,56 @@
 </div>
 
 <nav class="bottom-nav" aria-label="Navigation propriétaire">
-  <a class="active" href="owner-dashboard.html">Dashboard</a>
-  <a href="owner-planning.html">Planning</a>
-  <a href="owner-homes.html">Logements</a>
-  <a href="owner-messages.html">Messages</a>
+  <a class="active" href="owner-dashboard.html" id="dashLink">Dashboard</a>
+  <a href="owner-planning.html" id="navPlanning">Planning</a>
+  <a href="owner-homes.html" id="navHomes">Logements</a>
+  <a href="owner-messages.html" id="navMessages">Messages</a>
 </nav>
 
 <script type="module">
   import { auth, db, authReady } from "./firebase-init.js";
   import { signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
   import { requireRole } from "./auth-guard.js";
-  import {
-    doc, getDoc,
-    collection, query, where, onSnapshot
-  } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+  import { doc, getDoc, collection, query, where, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
   const ownerNameLine = document.getElementById("ownerNameLine");
   const alertsLine = document.getElementById("alertsLine");
   const countMsg = document.getElementById("countMsg");
   const countBill = document.getElementById("countBill");
+
+  const profileBtn = document.getElementById("profileBtn");
+  const homesLink = document.getElementById("homesLink");
+  const planningLink = document.getElementById("planningLink");
+  const messagesLink = document.getElementById("messagesLink");
+  const billingLink = document.getElementById("billingLink");
+
+  const dashLink = document.getElementById("dashLink");
+  const navPlanning = document.getElementById("navPlanning");
+  const navHomes = document.getElementById("navHomes");
+  const navMessages = document.getElementById("navMessages");
+
+  // token passthrough (si présent)
+  const params = new URLSearchParams(location.search);
+  const token = (params.get("token") || "").trim();
+
+  function withToken(url){
+    if(!token) return url;
+    const u = new URL(url, location.href);
+    u.searchParams.set("token", token);
+    return u.pathname + "?" + u.searchParams.toString();
+  }
+
+  // propage token vers les liens
+  profileBtn.href = withToken("profil-proprietaire.html?self=1");
+  homesLink.href = withToken("owner-homes.html");
+  planningLink.href = withToken("owner-planning.html");
+  messagesLink.href = withToken("owner-messages.html");
+  billingLink.href = withToken("owner-facturation.html");
+
+  dashLink.href = withToken("owner-dashboard.html");
+  navPlanning.href = withToken("owner-planning.html");
+  navHomes.href = withToken("owner-homes.html");
+  navMessages.href = withToken("owner-messages.html");
 
   let unsubThreads = null;
   let unsubBilling = null;
@@ -270,20 +296,19 @@
       `🧾 Documents : ${Number(lastBillingCount||0)}`;
   }
 
-  function hardRequireOwnerLinked(userDoc){
-    const ownerDocId = String(userDoc?.ownerDocId || "").trim();
-    const conciergerieUid = String(userDoc?.conciergerieUid || "").trim();
-    return { ok: !!(ownerDocId && conciergerieUid), ownerDocId, conciergerieUid };
-  }
-
   function stopThreads(){
     if(unsubThreads) unsubThreads();
     unsubThreads = null;
   }
-
   function stopBilling(){
     if(unsubBilling) unsubBilling();
     unsubBilling = null;
+  }
+
+  function hardRequireOwnerLinked(userDoc){
+    const ownerDocId = String(userDoc?.ownerDocId || "").trim();
+    const conciergerieUid = String(userDoc?.conciergerieUid || "").trim();
+    return { ok: !!(ownerDocId && conciergerieUid), ownerDocId, conciergerieUid };
   }
 
   function startUnreadThreadsListener(ownerUid, conciergerieUid, ownerDocId){
@@ -294,6 +319,8 @@
       where("ownerUid","==", String(ownerUid)),
       where("conciergerieUid","==", String(conciergerieUid))
     ];
+
+    // optionnel : seulement si ownerDocId défini
     if(ownerDocId){
       filters.push(where("ownerDocId","==", String(ownerDocId)));
     }
@@ -311,7 +338,8 @@
       refreshBadges();
     }, (err)=>{
       console.warn("threads unread listener:", err?.code, err?.message || err);
-      gotThreadsOnce = true; // évite blocage "Chargement…" infini
+      lastUnreadMsg = 0;
+      gotThreadsOnce = true;
       refreshBadges();
     });
   }
@@ -333,6 +361,7 @@
       refreshBadges();
     }, (err)=>{
       console.warn("billing badge listener:", err?.code, err?.message || err);
+      lastBillingCount = 0;
       gotBillingOnce = true;
       refreshBadges();
     });
@@ -342,7 +371,7 @@
     stopThreads(); stopBilling();
     await signOut(auth);
     try{ localStorage.removeItem("cm_auth"); }catch(_){}
-    location.replace("login.html?role=proprietaire");
+    location.replace(withToken("login.html?role=proprietaire"));
   };
 
   // =========================
@@ -350,38 +379,44 @@
   // =========================
   await authReady;
 
-  // ✅ auth + rôle via identities (source de vérité)
   const user = await requireRole(
     ["proprietaire"],
-    "login.html?role=proprietaire"
+    withToken("login.html?role=proprietaire")
   );
   if(!user) return;
 
   refreshBadges();
 
   try{
-    // users/{uid} = data de liaison ownerDocId/conciergerieUid (et compat anciens champs)
     const us = await getDoc(doc(db,"users", user.uid));
     const ud = us.exists()? (us.data()||{}) : {};
 
-    // ✅ compat: si tu as encore ud.role sur de vieux comptes, on ne bloque que si contradictoire
+    // compat: ne bloque que si contradictoire
     const legacyRole = String(ud.role || "").toLowerCase().trim();
     if(legacyRole && legacyRole !== "proprietaire"){
       stopThreads(); stopBilling();
-      location.replace("login.html?role=proprietaire");
+      location.replace(withToken("login.html?role=proprietaire"));
       return;
     }
 
     const link = hardRequireOwnerLinked(ud);
     if(!link.ok){
       stopThreads(); stopBilling();
-      location.replace("profil-proprietaire.html?self=1");
+      location.replace(withToken("profil-proprietaire.html?self=1"));
       return;
     }
 
-    const os = await getDoc(doc(db,"owners", link.ownerDocId));
-    const o = os.exists()? (os.data()||{}) : {};
-    const name = String(o.fullname || o.displayName || o.legalName || o.company || "").trim();
+    // nom: owners/{ownerDocId} si possible, sinon fallback users/fullname, sinon email
+    let name = "";
+    try{
+      const os = await getDoc(doc(db,"owners", link.ownerDocId));
+      const o = os.exists()? (os.data()||{}) : {};
+      name = String(o.fullname || o.displayName || o.legalName || o.company || "").trim();
+    }catch(_){}
+
+    if(!name){
+      name = String(ud.fullname || ud.displayName || "").trim();
+    }
 
     ownerNameLine.textContent = "Bonjour et bienvenue " + (name ? name : (user.email || "Propriétaire"));
 
@@ -392,10 +427,9 @@
   }catch(e){
     console.error(e);
     stopThreads(); stopBilling();
-    location.replace("profil-proprietaire.html?self=1");
+    location.replace(withToken("profil-proprietaire.html?self=1"));
   }
 
-  // nettoyage si besoin
   window.addEventListener("beforeunload", ()=>{
     stopThreads(); stopBilling();
   });
