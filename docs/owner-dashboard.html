@@ -1,4 +1,4 @@
-<!-- docs/owner-dashboard.html (FINAL — guard owner role + ownerDocId+conciergerieUid + unread messages realtime + billing badge ownerVisible) -->
+<!-- docs/owner-dashboard.html (CORRIGÉ + STABLE — guard via auth-guard.js + identities.role propriétaire + ownerDocId+conciergerieUid + realtime badges) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -224,8 +224,9 @@
 </nav>
 
 <script type="module">
-  import { auth, db } from "./firebase-init.js";
-  import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+  import { auth, db, authReady } from "./firebase-init.js";
+  import { signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+  import { requireRole } from "./auth-guard.js";
   import {
     doc, getDoc,
     collection, query, where, onSnapshot
@@ -289,12 +290,10 @@
     stopThreads();
     gotThreadsOnce = false;
 
-    // ✅ multi-tenant safe: filtre conciergerieUid (et ownerDocId si présent dans thread)
     const filters = [
       where("ownerUid","==", String(ownerUid)),
       where("conciergerieUid","==", String(conciergerieUid))
     ];
-    // si tes threads stockent ownerDocId (chez toi oui), on l’ajoute
     if(ownerDocId){
       filters.push(where("ownerDocId","==", String(ownerDocId)));
     }
@@ -311,16 +310,16 @@
       gotThreadsOnce = true;
       refreshBadges();
     }, (err)=>{
-      console.warn("threads unread listener:", err?.message || err);
+      console.warn("threads unread listener:", err?.code, err?.message || err);
+      gotThreadsOnce = true; // évite blocage "Chargement…" infini
+      refreshBadges();
     });
   }
 
-  // ✅ badge billing: uniquement docs visibles propriétaire
   function startBillingBadge(ownerUid, conciergerieUid){
     stopBilling();
     gotBillingOnce = false;
 
-    // 🔥 important: ownerVisible == true sinon tu comptes aussi les brouillons internes
     const qb = query(
       collection(db,"salesDocuments"),
       where("ownerUid","==", String(ownerUid)),
@@ -333,60 +332,72 @@
       gotBillingOnce = true;
       refreshBadges();
     }, (err)=>{
-      console.warn("billing badge listener:", err?.message || err);
+      console.warn("billing badge listener:", err?.code, err?.message || err);
+      gotBillingOnce = true;
+      refreshBadges();
     });
   }
 
   document.getElementById("logoutBtn").onclick = async ()=>{
+    stopThreads(); stopBilling();
     await signOut(auth);
-    localStorage.removeItem("cm_auth");
-    location.href="login.html?role=proprietaire";
+    try{ localStorage.removeItem("cm_auth"); }catch(_){}
+    location.replace("login.html?role=proprietaire");
   };
 
-  onAuthStateChanged(auth, async (user)=>{
-    if(!user){
-      location.href="login.html?role=proprietaire";
+  // =========================
+  // BOOT (stable)
+  // =========================
+  await authReady;
+
+  // ✅ auth + rôle via identities (source de vérité)
+  const user = await requireRole(
+    ["proprietaire"],
+    "login.html?role=proprietaire"
+  );
+  if(!user) return;
+
+  refreshBadges();
+
+  try{
+    // users/{uid} = data de liaison ownerDocId/conciergerieUid (et compat anciens champs)
+    const us = await getDoc(doc(db,"users", user.uid));
+    const ud = us.exists()? (us.data()||{}) : {};
+
+    // ✅ compat: si tu as encore ud.role sur de vieux comptes, on ne bloque que si contradictoire
+    const legacyRole = String(ud.role || "").toLowerCase().trim();
+    if(legacyRole && legacyRole !== "proprietaire"){
+      stopThreads(); stopBilling();
+      location.replace("login.html?role=proprietaire");
       return;
     }
 
-    refreshBadges();
-
-    try{
-      const us = await getDoc(doc(db,"users", user.uid));
-      const ud = us.exists()? (us.data()||{}) : {};
-
-      // ✅ garde-fou: mauvais rôle -> dehors
-      const role = String(ud.role || "").toLowerCase().trim();
-      if(role && role !== "proprietaire"){
-        stopThreads(); stopBilling();
-        location.replace("login.html?role=proprietaire");
-        return;
-      }
-
-      const link = hardRequireOwnerLinked(ud);
-      if(!link.ok){
-        stopThreads(); stopBilling();
-        location.replace("profil-proprietaire.html?self=1");
-        return;
-      }
-
-      const os = await getDoc(doc(db,"owners", link.ownerDocId));
-      const o = os.exists()? (os.data()||{}) : {};
-      const name = String(o.fullname || o.displayName || o.legalName || o.company || "").trim();
-
-      ownerNameLine.textContent = "Bonjour et bienvenue " + (name ? name : (user.email || "Propriétaire"));
-
-      startUnreadThreadsListener(user.uid, link.conciergerieUid, link.ownerDocId);
-
-      startBillingBadge(user.uid, link.conciergerieUid);
-
-      refreshBadges();
-
-    }catch(e){
-      console.error(e);
+    const link = hardRequireOwnerLinked(ud);
+    if(!link.ok){
       stopThreads(); stopBilling();
       location.replace("profil-proprietaire.html?self=1");
+      return;
     }
+
+    const os = await getDoc(doc(db,"owners", link.ownerDocId));
+    const o = os.exists()? (os.data()||{}) : {};
+    const name = String(o.fullname || o.displayName || o.legalName || o.company || "").trim();
+
+    ownerNameLine.textContent = "Bonjour et bienvenue " + (name ? name : (user.email || "Propriétaire"));
+
+    startUnreadThreadsListener(user.uid, link.conciergerieUid, link.ownerDocId);
+    startBillingBadge(user.uid, link.conciergerieUid);
+
+    refreshBadges();
+  }catch(e){
+    console.error(e);
+    stopThreads(); stopBilling();
+    location.replace("profil-proprietaire.html?self=1");
+  }
+
+  // nettoyage si besoin
+  window.addEventListener("beforeunload", ()=>{
+    stopThreads(); stopBilling();
   });
 </script>
 </body>
