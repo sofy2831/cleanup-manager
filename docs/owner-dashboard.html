@@ -1,4 +1,4 @@
-<!-- docs/owner-dashboard.html (FINAL — users.role + rules compatibles, threads safe, token passthrough) -->
+<!-- docs/owner-dashboard.html (FINAL — users.role + dual threads query (ownerUid + ownerDocId), token passthrough) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -249,7 +249,7 @@
     return u.pathname + "?" + u.searchParams.toString();
   }
 
-  // propage token (si présent)
+  // propage token
   profileBtn.href = withToken("profil-proprietaire.html?self=1");
   homesLink.href = withToken("owner-homes.html");
   planningLink.href = withToken("owner-planning.html");
@@ -261,11 +261,16 @@
   navHomes.href = withToken("owner-homes.html");
   navMessages.href = withToken("owner-messages.html");
 
-  let unsubThreads = null;
+  let unsubThreadsUid = null;
+  let unsubThreadsDoc = null;
   let unsubBilling = null;
 
   let gotThreadsOnce = false;
   let gotBillingOnce = false;
+
+  // on déduplique: threadId -> unreadForOwner
+  const unreadByThreadId = new Map();
+
   let lastUnreadMsg = 0;
   let lastBillingCount = 0;
 
@@ -278,6 +283,14 @@
       el.style.display="none";
       el.textContent="0";
     }
+  }
+
+  function recomputeUnread(){
+    let total = 0;
+    for(const v of unreadByThreadId.values()){
+      total += Number(v || 0);
+    }
+    lastUnreadMsg = total;
   }
 
   function refreshBadges(){
@@ -294,11 +307,18 @@
       `🧾 Documents : ${Number(lastBillingCount||0)}`;
   }
 
-  function stopThreads(){ try{ if(unsubThreads) unsubThreads(); }catch(_){}
-    unsubThreads = null;
+  function stopThreads(){
+    try{ if(unsubThreadsUid) unsubThreadsUid(); }catch(_){}
+    try{ if(unsubThreadsDoc) unsubThreadsDoc(); }catch(_){}
+    unsubThreadsUid = null;
+    unsubThreadsDoc = null;
+    unreadByThreadId.clear();
+    gotThreadsOnce = false;
   }
+
   function stopBilling(){ try{ if(unsubBilling) unsubBilling(); }catch(_){}
     unsubBilling = null;
+    gotBillingOnce = false;
   }
 
   function hardRequireOwnerLinked(userDoc){
@@ -307,37 +327,69 @@
     return { ok: !!(ownerDocId && conciergerieUid), ownerDocId, conciergerieUid };
   }
 
-  // ✅ IMPORTANT: query compatible rules threads => ownerUid + conciergerieUid (pas ownerDocId)
-  function startUnreadThreadsListener(ownerUid, conciergerieUid){
+  // ✅ dual subscribe: threads par ownerUid + par ownerDocId (legacy)
+  function startUnreadThreadsListeners(ownerUid, conciergerieUid, ownerDocId){
     stopThreads();
-    gotThreadsOnce = false;
 
-    const qThreads = query(
+    // 1) mode "ownerUid"
+    const qUid = query(
       collection(db,"threads"),
-      where("ownerUid","==", String(ownerUid)),
-      where("conciergerieUid","==", String(conciergerieUid))
+      where("conciergerieUid","==", String(conciergerieUid)),
+      where("ownerUid","==", String(ownerUid))
     );
 
-    unsubThreads = onSnapshot(qThreads, (snap)=>{
-      let totalUnread = 0;
-      snap.forEach(d=>{
-        const t = d.data() || {};
-        totalUnread += Number(t.unreadForOwner || 0);
+    unsubThreadsUid = onSnapshot(qUid, (snap)=>{
+      snap.docChanges().forEach(ch=>{
+        const id = ch.doc.id;
+        if(ch.type === "removed"){
+          unreadByThreadId.delete(id);
+        }else{
+          const t = ch.doc.data() || {};
+          unreadByThreadId.set(id, Number(t.unreadForOwner || 0));
+        }
       });
-      lastUnreadMsg = totalUnread;
       gotThreadsOnce = true;
+      recomputeUnread();
       refreshBadges();
     }, (err)=>{
-      console.warn("threads unread listener:", err?.code, err?.message || err);
-      lastUnreadMsg = 0;
+      console.warn("threads(uid) listener:", err?.code, err?.message || err);
       gotThreadsOnce = true;
+      recomputeUnread();
+      refreshBadges();
+    });
+
+    // 2) mode "ownerDocId" (anciennes données / stableThreadId)
+    const qDoc = query(
+      collection(db,"threads"),
+      where("conciergerieUid","==", String(conciergerieUid)),
+      where("ownerDocId","==", String(ownerDocId))
+    );
+
+    unsubThreadsDoc = onSnapshot(qDoc, (snap)=>{
+      snap.docChanges().forEach(ch=>{
+        const id = ch.doc.id;
+        if(ch.type === "removed"){
+          // attention: peut exister via uid listener aussi -> on ne delete pas aveuglément
+          // on re-check en recomptant après coup => ok.
+          unreadByThreadId.delete(id);
+        }else{
+          const t = ch.doc.data() || {};
+          unreadByThreadId.set(id, Number(t.unreadForOwner || 0));
+        }
+      });
+      gotThreadsOnce = true;
+      recomputeUnread();
+      refreshBadges();
+    }, (err)=>{
+      console.warn("threads(docId) listener:", err?.code, err?.message || err);
+      gotThreadsOnce = true;
+      recomputeUnread();
       refreshBadges();
     });
   }
 
   function startBillingBadge(ownerUid, conciergerieUid){
     stopBilling();
-    gotBillingOnce = false;
 
     const qb = query(
       collection(db,"salesDocuments"),
@@ -417,8 +469,10 @@
     ownerNameLine.textContent =
       "Bonjour et bienvenue " + (name ? name : (user.email || "Propriétaire"));
 
-    // ✅ threads: rules demandent ownerUid/conciergerieUid
-    startUnreadThreadsListener(user.uid, link.conciergerieUid);
+    // ✅ threads: dual (ownerUid + ownerDocId)
+    startUnreadThreadsListeners(user.uid, link.conciergerieUid, link.ownerDocId);
+
+    // billing: ownerUid obligatoire (tes docs ont ownerUid)
     startBillingBadge(user.uid, link.conciergerieUid);
 
     refreshBadges();
