@@ -1,4 +1,4 @@
-<!-- docs/login.html (FINAL — reset mdp + erreurs + flux owner/conciergerie + merge safety clients + LINK owners.ownerUid) -->
+<!-- docs/login.html (SECURE — reset mdp + erreurs + flux owner/conciergerie + fallback anciens comptes) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -161,7 +161,7 @@ function humanAuthError(err){
 
 function normEmail(s){ return (s||"").trim().toLowerCase(); }
 
-// ✅ Lit users/{uid} si présent (source de vérité pour router)
+// ✅ Lit users/{uid} (profil métier) — pas une source d'autorisation
 async function loadUserProfile(uid){
   try{
     const us = await getDoc(doc(db,"users", uid));
@@ -172,6 +172,7 @@ async function loadUserProfile(uid){
     return null;
   }
 }
+
 // ✅ Lit identities/{uid} (source de vérité pour router)
 async function loadIdentity(uid){
   try{
@@ -183,13 +184,11 @@ async function loadIdentity(uid){
     return null;
   }
 }
-  
 
 // ✅ 1) Filet de sécurité : s'assurer que clients/{c_owner_ownerDocId} existe
 async function ensureClientDocForOwner(user, userProfile){
   try{
     const u = userProfile || {};
-
     const ownerDocId = String(u.ownerDocId || "").trim();
     const conciergerieUid = String(u.conciergerieUid || "").trim();
 
@@ -295,20 +294,19 @@ form.addEventListener("submit", async (e)=>{
     const cred = await signInWithEmailAndPassword(auth, email, pass);
     const user = cred.user;
 
-        // ✅ token propriétaire = priorité absolue
+    // ✅ token propriétaire = priorité absolue
     if(token){
       location.replace("invite-proprietaire.html?token="+encodeURIComponent(token));
       return;
     }
 
-    // ✅ router sur base identities/{uid}.role (source de vérité)
+    // ✅ routing : identities.role (priorité) -> users.role (fallback ancien) -> rôle demandé
     const ident = await loadIdentity(user.uid);
-    const profile = await loadUserProfile(user.uid); // on garde users pour le métier
+    const profile = await loadUserProfile(user.uid); // users conservé pour ownerDocId/conciergerieUid + métier
 
-    const realRole = String(ident?.role || "").toLowerCase().trim();
-
-    // Si pas d'identité, fallback sur rôle demandé (ancien compte), mais prudent
-    const effectiveRole = realRole || requestedRole;
+    const roleFromIdentity = String(ident?.role || "").toLowerCase().trim();
+    const roleFromUsers    = String(profile?.role || "").toLowerCase().trim();
+    const effectiveRole = roleFromIdentity || roleFromUsers || requestedRole;
 
     // PROPRIÉTAIRE
     if(effectiveRole === "proprietaire"){
@@ -347,7 +345,7 @@ form.addEventListener("submit", async (e)=>{
       return;
     }
 
-    // CONCIERGERIE
+    // CONCIERGERIE (admin à migrer plus tard vers claims)
     if(effectiveRole === "conciergerie" || effectiveRole === "admin"){
       location.replace("conciergerie.html");
       return;
