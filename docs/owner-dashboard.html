@@ -1,4 +1,4 @@
-<!-- docs/owner-dashboard.html (SANS identities — role dans users + ownerDocId/conciergerieUid + realtime badges + token passthrough) -->
+<!-- docs/owner-dashboard.html (FINAL — users.role + rules compatibles, threads safe, token passthrough) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -307,21 +307,18 @@
     return { ok: !!(ownerDocId && conciergerieUid), ownerDocId, conciergerieUid };
   }
 
-  function startUnreadThreadsListener(ownerUid, conciergerieUid, ownerDocId){
+  // ✅ IMPORTANT: query compatible rules threads => ownerUid + conciergerieUid (pas ownerDocId)
+  function startUnreadThreadsListener(ownerUid, conciergerieUid){
     stopThreads();
     gotThreadsOnce = false;
 
-    const filters = [
+    const qThreads = query(
+      collection(db,"threads"),
       where("ownerUid","==", String(ownerUid)),
       where("conciergerieUid","==", String(conciergerieUid))
-    ];
-    if(ownerDocId){
-      filters.push(where("ownerDocId","==", String(ownerDocId)));
-    }
+    );
 
-    const q = query(collection(db,"threads"), ...filters);
-
-    unsubThreads = onSnapshot(q, (snap)=>{
+    unsubThreads = onSnapshot(qThreads, (snap)=>{
       let totalUnread = 0;
       snap.forEach(d=>{
         const t = d.data() || {};
@@ -373,7 +370,6 @@
   // =========================
   await authReady;
 
-  // garde simple : doit être connecté
   const user = await new Promise((resolve)=>{
     const unsub = onAuthStateChanged(auth, (u)=>{
       try{ unsub(); }catch(_){}
@@ -421,11 +417,11 @@
     ownerNameLine.textContent =
       "Bonjour et bienvenue " + (name ? name : (user.email || "Propriétaire"));
 
-    startUnreadThreadsListener(user.uid, link.conciergerieUid, link.ownerDocId);
+    // ✅ threads: rules demandent ownerUid/conciergerieUid
+    startUnreadThreadsListener(user.uid, link.conciergerieUid);
     startBillingBadge(user.uid, link.conciergerieUid);
 
     refreshBadges();
-
   }catch(e){
     console.error(e);
     stopThreads(); stopBilling();
