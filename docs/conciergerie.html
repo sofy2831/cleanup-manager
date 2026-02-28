@@ -648,344 +648,346 @@ Une aide dédiée s’y trouve pour te guider pas à pas.
   </div>
 
   <script type="module">
-    import { auth, db } from "./firebase-init.js";
-    import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-    import {
-      doc, getDoc,
-      collection, query, where, orderBy, limit, getDocs
-    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+  import { auth, db, authReady } from "./firebase-init.js";
+  import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+  import {
+    doc, getDoc,
+    collection, query, where, orderBy, limit, getDocs
+  } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
-    const alertBox = document.getElementById("alertBox");
-    const logoutBtn = document.getElementById("logoutBtn");
-    const companyLine = document.getElementById("companyLine");
+  const alertBox = document.getElementById("alertBox");
+  const logoutBtn = document.getElementById("logoutBtn");
+  const companyLine = document.getElementById("companyLine");
 
-    const statClients = document.getElementById("statClients");
-    const statClientsNoAccount = document.getElementById("statClientsNoAccount");
-    const statLogements = document.getElementById("statLogements");
-    const statHomesNoAccount = document.getElementById("statHomesNoAccount");
-    const statAgents = document.getElementById("statAgents");
+  const statClients = document.getElementById("statClients");
+  const statClientsNoAccount = document.getElementById("statClientsNoAccount");
+  const statLogements = document.getElementById("statLogements");
+  const statHomesNoAccount = document.getElementById("statHomesNoAccount");
+  const statAgents = document.getElementById("statAgents");
 
-    // ✅ Recouvrement badge cliquable
-    const statRecouvrementCard = document.getElementById("statRecouvrementCard");
-    const statRecouvrement = document.getElementById("statRecouvrement");
-    const statRecouvrementHint = document.getElementById("statRecouvrementHint");
+  const statRecouvrementCard = document.getElementById("statRecouvrementCard");
+  const statRecouvrement = document.getElementById("statRecouvrement");
+  const statRecouvrementHint = document.getElementById("statRecouvrementHint");
 
-    // ✅ AIDE
-    const helpBtn = document.getElementById("helpBtn");
-    const helpBubble = document.getElementById("helpBubble");
+  const helpBtn = document.getElementById("helpBtn");
+  const helpBubble = document.getElementById("helpBubble");
 
-    function setHelpOpen(open){
-      helpBubble.style.display = open ? "block" : "none";
-      helpBtn.setAttribute("aria-expanded", open ? "true" : "false");
-    }
+  function setHelpOpen(open){
+    helpBubble.style.display = open ? "block" : "none";
+    helpBtn.setAttribute("aria-expanded", open ? "true" : "false");
+  }
 
-    helpBtn.addEventListener("click", (e)=>{
-      e.stopPropagation();
-      const isOpen = helpBubble.style.display === "block";
-      setHelpOpen(!isOpen);
-    });
+  helpBtn.addEventListener("click", (e)=>{
+    e.stopPropagation();
+    const isOpen = helpBubble.style.display === "block";
+    setHelpOpen(!isOpen);
+  });
 
-    document.addEventListener("click", (e)=>{
-      if(helpBubble.style.display !== "block") return;
-      const within = helpBubble.contains(e.target) || helpBtn.contains(e.target);
-      if(!within) setHelpOpen(false);
-    });
+  document.addEventListener("click", (e)=>{
+    if(helpBubble.style.display !== "block") return;
+    const within = helpBubble.contains(e.target) || helpBtn.contains(e.target);
+    if(!within) setHelpOpen(false);
+  });
 
-    window.addEventListener("keydown", (e)=>{
-      if(e.key === "Escape") setHelpOpen(false);
-    });
+  window.addEventListener("keydown", (e)=>{
+    if(e.key === "Escape") setHelpOpen(false);
+  });
 
-    let lastRec = { today:0, late:0 };
+  let lastRec = { today:0, late:0 };
 
-    function showAlert(msg, ok=false){
-      alertBox.style.display = "block";
-      alertBox.classList.toggle("ok", !!ok);
-      alertBox.textContent = msg;
-    }
-    function hideAlert(){
-      alertBox.style.display = "none";
-      alertBox.classList.remove("ok");
-      alertBox.textContent = "";
-    }
+  function showAlert(msg, ok=false){
+    alertBox.style.display = "block";
+    alertBox.classList.toggle("ok", !!ok);
+    alertBox.textContent = msg;
+  }
+  function hideAlert(){
+    alertBox.style.display = "none";
+    alertBox.classList.remove("ok");
+    alertBox.textContent = "";
+  }
 
-    const FREE_EMAILS = new Set([
-      "mathilde.debout31@gmail.com",
-      "s.dumas974@gmail.com"
-    ]);
+  const FREE_EMAILS = new Set([
+    "mathilde.debout31@gmail.com",
+    "s.dumas974@gmail.com"
+  ]);
 
-    // ✅ guard : rôle + abonnement + profil obligatoire (billingReady)
-    async function guardConciergerie(user){
-      const email = (user.email || "").toLowerCase();
-      const isAdmin = FREE_EMAILS.has(email);
+  // ✅ guard : rôle + abonnement + profil obligatoire (billingReady)
+  async function guardConciergerie(user){
+    const email = (user.email || "").toLowerCase();
+    const isAdminEmail = FREE_EMAILS.has(email);
 
-      try{
-        const snap = await getDoc(doc(db, "users", user.uid));
-        if(!snap.exists()) return { ok:false, reason:"no_profile" };
+    try{
+      const snap = await getDoc(doc(db, "users", user.uid));
+      if(!snap.exists()) return { ok:false, reason:"no_profile" };
 
-        const data = snap.data() || {};
-        const roleOk = (data.role === "conciergerie" || data.role === "admin");
-        if(!roleOk) return { ok:false, reason:"bad_role" };
+      const data = snap.data() || {};
 
-        // admin bypass
-        if(isAdmin || data.role === "admin") return { ok:true, data };
+      // ⚠️ IMPORTANT : tu as déplacé le rôle dans identities.
+      // Donc ici : on ne doit PAS bloquer sur data.role.
+      // On garde juste l’admin bypass par email pour toi (MVP).
+      // Le vrai contrôle role = à faire via identities + rules (ensuite).
+      if(isAdminEmail) return { ok:true, data };
 
-        // abonnement obligatoire
-        if(String(data.subscriptionStatus || "").toLowerCase() !== "active"){
-          return { ok:false, reason:"sub_inactive" };
-        }
-
-       // profil obligatoire (billingReady) + compat anciens comptes
-const bp = data.businessProfile || {};
-const legacyLooksComplete =
-  String(bp.companyName || "").trim().length > 0 &&
-  String(bp.billingEmail || data.email || "").trim().length > 0 &&
-  String(bp.address?.street || "").trim().length > 0 &&
-  String(bp.address?.zip || "").trim().length > 0 &&
-  String(bp.address?.city || "").trim().length > 0;
-
-// billingReady:
-// - true => OK
-// - false => KO
-// - absent => fallback sur legacyLooksComplete
-const billingReady =
-  (data.billingReady === true) ||
-  (data.billingReady === false ? false : legacyLooksComplete);
-
-if(!billingReady){
-  return { ok:false, reason:"profile_missing" };
-}
-
-        return { ok:true, data };
-
-      }catch(e){
-        console.log("[GUARD] Firestore error:", e?.code, e?.message, e);
-        return { ok:false, reason:"error", errorCode: e?.code || "" };
-      }
-    }
-
-    function setStat(el, n){
-      el.textContent = Number.isFinite(n) ? String(n) : "—";
-    }
-
-    // ✅ Profil conciergerie = companyName (businessProfile.companyName)
-    async function loadCompanyProfile(user){
-      try{
-        const uSnap = await getDoc(doc(db, "users", user.uid));
-        const data = uSnap.exists() ? (uSnap.data()||{}) : {};
-        const company = String(data?.businessProfile?.companyName || "").trim();
-        companyLine.textContent = company || "Conciergerie";
-      }catch(e){
-        companyLine.textContent = "Conciergerie";
-      }
-    }
-
-    // Stats depuis events (comme avant)
-    async function loadStatsFromEvents(user){
-      const uid = user.uid;
-
-      const qEvents = query(
-        collection(db, "events"),
-        where("conciergerieUid", "==", uid),
-        orderBy("createdAt", "desc"),
-        limit(500)
-      );
-
-      const snap = await getDocs(qEvents);
-      const events = snap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }));
-
-      const owners = new Set();
-      const homes = new Set();
-      const agents = new Set();
-
-      let homesNoOwner = 0;
-      const ownerNoAccountSet = new Set();
-
-      for(const ev of events){
-        const ownerEmail = (ev.ownerEmail || "").toString().trim().toLowerCase();
-        if(ownerEmail) owners.add(ownerEmail);
-
-        const homeId = (ev.homeId || "").toString().trim();
-        const homeKey = homeId || ((ev.homeName || "Logement") + "|" + (ev.homeCity || ev.city || ""));
-        if(homeKey.trim()) homes.add(homeKey.trim());
-
-        const agentEmail = (ev.assignedToEmail || ev.agentEmail || "").toString().trim().toLowerCase();
-        const agentName  = (ev.assignedToName || ev.agentName || "").toString().trim();
-        const agentKey = agentEmail || agentName;
-        if(agentKey) agents.add(agentKey);
-
-        const ownerLinked = !!(ev.ownerUid || ev.ownerDocId || ev.ownerId);
-        if(ownerEmail && !ownerLinked) ownerNoAccountSet.add(ownerEmail);
-
-        const homeLinked = !!(ev.ownerUid || ev.ownerDocId || ev.ownerId);
-        if(!homeLinked) homesNoOwner++;
+      // Si tu gardes data.role temporairement, fais-le soft (ne bloque pas si absent)
+      const role = String(data.role || "").toLowerCase();
+      if(role && role !== "conciergerie" && role !== "admin"){
+        return { ok:false, reason:"bad_role" };
       }
 
-      setStat(statClients, owners.size);
-      setStat(statClientsNoAccount, ownerNoAccountSet.size);
-      setStat(statLogements, homes.size);
-      setStat(statHomesNoAccount, homesNoOwner);
-      setStat(statAgents, agents.size);
-    }
-
-    // ✅ Recouvrement: compteur simple (TODAY + LATE) basé sur salesDocuments
-    function toMillis(v){
-      try{
-        if(!v) return 0;
-        if(v?.toDate?.()) return v.toDate().getTime();
-        if(typeof v === "number") return v;
-        const s = String(v).trim();
-        if(!s) return 0;
-        const d = new Date(s);
-        return isNaN(d.getTime()) ? 0 : d.getTime();
-      }catch{ return 0; }
-    }
-    function isClosedByStatus(x){
-      const st = String(x?.invoiceStatus||"").toUpperCase().trim();
-      return ["PAID","CREDITED","CANCELLED"].includes(st);
-    }
-    function getDueAmountQuick(x){
-      const total = Number(x?.totalTTC);
-      const paid = Number(x?.paidAmount);
-      const t = Number.isFinite(total) ? total : 0;
-      const p = Number.isFinite(paid) ? paid : 0;
-      return Math.max(0, t - p);
-    }
-    function isActionable(x){
-      const due = getDueAmountQuick(x);
-      return !isClosedByStatus(x) && due > 0.000001;
-    }
-    function getNextActionAtMs(x){
-      const rec = (x?.recouvrement && typeof x.recouvrement === "object") ? x.recouvrement : {};
-      return toMillis(rec.nextActionAt);
-    }
-
-    async function loadRecouvrementTodo(user){
-      const uid = user.uid;
-
-      const qInv = query(
-        collection(db, "salesDocuments"),
-        where("conciergerieUid", "==", uid),
-        limit(300)
-      );
-
-      const snap = await getDocs(qInv);
-      const docs = snap.docs.map(d => ({ id:d.id, ...(d.data()||{}) }));
-
-      const invoices = docs.filter(x=>{
-        const listable = (x?.listable !== false);
-        if(!listable) return false;
-        const type = String(x?.type || "").toUpperCase().trim();
-        const docType = String(x?.docType || "").toUpperCase().trim();
-        return (type === "INVOICE" || docType === "INVOICE_EVENT" || docType === "INVOICE");
-      });
-
-      const now = Date.now();
-      const endOfDay = new Date();
-      endOfDay.setHours(23,59,59,999);
-      const eod = endOfDay.getTime();
-
-      let today = 0;
-      let late = 0;
-
-      for(const inv of invoices){
-        if(!isActionable(inv)) continue;
-
-        const ms = getNextActionAtMs(inv);
-        if(!ms) continue;
-        if(ms <= now) late++;
-        else if(ms <= eod) today++;
+      // abonnement obligatoire (sauf admin email)
+      if(String(data.subscriptionStatus || "").toLowerCase() !== "active"){
+        return { ok:false, reason:"sub_inactive" };
       }
 
-      lastRec = { today, late };
+      // profil obligatoire (billingReady) + compat anciens comptes
+      const bp = data.businessProfile || {};
+      const legacyLooksComplete =
+        String(bp.companyName || "").trim().length > 0 &&
+        String(bp.billingEmail || data.email || "").trim().length > 0 &&
+        String(bp.address?.street || "").trim().length > 0 &&
+        String(bp.address?.zip || "").trim().length > 0 &&
+        String(bp.address?.city || "").trim().length > 0;
 
-      const total = today + late;
-      setStat(statRecouvrement, total);
+      const billingReady =
+        (data.billingReady === true) ||
+        (data.billingReady === false ? false : legacyLooksComplete);
 
-      if(total === 0){
-        statRecouvrementHint.textContent = "impayés : 0";
-        statRecouvrementHint.classList.remove("bad");
-      }else if(late > 0){
-        statRecouvrementHint.textContent = `retards : ${late}`;
-        statRecouvrementHint.classList.add("bad");
-      }else{
-        statRecouvrementHint.textContent = `aujourd’hui : ${today}`;
-        statRecouvrementHint.classList.remove("bad");
+      if(!billingReady){
+        return { ok:false, reason:"profile_missing" };
       }
+
+      return { ok:true, data };
+
+    }catch(e){
+      console.log("[GUARD] Firestore error:", e?.code, e?.message, e);
+      return { ok:false, reason:"error", errorCode: e?.code || "" };
+    }
+  }
+
+  function setStat(el, n){
+    el.textContent = Number.isFinite(n) ? String(n) : "—";
+  }
+
+  async function loadCompanyProfile(user){
+    try{
+      const uSnap = await getDoc(doc(db, "users", user.uid));
+      const data = uSnap.exists() ? (uSnap.data()||{}) : {};
+      const company = String(data?.businessProfile?.companyName || "").trim();
+      companyLine.textContent = company || "Conciergerie";
+    }catch(e){
+      companyLine.textContent = "Conciergerie";
+    }
+  }
+
+  async function loadStatsFromEvents(user){
+    const uid = user.uid;
+
+    const qEvents = query(
+      collection(db, "events"),
+      where("conciergerieUid", "==", uid),
+      orderBy("createdAt", "desc"),
+      limit(500)
+    );
+
+    const snap = await getDocs(qEvents);
+    const events = snap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }));
+
+    const owners = new Set();
+    const homes = new Set();
+    const agents = new Set();
+
+    let homesNoOwner = 0;
+    const ownerNoAccountSet = new Set();
+
+    for(const ev of events){
+      const ownerEmail = (ev.ownerEmail || "").toString().trim().toLowerCase();
+      if(ownerEmail) owners.add(ownerEmail);
+
+      const homeId = (ev.homeId || "").toString().trim();
+      const homeKey = homeId || ((ev.homeName || "Logement") + "|" + (ev.homeCity || ev.city || ""));
+      if(homeKey.trim()) homes.add(homeKey.trim());
+
+      const agentEmail = (ev.assignedToEmail || ev.agentEmail || "").toString().trim().toLowerCase();
+      const agentName  = (ev.assignedToName || ev.agentName || "").toString().trim();
+      const agentKey = agentEmail || agentName;
+      if(agentKey) agents.add(agentKey);
+
+      const ownerLinked = !!(ev.ownerUid || ev.ownerDocId || ev.ownerId);
+      if(ownerEmail && !ownerLinked) ownerNoAccountSet.add(ownerEmail);
+
+      const homeLinked = !!(ev.ownerUid || ev.ownerDocId || ev.ownerId);
+      if(!homeLinked) homesNoOwner++;
     }
 
-    // ✅ click recouvrement badge -> scope compatible (LATE/TODAY/NONE)
-    statRecouvrementCard.addEventListener("click", ()=>{
-      if(lastRec.late > 0) location.href = "recouvrement.html?scope=LATE";
-      else if(lastRec.today > 0) location.href = "recouvrement.html?scope=TODAY";
-      else location.href = "recouvrement.html";
+    setStat(statClients, owners.size);
+    setStat(statClientsNoAccount, ownerNoAccountSet.size);
+    setStat(statLogements, homes.size);
+    setStat(statHomesNoAccount, homesNoOwner);
+    setStat(statAgents, agents.size);
+  }
+
+  function toMillis(v){
+    try{
+      if(!v) return 0;
+      if(v?.toDate?.()) return v.toDate().getTime();
+      if(typeof v === "number") return v;
+      const s = String(v).trim();
+      if(!s) return 0;
+      const d = new Date(s);
+      return isNaN(d.getTime()) ? 0 : d.getTime();
+    }catch{ return 0; }
+  }
+  function isClosedByStatus(x){
+    const st = String(x?.invoiceStatus||"").toUpperCase().trim();
+    return ["PAID","CREDITED","CANCELLED"].includes(st);
+  }
+  function getDueAmountQuick(x){
+    const total = Number(x?.totalTTC);
+    const paid = Number(x?.paidAmount);
+    const t = Number.isFinite(total) ? total : 0;
+    const p = Number.isFinite(paid) ? paid : 0;
+    return Math.max(0, t - p);
+  }
+  function isActionable(x){
+    const due = getDueAmountQuick(x);
+    return !isClosedByStatus(x) && due > 0.000001;
+  }
+  function getNextActionAtMs(x){
+    const rec = (x?.recouvrement && typeof x.recouvrement === "object") ? x.recouvrement : {};
+    return toMillis(rec.nextActionAt);
+  }
+
+  async function loadRecouvrementTodo(user){
+    const uid = user.uid;
+
+    const qInv = query(
+      collection(db, "salesDocuments"),
+      where("conciergerieUid", "==", uid),
+      limit(300)
+    );
+
+    const snap = await getDocs(qInv);
+    const docs = snap.docs.map(d => ({ id:d.id, ...(d.data()||{}) }));
+
+    const invoices = docs.filter(x=>{
+      const listable = (x?.listable !== false);
+      if(!listable) return false;
+      const type = String(x?.type || "").toUpperCase().trim();
+      const docType = String(x?.docType || "").toUpperCase().trim();
+      return (type === "INVOICE" || docType === "INVOICE_EVENT" || docType === "INVOICE");
     });
 
-    logoutBtn.addEventListener("click", async ()=>{
-      await signOut(auth);
-      try{ localStorage.removeItem("cm_auth"); }catch(_){}
-      location.href = "index.html";
-    });
+    const now = Date.now();
+    const endOfDay = new Date();
+    endOfDay.setHours(23,59,59,999);
+    const eod = endOfDay.getTime();
 
-    onAuthStateChanged(auth, async (user)=>{
-      if(!user){
-        location.href = "login.html?role=conciergerie";
+    let today = 0;
+    let late = 0;
+
+    for(const inv of invoices){
+      if(!isActionable(inv)) continue;
+
+      const ms = getNextActionAtMs(inv);
+      if(!ms) continue;
+      if(ms <= now) late++;
+      else if(ms <= eod) today++;
+    }
+
+    lastRec = { today, late };
+
+    const total = today + late;
+    setStat(statRecouvrement, total);
+
+    if(total === 0){
+      statRecouvrementHint.textContent = "impayés : 0";
+      statRecouvrementHint.classList.remove("bad");
+    }else if(late > 0){
+      statRecouvrementHint.textContent = `retards : ${late}`;
+      statRecouvrementHint.classList.add("bad");
+    }else{
+      statRecouvrementHint.textContent = `aujourd’hui : ${today}`;
+      statRecouvrementHint.classList.remove("bad");
+    }
+  }
+
+  statRecouvrementCard.addEventListener("click", ()=>{
+    if(lastRec.late > 0) location.href = "recouvrement.html?scope=LATE";
+    else if(lastRec.today > 0) location.href = "recouvrement.html?scope=TODAY";
+    else location.href = "recouvrement.html";
+  });
+
+  logoutBtn.addEventListener("click", async ()=>{
+    await signOut(auth);
+    try{ localStorage.removeItem("cm_auth"); }catch(_){}
+    location.href = "index.html";
+  });
+
+  // ✅ CRITIQUE: attendre la persistance AVANT le listener
+  await authReady;
+
+  // ✅ Anti-double-fire / anti-redirect loop
+  let handled = false;
+
+  onAuthStateChanged(auth, async (user)=>{
+    if(handled) return;
+
+    if(!user){
+      handled = true;
+      location.href = "login.html?role=conciergerie";
+      return;
+    }
+
+    const res = await guardConciergerie(user);
+
+    if(!res.ok){
+      console.log("[GUARD FAIL]", res.reason, res.errorCode || "");
+
+      if(res.reason === "sub_inactive"){
+        showAlert("⛔ Abonnement inactif. Merci de choisir une offre.", false);
+        handled = true;
+        setTimeout(()=> location.href = "abonnement.html?plan=free", 500);
         return;
       }
 
-      const res = await guardConciergerie(user);
-
-      if(!res.ok){
-        console.log("[GUARD FAIL]", res.reason, res.errorCode || "");
-
-        if(res.reason === "sub_inactive"){
-          showAlert("⛔ Abonnement inactif. Merci de choisir une offre.", false);
-          setTimeout(()=> location.href = "abonnement.html?plan=free", 500);
-          return;
-        }
-
-        if(res.reason === "profile_missing"){
-          showAlert("⚠️ Profil conciergerie à compléter (obligatoire).", false);
-          setTimeout(()=> location.href = "profil-conciergerie.html", 500);
-          return;
-        }
-
-        if(res.reason === "no_profile"){
-          showAlert("⚠️ Profil introuvable. Merci de compléter le profil conciergerie.", false);
-          setTimeout(()=> location.href = "profil-conciergerie.html", 500);
-          return;
-        }
-
-        if(res.reason === "error"){
-          // On évite la boucle de redirect (super pénible sur iPhone)
-          showAlert("⛔ Erreur d'accès (règles Firestore ?). Ouvre la console pour voir le code.", false);
-          return;
-        }
-
-        location.href = "login.html?role=conciergerie";
+      if(res.reason === "profile_missing" || res.reason === "no_profile"){
+        showAlert("⚠️ Profil conciergerie à compléter (obligatoire).", false);
+        handled = true;
+        setTimeout(()=> location.href = "profil-conciergerie.html", 500);
         return;
       }
 
-      hideAlert();
-
-      await loadCompanyProfile(user);
-
-      try{
-        await loadStatsFromEvents(user);
-      }catch(e){
-        setStat(statClients, NaN);
-        setStat(statClientsNoAccount, NaN);
-        setStat(statLogements, NaN);
-        setStat(statHomesNoAccount, NaN);
-        setStat(statAgents, NaN);
+      if(res.reason === "error"){
+        showAlert("⛔ Erreur d'accès (règles Firestore ?). Ouvre la console pour voir le code.", false);
+        return;
       }
 
-      try{
-        await loadRecouvrementTodo(user);
-      }catch(e){
-        setStat(statRecouvrement, NaN);
-        statRecouvrementHint.textContent = "impayés : —";
-      }
-    });
-  </script>
+      handled = true;
+      location.href = "login.html?role=conciergerie";
+      return;
+    }
+
+    hideAlert();
+
+    await loadCompanyProfile(user);
+
+    try{
+      await loadStatsFromEvents(user);
+    }catch(e){
+      setStat(statClients, NaN);
+      setStat(statClientsNoAccount, NaN);
+      setStat(statLogements, NaN);
+      setStat(statHomesNoAccount, NaN);
+      setStat(statAgents, NaN);
+    }
+
+    try{
+      await loadRecouvrementTodo(user);
+    }catch(e){
+      setStat(statRecouvrement, NaN);
+      statRecouvrementHint.textContent = "impayés : —";
+    }
+  });
+</script>
 </body>
 </html>
