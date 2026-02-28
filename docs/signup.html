@@ -1,4 +1,4 @@
-<!-- docs/signup.html (UPDATED — minimal + no trial + redirect to abonnement) -->
+<!-- docs/signup.html (SECURE + Phase1/2 READY — redirect to profil minimal) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -20,7 +20,6 @@
       --bad:#b3261e;
       --ok:#1b8f4d;
     }
-
     *, *::before, *::after{ box-sizing:border-box; }
     body{
       margin:0;
@@ -34,7 +33,6 @@
       font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
       text-align:center;
     }
-
     .container{
       width:100%;
       max-width:460px;
@@ -45,7 +43,6 @@
       backdrop-filter: blur(10px);
       padding: 26px 22px;
     }
-
     .topbar{
       display:flex;
       justify-content:space-between;
@@ -53,7 +50,6 @@
       margin-bottom:12px;
       gap:10px;
     }
-
     .pill{
       display:inline-flex;
       align-items:center;
@@ -68,7 +64,6 @@
       font-size:13px;
       white-space:nowrap;
     }
-
     .logo-title{
       display:flex;
       align-items:center;
@@ -76,7 +71,6 @@
       gap:10px;
       margin: 10px 0 8px;
     }
-
     .logo-icon{
       width:42px;height:42px;
       border-radius:50%;
@@ -98,23 +92,19 @@
       font-size:12px;
       color:var(--violet-main);
     }
-
     h1{
       margin:0;
       font-size:22px;
       font-weight:900;
       letter-spacing:-0.2px;
     }
-
     .subtitle{
       margin:8px 0 16px;
       font-size:13px;
       color:var(--muted);
       line-height:1.4;
     }
-
     form{ text-align:left; margin-top:8px; }
-
     .field{ margin-bottom:12px; }
     label{
       display:block;
@@ -123,7 +113,6 @@
       margin: 0 0 6px;
       color:#222;
     }
-
     input{
       width:100%;
       padding:12px 12px;
@@ -137,14 +126,12 @@
       border-color: rgba(122,92,255,0.45);
       box-shadow: 0 0 0 4px rgba(122,92,255,0.12);
     }
-
     .hint{
       margin:6px 0 0;
       font-size:12px;
       color:#777;
       line-height:1.35;
     }
-
     .btn{
       width:100%;
       border:none;
@@ -160,20 +147,17 @@
       margin-top:6px;
     }
     .btn:hover{ transform: translateY(-1px); }
-
     .below{
       margin-top:12px;
       font-size:12px;
       color:#777;
       line-height:1.35;
     }
-
     .link{
       color: var(--violet-main);
       font-weight:900;
       text-decoration:none;
     }
-
     .msg{
       display:none;
       margin-top:12px;
@@ -204,7 +188,7 @@
     </div>
 
     <p class="subtitle">
-      Crée ton compte conciergerie. Ensuite tu choisis ton abonnement (gratuit 0–2 logements, ou payant).
+      Crée ton compte conciergerie. Ensuite tu complètes ton profil, puis tu choisis ton abonnement.
     </p>
 
     <form id="signupForm" novalidate>
@@ -249,12 +233,6 @@
     const msgBox = document.getElementById("msgBox");
     const submitBtn = document.getElementById("submitBtn");
 
-    // ✅ comptes illimités (admin)
-    const FREE_EMAILS = new Set([
-      "mathilde.debout31@gmail.com",
-      "s.dumas974@gmail.com"
-    ]);
-
     let isSubmitting = false;
 
     function getParam(name){
@@ -280,14 +258,19 @@
     }
 
     function buildRedirectAfterSignup(){
-      // par défaut: on envoie vers tarifs
+      // Nouveau flux SaaS: profil minimal d'abord, puis abonnement
+      // On passe next=abonnement pour enchaîner proprement.
       const next = getParam("next");   // optionnel
       const plan = getParam("plan");   // optionnel
 
-      if(next === "abonnement"){
-        return "abonnement.html?plan=" + encodeURIComponent(plan || "pro");
-      }
-      return "abonnement.html?plan=free";
+      // profil conciergerie devra rediriger vers abonnement ensuite
+      const qs = new URLSearchParams();
+      qs.set("next", "abonnement");
+      qs.set("plan", plan || "pro");
+
+      // si tu as une page "profil-minimal.html", mets-la ici.
+      // sinon on part sur profil-conciergerie.html.
+      return "profil-conciergerie.html?" + qs.toString();
     }
 
     form.addEventListener("submit", async (e) => {
@@ -314,26 +297,16 @@
         const cred = await createUserWithEmailAndPassword(auth, email, password);
         const uid = cred.user.uid;
 
-        const isAdmin = FREE_EMAILS.has(email);
-
+        // ✅ users/{uid} : profil uniquement (compatible avec les nouvelles rules)
         await setDoc(doc(db, "users", uid), {
           uid,
-          role: "conciergerie",
           email,
+          emailLower: email.toLowerCase(),
           displayName: tradeName,
-          company: {
-            tradeName,
-            phone: phone || ""
-          },
+          phone: phone || "",
+          contact: { email, phone: phone || "" },
           createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-
-          // ✅ abonnement : par défaut aucun (sauf admin)
-          subscriptionStatus: isAdmin ? "active" : "inactive",
-          plan: isAdmin ? "free-admin" : "",
-
-          // ✅ profil conciergerie : à compléter plus tard
-          billingReady: false
+          updatedAt: serverTimestamp()
         }, { merge: true });
 
         showMsg("Compte créé. Redirection…", "ok");
