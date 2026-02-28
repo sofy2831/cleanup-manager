@@ -1,10 +1,14 @@
-// docs/auth-guard.js (STABLE — iOS-friendly, no double redirect loops)
+// docs/auth-guard.js (FINAL — users.role only, iOS-friendly, no double redirect loops)
 import { auth, db, authReady } from "./firebase-init.js";
 import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
 import { doc, getDoc } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
 function normRole(s){
   return String(s || "").toLowerCase().trim();
+}
+
+function normEmail(s){
+  return String(s || "").trim().toLowerCase();
 }
 
 function withRoleParam(url, role){
@@ -14,7 +18,6 @@ function withRoleParam(url, role){
     if(role) u.searchParams.set("role", role);
     return u.pathname + u.search + u.hash;
   }catch{
-    // url relative pas parseable -> fallback simple
     if(role && !String(url).includes("role=")){
       return url + (url.includes("?") ? "&" : "?") + "role=" + encodeURIComponent(role);
     }
@@ -27,6 +30,7 @@ async function getCurrentUserOnce({ timeoutMs = 3500 } = {}){
 
   return new Promise((resolve) => {
     let done = false;
+
     const timer = setTimeout(() => {
       if(done) return;
       done = true;
@@ -35,23 +39,19 @@ async function getCurrentUserOnce({ timeoutMs = 3500 } = {}){
     }, timeoutMs);
 
     const unsub = onAuthStateChanged(auth, (user) => {
-      // ⚠️ iOS: parfois un callback "null" arrive avant que la session ne soit restaurée.
-      // On laisse une mini fenêtre pour recevoir un second callback non-null.
       if(done) return;
 
       if(user){
         done = true;
         clearTimeout(timer);
-        unsub();
+        try{ unsub(); }catch(_){}
         resolve({ user, reason: "ok" });
         return;
       }
 
-      // Si null -> on attend un petit tick (micro window) avant de conclure.
-      // (Sinon tu unsub trop vite et tu perds la réhydratation)
+      // iOS sometimes emits null before session rehydrates
       setTimeout(() => {
         if(done) return;
-        // si toujours null après cette fenêtre, on conclut null.
         done = true;
         clearTimeout(timer);
         try{ unsub(); }catch(_){}
@@ -61,22 +61,40 @@ async function getCurrentUserOnce({ timeoutMs = 3500 } = {}){
   });
 }
 
-export async function loadIdentity(uid){
+// === DEV allowlist (must match rules if you use it there too)
+const DEV_ALLOWLIST = new Set([
+  "s.dumas974@gmail.com",
+  "mathildeconciergerie45@gmail.com",
+]);
+
+function isAllowlistedEmail(user){
+  const email = normEmail(user?.email || "");
+  return email && DEV_ALLOWLIST.has(email);
+}
+
+async function loadUserDoc(uid){
   try{
-    const snap = await getDoc(doc(db, "identities", uid));
+    const snap = await getDoc(doc(db, "users", uid));
     return snap.exists() ? (snap.data() || null) : null;
   }catch(e){
-    console.warn("[loadIdentity]", e?.code || "", e?.message || e);
+    console.warn("[loadUserDoc]", e?.code || "", e?.message || e);
     return null;
   }
 }
 
+function roleFromUrlParam(){
+  const r = normRole(new URLSearchParams(location.search).get("role") || "");
+  // only accept known roles to avoid garbage
+  if(r === "conciergerie" || r === "proprietaire" || r === "admin" || r === "staff") return r;
+  return "";
+}
+
 /**
  * requireAuth
- * -> retourne { user } ou null (redirige)
+ * -> returns { user } or null (redirects)
  */
-export async function requireAuth(redirectUrl = "login.html"){
-  const { user } = await getCurrentUserOnce();
+export async function requireAuth(redirectUrl = "login.html", options = {}){
+  const { user } = await getCurrentUserOnce(options);
   if(!user){
     location.replace(redirectUrl);
     return null;
@@ -86,11 +104,11 @@ export async function requireAuth(redirectUrl = "login.html"){
 
 /**
  * requireRole
- * -> retourne { user, role, identity } ou null (redirige)
+ * -> returns { user, role, userDoc, allowlisted } or null (redirects)
  * allowedRoles = ["conciergerie","admin","staff"] etc.
  */
 export async function requireRole(allowedRoles = [], redirectUrl = "login.html", options = {}){
-  const roleParam = options?.roleParam || null; // ex: "conciergerie" pour login.html?role=conciergerie
+  const roleParam = options?.roleParam || null;
   const targetUrl = roleParam ? withRoleParam(redirectUrl, roleParam) : redirectUrl;
 
   const { user } = await getCurrentUserOnce(options);
@@ -99,14 +117,29 @@ export async function requireRole(allowedRoles = [], redirectUrl = "login.html",
     return null;
   }
 
-  const identity = await loadIdentity(user.uid);
-  const role = normRole(identity?.role);
+  const allowlisted = isAllowlistedEmail(user);
+
+  // Source of truth = users/{uid}.role
+  const userDoc = await loadUserDoc(user.uid);
+
+  // role resolution strategy:
+  // 1) users.role
+  // 2) if allowlisted: allow a fallback from URL role param
+  // 3) fallback: empty => treated as not allowed
+  let role = normRole(userDoc?.role || "");
+  if(!role && allowlisted){
+    role = roleFromUrlParam(); // allows dev to enter with login.html?role=conciergerie etc.
+  }
 
   const allowed = (allowedRoles || []).map(normRole);
-  if(!role || (allowed.length && !allowed.includes(role))){
+
+  // if no allowedRoles provided => any authenticated user is ok
+  const ok = !allowed.length || (role && allowed.includes(role));
+
+  if(!ok){
     location.replace(targetUrl);
     return null;
   }
 
-  return { user, role, identity };
+  return { user, role, userDoc, allowlisted };
 }
