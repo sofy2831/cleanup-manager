@@ -295,22 +295,23 @@ form.addEventListener("submit", async (e)=>{
     const cred = await signInWithEmailAndPassword(auth, email, pass);
     const user = cred.user;
 
-    // ✅ token propriétaire = priorité absolue
+        // ✅ token propriétaire = priorité absolue
     if(token){
       location.replace("invite-proprietaire.html?token="+encodeURIComponent(token));
       return;
     }
 
-    // ✅ router sur base users/{uid}.role si existant
-    const profile = await loadUserProfile(user.uid);
-    const realRole = String(profile?.role || "").toLowerCase().trim();
+    // ✅ router sur base identities/{uid}.role (source de vérité)
+    const ident = await loadIdentity(user.uid);
+    const profile = await loadUserProfile(user.uid); // on garde users pour le métier
 
-    // Si pas de profile, on fallback sur le role demandé (mais on reste prudent)
+    const realRole = String(ident?.role || "").toLowerCase().trim();
+
+    // Si pas d'identité, fallback sur rôle demandé (ancien compte), mais prudent
     const effectiveRole = realRole || requestedRole;
 
     // PROPRIÉTAIRE
     if(effectiveRole === "proprietaire"){
-      // merge minimal (clients) + FIX owners.ownerUid (avec sécurité tenant)
       const res = await ensureClientDocForOwner(user, profile);
 
       if(res?.ok && res.ownerDocId){
@@ -346,13 +347,12 @@ form.addEventListener("submit", async (e)=>{
       return;
     }
 
-    // CONCIERGERIE (ou admin)
+    // CONCIERGERIE
     if(effectiveRole === "conciergerie" || effectiveRole === "admin"){
       location.replace("conciergerie.html");
       return;
     }
 
-    // fallback propre
     showMsg("⛔ Compte non reconnu (role manquant). Ouvre une invitation ou contacte la conciergerie.", false);
     submitBtn.disabled = false;
 
