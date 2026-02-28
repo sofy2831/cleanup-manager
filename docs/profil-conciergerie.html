@@ -1,4 +1,4 @@
-<!-- docs/profil-conciergerie.html (CORRIGÉ: verrou role + logoPath only + pas de logoUrl en Firestore) -->
+<!-- docs/profil-conciergerie.html (CORRIGÉ: guard stable + logoPath only + script valide) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -483,18 +483,22 @@
   </nav>
 
   <script type="module">
-  import { db, storage } from "./firebase-init.js";
-import { requireRole } from "./auth-guard.js";
+    import { db, storage } from "./firebase-init.js";
+    import { requireRole } from "./auth-guard.js";
 
-import { doc, getDoc, setDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
-import { ref as sRef, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js";
+    import { doc, getDoc, setDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import { ref as sRef, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js";
 
-const currentUser = await requireRole(
-  ["conciergerie","admin","staff"],
-  "login.html?role=conciergerie"
-);
-if(!currentUser) return;
-    
+    // ✅ garde conciergerie : role dans identities
+    const session = await requireRole(
+      ["conciergerie","admin","staff"],
+      "login.html",
+      { roleParam: "conciergerie" }
+    );
+    if(!session) return;
+
+    const { user: currentUser, role: currentRole } = session;
+
     const emailLine = document.getElementById("emailLine");
     const alertBox = document.getElementById("alertBox");
 
@@ -541,7 +545,6 @@ if(!currentUser) return;
     const backBtn = document.getElementById("backBtn");
     const saveBtn = document.getElementById("saveBtn");
 
-    let currentUser = null;
     let currentProfileDoc = null;
     let selectedLogoFile = null;
 
@@ -554,17 +557,6 @@ if(!currentUser) return;
       alertBox.style.display = "none";
       alertBox.classList.remove("ok");
       alertBox.textContent = "";
-    }
-
-    async function loadIdentity(uid){
-      try{
-        const s = await getDoc(doc(db,"identities", uid));
-        if(!s.exists()) return null;
-        return s.data() || null;
-      }catch(e){
-        console.warn("loadIdentity:", e?.message || e);
-        return null;
-      }
     }
 
     function setTvaMode(isYes){
@@ -603,7 +595,6 @@ if(!currentUser) return;
         logoFallback.style.display = "none";
         logoStatus.textContent = "Logo chargé";
         logoUrlLine.textContent = "—";
-
         removeLogoBtn.disabled = false;
 
         topLogoImg.src = url;
@@ -615,7 +606,6 @@ if(!currentUser) return;
         logoFallback.style.display = "block";
         logoStatus.textContent = "Aucun logo";
         logoUrlLine.textContent = "—";
-
         removeLogoBtn.disabled = true;
 
         topLogoImg.removeAttribute("src");
@@ -626,8 +616,10 @@ if(!currentUser) return;
 
     async function loadProfile(){
       hideAlert();
+
       const ref = doc(db, "users", currentUser.uid);
       const snap = await getDoc(ref);
+
       currentProfileDoc = snap.exists() ? (snap.data() || {}) : {};
       const bp = currentProfileDoc.businessProfile || {};
 
@@ -679,6 +671,7 @@ if(!currentUser) return;
 
     async function saveProfile(){
       hideAlert();
+
       const err = validate();
       if(err){ showAlert("⛔ " + err); return; }
 
@@ -723,7 +716,7 @@ if(!currentUser) return;
           },
 
           // ✅ logo : path only (pas de logoUrl en Firestore)
-          logoPath: (prevBp.logoPath || "").trim(),
+          logoPath: (String(prevBp.logoPath || "").trim()),
 
           updatedAt: serverTimestamp(),
         },
@@ -909,17 +902,13 @@ if(!currentUser) return;
     backBtn.addEventListener("click", ()=> location.href = "conciergerie.html");
     saveBtn.addEventListener("click", saveProfile);
 
-   
-         try{
-        await loadProfile();
-      }catch(e){
-        console.error(e);
-        showAlert("⛔ Erreur chargement profil : " + (e?.message || "inconnue"));
-      }
-    });
+    // ✅ init
+    try{
+      await loadProfile();
+    }catch(e){
+      console.error(e);
+      showAlert("⛔ Erreur chargement profil : " + (e?.message || "inconnue"));
+    }
   </script>
 </body>
 </html>
-
-
-
