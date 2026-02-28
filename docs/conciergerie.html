@@ -1,4 +1,4 @@
-<!-- docs/conciergerie.html (FINAL — profil obligatoire + abonnement guard + bulle Aide, sans onboarding) -->
+<!-- docs/conciergerie.html (CLEAN + STABLE — guard via auth-guard.js + bypass dev/staff + profil obligatoire + abonnement) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -103,7 +103,6 @@
     h1{ margin:0; font-size:26px; font-weight:900; letter-spacing:-0.2px; }
     .subtitle{ margin-top:2px; font-size:14px; color:#444; text-align:center; }
 
-    /* ✅ Sous-titre conciergerie = companyName (comme planning) */
     .companyLine{
       margin-top:10px;
       padding:4px 10px;
@@ -117,7 +116,6 @@
       font-weight:900;
     }
 
-    /* ✅ Aide bulle jaune (même logique que logements) */
     .helpWrap{
       display:flex;
       justify-content:flex-end;
@@ -204,7 +202,6 @@
       .helpBubble::before{ right:22px; }
     }
 
-    /* ✅ BADGES */
     .stats{
       width:100%;
       max-width:980px;
@@ -345,7 +342,6 @@
       box-shadow:0 8px 18px rgba(0,0,0,0.06);
     }
 
-    /* Légal */
     .legal-list{
       list-style:none;
       padding:0;
@@ -413,7 +409,6 @@
       white-space:nowrap;
     }
 
-    /* Bottom nav */
     .bottom-nav{
       position: fixed;
       left: 0;
@@ -446,7 +441,6 @@
       box-shadow: 0 10px 22px rgba(0,0,0,0.10);
     }
 
-    /* PC: nav pleine largeur du container */
     @media(min-width: 860px){
       .bottom-nav{
         position: static;
@@ -475,7 +469,6 @@
       <a class="pill" href="index.html">← Accueil</a>
 
       <div style="display:flex; gap:10px; align-items:center;">
-        <!-- ✅ AIDE (bulle) -->
         <div class="helpWrap" id="helpWrap" aria-label="Aide">
           <button class="helpBtn" id="helpBtn" type="button" aria-expanded="false" aria-controls="helpBubble">
             💡 Aide
@@ -497,7 +490,6 @@ Une aide dédiée s’y trouve pour te guider pas à pas.
           </div>
         </div>
 
-        <!-- ✅ Déconnexion conservée -->
         <button class="pill" id="logoutBtn" type="button">Déconnexion</button>
       </div>
     </div>
@@ -508,11 +500,8 @@ Une aide dédiée s’y trouve pour te guider pas à pas.
     </div>
 
     <div class="subtitle">Tableau de bord conciergerie</div>
-
-    <!-- ✅ Sous-titre conciergerie = companyName (on le remettra pareil dans logements.html) -->
     <div class="companyLine" id="companyLine">—</div>
 
-    <!-- ✅ BADGES -->
     <section class="stats" aria-label="Indicateurs">
       <div class="stat">
         <div class="label">Clients<br>(avec compte)</div>
@@ -554,7 +543,6 @@ Une aide dédiée s’y trouve pour te guider pas à pas.
         </div>
       </div>
 
-      <!-- ✅ Recouvrement -->
       <div class="stat clickable" id="statRecouvrementCard" title="Ouvrir le recouvrement">
         <div class="label">Recouvrement<br>(à faire)</div>
         <div class="value">
@@ -648,311 +636,303 @@ Une aide dédiée s’y trouve pour te guider pas à pas.
   </div>
 
   <script type="module">
-  import { auth, db, authReady } from "./firebase-init.js";
-  import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-  import {
-    doc, getDoc,
-    collection, query, where, orderBy, limit, getDocs
-  } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import { auth, db, authReady } from "./firebase-init.js";
+    import { signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+    import { requireRole } from "./auth-guard.js";
+    import {
+      doc, getDoc,
+      collection, query, where, orderBy, limit, getDocs
+    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
-  const alertBox = document.getElementById("alertBox");
-  const logoutBtn = document.getElementById("logoutBtn");
-  const companyLine = document.getElementById("companyLine");
+    const alertBox = document.getElementById("alertBox");
+    const logoutBtn = document.getElementById("logoutBtn");
+    const companyLine = document.getElementById("companyLine");
 
-  const statClients = document.getElementById("statClients");
-  const statClientsNoAccount = document.getElementById("statClientsNoAccount");
-  const statLogements = document.getElementById("statLogements");
-  const statHomesNoAccount = document.getElementById("statHomesNoAccount");
-  const statAgents = document.getElementById("statAgents");
+    const statClients = document.getElementById("statClients");
+    const statClientsNoAccount = document.getElementById("statClientsNoAccount");
+    const statLogements = document.getElementById("statLogements");
+    const statHomesNoAccount = document.getElementById("statHomesNoAccount");
+    const statAgents = document.getElementById("statAgents");
 
-  const statRecouvrementCard = document.getElementById("statRecouvrementCard");
-  const statRecouvrement = document.getElementById("statRecouvrement");
-  const statRecouvrementHint = document.getElementById("statRecouvrementHint");
+    const statRecouvrementCard = document.getElementById("statRecouvrementCard");
+    const statRecouvrement = document.getElementById("statRecouvrement");
+    const statRecouvrementHint = document.getElementById("statRecouvrementHint");
 
-  const helpBtn = document.getElementById("helpBtn");
-  const helpBubble = document.getElementById("helpBubble");
+    const helpBtn = document.getElementById("helpBtn");
+    const helpBubble = document.getElementById("helpBubble");
 
-  function setHelpOpen(open){
-    helpBubble.style.display = open ? "block" : "none";
-    helpBtn.setAttribute("aria-expanded", open ? "true" : "false");
-  }
-
-  helpBtn.addEventListener("click", (e)=>{
-    e.stopPropagation();
-    const isOpen = helpBubble.style.display === "block";
-    setHelpOpen(!isOpen);
-  });
-
-  document.addEventListener("click", (e)=>{
-    if(helpBubble.style.display !== "block") return;
-    const within = helpBubble.contains(e.target) || helpBtn.contains(e.target);
-    if(!within) setHelpOpen(false);
-  });
-
-  window.addEventListener("keydown", (e)=>{
-    if(e.key === "Escape") setHelpOpen(false);
-  });
-
-  let lastRec = { today:0, late:0 };
-
-  function showAlert(msg, ok=false){
-    alertBox.style.display = "block";
-    alertBox.classList.toggle("ok", !!ok);
-    alertBox.textContent = msg;
-  }
-  function hideAlert(){
-    alertBox.style.display = "none";
-    alertBox.classList.remove("ok");
-    alertBox.textContent = "";
-  }
-
-  const FREE_EMAILS = new Set([
-    "mathilde.debout31@gmail.com",
-    "s.dumas974@gmail.com"
-  ]);
-
-  // ✅ guard : rôle + abonnement + profil obligatoire (billingReady)
-  async function guardConciergerie(user){
-    const email = (user.email || "").toLowerCase();
-    const isAdminEmail = FREE_EMAILS.has(email);
-
-    try{
-      const snap = await getDoc(doc(db, "users", user.uid));
-      if(!snap.exists()) return { ok:false, reason:"no_profile" };
-
-      const data = snap.data() || {};
-
-      // ⚠️ IMPORTANT : tu as déplacé le rôle dans identities.
-      // Donc ici : on ne doit PAS bloquer sur data.role.
-      // On garde juste l’admin bypass par email pour toi (MVP).
-      // Le vrai contrôle role = à faire via identities + rules (ensuite).
-      if(isAdminEmail) return { ok:true, data };
-
-      // Si tu gardes data.role temporairement, fais-le soft (ne bloque pas si absent)
-      const role = String(data.role || "").toLowerCase();
-      if(role && role !== "conciergerie" && role !== "admin"){
-        return { ok:false, reason:"bad_role" };
-      }
-
-      // abonnement obligatoire (sauf admin email)
-      if(String(data.subscriptionStatus || "").toLowerCase() !== "active"){
-        return { ok:false, reason:"sub_inactive" };
-      }
-
-      // profil obligatoire (billingReady) + compat anciens comptes
-      const bp = data.businessProfile || {};
-      const legacyLooksComplete =
-        String(bp.companyName || "").trim().length > 0 &&
-        String(bp.billingEmail || data.email || "").trim().length > 0 &&
-        String(bp.address?.street || "").trim().length > 0 &&
-        String(bp.address?.zip || "").trim().length > 0 &&
-        String(bp.address?.city || "").trim().length > 0;
-
-      const billingReady =
-        (data.billingReady === true) ||
-        (data.billingReady === false ? false : legacyLooksComplete);
-
-      if(!billingReady){
-        return { ok:false, reason:"profile_missing" };
-      }
-
-      return { ok:true, data };
-
-    }catch(e){
-      console.log("[GUARD] Firestore error:", e?.code, e?.message, e);
-      return { ok:false, reason:"error", errorCode: e?.code || "" };
+    function setHelpOpen(open){
+      helpBubble.style.display = open ? "block" : "none";
+      helpBtn.setAttribute("aria-expanded", open ? "true" : "false");
     }
-  }
-
-  function setStat(el, n){
-    el.textContent = Number.isFinite(n) ? String(n) : "—";
-  }
-
-  async function loadCompanyProfile(user){
-    try{
-      const uSnap = await getDoc(doc(db, "users", user.uid));
-      const data = uSnap.exists() ? (uSnap.data()||{}) : {};
-      const company = String(data?.businessProfile?.companyName || "").trim();
-      companyLine.textContent = company || "Conciergerie";
-    }catch(e){
-      companyLine.textContent = "Conciergerie";
-    }
-  }
-
-  async function loadStatsFromEvents(user){
-    const uid = user.uid;
-
-    const qEvents = query(
-      collection(db, "events"),
-      where("conciergerieUid", "==", uid),
-      orderBy("createdAt", "desc"),
-      limit(500)
-    );
-
-    const snap = await getDocs(qEvents);
-    const events = snap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }));
-
-    const owners = new Set();
-    const homes = new Set();
-    const agents = new Set();
-
-    let homesNoOwner = 0;
-    const ownerNoAccountSet = new Set();
-
-    for(const ev of events){
-      const ownerEmail = (ev.ownerEmail || "").toString().trim().toLowerCase();
-      if(ownerEmail) owners.add(ownerEmail);
-
-      const homeId = (ev.homeId || "").toString().trim();
-      const homeKey = homeId || ((ev.homeName || "Logement") + "|" + (ev.homeCity || ev.city || ""));
-      if(homeKey.trim()) homes.add(homeKey.trim());
-
-      const agentEmail = (ev.assignedToEmail || ev.agentEmail || "").toString().trim().toLowerCase();
-      const agentName  = (ev.assignedToName || ev.agentName || "").toString().trim();
-      const agentKey = agentEmail || agentName;
-      if(agentKey) agents.add(agentKey);
-
-      const ownerLinked = !!(ev.ownerUid || ev.ownerDocId || ev.ownerId);
-      if(ownerEmail && !ownerLinked) ownerNoAccountSet.add(ownerEmail);
-
-      const homeLinked = !!(ev.ownerUid || ev.ownerDocId || ev.ownerId);
-      if(!homeLinked) homesNoOwner++;
-    }
-
-    setStat(statClients, owners.size);
-    setStat(statClientsNoAccount, ownerNoAccountSet.size);
-    setStat(statLogements, homes.size);
-    setStat(statHomesNoAccount, homesNoOwner);
-    setStat(statAgents, agents.size);
-  }
-
-  function toMillis(v){
-    try{
-      if(!v) return 0;
-      if(v?.toDate?.()) return v.toDate().getTime();
-      if(typeof v === "number") return v;
-      const s = String(v).trim();
-      if(!s) return 0;
-      const d = new Date(s);
-      return isNaN(d.getTime()) ? 0 : d.getTime();
-    }catch{ return 0; }
-  }
-  function isClosedByStatus(x){
-    const st = String(x?.invoiceStatus||"").toUpperCase().trim();
-    return ["PAID","CREDITED","CANCELLED"].includes(st);
-  }
-  function getDueAmountQuick(x){
-    const total = Number(x?.totalTTC);
-    const paid = Number(x?.paidAmount);
-    const t = Number.isFinite(total) ? total : 0;
-    const p = Number.isFinite(paid) ? paid : 0;
-    return Math.max(0, t - p);
-  }
-  function isActionable(x){
-    const due = getDueAmountQuick(x);
-    return !isClosedByStatus(x) && due > 0.000001;
-  }
-  function getNextActionAtMs(x){
-    const rec = (x?.recouvrement && typeof x.recouvrement === "object") ? x.recouvrement : {};
-    return toMillis(rec.nextActionAt);
-  }
-
-  async function loadRecouvrementTodo(user){
-    const uid = user.uid;
-
-    const qInv = query(
-      collection(db, "salesDocuments"),
-      where("conciergerieUid", "==", uid),
-      limit(300)
-    );
-
-    const snap = await getDocs(qInv);
-    const docs = snap.docs.map(d => ({ id:d.id, ...(d.data()||{}) }));
-
-    const invoices = docs.filter(x=>{
-      const listable = (x?.listable !== false);
-      if(!listable) return false;
-      const type = String(x?.type || "").toUpperCase().trim();
-      const docType = String(x?.docType || "").toUpperCase().trim();
-      return (type === "INVOICE" || docType === "INVOICE_EVENT" || docType === "INVOICE");
+    helpBtn.addEventListener("click", (e)=>{
+      e.stopPropagation();
+      const isOpen = helpBubble.style.display === "block";
+      setHelpOpen(!isOpen);
+    });
+    document.addEventListener("click", (e)=>{
+      if(helpBubble.style.display !== "block") return;
+      const within = helpBubble.contains(e.target) || helpBtn.contains(e.target);
+      if(!within) setHelpOpen(false);
+    });
+    window.addEventListener("keydown", (e)=>{
+      if(e.key === "Escape") setHelpOpen(false);
     });
 
-    const now = Date.now();
-    const endOfDay = new Date();
-    endOfDay.setHours(23,59,59,999);
-    const eod = endOfDay.getTime();
+    let lastRec = { today:0, late:0 };
 
-    let today = 0;
-    let late = 0;
-
-    for(const inv of invoices){
-      if(!isActionable(inv)) continue;
-
-      const ms = getNextActionAtMs(inv);
-      if(!ms) continue;
-      if(ms <= now) late++;
-      else if(ms <= eod) today++;
+    function showAlert(msg, ok=false){
+      alertBox.style.display = "block";
+      alertBox.classList.toggle("ok", !!ok);
+      alertBox.textContent = msg;
+    }
+    function hideAlert(){
+      alertBox.style.display = "none";
+      alertBox.classList.remove("ok");
+      alertBox.textContent = "";
     }
 
-    lastRec = { today, late };
+    const FREE_EMAILS = new Set([
+      "mathilde.debout31@gmail.com",
+      "s.dumas974@gmail.com"
+    ]);
 
-    const total = today + late;
-    setStat(statRecouvrement, total);
-
-    if(total === 0){
-      statRecouvrementHint.textContent = "impayés : 0";
-      statRecouvrementHint.classList.remove("bad");
-    }else if(late > 0){
-      statRecouvrementHint.textContent = `retards : ${late}`;
-      statRecouvrementHint.classList.add("bad");
-    }else{
-      statRecouvrementHint.textContent = `aujourd’hui : ${today}`;
-      statRecouvrementHint.classList.remove("bad");
-    }
-  }
-
-  statRecouvrementCard.addEventListener("click", ()=>{
-    if(lastRec.late > 0) location.href = "recouvrement.html?scope=LATE";
-    else if(lastRec.today > 0) location.href = "recouvrement.html?scope=TODAY";
-    else location.href = "recouvrement.html";
-  });
-
-  logoutBtn.addEventListener("click", async ()=>{
-    await signOut(auth);
-    try{ localStorage.removeItem("cm_auth"); }catch(_){}
-    location.href = "index.html";
-  });
-
-  // ✅ CRITIQUE: attendre la persistance AVANT le listener
-  await authReady;
-
-  // ✅ Anti-double-fire / anti-redirect loop
-  let handled = false;
-
-  onAuthStateChanged(auth, async (user)=>{
-    if(handled) return;
-
-    if(!user){
-      handled = true;
-      location.href = "login.html?role=conciergerie";
-      return;
+    function setStat(el, n){
+      el.textContent = Number.isFinite(n) ? String(n) : "—";
     }
 
-    const res = await guardConciergerie(user);
+    function normalizeEmail(s){ return String(s || "").trim().toLowerCase(); }
+
+    // ✅ Guard BUSINESS (pas auth) : abonnement + profil, avec bypass staff/admin/dev
+    async function guardBusiness(user, role){
+      const emailLower = normalizeEmail(user?.email);
+      const bypass = FREE_EMAILS.has(emailLower) || (role === "admin") || (role === "staff");
+
+      try{
+        const snap = await getDoc(doc(db, "users", user.uid));
+        if(!snap.exists()){
+          return { ok:false, reason:"no_profile", bypass };
+        }
+
+        const data = snap.data() || {};
+
+        // bypass total pour toi / staff / admin
+        if(bypass) return { ok:true, data, bypass:true };
+
+        // abonnement obligatoire
+        if(String(data.subscriptionStatus || "").toLowerCase() !== "active"){
+          return { ok:false, reason:"sub_inactive", data, bypass:false };
+        }
+
+        // profil obligatoire (billingReady) + compat anciens comptes
+        const bp = data.businessProfile || {};
+        const legacyLooksComplete =
+          String(bp.companyName || "").trim().length > 0 &&
+          String(bp.billingEmail || data.email || "").trim().length > 0 &&
+          String(bp.address?.street || "").trim().length > 0 &&
+          String(bp.address?.zip || "").trim().length > 0 &&
+          String(bp.address?.city || "").trim().length > 0;
+
+        const billingReady =
+          (data.billingReady === true) ||
+          (data.billingReady === false ? false : legacyLooksComplete);
+
+        if(!billingReady){
+          return { ok:false, reason:"profile_missing", data, bypass:false };
+        }
+
+        return { ok:true, data, bypass:false };
+      }catch(e){
+        console.log("[GUARD] Firestore error:", e?.code, e?.message, e);
+        return { ok:false, reason:"error", errorCode: e?.code || "" };
+      }
+    }
+
+    async function loadCompanyProfile(user){
+      try{
+        const uSnap = await getDoc(doc(db, "users", user.uid));
+        const data = uSnap.exists() ? (uSnap.data()||{}) : {};
+        const company = String(data?.businessProfile?.companyName || "").trim();
+        companyLine.textContent = company || "Conciergerie";
+      }catch{
+        companyLine.textContent = "Conciergerie";
+      }
+    }
+
+    async function loadStatsFromEvents(user){
+      const uid = user.uid;
+
+      const qEvents = query(
+        collection(db, "events"),
+        where("conciergerieUid", "==", uid),
+        orderBy("createdAt", "desc"),
+        limit(500)
+      );
+
+      const snap = await getDocs(qEvents);
+      const events = snap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }));
+
+      const owners = new Set();
+      const homes = new Set();
+      const agents = new Set();
+
+      let homesNoOwner = 0;
+      const ownerNoAccountSet = new Set();
+
+      for(const ev of events){
+        const ownerEmail = (ev.ownerEmail || "").toString().trim().toLowerCase();
+        if(ownerEmail) owners.add(ownerEmail);
+
+        const homeId = (ev.homeId || "").toString().trim();
+        const homeKey = homeId || ((ev.homeName || "Logement") + "|" + (ev.homeCity || ev.city || ""));
+        if(homeKey.trim()) homes.add(homeKey.trim());
+
+        const agentEmail = (ev.assignedToEmail || ev.agentEmail || "").toString().trim().toLowerCase();
+        const agentName  = (ev.assignedToName || ev.agentName || "").toString().trim();
+        const agentKey = agentEmail || agentName;
+        if(agentKey) agents.add(agentKey);
+
+        const ownerLinked = !!(ev.ownerUid || ev.ownerDocId || ev.ownerId);
+        if(ownerEmail && !ownerLinked) ownerNoAccountSet.add(ownerEmail);
+
+        const homeLinked = !!(ev.ownerUid || ev.ownerDocId || ev.ownerId);
+        if(!homeLinked) homesNoOwner++;
+      }
+
+      setStat(statClients, owners.size);
+      setStat(statClientsNoAccount, ownerNoAccountSet.size);
+      setStat(statLogements, homes.size);
+      setStat(statHomesNoAccount, homesNoOwner);
+      setStat(statAgents, agents.size);
+    }
+
+    function toMillis(v){
+      try{
+        if(!v) return 0;
+        if(v?.toDate?.()) return v.toDate().getTime();
+        if(typeof v === "number") return v;
+        const s = String(v).trim();
+        if(!s) return 0;
+        const d = new Date(s);
+        return isNaN(d.getTime()) ? 0 : d.getTime();
+      }catch{ return 0; }
+    }
+    function isClosedByStatus(x){
+      const st = String(x?.invoiceStatus||"").toUpperCase().trim();
+      return ["PAID","CREDITED","CANCELLED"].includes(st);
+    }
+    function getDueAmountQuick(x){
+      const total = Number(x?.totalTTC);
+      const paid = Number(x?.paidAmount);
+      const t = Number.isFinite(total) ? total : 0;
+      const p = Number.isFinite(paid) ? paid : 0;
+      return Math.max(0, t - p);
+    }
+    function isActionable(x){
+      const due = getDueAmountQuick(x);
+      return !isClosedByStatus(x) && due > 0.000001;
+    }
+    function getNextActionAtMs(x){
+      const rec = (x?.recouvrement && typeof x.recouvrement === "object") ? x.recouvrement : {};
+      return toMillis(rec.nextActionAt);
+    }
+
+    async function loadRecouvrementTodo(user){
+      const uid = user.uid;
+
+      const qInv = query(
+        collection(db, "salesDocuments"),
+        where("conciergerieUid", "==", uid),
+        limit(300)
+      );
+
+      const snap = await getDocs(qInv);
+      const docs = snap.docs.map(d => ({ id:d.id, ...(d.data()||{}) }));
+
+      const invoices = docs.filter(x=>{
+        const listable = (x?.listable !== false);
+        if(!listable) return false;
+        const type = String(x?.type || "").toUpperCase().trim();
+        const docType = String(x?.docType || "").toUpperCase().trim();
+        return (type === "INVOICE" || docType === "INVOICE_EVENT" || docType === "INVOICE");
+      });
+
+      const now = Date.now();
+      const endOfDay = new Date();
+      endOfDay.setHours(23,59,59,999);
+      const eod = endOfDay.getTime();
+
+      let today = 0;
+      let late = 0;
+
+      for(const inv of invoices){
+        if(!isActionable(inv)) continue;
+
+        const ms = getNextActionAtMs(inv);
+        if(!ms) continue;
+        if(ms <= now) late++;
+        else if(ms <= eod) today++;
+      }
+
+      lastRec = { today, late };
+
+      const total = today + late;
+      setStat(statRecouvrement, total);
+
+      if(total === 0){
+        statRecouvrementHint.textContent = "impayés : 0";
+        statRecouvrementHint.classList.remove("bad");
+      }else if(late > 0){
+        statRecouvrementHint.textContent = `retards : ${late}`;
+        statRecouvrementHint.classList.add("bad");
+      }else{
+        statRecouvrementHint.textContent = `aujourd’hui : ${today}`;
+        statRecouvrementHint.classList.remove("bad");
+      }
+    }
+
+    statRecouvrementCard.addEventListener("click", ()=>{
+      if(lastRec.late > 0) location.href = "recouvrement.html?scope=LATE";
+      else if(lastRec.today > 0) location.href = "recouvrement.html?scope=TODAY";
+      else location.href = "recouvrement.html";
+    });
+
+    logoutBtn.addEventListener("click", async ()=>{
+      await signOut(auth);
+      try{ localStorage.removeItem("cm_auth"); }catch(_){}
+      location.href = "index.html";
+    });
+
+    // =========================
+    // BOOT
+    // =========================
+    await authReady;
+
+    // ✅ auth + role via identities (source de vérité)
+    const user = await requireRole(
+      ["conciergerie","admin","staff"],
+      "login.html?role=conciergerie"
+    );
+    if(!user) return;
+
+    // role déjà validé par requireRole, on le recalcule "soft" via email/identity
+    // (si ton requireRole renvoie aussi {user, role}, tu peux simplifier plus tard)
+    const emailLower = normalizeEmail(user.email);
+    const assumedRole = FREE_EMAILS.has(emailLower) ? "admin" : "conciergerie";
+
+    const res = await guardBusiness(user, assumedRole);
 
     if(!res.ok){
       console.log("[GUARD FAIL]", res.reason, res.errorCode || "");
 
       if(res.reason === "sub_inactive"){
         showAlert("⛔ Abonnement inactif. Merci de choisir une offre.", false);
-        handled = true;
         setTimeout(()=> location.href = "abonnement.html?plan=free", 500);
         return;
       }
 
       if(res.reason === "profile_missing" || res.reason === "no_profile"){
         showAlert("⚠️ Profil conciergerie à compléter (obligatoire).", false);
-        handled = true;
         setTimeout(()=> location.href = "profil-conciergerie.html", 500);
         return;
       }
@@ -962,7 +942,6 @@ Une aide dédiée s’y trouve pour te guider pas à pas.
         return;
       }
 
-      handled = true;
       location.href = "login.html?role=conciergerie";
       return;
     }
@@ -973,7 +952,7 @@ Une aide dédiée s’y trouve pour te guider pas à pas.
 
     try{
       await loadStatsFromEvents(user);
-    }catch(e){
+    }catch{
       setStat(statClients, NaN);
       setStat(statClientsNoAccount, NaN);
       setStat(statLogements, NaN);
@@ -983,11 +962,10 @@ Une aide dédiée s’y trouve pour te guider pas à pas.
 
     try{
       await loadRecouvrementTodo(user);
-    }catch(e){
+    }catch{
       setStat(statRecouvrement, NaN);
       statRecouvrementHint.textContent = "impayés : —";
     }
-  });
-</script>
+  </script>
 </body>
 </html>
