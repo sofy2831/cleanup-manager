@@ -1,4 +1,4 @@
-<!-- docs/profil-proprietaire.html (FIX — self: écrit users + clients(c_owner_*), owners update best-effort sans planter, canon ownerUid/ownerDocId) -->
+<!-- docs/profil-proprietaire.html (CORRIGÉ + STABLE — guard via auth-guard.js + identities role + self/conciergerie modes + pas de boucles) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -276,11 +276,11 @@
   </nav>
 
 <script type="module">
-  import { auth, db } from "./firebase-init.js";
-  import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+  import { auth, db, authReady } from "./firebase-init.js";
+  import { signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+  import { requireRole } from "./auth-guard.js";
   import {
-    collection, doc, getDoc, setDoc, updateDoc,
-    serverTimestamp
+    collection, doc, getDoc, setDoc, updateDoc, serverTimestamp
   } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
   // UI
@@ -359,17 +359,10 @@
 
   function normalizeEmail(s){ return (s||"").trim().toLowerCase(); }
 
-  // Payload unique (form) — champs plats only
   function serializeForm(){
     const fullname = (displayName.value || "").trim();
     const emailStr = (email.value || "").trim();
     const phoneStr = (phone.value || "").trim();
-
-    const street = (address1.value || "").trim();
-    const addr2  = (address2.value || "").trim();
-    const z      = (zip.value || "").trim();
-    const c      = (city.value || "").trim();
-    const ct     = (country.value || "FR").trim();
 
     return {
       fullname,
@@ -377,11 +370,11 @@
       emailLower: normalizeEmail(emailStr),
       phone: phoneStr,
 
-      address1: street,
-      address2: addr2,
-      zip: z,
-      city: c,
-      country: ct,
+      address1: (address1.value || "").trim(),
+      address2: (address2.value || "").trim(),
+      zip: (zip.value || "").trim(),
+      city: (city.value || "").trim(),
+      country: (country.value || "FR").trim(),
 
       siret: (siret.value || "").trim(),
       vat: (vat.value || "").trim(),
@@ -431,7 +424,6 @@
     if(isSelfMode()){
       setupSelfUi();
 
-      // 1) users/{uid}
       let u = null;
       try{
         const snapU = await getDoc(doc(db, "users", currentUser.uid));
@@ -448,7 +440,6 @@
         email.readOnly = true;
       }
 
-      // 2) owners/{ownerDocId} (read only, best effort)
       if(selfOwnerDocId){
         try{
           const osnap = await getDoc(doc(db,"owners", selfOwnerDocId));
@@ -460,7 +451,7 @@
           }
         }catch(err){
           console.warn(err);
-          showAlert("⚠️ Accès owners refusé. Ce n’est pas bloquant : enregistre quand même, la conciergerie lira via Clients.", false);
+          showAlert("⚠️ Accès owners refusé. Ce n’est pas bloquant : enregistre quand même.", false);
           ownerIdLine.textContent = selfOwnerDocId ? ("Owner ID : " + selfOwnerDocId) : "—";
         }
       }else{
@@ -526,15 +517,15 @@
       if(isSelfMode()){
         const uid = currentUser.uid;
 
-        // 0) sanity: ownerDocId / conciergerieUid requis
         if(!selfOwnerDocId || !selfConciergerieUid){
-          showAlert("⛔ Liaison incomplète (ownerDocId/conciergerieUid manquant). Réouvre le lien d’invitation pour finaliser.", false);
+          showAlert("⛔ Liaison incomplète (ownerDocId/conciergerieUid manquant). Réouvre le lien d’invitation.", false);
           return;
         }
 
-        // 1) users/{uid} : toujours autorisé
         await setDoc(doc(db, "users", uid), {
           uid,
+          // ⚠️ on garde role en compat si tes rules/écrans le lisent encore,
+          // mais le vrai contrôle = identities.role
           role: "proprietaire",
           email: currentUser.email || p.email || "",
           emailLower: normalizeEmail(currentUser.email || p.email || ""),
@@ -557,7 +548,6 @@
           updatedAt: serverTimestamp()
         }, { merge:true });
 
-        // 2) clients/c_owner_{ownerDocId} : canon pour facturation
         const clientId = "c_owner_" + selfOwnerDocId;
         await setDoc(doc(db, "clients", clientId), {
           clientId,
@@ -565,8 +555,8 @@
           type: "OWNER",
 
           ownerDocId: selfOwnerDocId,
-          ownerUid: uid,              // ✅ CANON
-          uid,                        // compat
+          ownerUid: uid,
+          uid,
 
           fullname: p.fullname,
           email: (currentUser.email || p.email || "").trim(),
@@ -588,11 +578,10 @@
           updatedAt: serverTimestamp()
         }, { merge:true });
 
-        // 3) owners/{ownerDocId} : best effort (si rules autorisent)
         try{
           await updateDoc(doc(db, "owners", selfOwnerDocId), {
-            ownerUid: uid,            // ✅ met à jour si possible
-            uid,                      // compat
+            ownerUid: uid,
+            uid,
 
             fullname: p.fullname,
             email: (currentUser.email || p.email || "").trim(),
@@ -614,8 +603,7 @@
             updatedAt: serverTimestamp()
           });
         }catch(e){
-          // pas bloquant : la conciergerie lira via clients/
-          console.warn("owners update denied (ignored):", e?.message || e);
+          console.warn("owners update denied (ignored):", e?.code, e?.message || e);
         }
 
         showAlert("✅ Profil enregistré.", true);
@@ -655,8 +643,8 @@
 
         await setDoc(ref, {
           ownerDocId: ownerId,
-          ownerUid: "",         // vide tant que pas accepté
-          uid: "",              // compat
+          ownerUid: "",
+          uid: "",
           status: "INVITED",
           isActive: true,
           ...conciergeriePayload,
@@ -673,8 +661,7 @@
 
     }catch(err){
       console.error(err);
-      const m = String(err?.message || "inconnue");
-      showAlert("Erreur enregistrement : " + m);
+      showAlert("Erreur enregistrement : " + String(err?.message || "inconnue"));
     }
   }
 
@@ -695,30 +682,37 @@
 
   logoutBtn.addEventListener("click", async ()=>{
     await signOut(auth);
-    localStorage.removeItem("cm_auth");
+    try{ localStorage.removeItem("cm_auth"); }catch(_){}
     const role = isSelfMode() ? "proprietaire" : "conciergerie";
-    location.href = "login.html?role=" + role;
+    location.replace("login.html?role=" + role);
   });
 
-  // Init
-  onAuthStateChanged(auth, async (user)=>{
-    if(!user){
-      const role = isSelfMode() ? "proprietaire" : "conciergerie";
-      location.href = "login.html?role=" + role;
-      return;
-    }
-    currentUser = user;
-    emailLine.textContent = user.email || user.uid;
+  // =========================
+  // BOOT (stable)
+  // =========================
+  await authReady;
 
-    if(!country.value) country.value = "FR";
+  const self = isSelfMode();
 
-    if(isSelfMode()){
-      email.value = user.email || "";
-      email.readOnly = true;
-    }
+  // ✅ rôle via identities :
+  // - self => propriétaire
+  // - conciergerie => conciergerie/admin/staff
+  const user = self
+    ? await requireRole(["proprietaire"], "login.html?role=proprietaire")
+    : await requireRole(["conciergerie","admin","staff"], "login.html?role=conciergerie");
 
-    await loadOwner();
-  });
+  if(!user) return;
+
+  currentUser = user;
+  emailLine.textContent = user.email || user.uid;
+
+  if(!country.value) country.value = "FR";
+  if(self){
+    email.value = user.email || "";
+    email.readOnly = true;
+  }
+
+  await loadOwner();
 </script>
 
 </body>
