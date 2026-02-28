@@ -1,10 +1,6 @@
 // docs/firebase-init.js
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
-import {
-  getAuth,
-  setPersistence,
-  browserLocalPersistence
-} from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+import {  getAuth,  setPersistence,  browserLocalPersistence} from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
 import { getFirestore } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 import { getStorage } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js";
 
@@ -29,3 +25,4 @@ export const authReady = setPersistence(auth, browserLocalPersistence)
     console.warn("Auth persistence NON appliquée (session volatile) :", e?.code || e);
     // on ne throw pas : on laisse l'app tourner, mais tu verras le warning
   });
+
