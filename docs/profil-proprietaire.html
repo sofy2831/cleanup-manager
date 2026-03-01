@@ -1,4 +1,4 @@
-<!-- docs/profil-proprietaire.html (FIXED — clients > users > owners, back/logout ok, token passthrough) -->
+<!-- docs/profil-proprietaire.html (PROD CLEAN — no Owner ID, no logout, clients > users > owners, back ok, token passthrough) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -95,10 +95,6 @@
       box-shadow:0 10px 22px rgba(0,0,0,0.10);
       display:inline-flex; align-items:center; justify-content:center; gap:6px;
     }
-    .btn.ghost{
-      background:#fff; color:var(--violet); border:2px solid var(--violet);
-      box-shadow:0 3px 10px rgba(0,0,0,.06);
-    }
     .btn:disabled{ opacity:.55; cursor:not-allowed; }
 
     .form{
@@ -139,9 +135,7 @@
   <div class="page">
     <div class="topbar">
       <a class="pill" id="backBtn" href="#">← Retour</a>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-        <button class="pill" id="logoutBtn" type="button">Déconnexion</button>
-      </div>
+      <span class="tiny" id="topHint" style="display:none;"></span>
     </div>
 
     <div class="wrap">
@@ -158,10 +152,7 @@
         <div class="rowTop">
           <div class="title">
             <h2>Mon profil</h2>
-            <div class="tiny" id="ownerIdLine">—</div>
-          </div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;">
-            <button class="btn ghost" id="copyBtn" type="button" disabled>Copier Owner ID</button>
+            <div class="tiny">Merci de vérifier ces informations.</div>
           </div>
         </div>
 
@@ -231,16 +222,13 @@
 
 <script type="module">
   import { auth, db } from "./firebase-init.js";
-  import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+  import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
   import { doc, getDoc, setDoc, updateDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
   // UI
   const emailLine = document.getElementById("emailLine");
   const alertBox = document.getElementById("alertBox");
-  const logoutBtn = document.getElementById("logoutBtn");
   const backBtn = document.getElementById("backBtn");
-  const ownerIdLine = document.getElementById("ownerIdLine");
-  const copyBtn = document.getElementById("copyBtn");
   const saveBtn = document.getElementById("saveBtn");
 
   // Inputs
@@ -315,7 +303,6 @@
   async function loadSelfData(){
     hideAlert();
 
-    // back toujours -> dashboard (+ token)
     backBtn.href = withToken("owner-dashboard.html");
 
     // 1) users/{uid} — source de vérité liaison
@@ -324,7 +311,7 @@
       const us = await getDoc(doc(db,"users", currentUser.uid));
       u = us.exists()? (us.data()||{}) : {};
     }catch(e){
-      showAlert("⛔ Impossible de lire users/ (rules). " + (e?.code || e?.message || ""), false);
+      showAlert("⛔ Impossible de lire votre profil (droits). " + (e?.code || e?.message || ""), false);
       return;
     }
 
@@ -340,16 +327,12 @@
     email.value = currentUser.email || safeStr(u.email || "");
     emailLine.textContent = currentUser.email || currentUser.uid;
 
+    // pas lié => on affiche quand même users (édition possible) + message clair
     if(!ownerDocId || !conciergerieUid){
-      ownerIdLine.textContent = "—";
-      copyBtn.disabled = true;
       applyData(u);
-      showAlert("⚠️ Liaison incomplète (ownerDocId/conciergerieUid). Reconnecte-toi via l’invitation.", false);
+      showAlert("⚠️ Compte pas encore rattaché. Si tu viens d’accepter une invitation, clique sur “Enregistrer”.", false);
       return;
     }
-
-    ownerIdLine.textContent = "Owner ID : " + ownerDocId;
-    copyBtn.disabled = false;
 
     // 2) clients/c_owner_{ownerDocId} — CANON FACTURATION (priority)
     let c = null;
@@ -359,7 +342,7 @@
       c = cs.exists()? (cs.data()||null) : null;
     }catch(_){}
 
-    // 3) owners/{ownerDocId} — best effort (souvent incomplet)
+    // 3) owners/{ownerDocId} — best effort
     let o = null;
     try{
       const os = await getDoc(doc(db,"owners", ownerDocId));
@@ -379,13 +362,19 @@
       showAlert("⛔ Nom / Société obligatoire.");
       return;
     }
-    if(!ownerDocId || !conciergerieUid){
-      showAlert("⛔ Liaison incomplète. Réouvre l’invitation.");
-      return;
-    }
 
     const uid = currentUser.uid;
     const emailLower = normEmail(currentUser.email || email.value || "");
+
+    // relire users pour récupérer ownerDocId/conciergerieUid (évite état JS stale)
+    let u = {};
+    try{
+      const us = await getDoc(doc(db,"users", uid));
+      u = us.exists()? (us.data()||{}) : {};
+    }catch(_){}
+
+    ownerDocId = String(u.ownerDocId || ownerDocId || "").trim();
+    conciergerieUid = String(u.conciergerieUid || conciergerieUid || "").trim();
 
     // 1) users/{uid}
     await setDoc(doc(db,"users", uid), {
@@ -393,6 +382,7 @@
       role: "proprietaire",
       email: currentUser.email || email.value || "",
       emailLower,
+
       ownerDocId,
       conciergerieUid,
 
@@ -409,6 +399,12 @@
 
       updatedAt: serverTimestamp()
     }, { merge:true });
+
+    // si pas lié => on ne tente pas clients/owners
+    if(!ownerDocId || !conciergerieUid){
+      showAlert("✅ Profil enregistré. (Rattachement en attente)", true);
+      return;
+    }
 
     // 2) clients/c_owner_{ownerDocId} — canon facturation
     const clientId = "c_owner_" + ownerDocId;
@@ -469,16 +465,6 @@
     setTimeout(()=> location.replace(withToken("owner-dashboard.html")), 250);
   }
 
-  copyBtn.addEventListener("click", async ()=>{
-    if(!ownerDocId) return;
-    try{
-      await navigator.clipboard.writeText(ownerDocId);
-      showAlert("✅ Owner ID copié.", true);
-    }catch{
-      showAlert("Copie impossible. Copie manuelle : " + ownerDocId, false);
-    }
-  });
-
   saveBtn.addEventListener("click", async ()=>{
     try{
       await saveSelfData();
@@ -486,12 +472,6 @@
       console.error(e);
       showAlert("⛔ Erreur enregistrement : " + (e?.code || e?.message || "inconnue"));
     }
-  });
-
-  logoutBtn.addEventListener("click", async ()=>{
-    try{ await signOut(auth); }catch(_){}
-    try{ localStorage.removeItem("cm_auth"); }catch(_){}
-    location.replace(withToken("login.html?role=proprietaire"));
   });
 
   // BOOT
