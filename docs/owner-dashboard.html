@@ -1,4 +1,4 @@
-<!-- docs/owner-dashboard.html (FINAL — users.role + dual threads query (ownerUid + ownerDocId), token passthrough) -->
+<!-- docs/owner-dashboard.html (FIXED — no stuck loading, logout always works, rules-compatible) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -219,7 +219,7 @@
 </nav>
 
 <script type="module">
-  import { auth, db, authReady } from "./firebase-init.js";
+  import { auth, db } from "./firebase-init.js";
   import { signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
   import { doc, getDoc, collection, query, where, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
@@ -249,7 +249,7 @@
     return u.pathname + "?" + u.searchParams.toString();
   }
 
-  // propage token
+  // propage token (si présent)
   profileBtn.href = withToken("profil-proprietaire.html?self=1");
   homesLink.href = withToken("owner-homes.html");
   planningLink.href = withToken("owner-planning.html");
@@ -261,16 +261,11 @@
   navHomes.href = withToken("owner-homes.html");
   navMessages.href = withToken("owner-messages.html");
 
-  let unsubThreadsUid = null;
-  let unsubThreadsDoc = null;
+  let unsubThreads = null;
   let unsubBilling = null;
 
   let gotThreadsOnce = false;
   let gotBillingOnce = false;
-
-  // on déduplique: threadId -> unreadForOwner
-  const unreadByThreadId = new Map();
-
   let lastUnreadMsg = 0;
   let lastBillingCount = 0;
 
@@ -283,14 +278,6 @@
       el.style.display="none";
       el.textContent="0";
     }
-  }
-
-  function recomputeUnread(){
-    let total = 0;
-    for(const v of unreadByThreadId.values()){
-      total += Number(v || 0);
-    }
-    lastUnreadMsg = total;
   }
 
   function refreshBadges(){
@@ -307,18 +294,11 @@
       `🧾 Documents : ${Number(lastBillingCount||0)}`;
   }
 
-  function stopThreads(){
-    try{ if(unsubThreadsUid) unsubThreadsUid(); }catch(_){}
-    try{ if(unsubThreadsDoc) unsubThreadsDoc(); }catch(_){}
-    unsubThreadsUid = null;
-    unsubThreadsDoc = null;
-    unreadByThreadId.clear();
-    gotThreadsOnce = false;
+  function stopThreads(){ try{ if(unsubThreads) unsubThreads(); }catch(_){}
+    unsubThreads = null;
   }
-
   function stopBilling(){ try{ if(unsubBilling) unsubBilling(); }catch(_){}
     unsubBilling = null;
-    gotBillingOnce = false;
   }
 
   function hardRequireOwnerLinked(userDoc){
@@ -327,69 +307,36 @@
     return { ok: !!(ownerDocId && conciergerieUid), ownerDocId, conciergerieUid };
   }
 
-  // ✅ dual subscribe: threads par ownerUid + par ownerDocId (legacy)
-  function startUnreadThreadsListeners(ownerUid, conciergerieUid, ownerDocId){
+  function startUnreadThreadsListener(ownerUid, conciergerieUid){
     stopThreads();
+    gotThreadsOnce = false;
 
-    // 1) mode "ownerUid"
-    const qUid = query(
+    const qThreads = query(
       collection(db,"threads"),
-      where("conciergerieUid","==", String(conciergerieUid)),
-      where("ownerUid","==", String(ownerUid))
+      where("ownerUid","==", String(ownerUid)),
+      where("conciergerieUid","==", String(conciergerieUid))
     );
 
-    unsubThreadsUid = onSnapshot(qUid, (snap)=>{
-      snap.docChanges().forEach(ch=>{
-        const id = ch.doc.id;
-        if(ch.type === "removed"){
-          unreadByThreadId.delete(id);
-        }else{
-          const t = ch.doc.data() || {};
-          unreadByThreadId.set(id, Number(t.unreadForOwner || 0));
-        }
+    unsubThreads = onSnapshot(qThreads, (snap)=>{
+      let totalUnread = 0;
+      snap.forEach(d=>{
+        const t = d.data() || {};
+        totalUnread += Number(t.unreadForOwner || 0);
       });
+      lastUnreadMsg = totalUnread;
       gotThreadsOnce = true;
-      recomputeUnread();
       refreshBadges();
     }, (err)=>{
-      console.warn("threads(uid) listener:", err?.code, err?.message || err);
-      gotThreadsOnce = true;
-      recomputeUnread();
-      refreshBadges();
-    });
-
-    // 2) mode "ownerDocId" (anciennes données / stableThreadId)
-    const qDoc = query(
-      collection(db,"threads"),
-      where("conciergerieUid","==", String(conciergerieUid)),
-      where("ownerDocId","==", String(ownerDocId))
-    );
-
-    unsubThreadsDoc = onSnapshot(qDoc, (snap)=>{
-      snap.docChanges().forEach(ch=>{
-        const id = ch.doc.id;
-        if(ch.type === "removed"){
-          // attention: peut exister via uid listener aussi -> on ne delete pas aveuglément
-          // on re-check en recomptant après coup => ok.
-          unreadByThreadId.delete(id);
-        }else{
-          const t = ch.doc.data() || {};
-          unreadByThreadId.set(id, Number(t.unreadForOwner || 0));
-        }
-      });
-      gotThreadsOnce = true;
-      recomputeUnread();
-      refreshBadges();
-    }, (err)=>{
-      console.warn("threads(docId) listener:", err?.code, err?.message || err);
-      gotThreadsOnce = true;
-      recomputeUnread();
+      console.warn("threads unread listener:", err?.code, err?.message || err);
+      lastUnreadMsg = 0;
+      gotThreadsOnce = true;        // ✅ ne pas rester bloqué
       refreshBadges();
     });
   }
 
   function startBillingBadge(ownerUid, conciergerieUid){
     stopBilling();
+    gotBillingOnce = false;
 
     const qb = query(
       collection(db,"salesDocuments"),
@@ -405,11 +352,12 @@
     }, (err)=>{
       console.warn("billing badge listener:", err?.code, err?.message || err);
       lastBillingCount = 0;
-      gotBillingOnce = true;
+      gotBillingOnce = true;        // ✅ ne pas rester bloqué
       refreshBadges();
     });
   }
 
+  // ✅ logout robuste (et toujours attaché)
   document.getElementById("logoutBtn").addEventListener("click", async ()=>{
     stopThreads(); stopBilling();
     try{ await signOut(auth); }catch(e){ console.warn("signOut:", e?.message || e); }
@@ -417,70 +365,51 @@
     location.replace(withToken("login.html?role=proprietaire"));
   });
 
-  // =========================
-  // BOOT
-  // =========================
-  await authReady;
-
-  const user = await new Promise((resolve)=>{
-    const unsub = onAuthStateChanged(auth, (u)=>{
-      try{ unsub(); }catch(_){}
-      resolve(u || null);
-    });
-  });
-
-  if(!user){
-    location.replace(withToken("login.html?role=proprietaire"));
-    return;
-  }
-
   refreshBadges();
 
-  try{
-    const us = await getDoc(doc(db,"users", user.uid));
-    const ud = us.exists()? (us.data()||{}) : {};
-
-    const role = String(ud.role || "").toLowerCase().trim();
-    if(role !== "proprietaire"){
-      stopThreads(); stopBilling();
+  // BOOT
+  onAuthStateChanged(auth, async (user)=>{
+    if(!user){
       location.replace(withToken("login.html?role=proprietaire"));
       return;
     }
 
-    const link = hardRequireOwnerLinked(ud);
-    if(!link.ok){
-      stopThreads(); stopBilling();
-      location.replace(withToken("profil-proprietaire.html?self=1"));
-      return;
-    }
-
-    // nom : owners/{ownerDocId} si lisible, sinon users/fullname, sinon email
-    let name = "";
     try{
-      const os = await getDoc(doc(db,"owners", link.ownerDocId));
-      const o = os.exists()? (os.data()||{}) : {};
-      name = String(o.fullname || o.displayName || o.legalName || o.company || "").trim();
-    }catch(_){}
+      const us = await getDoc(doc(db,"users", user.uid));
+      const ud = us.exists()? (us.data()||{}) : {};
 
-    if(!name){
-      name = String(ud.fullname || ud.displayName || "").trim();
+      const role = String(ud.role || "").toLowerCase().trim();
+      if(role !== "proprietaire"){
+        stopThreads(); stopBilling();
+        location.replace(withToken("login.html?role=proprietaire"));
+        return;
+      }
+
+      const link = hardRequireOwnerLinked(ud);
+      if(!link.ok){
+        stopThreads(); stopBilling();
+        location.replace(withToken("profil-proprietaire.html?self=1"));
+        return;
+      }
+
+      let name = String(ud.fullname || ud.displayName || "").trim();
+      if(!name){
+        name = user.email || "Propriétaire";
+      }
+      ownerNameLine.textContent = "Bonjour et bienvenue " + name;
+
+      startUnreadThreadsListener(user.uid, link.conciergerieUid);
+      startBillingBadge(user.uid, link.conciergerieUid);
+
+      refreshBadges();
+    }catch(e){
+      console.error(e);
+      // ✅ au lieu de rester figé
+      gotThreadsOnce = true;
+      gotBillingOnce = true;
+      alertsLine.textContent = "⛔ Erreur dashboard (users/rules). Va sur Mon profil puis Enregistrer.";
     }
-
-    ownerNameLine.textContent =
-      "Bonjour et bienvenue " + (name ? name : (user.email || "Propriétaire"));
-
-    // ✅ threads: dual (ownerUid + ownerDocId)
-    startUnreadThreadsListeners(user.uid, link.conciergerieUid, link.ownerDocId);
-
-    // billing: ownerUid obligatoire (tes docs ont ownerUid)
-    startBillingBadge(user.uid, link.conciergerieUid);
-
-    refreshBadges();
-  }catch(e){
-    console.error(e);
-    stopThreads(); stopBilling();
-    location.replace(withToken("profil-proprietaire.html?self=1"));
-  }
+  });
 
   window.addEventListener("beforeunload", ()=>{
     stopThreads(); stopBilling();
