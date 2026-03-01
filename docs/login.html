@@ -1,4 +1,4 @@
-<!-- docs/login.html (CORRIGÉ — sans identities, routing via users.role, flux owner/conciergerie + reset mdp) -->
+<!-- docs/login.html (SANS IDENTITIES — routing via users.role + auto-heal prudent + flux owner/conciergerie + reset mdp) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -46,8 +46,9 @@
       border-left:5px solid var(--bad);
       font-size:12px; font-weight:900;
       white-space:pre-wrap;
+      color:#7a1d16;
     }
-    .msg.ok{ border-left-color: var(--ok); }
+    .msg.ok{ border-left-color: var(--ok); color: var(--ok); }
 
     form{ margin-top:12px; display:flex; flex-direction:column; gap:10px; }
     label{ font-size:12px; font-weight:900; }
@@ -132,8 +133,9 @@ const emailEl = document.getElementById("email");
 const passEl  = document.getElementById("password");
 
 const params = new URLSearchParams(location.search);
-const requestedRole = (params.get("role") || "conciergerie").toLowerCase().trim(); // rôle demandé (UI)
+const requestedRole = (params.get("role") || "conciergerie").toLowerCase().trim(); // UI hint
 const token = (params.get("token") || "").trim();
+const next = (params.get("next") || "").trim(); // optionnel (abonnement, etc.)
 
 subtitleP.textContent =
   requestedRole === "proprietaire"
@@ -179,13 +181,54 @@ function looksLikeOwnerProfile(profile){
   return !!(ownerDocId && concUid);
 }
 
+function looksLikeConciergerieProfile(profile){
+  if(!profile) return false;
+  const bp = profile.businessProfile || {};
+  const hasBp = !!(String(bp.companyName||"").trim() || String(bp.billingEmail||"").trim() || String(bp.address?.city||"").trim());
+  const hasBillingFlag = typeof profile.billingReady === "boolean";
+  const hasSubscription = !!String(profile.subscriptionStatus||"").trim() || !!String(profile.plan||"").trim();
+  const hasOwnerLink = !!String(profile.ownerDocId||"").trim() || !!String(profile.conciergerieUid||"").trim();
+  // conciergerie => pas censée avoir ownerDocId/conciergerieUid (owner link)
+  return (hasBp || hasBillingFlag || hasSubscription) && !hasOwnerLink;
+}
+
+// Auto-heal : si users.role vide, on le renseigne avec prudence (sans escalade)
+async function ensureRoleIfMissing(uid, profile){
+  const current = String(profile?.role || "").toLowerCase().trim();
+  if(current) return current;
+
+  // si on a des preuves owner => owner
+  if(looksLikeOwnerProfile(profile)){
+    try{
+      await setDoc(doc(db,"users", uid), { role:"proprietaire", updatedAt: serverTimestamp() }, { merge:true });
+      return "proprietaire";
+    }catch(e){
+      console.warn("ensureRoleIfMissing owner:", e?.message || e);
+      return "proprietaire";
+    }
+  }
+
+  // si on a des preuves conciergerie => conciergerie
+  if(looksLikeConciergerieProfile(profile)){
+    try{
+      await setDoc(doc(db,"users", uid), { role:"conciergerie", updatedAt: serverTimestamp() }, { merge:true });
+      return "conciergerie";
+    }catch(e){
+      console.warn("ensureRoleIfMissing conciergerie:", e?.message || e);
+      return "conciergerie";
+    }
+  }
+
+  // sinon on n'écrit rien : on route via requestedRole, mais en bloquant si incohérent
+  return "";
+}
+
 // ✅ 1) Filet de sécurité : s'assurer que clients/{c_owner_ownerDocId} existe
 async function ensureClientDocForOwner(user, userProfile){
   try{
     const u = userProfile || {};
     const ownerDocId = String(u.ownerDocId || "").trim();
     const conciergerieUid = String(u.conciergerieUid || "").trim();
-
     if(!ownerDocId || !conciergerieUid) return { ok:false, reason:"missing_ownerDocId_or_conciergerieUid" };
 
     const email = normEmail(user.email || u.email || "");
@@ -293,9 +336,9 @@ form.addEventListener("submit", async (e)=>{
 
     const profile = await loadUserProfile(user.uid);
 
-    // role = source de vérité
-    const roleFromUsers = String(profile?.role || "").toLowerCase().trim();
-    const effectiveRole = roleFromUsers || requestedRole;
+    // rôle effectif : users.role (source de vérité) + auto-heal si vide
+    const roleFromUsers = await ensureRoleIfMissing(user.uid, profile);
+    const effectiveRole = (roleFromUsers || String(profile?.role||"").toLowerCase().trim() || requestedRole);
 
     // PROPRIÉTAIRE
     if(effectiveRole === "proprietaire" || effectiveRole === "owner"){
@@ -342,12 +385,16 @@ form.addEventListener("submit", async (e)=>{
 
     // CONCIERGERIE
     if(effectiveRole === "conciergerie"){
+      // next=abonnement (ou autres) si tu veux gérer un retour de flux
+      if(next === "abonnement"){
+        location.replace("abonnement.html");
+        return;
+      }
       location.replace("conciergerie.html");
       return;
     }
 
-    // fallback propre
-    showMsg("⛔ Compte non reconnu (role manquant).", false);
+    showMsg("⛔ Compte non reconnu (role manquant). Utilise le bon lien ou contacte la conciergerie.", false);
     submitBtn.disabled = false;
 
   }catch(err){
