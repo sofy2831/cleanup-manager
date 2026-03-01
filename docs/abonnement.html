@@ -1,3 +1,4 @@
+<!-- docs/abonnement.html (CORRIGÉ — allowlist DEV bypass + Stripe normal, design conservé) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -5,7 +6,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>CleanUp Manager – Abonnement</title>
 
-  <!-- Police pro -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -130,7 +130,6 @@
       border-color: rgba(122,92,255,.55);
     }
 
-    /* ⭐ Plan recommandé */
     .plan-card.recommended{
       border-color: rgba(122,92,255,.95);
       box-shadow:0 10px 28px rgba(98,56,255,.20);
@@ -330,10 +329,8 @@
       .plan-grid{ grid-template-columns: repeat(2, 1fr); }
     }
 
-    /* === Fix : éviter que le badge RECOMMANDÉ masque le prix === */
     .plan-card .row{ position:relative; }
 
-    /* ✅ Mobile : on masque le ribbon flottant et on met un badge inline */
     @media (max-width:699px){
       .plan-card.recommended .ribbon{ display:none; }
 
@@ -354,19 +351,12 @@
         white-space:nowrap;
       }
 
-      /* on évite que le prix prenne trop de place */
       .plan-card .p{ font-size:20px; }
     }
 
-    /* ✅ PC : on réserve de la place pour le ribbon (sinon il recouvre le prix) */
     @media (min-width:700px){
-      .plan-card.recommended{
-        padding-top:54px;
-      }
-      .plan-card.recommended .ribbon{
-        top:14px;
-        right:14px;
-      }
+      .plan-card.recommended{ padding-top:54px; }
+      .plan-card.recommended .ribbon{ top:14px; right:14px; }
     }
   </style>
 </head>
@@ -405,351 +395,447 @@
       <div class="msg" id="msgBox"></div>
 
       <div class="small">
-        Propriétaires : accès gratuit. Paiement uniquement des prestations/kits.
+        Propriétaires : accès gratuit. Zéro commission. Paiement uniquement des prestations/kits.
       </div>
     </div>
 
   </div>
 
   <script type="module">
-  // ✅ Ton endpoint Functions (projet cleanup-manager-d9301)
-  const FUNCTIONS_BASE = "https://europe-west1-cleanup-manager-d9301.cloudfunctions.net/api";
+    // ===========
+    // Stripe / Functions
+    // ===========
+    const FUNCTIONS_BASE = "https://europe-west1-cleanup-manager-d9301.cloudfunctions.net/api";
 
-  // ✅ Stripe Price IDs
-  const PRICE_STARTER  = "price_1T4ffoAMMazMXNc1WTPLqxoX";
-  const PRICE_PRO      = "price_1T4fitAMMazMXNc1wEVBRHWC";
-  const PRICE_BUSINESS = "price_1T4fjXAMMazMXNc18OuwIaxh";
+    const PRICE_STARTER  = "price_1T4ffoAMMazMXNc1WTPLqxoX";
+    const PRICE_PRO      = "price_1T4fitAMMazMXNc1wEVBRHWC";
+    const PRICE_BUSINESS = "price_1T4fjXAMMazMXNc18OuwIaxh";
 
-  // ✅ Contact / Devis Enterprise
-  const ENTERPRISE_CONTACT_HREF =
-    "mailto:contact@cleanup-manager.fr?subject=CleanUp%20Manager%20-%20Demande%20Enterprise&body=Bonjour,%0D%0A%0D%0AJe souhaite une offre Enterprise (41+ logements).%0D%0A%0D%0ANom%20:%0D%0AConciergerie%20:%0D%0AVille%20:%0D%0ANombre%20de%20logements%20:%0D%0A%0D%0AMerci.";
+    const ENTERPRISE_CONTACT_HREF =
+      "mailto:contact@cleanup-manager.fr?subject=CleanUp%20Manager%20-%20Demande%20Enterprise&body=Bonjour,%0D%0A%0D%0AJe souhaite une offre Enterprise (41+ logements).%0D%0A%0D%0ANom%20:%0D%0AConciergerie%20:%0D%0AVille%20:%0D%0ANombre%20de%20logements%20:%0D%0A%0D%0AMerci.";
 
-  // ✅ Plans
-  const PLANS = {
-    free: {
-      key: "free",
-      name: "Gratuit",
-      range: "0–2 logements",
-      price: 0,
-      desc: "Pour tester CleanUp (jusqu’à 2 logements).",
-      features: [
-        "Planning • Logements • Prestations",
-        "Accès conciergerie (MVP)",
-        "Idéal pour démarrer sans risque"
-      ],
-      isFree: true,
-      recommended: false
-    },
+    // ===========
+    // Allowlist DEV (accès libre)
+    // ===========
+    const DEV_ALLOWLIST = [
+      "s.dumas974@gmail.com",
+      "mathildeconciergerie45@gmail.com"
+    ];
 
-    starter: {
-      key: "starter",
-      name: "Starter",
-      range: "3–5 logements",
-      price: 49.90,
-      desc: "Pour démarrer et structurer votre conciergerie.",
-      features: [
-        "Planning • Logements • Prestations",
-        "Paiements + relances (V1)",
-        "Messagerie (V1) • Boutique • Import iCal",
-        "Historique + export comptable (CSV/PDF)"
-      ],
-      priceId: PRICE_STARTER,
-      recommended: false
-    },
+    // ===========
+    // Plans
+    // ===========
+    const PLANS = {
+      free: {
+        key: "free",
+        name: "Gratuit",
+        range: "0–2 logements",
+        price: 0,
+        desc: "Pour tester CleanUp (jusqu’à 2 logements).",
+        features: [
+          "Planning • Logements • Prestations",
+          "Accès conciergerie (MVP)",
+          "Idéal pour démarrer sans risque"
+        ],
+        isFree: true,
+        recommended: false,
+        maxHomes: 2
+      },
 
-    pro: {
-      key: "pro",
-      name: "Pro",
-      range: "6–15 logements",
-      price: 119.90,
-      desc: "Le meilleur équilibre : croissance + organisation + rentabilité.",
-      features: [
-        "Tout Starter",
-        "Priorité évolutions produit (selon roadmap)",
-        "Conçu pour une conciergerie active"
-      ],
-      priceId: PRICE_PRO,
-      recommended: true
-    },
+      starter: {
+        key: "starter",
+        name: "Starter",
+        range: "3–5 logements",
+        price: 49.90,
+        desc: "Pour démarrer et structurer votre conciergerie.",
+        features: [
+          "Planning • Logements • Prestations",
+          "Paiements + relances (V1)",
+          "Messagerie (V1) • Boutique • Import iCal",
+          "Historique + export comptable (CSV/PDF)"
+        ],
+        priceId: PRICE_STARTER,
+        recommended: false,
+        maxHomes: 5
+      },
 
-    business: {
-      key: "business",
-      name: "Business",
-      range: "16–40 logements",
-      price: 299.90,
-      desc: "Pour une conciergerie structurée avec un vrai volume.",
-      features: [
-        "Tout Pro",
-        "Optimisé multi-logements",
-        "Support renforcé (à venir)"
-      ],
-      priceId: PRICE_BUSINESS,
-      recommended: false
-    },
+      pro: {
+        key: "pro",
+        name: "Pro",
+        range: "6–15 logements",
+        price: 119.90,
+        desc: "Le meilleur équilibre : croissance + organisation + rentabilité.",
+        features: [
+          "Tout Starter",
+          "Priorité évolutions produit (selon roadmap)",
+          "Conçu pour une conciergerie active"
+        ],
+        priceId: PRICE_PRO,
+        recommended: true,
+        maxHomes: 15
+      },
 
-    enterprise: {
-      key: "enterprise",
-      name: "Enterprise",
-      range: "41+ logements",
-      price: null,
-      desc: "Tarif sur devis (selon volume, équipes et besoins).",
-      features: [
-        "Contrat adapté au volume",
-        "Accompagnement déploiement (si besoin)",
-        "Conditions & support dédiés"
-      ],
-      isEnterprise: true,
-      recommended: false
-    }
-  };
+      business: {
+        key: "business",
+        name: "Business",
+        range: "16–40 logements",
+        price: 299.90,
+        desc: "Pour une conciergerie structurée avec un vrai volume.",
+        features: [
+          "Tout Pro",
+          "Optimisé multi-logements",
+          "Support renforcé (à venir)"
+        ],
+        priceId: PRICE_BUSINESS,
+        recommended: false,
+        maxHomes: 40
+      },
 
-  function $(id){ return document.getElementById(id); }
-
-  function getParam(name){
-    const p = new URLSearchParams(location.search);
-    return (p.get(name) || "").trim();
-  }
-
-  function formatPrice(n){
-    const v = Number(n || 0);
-    return v.toFixed(2).replace(".", ",") + " €";
-  }
-
-  function formatPlanPrice(plan){
-    if(plan.isEnterprise) return "Sur devis";
-    if(plan.isFree) return "0,00 €";
-    return formatPrice(plan.price);
-  }
-
-  function showMsg(text){
-    const box = $("msgBox");
-    box.style.display = "block";
-    box.textContent = text;
-  }
-  function clearMsg(){
-    const box = $("msgBox");
-    box.style.display = "none";
-    box.textContent = "";
-  }
-  function disableCta(disabled){
-    const stack = $("ctaStack");
-    stack.style.opacity = disabled ? "0.75" : "1";
-    stack.style.pointerEvents = disabled ? "none" : "auto";
-  }
-
-  function getSession(){
-    try{ return JSON.parse(localStorage.getItem("cm_auth") || "null"); }
-    catch{ return null; }
-  }
-
-  // ==========
-  // Firebase (optionnel) : on tente plusieurs chemins
-  // ==========
-  let auth = null;
-  let onAuthStateChanged = null;
-
-  async function loadFirebaseAuth(){
-    try{
-      // 1) le plus probable chez toi (tu l'as mis)
-      ({ auth } = await import("./src/firebase-init.js"));
-    }catch(_e1){
-      try{
-        // 2) fallback si le fichier est à la racine
-        ({ auth } = await import("./firebase-init.js"));
-      }catch(_e2){
-        auth = null;
+      enterprise: {
+        key: "enterprise",
+        name: "Enterprise",
+        range: "41+ logements",
+        price: null,
+        desc: "Tarif sur devis (selon volume, équipes et besoins).",
+        features: [
+          "Contrat adapté au volume",
+          "Accompagnement déploiement (si besoin)",
+          "Conditions & support dédiés"
+        ],
+        isEnterprise: true,
+        recommended: false,
+        maxHomes: 9999
       }
+    };
+
+    function $(id){ return document.getElementById(id); }
+    function getParam(name){
+      const p = new URLSearchParams(location.search);
+      return (p.get(name) || "").trim();
+    }
+    function formatPrice(n){
+      const v = Number(n || 0);
+      return v.toFixed(2).replace(".", ",") + " €";
+    }
+    function formatPlanPrice(plan){
+      if(plan.isEnterprise) return "Sur devis";
+      if(plan.isFree) return "0,00 €";
+      return formatPrice(plan.price);
     }
 
-    try{
-      ({ onAuthStateChanged } = await import("https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js"));
-    }catch{
-      onAuthStateChanged = null;
-      auth = null;
+    function showMsg(text){
+      const box = $("msgBox");
+      box.style.display = "block";
+      box.textContent = text;
     }
-  }
+    function clearMsg(){
+      const box = $("msgBox");
+      box.style.display = "none";
+      box.textContent = "";
+    }
+    function disableCta(disabled){
+      const stack = $("ctaStack");
+      stack.style.opacity = disabled ? "0.75" : "1";
+      stack.style.pointerEvents = disabled ? "none" : "auto";
+    }
 
-  async function waitForUserFirebase(){
-    if(!auth || !onAuthStateChanged) return null;
-    return new Promise((resolve)=>{
-      const unsub = onAuthStateChanged(auth, (user)=>{
-        unsub();
-        resolve(user || null);
+    // ===========
+    // Firebase
+    // ===========
+    import { auth, db, authReady } from "./firebase-init.js";
+    import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+    import { doc, setDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+
+    function normEmail(s){ return (s || "").trim().toLowerCase(); }
+    function isDevAllowlisted(emailLower){
+      return !!emailLower && DEV_ALLOWLIST.includes(emailLower);
+    }
+
+    async function waitForUser(){
+      await authReady;
+      const current = auth.currentUser;
+      if(current) return current;
+      return new Promise((resolve)=>{
+        const unsub = onAuthStateChanged(auth, (u)=>{
+          unsub();
+          resolve(u || null);
+        });
       });
-    });
-  }
-
-  // ==========
-  // UI render
-  // ==========
-  function renderCtas(plan){
-    const stack = $("ctaStack");
-    stack.innerHTML = "";
-    clearMsg();
-
-    // Gratuit
-    if(plan.isFree){
-      const a = document.createElement("a");
-      a.className = "cta-btn secondary";
-      a.href = "#";
-      a.textContent = "Activer Gratuit";
-      a.addEventListener("click", async (e)=>{
-        e.preventDefault();
-
-        // Si Firebase dispo : user firebase
-        const user = (auth?.currentUser) || await waitForUserFirebase();
-
-        // Sinon : session localStorage
-        const s = getSession();
-
-        if(!user && !(s?.uid && s?.email)){
-          location.href = "login.html?next=abonnement&plan=free";
-          return;
-        }
-
-        // ✅ FIX : le gratuit doit forcer profil d'abord
-        location.href = "profil-conciergerie.html";
-      });
-      stack.appendChild(a);
-
-      const note = document.createElement("div");
-      note.className = "small";
-      note.textContent = "Aucun paiement. Tu peux passer à un plan payant quand tu dépasses 2 logements.";
-      stack.appendChild(note);
-      return;
     }
 
-    // Enterprise
-    if(plan.isEnterprise){
-      const a = document.createElement("a");
-      a.className = "cta-btn";
-      a.href = ENTERPRISE_CONTACT_HREF;
-      a.textContent = "Nous contacter (devis)";
-      stack.appendChild(a);
-      return;
+    async function requireLoginOrRedirect(planKey){
+      const user = await waitForUser();
+      if(user) return user;
+
+      const qs = new URLSearchParams();
+      qs.set("next", "abonnement");
+      qs.set("plan", planKey);
+      location.href = "login.html?" + qs.toString();
+      return null;
     }
 
-    // Payant Stripe
-    const pay = document.createElement("a");
-    pay.className = "cta-btn";
-    pay.href = "#";
-    pay.textContent = "Payer en ligne";
-    pay.addEventListener("click", async (e)=>{
-      e.preventDefault();
-      await startCheckout(plan.key);
-    });
-    stack.appendChild(pay);
-  }
+    // ===========
+    // DEV activation (bypass Stripe)
+    // ===========
+    async function activatePlanDev(planKey){
+      disableCta(true);
+      clearMsg();
 
-  async function startCheckout(planKey){
-    disableCta(true);
-
-    const plan = PLANS[planKey];
-    if(!plan || !plan.priceId || !String(plan.priceId).startsWith("price_")){
-      showMsg("Stripe : priceId manquant/incorrect pour ce plan.");
-      disableCta(false);
-      return;
-    }
-
-    // user via Firebase si possible
-    const user = (auth?.currentUser) || await waitForUserFirebase();
-
-    // fallback localStorage (ancien mode)
-    const s = getSession();
-
-    const uid = user?.uid || s?.uid || "";
-    const email = user?.email || s?.email || "";
-
-    if(!uid || !email){
-      showMsg("Connecte-toi d’abord pour payer.");
-      location.href = "login.html?next=abonnement&plan=" + encodeURIComponent(planKey);
-      return;
-    }
-
-    try{
-      const res = await fetch(FUNCTIONS_BASE + "/create-checkout-session", {
-        method: "POST",
-        headers: { "Content-Type":"application/json" },
-        body: JSON.stringify({
-          uid,
-          email,
-          role: "conciergerie",
-          plan: plan.key,
-          priceId: plan.priceId
-        })
-      });
-
-      const data = await res.json();
-      if(!res.ok || !data.url){
-        console.error(data);
-        showMsg("Erreur création paiement : " + (data.error || "inconnue"));
+      const plan = PLANS[planKey];
+      if(!plan){
+        showMsg("Plan introuvable.");
         disableCta(false);
         return;
       }
 
-      location.href = data.url;
+      const user = await requireLoginOrRedirect(planKey);
+      if(!user) return;
 
-    }catch(err){
-      console.error(err);
-      showMsg("Erreur réseau : " + (err?.message || err));
-      disableCta(false);
+      const emailLower = normEmail(user.email || "");
+      if(!isDevAllowlisted(emailLower)){
+        showMsg("⛔ Accès DEV refusé (email non allowlist).");
+        disableCta(false);
+        return;
+      }
+
+      try{
+        // users/{uid} : source de vérité simple (sans identities)
+        await setDoc(doc(db, "users", user.uid), {
+          uid: user.uid,
+          email: user.email || "",
+          emailLower,
+          role: "conciergerie",
+
+          // abonnement
+          plan: plan.key,
+          subscriptionStatus: "active",
+          subscriptionSource: "DEV_BYPASS",
+          maxHomes: Number(plan.maxHomes || 2),
+
+          updatedAt: serverTimestamp(),
+          subscribedAt: serverTimestamp()
+        }, { merge: true });
+
+        // entitlements/{uid} : optionnel (si tes rules autorisent)
+        // (si interdit, ça ne doit pas bloquer)
+        try{
+          await setDoc(doc(db, "entitlements", user.uid), {
+            uid: user.uid,
+            plan: plan.key,
+            subscriptionStatus: "active",
+            source: "DEV_BYPASS",
+            maxHomes: Number(plan.maxHomes || 2),
+            updatedAt: serverTimestamp(),
+            createdAt: serverTimestamp()
+          }, { merge: true });
+        }catch(_e){ /* silencieux */ }
+
+        showMsg("✅ Plan activé (DEV). Redirection…");
+        setTimeout(()=> location.href = "conciergerie.html", 350);
+
+      }catch(err){
+        console.error(err);
+        showMsg("Erreur activation DEV : " + (err?.message || "inconnue"));
+        disableCta(false);
+      }
     }
-  }
 
-  function renderAll(){
-    const selectedKey = (getParam("plan") || "pro").toLowerCase();
-    const plan = PLANS[selectedKey] || PLANS.pro;
+    // ===========
+    // Stripe checkout normal
+    // ===========
+    async function startCheckout(planKey){
+      disableCta(true);
+      clearMsg();
 
-    // grid
-    const order = ["free","starter","pro","business","enterprise"];
-    const grid = $("planGrid");
+      const plan = PLANS[planKey];
+      if(!plan || !plan.priceId || !String(plan.priceId).startsWith("price_")){
+        showMsg("Stripe : priceId manquant/incorrect pour ce plan.");
+        disableCta(false);
+        return;
+      }
 
-    grid.innerHTML = order.map(k => {
-      const p = PLANS[k];
-      const active = p.key === plan.key ? "active" : "";
-      const rec = p.recommended ? "recommended" : "";
-      const ribbon = p.recommended ? `<div class="ribbon"><span class="dot"></span>RECOMMANDÉ</div>` : "";
-      const priceLabel = p.isEnterprise ? "Sur devis" : formatPlanPrice(p);
+      const user = await requireLoginOrRedirect(planKey);
+      if(!user) return;
 
-      return `
-        <div class="plan-card ${active} ${rec}">
-          ${ribbon}
-          <div class="row">
-            <div>
-              <p class="name">${p.name}</p>
-              <p class="range">${p.range}</p>
+      const uid = user.uid;
+      const email = user.email || "";
+      const emailLower = normEmail(email);
+
+      // DEV allowlist -> on ne paye pas
+      if(isDevAllowlisted(emailLower)){
+        await activatePlanDev(planKey);
+        return;
+      }
+
+      try{
+        const res = await fetch(FUNCTIONS_BASE + "/create-checkout-session", {
+          method: "POST",
+          headers: { "Content-Type":"application/json" },
+          body: JSON.stringify({
+            uid,
+            email,
+            role: "conciergerie",
+            plan: plan.key,
+            priceId: plan.priceId
+          })
+        });
+
+        const data = await res.json();
+        if(!res.ok || !data.url){
+          console.error(data);
+          showMsg("Erreur création paiement : " + (data.error || "inconnue"));
+          disableCta(false);
+          return;
+        }
+
+        location.href = data.url;
+
+      }catch(err){
+        console.error(err);
+        showMsg("Erreur réseau : " + (err?.message || err));
+        disableCta(false);
+      }
+    }
+
+    // ===========
+    // UI render
+    // ===========
+    async function renderCtas(plan){
+      const stack = $("ctaStack");
+      stack.innerHTML = "";
+      clearMsg();
+
+      const selectedKey = plan.key;
+
+      // Gratuit
+      if(plan.isFree){
+        const a = document.createElement("a");
+        a.className = "cta-btn secondary";
+        a.href = "#";
+        a.textContent = "Activer Gratuit";
+        a.addEventListener("click", async (e)=>{
+          e.preventDefault();
+
+          const user = await requireLoginOrRedirect(selectedKey);
+          if(!user) return;
+
+          // Flux : profil d’abord, puis retour abonnement
+          const qs = new URLSearchParams();
+          qs.set("next", "abonnement");
+          qs.set("plan", "free");
+          location.href = "profil-conciergerie.html?" + qs.toString();
+        });
+        stack.appendChild(a);
+
+        const note = document.createElement("div");
+        note.className = "small";
+        note.textContent = "Aucun paiement. Tu peux passer à un plan payant quand tu dépasses 2 logements.";
+        stack.appendChild(note);
+        return;
+      }
+
+      // Enterprise
+      if(plan.isEnterprise){
+        const a = document.createElement("a");
+        a.className = "cta-btn";
+        a.href = ENTERPRISE_CONTACT_HREF;
+        a.textContent = "Nous contacter (devis)";
+        stack.appendChild(a);
+        return;
+      }
+
+      // Si connecté + allowlist -> CTA DEV
+      const user = await waitForUser();
+      const emailLower = normEmail(user?.email || "");
+      const dev = isDevAllowlisted(emailLower);
+
+      if(dev){
+        const a = document.createElement("a");
+        a.className = "cta-btn";
+        a.href = "#";
+        a.textContent = "Activer (DEV)";
+        a.addEventListener("click", async (e)=>{
+          e.preventDefault();
+          await activatePlanDev(plan.key);
+        });
+        stack.appendChild(a);
+
+        const note = document.createElement("div");
+        note.className = "small";
+        note.textContent = "Mode DEV : accès libre (sans Stripe).";
+        stack.appendChild(note);
+        return;
+      }
+
+      // Payant Stripe
+      const pay = document.createElement("a");
+      pay.className = "cta-btn";
+      pay.href = "#";
+      pay.textContent = "Payer en ligne";
+      pay.addEventListener("click", async (e)=>{
+        e.preventDefault();
+        await startCheckout(plan.key);
+      });
+      stack.appendChild(pay);
+    }
+
+    function renderAll(){
+      const selectedKey = (getParam("plan") || "pro").toLowerCase();
+      const plan = PLANS[selectedKey] || PLANS.pro;
+
+      // grid
+      const order = ["free","starter","pro","business","enterprise"];
+      const grid = $("planGrid");
+
+      grid.innerHTML = order.map(k => {
+        const p = PLANS[k];
+        const active = p.key === plan.key ? "active" : "";
+        const rec = p.recommended ? "recommended" : "";
+        const ribbon = p.recommended ? `<div class="ribbon"><span class="dot"></span>RECOMMANDÉ</div>` : "";
+        const priceLabel = p.isEnterprise ? "Sur devis" : formatPlanPrice(p);
+
+        return `
+          <div class="plan-card ${active} ${rec}">
+            ${ribbon}
+            <div class="row">
+              <div>
+                <p class="name">${p.name}</p>
+                <p class="range">${p.range}</p>
+              </div>
+              <div class="p">${priceLabel} ${p.isEnterprise ? "" : "<small>/ mois</small>"}</div>
             </div>
-            <div class="p">${priceLabel} ${p.isEnterprise ? "" : "<small>/ mois</small>"}</div>
+            <p class="mini">${p.desc}</p>
+            <a class="choose" href="abonnement.html?plan=${p.key}">Choisir</a>
           </div>
-          <p class="mini">${p.desc}</p>
-          <a class="choose" href="abonnement.html?plan=${p.key}">Choisir</a>
-        </div>
-      `;
-    }).join("");
+        `;
+      }).join("");
 
-    // details
-    const badge = $("planBadge");
-    badge.textContent = plan.recommended ? "Abonnement • RECOMMANDÉ" : ("Abonnement • " + plan.name);
-    badge.classList.toggle("recommended", !!plan.recommended);
+      // details
+      const badge = $("planBadge");
+      badge.textContent = plan.recommended ? "Abonnement • RECOMMANDÉ" : ("Abonnement • " + plan.name);
+      badge.classList.toggle("recommended", !!plan.recommended);
 
-    $("planName").textContent = plan.name;
+      $("planName").textContent = plan.name;
 
-    const priceEl = $("planPrice");
-    if(plan.isEnterprise){
-      priceEl.innerHTML = `Sur devis <small></small>`;
-    }else{
-      priceEl.innerHTML = `${formatPlanPrice(plan)} <small>/ mois</small>`;
+      const priceEl = $("planPrice");
+      if(plan.isEnterprise){
+        priceEl.innerHTML = `Sur devis <small></small>`;
+      }else{
+        priceEl.innerHTML = `${formatPlanPrice(plan)} <small>/ mois</small>`;
+      }
+
+      $("planDesc").textContent = plan.desc;
+      $("planFeatures").innerHTML = plan.features.map(x => `<li>${x}</li>`).join("");
+
+      // CTA async (car check allowlist si connecté)
+      renderCtas(plan).catch(e=>{
+        console.warn(e);
+        // fallback CTA
+      });
     }
 
-    $("planDesc").textContent = plan.desc;
-    $("planFeatures").innerHTML = plan.features.map(x => `<li>${x}</li>`).join("");
-
-    renderCtas(plan);
-  }
-
-  // Boot
-  await loadFirebaseAuth(); // tente Firebase sans casser si absent
-  renderAll();              // rend l'UI quoi qu'il arrive
-</script>
+    // Boot
+    renderAll();
+  </script>
 </body>
 </html>
