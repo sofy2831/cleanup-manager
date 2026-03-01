@@ -1,4 +1,4 @@
-<!-- docs/signup.html (SECURE + Phase1/2 READY — redirect to profil minimal) -->
+<!-- docs/signup.html (CORRIGÉ — sans identities, users.role = source de vérité) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -179,7 +179,7 @@
 
     <div class="topbar">
       <a class="pill" href="index.html">← Accueil</a>
-      <a class="pill" href="login.html">Connexion</a>
+      <a class="pill" href="login.html?role=conciergerie">Connexion</a>
     </div>
 
     <div class="logo-title">
@@ -218,7 +218,7 @@
       <div class="msg" id="msgBox"></div>
 
       <div class="below">
-        Déjà un compte ? <a class="link" href="login.html">Se connecter</a>
+        Déjà un compte ? <a class="link" href="login.html?role=conciergerie">Se connecter</a>
       </div>
     </form>
 
@@ -258,18 +258,11 @@
     }
 
     function buildRedirectAfterSignup(){
-      // Nouveau flux SaaS: profil minimal d'abord, puis abonnement
-      // On passe next=abonnement pour enchaîner proprement.
-      const next = getParam("next");   // optionnel
-      const plan = getParam("plan");   // optionnel
-
-      // profil conciergerie devra rediriger vers abonnement ensuite
+      // profil conciergerie d'abord, puis abonnement
+      const plan = getParam("plan");
       const qs = new URLSearchParams();
       qs.set("next", "abonnement");
-      qs.set("plan", plan || "pro");
-
-      // si tu as une page "profil-minimal.html", mets-la ici.
-      // sinon on part sur profil-conciergerie.html.
+      qs.set("plan", plan || "free");
       return "profil-conciergerie.html?" + qs.toString();
     }
 
@@ -297,11 +290,12 @@
         const cred = await createUserWithEmailAndPassword(auth, email, password);
         const uid = cred.user.uid;
 
-        // ✅ users/{uid} : profil uniquement (compatible avec les nouvelles rules)
+        // ✅ users/{uid} : SOURCE DE VÉRITÉ (role ici)
         await setDoc(doc(db, "users", uid), {
           uid,
+          role: "conciergerie",
           email,
-          emailLower: email.toLowerCase(),
+          emailLower: email,
           displayName: tradeName,
           phone: phone || "",
           contact: { email, phone: phone || "" },
@@ -309,23 +303,20 @@
           updatedAt: serverTimestamp()
         }, { merge: true });
 
-        // ✅ identities/{uid} : rôle (source de vérité pour le routing)
-        await setDoc(doc(db, "identities", uid), {
-          uid,
-          role: "conciergerie",
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp()
-        }, { merge: false });
+        // ✅ entitlements/{uid} : optionnel (si rules l'autorisent)
+        try{
+          await setDoc(doc(db, "entitlements", uid), {
+            uid,
+            plan: "",
+            subscriptionStatus: "inactive",
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp()
+          }, { merge: false });
+        }catch(e){
+          // si interdit par rules -> on n'empêche pas l'onboarding
+          console.warn("entitlements create blocked (ok if by backend):", e?.message || e);
+        }
 
-        // ✅ entitlements/{uid} : abonnement par défaut (verrouillé ensuite par webhook Stripe)
-        await setDoc(doc(db, "entitlements", uid), {
-          uid,
-          plan: "",
-          subscriptionStatus: "inactive",
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp()
-        }, { merge: false });
-        
         showMsg("Compte créé. Redirection…", "ok");
         window.location.href = buildRedirectAfterSignup();
 
