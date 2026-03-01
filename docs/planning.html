@@ -1,4 +1,4 @@
-<!-- docs/planning.html (CORRIGÉ & COMPLET — +prestations robuste + label déduit des packs + liens qui gardent le contexte + intervention.html) -->
+<!-- docs/planning.html (COMPLET — requêtes compatibles rules + icalEvents range/orderBy + role gate users/{uid}) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -140,7 +140,6 @@
     .badge.blue{ background:rgba(0,163,255,0.14); color:#0067a6; }
     .badge.orange{ background:rgba(255,140,0,0.16); color:#9a4f00; }
 
-    /* badge photos */
     .badge.photo{
       background:rgba(0,0,0,0.06);
       color:#222;
@@ -148,7 +147,6 @@
       border:1px solid rgba(0,0,0,0.08);
     }
 
-    /* ================= AIDE (3 bulles) ================= */
     .helpWrap{
       position:relative;
       display:inline-flex;
@@ -183,16 +181,13 @@
       position:fixed;
       top:0;
       left:0;
-
       width:min(640px, calc(100vw - 24px));
       max-height: calc(100vh - 24px);
-
       background:#FFFBE0;
       border:1px solid rgba(0,0,0,0.10);
       border-radius:26px;
       box-shadow:0 18px 44px rgba(0,0,0,0.14);
       padding:12px 14px 12px;
-
       display:none;
       z-index:2147483647;
       overflow:auto;
@@ -596,7 +591,6 @@
         <div class="cardTitle">
           <span>À valider</span>
 
-          <!-- ✅ AIDE #2 -->
           <div class="helpWrap" data-help-wrap="validate">
             <button class="helpBtn" type="button" data-help-btn="validate" aria-expanded="false">
               💡 Aide
@@ -866,7 +860,6 @@
     return normalizeBillingState(ev?.billingState) === "INVOICED";
   }
 
-  // ✅ label simple à partir des packs (arrivée/départ/autre)
   function packLines(packs, key){
     const ls = packs?.[key]?.lines;
     return Array.isArray(ls) ? ls : [];
@@ -898,7 +891,6 @@
     return { usefulPacks, lines };
   }
 
-  // ✅ navigation qui garde le contexte (date + bookingId)
   function getParam(name){
     return new URLSearchParams(location.search).get(name) || "";
   }
@@ -915,18 +907,15 @@
     const bid = getParam("bookingId");
     if(bid) p.set("bookingId", bid);
 
-    // liens top
     dashLink.href = "conciergerie.html";
     icalLink.href = "import-ical.html";
 
-    // bottom
     document.querySelectorAll(".bottom-nav a").forEach(a=>{
       const href = a.getAttribute("href") || "";
       if(href.startsWith("planning.html")){
         a.setAttribute("href", `planning.html?${p.toString()}`);
       }
       if(href.startsWith("prestations.html")){
-        // utile si tu vas voir une presta puis retour planning : prestations.html corrigé doit relayer
         a.setAttribute("href", `prestations.html?returnTo=planning&returnDate=${encodeURIComponent(selectedDateKey)}`);
       }
     });
@@ -963,29 +952,23 @@
     }
   });
 
-  /* ================= HELP BUBBLES (generic) ================= */
+  /* HELP */
   function closeAllHelpBubbles(){
     document.querySelectorAll("[data-help-bubble]").forEach(b=> b.style.display = "none");
     document.querySelectorAll("[data-help-btn]").forEach(btn=> btn.setAttribute("aria-expanded","false"));
   }
-
   function clamp(n, min, max){ return Math.max(min, Math.min(max, n)); }
-
   function portalBubbleToBody(bub){
     if(bub.dataset.portaled === "1") return;
-
     const ph = document.createElement("span");
     ph.style.display = "none";
     ph.dataset.helpPlaceholder = "1";
     ph.id = "hbph_" + Math.random().toString(16).slice(2);
-
     bub.parentNode?.insertBefore(ph, bub);
     bub.dataset.placeholderId = ph.id;
-
     document.body.appendChild(bub);
     bub.dataset.portaled = "1";
   }
-
   function positionHelpBubble(btn, bub){
     const r = btn.getBoundingClientRect();
     const margin = 12;
@@ -1017,7 +1000,6 @@
 
     bub.style.visibility = "visible";
   }
-
   function wireHelpBubbles(){
     const wraps = document.querySelectorAll(".helpWrap[data-help-wrap]");
     wraps.forEach(w=>{
@@ -1049,12 +1031,14 @@
       bub.addEventListener("click", (e)=> e.stopPropagation());
     });
   }
-
   document.addEventListener("click", ()=> closeAllHelpBubbles());
   window.addEventListener("resize", ()=> closeAllHelpBubbles());
   window.addEventListener("scroll", ()=> closeAllHelpBubbles(), true);
 
+  /* STATE */
   let currentUser = null;
+  let myRole = "";
+
   let viewYear = (new Date()).getFullYear();
   let viewMonth = (new Date()).getMonth();
   let selectedDateKey = toDateKey(new Date());
@@ -1070,6 +1054,28 @@
     const start = new Date(y, m, 1);
     const end = new Date(y, m+1, 0);
     return { startKey: toDateKey(start), endKey: toDateKey(end) };
+  }
+
+  function addDaysToKey(dateKey, deltaDays){
+    const d = parseDateKey(dateKey);
+    if(!d) return dateKey;
+    d.setDate(d.getDate() + Number(deltaDays || 0));
+    return toDateKey(d);
+  }
+
+  async function assertConciergerieRole(){
+    // ✅ gate compatible rules: elles checkent souvent users/{uid}.role
+    const uSnap = await getDoc(doc(db,"users", currentUser.uid));
+    const role = uSnap.exists() ? String(uSnap.data()?.role||"").toLowerCase() : "";
+    myRole = role;
+
+    const ok = (role === "conciergerie" || role === "admin" || role === "staff");
+    if(!ok){
+      showAlert("⛔ Accès refusé : compte non conciergerie (role users/{uid}).");
+      // tu peux aussi rediriger
+      // location.href = "login.html?role=conciergerie";
+      throw new Error("ROLE_DENIED");
+    }
   }
 
   async function loadConciergerieName(){
@@ -1106,33 +1112,53 @@
 
     const { startKey, endKey } = monthRangeKeys(viewYear, viewMonth);
 
+    // ✅ IMPORTANT : query "rules-friendly"
+    // - where conciergerieUid == uid
+    // - orderBy dateKey
+    // - range dateKey
+    // Et on élargit le range pour capter les séjours qui chevauchent.
+    const wideStartKey = addDaysToKey(startKey, -45);
+    const wideEndKey   = addDaysToKey(endKey, +45);
+
     let docs = [];
     try{
       const qb = query(
         collection(db,"icalEvents"),
         where("conciergerieUid","==", currentUser.uid),
-        limit(1600)
+        where("dateKey", ">=", wideStartKey),
+        where("dateKey", "<=", wideEndKey),
+        orderBy("dateKey","asc"),
+        limit(2500)
       );
       const snap = await getDocs(qb);
       docs = snap.docs.map(d=>({ id:d.id, ...(d.data()||{}) }));
     }catch(err){
       console.error("Erreur lecture icalEvents:", err);
-      showAlert("Erreur Firestore (icalEvents) : " + (err?.message || "inconnue"));
-      docs = [];
+      const m = String(err?.message || "").toLowerCase();
+      if(m.includes("permission")){
+        showAlert("Erreur Firestore (icalEvents) : Missing or insufficient permissions.");
+      }else if(m.includes("index")){
+        showAlert("Index manquant pour icalEvents (conciergerieUid + dateKey).");
+      }else{
+        showAlert("Erreur Firestore (icalEvents) : " + (err?.message || "inconnue"));
+      }
+      return;
     }
 
-    const start = parseDateKey(startKey);
-    const end = parseDateKey(endKey);
+    const monthStart = parseDateKey(startKey);
+    const monthEnd = parseDateKey(endKey);
 
     for(const b of docs){
       if(b?.archived === true) continue;
 
       const keys = Array.isArray(b.dateKeys) ? b.dateKeys : [];
-      if(!keys.length) continue;
+      // si dateKeys absent, on reconstruit au minimum avec dateKey
+      const safeKeys = keys.length ? keys : (b.dateKey ? [String(b.dateKey)] : []);
+      if(!safeKeys.length) continue;
 
-      const monthKeys = keys.filter(k=>{
+      const monthKeys = safeKeys.filter(k=>{
         const d = parseDateKey(k);
-        return d && start && end && d >= start && d <= end;
+        return d && monthStart && monthEnd && d >= monthStart && d <= monthEnd;
       });
       if(!monthKeys.length) continue;
 
@@ -1184,7 +1210,7 @@
         where("dateKey", ">=", startKey),
         where("dateKey", "<=", endKey),
         orderBy("dateKey","asc"),
-        limit(800)
+        limit(1200)
       );
       const snap = await getDocs(qMonth);
       docs = snap.docs.map(d=> ({ id:d.id, ...(d.data()||{}) }));
@@ -1194,13 +1220,21 @@
         const qFallback = query(
           collection(db,"events"),
           where("conciergerieUid","==", currentUser.uid),
-          limit(800)
+          orderBy("dateKey","asc"),
+          limit(1200)
         );
         const snap2 = await getDocs(qFallback);
         docs = snap2.docs.map(d=> ({ id:d.id, ...(d.data()||{}) }));
       }catch(err2){
         console.error(err2);
-        showAlert("Erreur Firestore : " + (err2?.message || "inconnue"));
+        const m = String(err2?.message||"").toLowerCase();
+        if(m.includes("permission")){
+          showAlert("Erreur Firestore (events) : Missing or insufficient permissions.");
+        }else if(m.includes("index")){
+          showAlert("Index manquant pour events (conciergerieUid + dateKey).");
+        }else{
+          showAlert("Erreur Firestore : " + (err2?.message || "inconnue"));
+        }
         return;
       }
     }
@@ -1211,13 +1245,8 @@
       if(!d) continue;
       if(d.getFullYear() !== viewYear || d.getMonth() !== viewMonth) continue;
 
-      // ne pas afficher les événements facturés / clos
-      if(String(ev.invoiceStatusOnEvent || "").toUpperCase() === "ISSUED"){
-        continue;
-      }
-      if(isInvoicedEvent(ev)){
-        continue;
-      }
+      if(String(ev.invoiceStatusOnEvent || "").toUpperCase() === "ISSUED") continue;
+      if(isInvoicedEvent(ev)) continue;
 
       const packs = (ev.packs && typeof ev.packs === "object") ? ev.packs : null;
       const label = packs ? computeEventLabelFromPacks(packs) : "";
@@ -1281,6 +1310,7 @@
 
   async function loadAllForMonth(){
     hideAlert();
+    await assertConciergerieRole();
     await loadConciergerieName();
     await loadEventsForMonth();
     await loadBookingsForMonth();
@@ -1320,7 +1350,6 @@
     }
   }
 
-  // NOTE: tu avais "preuves-admin.html" pour les photos (admin). On garde.
   function openProofsAdmin(prestationId){
     const p = new URLSearchParams();
     p.set("prestationId", prestationId);
@@ -1423,7 +1452,6 @@
       ${noteAgent ? `<div><b>Note agent</b> : ${esc(noteAgent)}</div>` : ``}
     `;
 
-    // actions (liens utiles)
     eventModalFoot.innerHTML = `
       <button class="mini ghost" type="button" id="emdInterv">
         <span class="ico">🧑‍🔧</span><span class="txt">Intervention</span>
@@ -1732,7 +1760,6 @@
     dayCount.textContent = `${presta.length + books.length}`;
     dayTitle.textContent = `Jour — ${selectedDateKey}`;
 
-    // ===== Bloc "Séjours" + AIDE #1 =====
     const block = document.createElement("div");
     block.className = "item";
     block.innerHTML = `
@@ -1819,7 +1846,6 @@
       div.querySelector(`[data-b-del="${CSS.escape(b.id)}"]`)?.addEventListener("click", async (e)=>{ e.stopPropagation(); if(allowEdit) await deleteBooking(b); });
       div.querySelector(`[data-b-arch="${CSS.escape(b.id)}"]`)?.addEventListener("click", async (e)=>{ e.stopPropagation(); if(allowEdit) await archiveBooking(b); });
 
-      // ✅ + prestations : on force homeId (sinon tu crées un truc impossible à relier)
       div.querySelector(`[data-b-add-presta="${CSS.escape(b.id)}"]`)?.addEventListener("click", (e)=>{
         e.stopPropagation();
         hideAlert();
@@ -1832,19 +1858,16 @@
         const params = new URLSearchParams();
         params.set("homeId", b.homeId);
 
-        // contexte booking / séjour
         params.set("from", "ical");
         params.set("icalEventId", b.id);
         params.set("dateKey", selectedDateKey);
 
-        // extras utiles (pré-remplissage / debug)
         if(b.meta) params.set("note", b.meta);
         if(b.ownerName) params.set("ownerName", b.ownerName);
         if(b.arrivalTime) params.set("time", b.arrivalTime);
         if(b.homeCity) params.set("homeCity", b.homeCity);
         if(b.homeZip) params.set("homeZip", b.homeZip);
 
-        // retour planning (nouvelle-prestation peut ignorer, mais prestations.html corrigé peut relayer)
         params.set("returnTo", "planning");
         params.set("returnDate", selectedDateKey);
         params.set("returnBookingId", b.id);
@@ -1853,7 +1876,6 @@
       });
     }
 
-    // ===== Bloc "Interventions" + AIDE #3 =====
     const block2 = document.createElement("div");
     block2.className = "item";
     block2.innerHTML = `
@@ -1949,7 +1971,6 @@
 
       div.addEventListener("click", ()=> openEventDetail(ev));
 
-      // ✅ bouton intervention => intervention.html
       div.querySelector(`[data-open-interv="${CSS.escape(ev.id)}"]`)?.addEventListener("click",(e)=>{
         e.stopPropagation();
         openIntervention(ev.id);
@@ -1960,7 +1981,6 @@
       div.querySelector(`[data-open-facture="${CSS.escape(ev.id)}"]`)?.addEventListener("click", (e)=>{ e.stopPropagation(); openFacture(ev); });
       div.querySelector(`[data-validate="${CSS.escape(ev.id)}"]`)?.addEventListener("click", (e)=>{ e.stopPropagation(); validateEvent(ev); });
 
-      // badge photo clickable => intervention (pas "dans le vide")
       div.querySelector(`[data-open-intervention="${CSS.escape(ev.id)}"]`)?.addEventListener("click",(e)=>{
         e.stopPropagation();
         openIntervention(ev.id);
@@ -2006,7 +2026,9 @@
     viewMonth = d.getMonth();
     selectedDateKey = toDateKey(new Date(viewYear, viewMonth, 1));
     setFocusParams(selectedDateKey, "");
-    loadAllForMonth().catch(e=> showAlert("Erreur chargement mois : " + (e?.message || "inconnue")));
+    loadAllForMonth().catch(e=> {
+      if(String(e?.message||"") !== "ROLE_DENIED") showAlert("Erreur chargement mois : " + (e?.message || "inconnue"));
+    });
   });
 
   nextMonthBtn.addEventListener("click", ()=>{
@@ -2016,7 +2038,9 @@
     viewMonth = d.getMonth();
     selectedDateKey = toDateKey(new Date(viewYear, viewMonth, 1));
     setFocusParams(selectedDateKey, "");
-    loadAllForMonth().catch(e=> showAlert("Erreur chargement mois : " + (e?.message || "inconnue")));
+    loadAllForMonth().catch(e=> {
+      if(String(e?.message||"") !== "ROLE_DENIED") showAlert("Erreur chargement mois : " + (e?.message || "inconnue"));
+    });
   });
 
   todayBtn.addEventListener("click", ()=>{
@@ -2025,11 +2049,15 @@
     viewMonth = now.getMonth();
     selectedDateKey = toDateKey(now);
     setFocusParams(selectedDateKey, "");
-    loadAllForMonth().catch(e=> showAlert("Erreur chargement : " + (e?.message || "inconnue")));
+    loadAllForMonth().catch(e=> {
+      if(String(e?.message||"") !== "ROLE_DENIED") showAlert("Erreur chargement : " + (e?.message || "inconnue"));
+    });
   });
 
   refreshBtn.addEventListener("click", ()=>{
-    loadAllForMonth().catch(e=> showAlert("Erreur rafraîchir : " + (e?.message || "inconnue")));
+    loadAllForMonth().catch(e=> {
+      if(String(e?.message||"") !== "ROLE_DENIED") showAlert("Erreur rafraîchir : " + (e?.message || "inconnue"));
+    });
   });
 
   onAuthStateChanged(auth, async (user)=>{
@@ -2057,7 +2085,9 @@
       await loadAllForMonth();
     }catch(err){
       console.error(err);
-      showAlert("Erreur initialisation planning : " + (err?.message || "inconnue"));
+      if(String(err?.message||"") !== "ROLE_DENIED"){
+        showAlert("Erreur initialisation planning : " + (err?.message || "inconnue"));
+      }
     }
 
     wireHelpBubbles();
