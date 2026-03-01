@@ -1,4 +1,4 @@
-<!-- docs/owner-planning.html (FINAL — 1 ligne par event: Réservation + Logement/Ville + Arrivée + Départ + labels(lines) si présent) -->
+<!-- docs/owner-planning.html (FINAL — owner voit events + icalEvents ; iCal visible même sans missions) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -24,11 +24,10 @@
       --bg1:#F8F4FF;
       --bg2:#EDE6FF;
 
-      /* couleurs planning */
-      --c-arr:#1b8f4d;            /* arrivée = vert */
-      --c-dep:#FF3B3B;            /* départ  = rouge */
-      --c-mis: var(--violet-main);/* missions = violet */
-      --c-res:#111;               /* réservation = noir */
+      --c-arr:#1b8f4d;
+      --c-dep:#FF3B3B;
+      --c-mis: var(--violet-main);
+      --c-res:#111;
     }
     *{ box-sizing:border-box; font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; }
     body{ margin:0; background:linear-gradient(180deg,var(--bg1),var(--bg2)); color:var(--text); }
@@ -51,13 +50,6 @@
       white-space:nowrap;
       display:inline-flex; align-items:center; justify-content:center;
     }
-    .pill.primary{
-      background:linear-gradient(90deg,var(--violet-main),var(--violet-dark));
-      border-color:transparent;
-      color:#fff;
-      box-shadow:0 10px 22px rgba(0,0,0,0.10);
-    }
-
     .wrap{ width:100%; max-width:980px; display:flex; flex-direction:column; gap:12px; margin-top:10px; }
 
     .card{
@@ -260,7 +252,6 @@
 <div class="page">
   <div class="topbar">
     <a class="pill" href="owner-dashboard.html#planning">← Dashboard</a>
-    
   </div>
 
   <div class="wrap">
@@ -292,6 +283,7 @@
         <div class="calTitle" id="calTitle">—</div>
         <button class="calBtn" id="nextMonthBtn" type="button">→</button>
       </div>
+
       <div class="calendar">
         <div class="dow">
           <div>Lun</div><div>Mar</div><div>Mer</div><div>Jeu</div><div>Ven</div><div>Sam</div><div>Dim</div>
@@ -360,7 +352,7 @@ function chunk(arr, size){
   return out;
 }
 
-/* ✅ labels réels depuis events.lines[] */
+/* labels depuis events.lines[] */
 function extractLineLabels(e){
   const lines = Array.isArray(e?.lines) ? e.lines : [];
   const out = [];
@@ -409,11 +401,20 @@ let homesById = new Map();
 let ownedHomeIds = [];
 
 let unsubHomes = null;
-let unsubEventChunks = [];
 
-let eventsMap = new Map();      // eventId -> event
+/* events (missions) */
+let unsubEventChunks = [];
+let eventsMap = new Map();   // eventId -> event
 let events = [];
-let eventsByDate = new Map();   // dateKey -> counts
+
+/* icalEvents (réservations) */
+let unsubIcal = null;
+let icalMap = new Map();     // icalId -> booking
+let icals = [];
+
+/* merged */
+let merged = [];
+let eventsByDate = new Map();
 
 /* Month view */
 let viewMonth = new Date();
@@ -454,9 +455,13 @@ function computeRangeKeys(){
 
 function classifyEvent(e){
   const source = String(e.source||"").toLowerCase();
-  const isReservation = (source === "ical") || (!!e.arrivalDateKey && !!e.departureDateKey);
 
-  // ✅ missions = soit missionTypes, soit lines (ton cas réel)
+  const isReservation =
+    source === "ical"
+    || source === "import"
+    || source === "ics"
+    || (!!e.arrivalDateKey && !!e.departureDateKey);
+
   const mt = Array.isArray(e.missionTypes) ? e.missionTypes.map(x=>String(x||"").toUpperCase()) : [];
   const hasLines = Array.isArray(e.lines) && e.lines.length > 0;
   const hasMissions = (mt.length > 0) || hasLines;
@@ -464,6 +469,40 @@ function classifyEvent(e){
   return { isReservation, hasMissions, mt };
 }
 
+/* merge events + icals */
+function rebuildMerged(){
+  merged = [];
+
+  // missions (events)
+  for(const e of events){
+    merged.push({ ...e, __kind:"event" });
+  }
+
+  // reservations (icalEvents)
+  for(const b of icals){
+    merged.push({
+      id: b.id,
+      __kind:"ical",
+      source: String(b.source || "ical").toLowerCase(),
+
+      homeId: String(b.homeId || ""),
+      homeName: String(b.homeName || ""),
+      homeCity: String(b.homeCity || ""),
+
+      dateKey: String(b.dateKey || b.arrivalDateKey || "").trim(),
+
+      arrivalDateKey: String(b.arrivalDateKey || b.dateKey || "").trim(),
+      departureDateKey: String(b.departureDateKey || "").trim(),
+
+      arrivalTime: String(b.arrivalTime || b.time || "").trim(),
+      departureTime: String(b.departureTime || "").trim(),
+
+      lines: [] // pas de missions ici
+    });
+  }
+}
+
+/* calendar buckets */
 function rebuildMaps(){
   eventsByDate = new Map();
 
@@ -475,8 +514,11 @@ function rebuildMaps(){
     return eventsByDate.get(dateKey);
   };
 
-  for(const e of events){
-    const dk = String(e.dateKey || e.arrivalDateKey || "").trim();
+  for(const e of merged){
+    const dk  = String(e.dateKey || "").trim();
+    const arr = String(e.arrivalDateKey || "").trim();
+    const dep = String(e.departureDateKey || "").trim();
+
     const { isReservation, hasMissions } = classifyEvent(e);
 
     if(isDateKey(dk)){
@@ -485,15 +527,21 @@ function rebuildMaps(){
     }
 
     if(isReservation){
-      if(isDateKey(e.arrivalDateKey)){
-        const b = addBucket(String(e.arrivalDateKey));
+      if(isDateKey(arr)){
+        const b = addBucket(arr);
         if(b) b.arr++;
       }
-      if(isDateKey(e.departureDateKey)){
-        const b = addBucket(String(e.departureDateKey));
+      if(isDateKey(dep)){
+        const b = addBucket(dep);
         if(b) b.dep++;
       }
-      if(!isDateKey(e.arrivalDateKey) && !isDateKey(e.departureDateKey) && isDateKey(dk)){
+      // réservation sans bornes -> dot res sur dateKey
+      if(!isDateKey(arr) && !isDateKey(dep) && isDateKey(dk)){
+        const b = addBucket(dk);
+        if(b) b.res++;
+      }
+      // si juste arrivée (cas fréquent iCal) : on marque res aussi sur dateKey si besoin
+      if(isDateKey(arr) && !isDateKey(dep) && isDateKey(dk)){
         const b = addBucket(dk);
         if(b) b.res++;
       }
@@ -545,31 +593,25 @@ function renderList(){
 
   const chosen = homeSelect.value || "__all__";
 
-  // filtre logement
-  let filtered = events.slice();
+  let filtered = merged.slice();
+
   if(chosen !== "__all__"){
     filtered = filtered.filter(e => String(e.homeId||"") === String(chosen));
   }
 
-  // filtre date = selectedKey
   filtered = filtered.filter(e => {
-  const dk  = String(e.dateKey || "").trim();
-  const arr = String(e.arrivalDateKey || "").trim();
-  const dep = String(e.departureDateKey || "").trim();
+    const dk  = String(e.dateKey || "").trim();
+    const arr = String(e.arrivalDateKey || "").trim();
+    const dep = String(e.departureDateKey || "").trim();
+    return (dk === selectedKey || arr === selectedKey || dep === selectedKey);
+  });
 
-  return (
-    dk === selectedKey ||
-    arr === selectedKey ||
-    dep === selectedKey
-  );
-});
   if(!filtered.length){
     emptyMsg.textContent = `Rien le ${fmtDateKey(selectedKey)}.`;
     emptyBox.style.display = "block";
     return;
   }
 
-  // tri
   filtered.sort((a,b)=>{
     const at = String(a.time||a.arrivalTime||a.departureTime||"");
     const bt = String(b.time||b.arrivalTime||b.departureTime||"");
@@ -598,12 +640,10 @@ function renderList(){
     const arr = niceDT(e.arrivalDateKey, e.arrivalTime);
     const dep = niceDT(e.departureDateKey, e.departureTime);
 
-    // ✅ labels réels depuis lines[]
     const labels = extractLineLabels(e);
     const labelsText = labels.join(" / ");
     const labelsPart = labelsText ? ` • ${labelsText}` : "";
 
-    // ✅ 1 seule ligne
     const line = `${reservationLabel} • ${place} • Arrivée ${arr} • Départ ${dep}${labelsPart}`;
 
     const div = document.createElement("div");
@@ -611,7 +651,7 @@ function renderList(){
     div.innerHTML = `
       <div class="meta">
         <span>${esc(fmtDateKey(selectedKey))}</span>
-        <span>${esc(String(e.id || ""))}</span>
+        <span>${esc(String(e.__kind || ""))} • ${esc(String(e.id || ""))}</span>
       </div>
       <p class="msg">${esc(line)}</p>
     `;
@@ -695,13 +735,17 @@ function stopHomesListener(){
   if(unsubHomes) unsubHomes();
   unsubHomes = null;
 }
-
 function stopEventListeners(){
   for(const u of unsubEventChunks){ try{ u(); }catch(_){ } }
   unsubEventChunks = [];
   eventsMap = new Map();
   events = [];
-  eventsByDate = new Map();
+}
+function stopIcalListener(){
+  if(unsubIcal) unsubIcal();
+  unsubIcal = null;
+  icalMap = new Map();
+  icals = [];
 }
 
 function refreshSubtitle(){
@@ -711,6 +755,46 @@ function refreshSubtitle(){
     ? "Tous les logements"
     : (homesById.get(chosen)?.name || "Logement");
   subtitleLine.textContent = `${titleHome} • ${fmtDateKey(minKey)} → ${fmtDateKey(maxKey)} • Jour : ${fmtDateKey(selectedKey)}`;
+}
+
+function listenIcalForOwner(){
+  stopIcalListener();
+  if(!currentUser) return;
+
+  const { minKey, maxKey } = computeRangeKeys();
+
+  const qIcal = query(
+    collection(db,"icalEvents"),
+    where("ownerUid","==", String(currentUser.uid)),
+    where("dateKey", ">=", minKey),
+    where("dateKey", "<=", maxKey),
+    orderBy("dateKey","asc"),
+    limit(2000)
+  );
+
+  unsubIcal = onSnapshot(qIcal, (snap)=>{
+    snap.docChanges().forEach(ch=>{
+      if(ch.type === "removed") icalMap.delete(ch.doc.id);
+      else icalMap.set(ch.doc.id, { id: ch.doc.id, ...(ch.doc.data()||{}) });
+    });
+
+    icals = Array.from(icalMap.values());
+
+    rebuildMerged();
+    rebuildMaps();
+    renderCalendar();
+    renderList();
+  }, (err)=>{
+    console.error(err);
+    const m = String(err?.message||"").toLowerCase();
+    if(m.includes("permission")){
+      showAlert("Accès aux réservations iCal refusé (rules).", false);
+    }else if(m.includes("index")){
+      showAlert("Index Firestore manquant pour icalEvents (ownerUid + dateKey).", false);
+    }else{
+      showAlert("Erreur chargement réservations iCal.", false);
+    }
+  });
 }
 
 function listenEventsByHomeIds(){
@@ -723,6 +807,8 @@ function listenEventsByHomeIds(){
   refreshSubtitle();
 
   if(!ownedHomeIds.length){
+    rebuildMerged();
+    rebuildMaps();
     renderCalendar();
     renderList();
     return;
@@ -735,6 +821,8 @@ function listenEventsByHomeIds(){
 
   const chunks = chunk(idsToUse, 10);
   if(!chunks.length){
+    rebuildMerged();
+    rebuildMaps();
     renderCalendar();
     renderList();
     return;
@@ -766,9 +854,11 @@ function listenEventsByHomeIds(){
         return ak.localeCompare(bk);
       });
 
+      rebuildMerged();
       rebuildMaps();
       renderCalendar();
       renderList();
+
     }, (err)=>{
       console.error(err);
       const m = String(err?.message||"").toLowerCase();
@@ -807,7 +897,11 @@ function listenHomesForOwner(){
     ownedHomeIds = homes.map(h=>h.id);
 
     fillHomes();
+
+    // listeners
     listenEventsByHomeIds();
+    listenIcalForOwner();
+
   }, (err)=>{
     console.error(err);
     showAlert("Impossible de charger tes logements.", false);
@@ -817,11 +911,13 @@ function listenHomesForOwner(){
 /* UI handlers */
 homeSelect.addEventListener("change", ()=>{
   refreshSubtitle();
-  listenEventsByHomeIds();
+  listenEventsByHomeIds();   // missions filtrées par home
+  listenIcalForOwner();      // réservations filtrées par dateKey/ownerUid (et renderList filtre homeId)
 });
 rangeSelect.addEventListener("change", ()=>{
   refreshSubtitle();
   listenEventsByHomeIds();
+  listenIcalForOwner();
 });
 
 prevMonthBtn.addEventListener("click", ()=>{
@@ -850,6 +946,8 @@ onAuthStateChanged(auth, async (user)=>{
 
   if(!ownerDocId || !conciergerieUid){
     showAlert("⚠️ Compte pas encore rattaché (ownerDocId/conciergerieUid). Va sur Profil puis Enregistrer.", false);
+  }else{
+    hideAlert();
   }
 
   if(!isDateKey(selectedKey)) selectedKey = todayKey;
@@ -858,11 +956,10 @@ onAuthStateChanged(auth, async (user)=>{
 
   refreshSubtitle();
   renderCalendar();
-  renderList();        // vide au départ
+  renderList(); // vide au départ
+
   listenHomesForOwner();
 });
 </script>
 </body>
 </html>
-
-
