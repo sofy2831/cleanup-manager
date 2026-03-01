@@ -1,4 +1,4 @@
-<!-- docs/owner-messages.html (FINAL — FIX: bouton déconnexion + garde-fou JS, messages OK) -->
+<!-- docs/owner-messages.html (CLEAN — hide thread id, show conciergerie companyName, token passthrough, messages OK) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -154,8 +154,7 @@
 <body>
   <div class="page">
     <div class="topbar">
-      <a class="pill" href="owner-dashboard.html">← Dashboard</a>
-     
+      <a class="pill" id="backBtn" href="owner-dashboard.html">← Dashboard</a>
     </div>
 
     <div class="wrap">
@@ -172,7 +171,7 @@
       <section class="card">
         <div class="cardTitle">
           <span>Conversation avec la conciergerie</span>
-          <span class="tiny" id="threadHint">—</span>
+          <span class="tiny" id="conciergerieName">—</span>
         </div>
 
         <div class="chat" id="chatBox"></div>
@@ -186,15 +185,15 @@
   </div>
 
   <nav class="bottom-nav" aria-label="Navigation propriétaire">
-    <a href="owner-dashboard.html">Dashboard</a>
-    <a href="owner-planning.html">Planning</a>
-    <a href="owner-homes.html">Logements</a>
-    <a class="active" href="owner-messages.html">Messages</a>
+    <a id="navDash" href="owner-dashboard.html">Dashboard</a>
+    <a id="navPlanning" href="owner-planning.html">Planning</a>
+    <a id="navHomes" href="owner-homes.html">Logements</a>
+    <a class="active" id="navMessages" href="owner-messages.html">Messages</a>
   </nav>
 
   <script type="module">
     import { auth, db } from "./firebase-init.js";
-    import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+    import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
       doc, getDoc, setDoc, addDoc, updateDoc, collection,
       query, orderBy, limit, onSnapshot, serverTimestamp, increment
@@ -204,8 +203,13 @@
     const chatBox = document.getElementById("chatBox");
     const msgInput = document.getElementById("msgInput");
     const sendBtn = document.getElementById("sendBtn");
-    const threadHint = document.getElementById("threadHint");
-    const logoutBtn = document.getElementById("logoutBtn");
+    const conciergerieNameEl = document.getElementById("conciergerieName");
+
+    const backBtn = document.getElementById("backBtn");
+    const navDash = document.getElementById("navDash");
+    const navPlanning = document.getElementById("navPlanning");
+    const navHomes = document.getElementById("navHomes");
+    const navMessages = document.getElementById("navMessages");
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -233,14 +237,20 @@
       }catch(_){ return ""; }
     }
 
-    // ✅ FIX: ne pas planter si le bouton n'existe pas
-    if(logoutBtn){
-      logoutBtn.onclick = async ()=>{
-        try{ await signOut(auth); }catch(_){}
-        localStorage.removeItem("cm_auth");
-        location.href = "login.html?role=proprietaire";
-      };
+    // token passthrough (si tu l’utilises)
+    const params = new URLSearchParams(location.search);
+    const token = (params.get("token") || "").trim();
+    function withToken(url){
+      if(!token) return url;
+      const u = new URL(url, location.href);
+      u.searchParams.set("token", token);
+      return u.pathname + "?" + u.searchParams.toString();
     }
+    backBtn.href = withToken("owner-dashboard.html");
+    navDash.href = withToken("owner-dashboard.html");
+    navPlanning.href = withToken("owner-planning.html");
+    navHomes.href = withToken("owner-homes.html");
+    navMessages.href = withToken("owner-messages.html");
 
     let currentUser = null;
     let ownerDocId = "";
@@ -250,6 +260,34 @@
 
     function stableThreadId(conciergerieUid, ownerDocId){
       return `t_${conciergerieUid}_${ownerDocId}`;
+    }
+
+    async function loadConciergerieName(conciergerieUid){
+      // on essaie plusieurs champs "probables", fallback safe
+      try{
+        const snap = await getDoc(doc(db,"conciergeries", conciergerieUid));
+        if(snap.exists()){
+          const c = snap.data() || {};
+          const n = String(
+            c.companyName || c.displayName || c.name || c.legalName || c.title || ""
+          ).trim();
+          return n || "Votre conciergerie";
+        }
+      }catch(_){}
+
+      // fallback sur users/{conciergerieUid} si jamais tu stockes companyName là
+      try{
+        const us = await getDoc(doc(db,"users", conciergerieUid));
+        if(us.exists()){
+          const u = us.data() || {};
+          const n = String(
+            u.companyName || u.displayName || u.fullname || u.name || ""
+          ).trim();
+          return n || "Votre conciergerie";
+        }
+      }catch(_){}
+
+      return "Votre conciergerie";
     }
 
     async function loadOwnerMeta(ownerDocId){
@@ -324,7 +362,6 @@
       if(unsubMessages) unsubMessages();
 
       const tid = await ensureThread();
-      threadHint.textContent = tid; // utile debug
 
       const q = query(
         collection(db, "threads", tid, "messages"),
@@ -388,7 +425,7 @@
     });
 
     onAuthStateChanged(auth, async (user)=>{
-      if(!user){ location.href = "login.html?role=proprietaire"; return; }
+      if(!user){ location.href = withToken("login.html?role=proprietaire"); return; }
       currentUser = user;
 
       try{
@@ -400,8 +437,11 @@
 
         if(!ownerDocId || !conciergerieUid){
           showAlert("Profil incomplet : ownerDocId ou conciergerieUid manquant dans users/{uid}.");
+          conciergerieNameEl.textContent = "—";
           return;
         }
+
+        conciergerieNameEl.textContent = await loadConciergerieName(conciergerieUid);
 
         threadId = "";
         await subscribeMessages();
@@ -412,4 +452,3 @@
   </script>
 </body>
 </html>
-
