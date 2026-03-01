@@ -1,4 +1,4 @@
-<!-- docs/login.html (CORRIGÉ + DURCI — authReady avant signIn + routing via identities + auto-heal SANS escalade + flux owner/conciergerie + reset mdp) -->
+<!-- docs/login.html (CORRIGÉ — sans identities, routing via users.role, flux owner/conciergerie + reset mdp) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -161,7 +161,6 @@ function humanAuthError(err){
 
 function normEmail(s){ return (s||"").trim().toLowerCase(); }
 
-// ✅ users/{uid} = profil métier (pas une source d'autorisation)
 async function loadUserProfile(uid){
   try{
     const us = await getDoc(doc(db,"users", uid));
@@ -173,83 +172,11 @@ async function loadUserProfile(uid){
   }
 }
 
-// ✅ identities/{uid} = source de vérité pour router
-async function loadIdentity(uid){
-  try{
-    const s = await getDoc(doc(db,"identities", uid));
-    if(!s.exists()) return null;
-    return s.data() || null;
-  }catch(e){
-    console.warn("loadIdentity:", e?.message || e);
-    return null;
-  }
-}
-
-function looksLikeConciergerieProfile(profile){
-  if(!profile) return false;
-  const bp = profile.businessProfile || {};
-  const hasBp = !!(String(bp.companyName||"").trim() || String(bp.billingEmail||"").trim() || String(bp.address?.city||"").trim());
-  const hasBillingFlag = typeof profile.billingReady === "boolean";
-  const hasSubscription = !!String(profile.subscriptionStatus||"").trim();
-  const hasOwnerLink = !!String(profile.ownerDocId||"").trim() || !!String(profile.conciergerieUid||"").trim();
-  // conciergerie => pas censé avoir ownerDocId/conciergerieUid (owner link)
-  return (hasBp || hasBillingFlag || hasSubscription) && !hasOwnerLink;
-}
-
 function looksLikeOwnerProfile(profile){
   if(!profile) return false;
   const ownerDocId = String(profile.ownerDocId||"").trim();
   const concUid    = String(profile.conciergerieUid||"").trim();
   return !!(ownerDocId && concUid);
-}
-
-// ✅ Auto-heal identities/{uid} manquante (anciens comptes) SANS escalade
-// - Jamais admin/staff ici
-async function ensureIdentityDocIfMissing(user, profile){
-  const uid = user?.uid;
-  if(!uid) return null;
-
-  const existing = await loadIdentity(uid);
-  if(existing) return existing;
-
-  // 1) si users.role existe (legacy), on l'utilise uniquement si safe
-  const legacy = String(profile?.role || "").toLowerCase().trim();
-  if(legacy === "proprietaire"){
-    if(!looksLikeOwnerProfile(profile)) return null;
-    return await createIdentity(uid, "proprietaire");
-  }
-  if(legacy === "conciergerie"){
-    if(!looksLikeConciergerieProfile(profile)) return null;
-    return await createIdentity(uid, "conciergerie");
-  }
-
-  // 2) sinon, on n'infère PAS au pif : on exige des preuves
-  if(requestedRole === "proprietaire"){
-    if(!looksLikeOwnerProfile(profile)) return null;
-    return await createIdentity(uid, "proprietaire");
-  }
-
-  if(requestedRole === "conciergerie"){
-    if(!looksLikeConciergerieProfile(profile)) return null;
-    return await createIdentity(uid, "conciergerie");
-  }
-
-  return null;
-}
-
-async function createIdentity(uid, role){
-  try{
-    await setDoc(doc(db,"identities", uid), {
-      uid,
-      role,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp()
-    }, { merge: true });
-    return { uid, role };
-  }catch(e){
-    console.warn("createIdentity:", e?.code || e?.message || e);
-    return null;
-  }
 }
 
 // ✅ 1) Filet de sécurité : s'assurer que clients/{c_owner_ownerDocId} existe
@@ -292,8 +219,8 @@ async function ensureOwnerUidOnOwners(ownerDocId, ownerUid, expectedConciergerie
   if(!snap.exists()) return { ok:false, reason:"owner_doc_missing" };
 
   const o = snap.data() || {};
-
   const ownerConc = String(o.conciergerieUid || "").trim();
+
   if(expectedConciergerieUid && ownerConc && ownerConc !== String(expectedConciergerieUid)){
     return { ok:false, reason:"owner_tenant_mismatch" };
   }
@@ -350,7 +277,6 @@ form.addEventListener("submit", async (e)=>{
   msgBox.style.display = "none";
 
   try{
-    // ✅ évite le bug “listener avant persistance” sur les pages suivantes
     await authReady;
 
     const email = normEmail(emailEl.value || "");
@@ -365,19 +291,14 @@ form.addEventListener("submit", async (e)=>{
       return;
     }
 
-    // users = métier; identities = rôle
     const profile = await loadUserProfile(user.uid);
 
-    // auto-heal identities manquante (anciens comptes) sans escalade
-    const ident = await ensureIdentityDocIfMissing(user, profile);
-
-    const roleFromIdentity = String(ident?.role || "").toLowerCase().trim();
-    const roleFromUsers    = String(profile?.role || "").toLowerCase().trim(); // compat anciens
-    const effectiveRole = roleFromIdentity || roleFromUsers || requestedRole;
+    // role = source de vérité
+    const roleFromUsers = String(profile?.role || "").toLowerCase().trim();
+    const effectiveRole = roleFromUsers || requestedRole;
 
     // PROPRIÉTAIRE
-    if(effectiveRole === "proprietaire"){
-      // si pas de lien ownerDocId/conciergerieUid, on ne laisse pas “entrer”
+    if(effectiveRole === "proprietaire" || effectiveRole === "owner"){
       if(!looksLikeOwnerProfile(profile)){
         showMsg("⛔ Compte propriétaire non rattaché. Reconnecte-toi via le lien d’invitation.", false);
         submitBtn.disabled = false;
@@ -419,13 +340,14 @@ form.addEventListener("submit", async (e)=>{
       return;
     }
 
-    // CONCIERGERIE (+ admin/staff si mis en identities à la main)
-    if(effectiveRole === "conciergerie" || effectiveRole === "admin" || effectiveRole === "staff"){
+    // CONCIERGERIE
+    if(effectiveRole === "conciergerie"){
       location.replace("conciergerie.html");
       return;
     }
 
-    showMsg("⛔ Compte non reconnu (role manquant). Ouvre une invitation ou contacte la conciergerie.", false);
+    // fallback propre
+    showMsg("⛔ Compte non reconnu (role manquant).", false);
     submitBtn.disabled = false;
 
   }catch(err){
