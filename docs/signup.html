@@ -1,4 +1,4 @@
-<!-- docs/signup.html (CORRIGÉ — sans identities, users.role = source de vérité) -->
+<!-- docs/signup.html (CORRIGÉ — TOUT USERS, sans identities, sans entitlements) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -225,7 +225,7 @@
   </main>
 
   <script type="module">
-    import { auth, db } from "./firebase-init.js";
+    import { auth, db, authReady } from "./firebase-init.js";
     import { createUserWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import { doc, setDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
@@ -287,10 +287,13 @@
       lockUI(true);
 
       try{
+        // ✅ évite les bizarreries de session sur les pages suivantes
+        await authReady;
+
         const cred = await createUserWithEmailAndPassword(auth, email, password);
         const uid = cred.user.uid;
 
-        // ✅ users/{uid} : SOURCE DE VÉRITÉ (role ici)
+        // ✅ users/{uid} : SOURCE DE VÉRITÉ (role + abonnement)
         await setDoc(doc(db, "users", uid), {
           uid,
           role: "conciergerie",
@@ -299,23 +302,15 @@
           displayName: tradeName,
           phone: phone || "",
           contact: { email, phone: phone || "" },
+
+          // abonnement (V1) : on reste simple, Stripe prod mettra à jour plus tard
+          plan: "free",
+          subscriptionStatus: "inactive",  // ou "free" si tu préfères
+          maxHomes: 2,
+
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp()
         }, { merge: true });
-
-        // ✅ entitlements/{uid} : optionnel (si rules l'autorisent)
-        try{
-          await setDoc(doc(db, "entitlements", uid), {
-            uid,
-            plan: "",
-            subscriptionStatus: "inactive",
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp()
-          }, { merge: false });
-        }catch(e){
-          // si interdit par rules -> on n'empêche pas l'onboarding
-          console.warn("entitlements create blocked (ok if by backend):", e?.message || e);
-        }
 
         showMsg("Compte créé. Redirection…", "ok");
         window.location.href = buildRedirectAfterSignup();
