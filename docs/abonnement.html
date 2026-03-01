@@ -1,4 +1,4 @@
-<!-- docs/abonnement.html (CORRIGÉ — allowlist DEV bypass + Stripe normal, design conservé) -->
+<!-- docs/abonnement.html (CORRIGÉ — allowlist DEV bypass via users uniquement, Stripe normal, design conservé) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -415,7 +415,8 @@
       "mailto:contact@cleanup-manager.fr?subject=CleanUp%20Manager%20-%20Demande%20Enterprise&body=Bonjour,%0D%0A%0D%0AJe souhaite une offre Enterprise (41+ logements).%0D%0A%0D%0ANom%20:%0D%0AConciergerie%20:%0D%0AVille%20:%0D%0ANombre%20de%20logements%20:%0D%0A%0D%0AMerci.";
 
     // ===========
-    // Allowlist DEV (accès libre)
+    // Allowlist DEV (accès libre) — côté front = confort UX seulement
+    // La vraie sécurité doit être dans les rules.
     // ===========
     const DEV_ALLOWLIST = [
       "s.dumas974@gmail.com",
@@ -575,7 +576,7 @@
     }
 
     // ===========
-    // DEV activation (bypass Stripe)
+    // DEV activation (bypass Stripe) — écrit UNIQUEMENT dans users/{uid}
     // ===========
     async function activatePlanDev(planKey){
       disableCta(true);
@@ -599,7 +600,7 @@
       }
 
       try{
-        // users/{uid} : source de vérité simple (sans identities)
+        // ✅ users/{uid} : source de vérité (sans entitlements / sans identities)
         await setDoc(doc(db, "users", user.uid), {
           uid: user.uid,
           email: user.email || "",
@@ -615,20 +616,6 @@
           updatedAt: serverTimestamp(),
           subscribedAt: serverTimestamp()
         }, { merge: true });
-
-        // entitlements/{uid} : optionnel (si tes rules autorisent)
-        // (si interdit, ça ne doit pas bloquer)
-        try{
-          await setDoc(doc(db, "entitlements", user.uid), {
-            uid: user.uid,
-            plan: plan.key,
-            subscriptionStatus: "active",
-            source: "DEV_BYPASS",
-            maxHomes: Number(plan.maxHomes || 2),
-            updatedAt: serverTimestamp(),
-            createdAt: serverTimestamp()
-          }, { merge: true });
-        }catch(_e){ /* silencieux */ }
 
         showMsg("✅ Plan activé (DEV). Redirection…");
         setTimeout(()=> location.href = "conciergerie.html", 350);
@@ -661,7 +648,7 @@
       const email = user.email || "";
       const emailLower = normEmail(email);
 
-      // DEV allowlist -> on ne paye pas
+      // DEV allowlist -> bypass Stripe
       if(isDevAllowlisted(emailLower)){
         await activatePlanDev(planKey);
         return;
@@ -830,7 +817,6 @@
       // CTA async (car check allowlist si connecté)
       renderCtas(plan).catch(e=>{
         console.warn(e);
-        // fallback CTA
       });
     }
 
