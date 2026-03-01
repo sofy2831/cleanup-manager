@@ -1,4 +1,4 @@
-<!-- docs/profil-proprietaire.html (FINAL — SANS identities, rôle via users.role + self only + safe fallbacks + token passthrough) -->
+<!-- docs/profil-proprietaire.html (FIXED — clients > users > owners, back/logout ok, token passthrough) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -230,7 +230,7 @@
   </div>
 
 <script type="module">
-  import { auth, db, authReady } from "./firebase-init.js";
+  import { auth, db } from "./firebase-init.js";
   import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
   import { doc, getDoc, setDoc, updateDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
@@ -261,7 +261,6 @@
   let ownerDocId = "";
   let conciergerieUid = "";
   let token = "";
-  let booted = false;
 
   function showAlert(msg, ok=false){
     alertBox.style.display = "block";
@@ -316,7 +315,10 @@
   async function loadSelfData(){
     hideAlert();
 
-    // users/{uid} = source de vérité
+    // back toujours -> dashboard (+ token)
+    backBtn.href = withToken("owner-dashboard.html");
+
+    // 1) users/{uid} — source de vérité liaison
     let u = {};
     try{
       const us = await getDoc(doc(db,"users", currentUser.uid));
@@ -326,7 +328,6 @@
       return;
     }
 
-    // role guard (tolérant: si vide -> OK; si présent et != proprietaire -> dehors)
     const role = String(u.role || "").toLowerCase().trim();
     if(role && role !== "proprietaire"){
       location.replace(withToken("login.html?role=proprietaire"));
@@ -339,8 +340,6 @@
     email.value = currentUser.email || safeStr(u.email || "");
     emailLine.textContent = currentUser.email || currentUser.uid;
 
-    backBtn.href = withToken("owner-dashboard.html");
-
     if(!ownerDocId || !conciergerieUid){
       ownerIdLine.textContent = "—";
       copyBtn.disabled = true;
@@ -352,7 +351,7 @@
     ownerIdLine.textContent = "Owner ID : " + ownerDocId;
     copyBtn.disabled = false;
 
-    // fallback clients/c_owner_{ownerDocId}
+    // 2) clients/c_owner_{ownerDocId} — CANON FACTURATION (priority)
     let c = null;
     try{
       const clientId = "c_owner_" + ownerDocId;
@@ -360,22 +359,22 @@
       c = cs.exists()? (cs.data()||null) : null;
     }catch(_){}
 
-    // best effort owners/{ownerDocId}
+    // 3) owners/{ownerDocId} — best effort (souvent incomplet)
     let o = null;
     try{
       const os = await getDoc(doc(db,"owners", ownerDocId));
       o = os.exists()? (os.data()||null) : null;
     }catch(_){}
 
-    if(o) applyData(o);
-    else if(c) applyData(c);
-    else applyData(u);
+    // ✅ priorité affichage : clients > users > owners
+    if(c) applyData(c);
+    else if(Object.keys(u||{}).length) applyData(u);
+    else if(o) applyData(o);
   }
 
   async function saveSelfData(){
     hideAlert();
     const p = serialize();
-
     if(!p.fullname){
       showAlert("⛔ Nom / Société obligatoire.");
       return;
@@ -388,7 +387,7 @@
     const uid = currentUser.uid;
     const emailLower = normEmail(currentUser.email || email.value || "");
 
-    // users/{uid}
+    // 1) users/{uid}
     await setDoc(doc(db,"users", uid), {
       uid,
       role: "proprietaire",
@@ -411,7 +410,7 @@
       updatedAt: serverTimestamp()
     }, { merge:true });
 
-    // clients/c_owner_{ownerDocId}
+    // 2) clients/c_owner_{ownerDocId} — canon facturation
     const clientId = "c_owner_" + ownerDocId;
     await setDoc(doc(db,"clients", clientId), {
       clientId,
@@ -439,7 +438,7 @@
       updatedAt: serverTimestamp()
     }, { merge:true });
 
-    // owners/{ownerDocId} — best effort
+    // 3) owners/{ownerDocId} — best effort
     try{
       await updateDoc(doc(db,"owners", ownerDocId), {
         ownerUid: uid,
@@ -481,14 +480,11 @@
   });
 
   saveBtn.addEventListener("click", async ()=>{
-    saveBtn.disabled = true;
     try{
       await saveSelfData();
     }catch(e){
       console.error(e);
       showAlert("⛔ Erreur enregistrement : " + (e?.code || e?.message || "inconnue"));
-    }finally{
-      setTimeout(()=>{ saveBtn.disabled = false; }, 350);
     }
   });
 
@@ -498,20 +494,14 @@
     location.replace(withToken("login.html?role=proprietaire"));
   });
 
-  // BOOT (single-run)
-  await authReady;
+  // BOOT
   token = getParam("token");
-  backBtn.href = withToken("owner-dashboard.html");
 
   onAuthStateChanged(auth, async (user)=>{
-    if(booted) return;
-    booted = true;
-
     if(!user){
       location.replace(withToken("login.html?role=proprietaire"));
       return;
     }
-
     currentUser = user;
 
     email.value = user.email || "";
@@ -524,4 +514,3 @@
 
 </body>
 </html>
-
