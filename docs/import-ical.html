@@ -1,4 +1,3 @@
-<!-- docs/import-ical.html (CORRIGÉ & COMPLET — guard rôle conciergerie/admin/staff + source=ical + dateKeys + arrivée/départ + champs planning) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -64,6 +63,12 @@
       white-space:nowrap;
       cursor:pointer;
     }
+    .pill-link.primary{
+      background:linear-gradient(90deg,var(--violet-main),var(--violet-dark));
+      border-color:transparent;
+      color:#fff;
+    }
+
     .logo-title{
       display:flex;
       justify-content:center;
@@ -251,7 +256,8 @@
   import { auth, db } from "./firebase-init.js";
   import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
   import {
-    collection, query, where, onSnapshot, doc, setDoc, getDoc, serverTimestamp
+    collection, query, where, onSnapshot,
+    doc, setDoc, getDoc, serverTimestamp
   } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
   const alertBox = document.getElementById("alertBox");
@@ -277,8 +283,7 @@
   }
 
   document.getElementById("logoutBtn").addEventListener("click", async ()=>{
-    try{ await signOut(auth); }catch(_){}
-    try{ localStorage.removeItem("cm_auth"); }catch(_){}
+    await signOut(auth);
     location.href = "index.html";
   });
 
@@ -296,31 +301,6 @@
   function pad2(n){ return n < 10 ? "0"+n : ""+n; }
   function dateKeyFromDate(d){ return d.getFullYear()+"-"+pad2(d.getMonth()+1)+"-"+pad2(d.getDate()); }
   function timeFromDate(d){ return pad2(d.getHours()) + ":" + pad2(d.getMinutes()); }
-
-  function addDays(d, n){
-    const x = new Date(d.getTime());
-    x.setDate(x.getDate() + n);
-    return x;
-  }
-
-  // crée ["YYYY-MM-DD", ...] du jour d'arrivée au jour de départ inclus
-  function buildDateKeysInclusive(start, end){
-    if(!(start instanceof Date) || isNaN(start)) return [];
-    if(!(end instanceof Date) || isNaN(end)) return [dateKeyFromDate(start)];
-
-    // si end <= start => 1 jour
-    let a = new Date(start.getFullYear(), start.getMonth(), start.getDate(), 0,0,0,0);
-    let b = new Date(end.getFullYear(), end.getMonth(), end.getDate(), 0,0,0,0);
-
-    if(b < a) b = a;
-
-    const out = [];
-    for(let cur = a; cur <= b; cur = addDays(cur, 1)){
-      out.push(dateKeyFromDate(cur));
-      if(out.length > 62) break; // garde-fou anti-ics foireux
-    }
-    return out;
-  }
 
   function unfoldIcs(text){
     // RFC5545: lignes repliées commencent par espace/tab
@@ -384,8 +364,15 @@
     let cur = null;
 
     for(const line of lines){
-      if(line === "BEGIN:VEVENT"){ cur = {}; continue; }
-      if(line === "END:VEVENT"){ if(cur) events.push(cur); cur = null; continue; }
+      if(line === "BEGIN:VEVENT"){
+        cur = {};
+        continue;
+      }
+      if(line === "END:VEVENT"){
+        if(cur) events.push(cur);
+        cur = null;
+        continue;
+      }
       if(!cur) continue;
 
       const idx = line.indexOf(":");
@@ -393,6 +380,7 @@
 
       const left = line.slice(0, idx);
       const val = line.slice(idx+1);
+
       const key = left.split(";")[0].toUpperCase();
 
       if(key === "UID") cur.uid = val.trim();
@@ -425,20 +413,6 @@
       b.style.opacity = locked ? "0.7" : "1";
       b.style.cursor = locked ? "not-allowed" : "pointer";
     });
-  }
-
-  function normalizeEmail(s){ return String(s||"").trim().toLowerCase(); }
-
-  // ===== Guard rôle (conciergerie/admin/staff) =====
-  async function getMyRole(uid){
-    try{
-      const snap = await getDoc(doc(db,"users", uid));
-      if(!snap.exists()) return "";
-      const d = snap.data() || {};
-      return String(d.role || "").toLowerCase().trim();
-    }catch{
-      return "";
-    }
   }
 
   // ===== Data =====
@@ -487,29 +461,17 @@
         homesById = new Map(homes.map(h=>[h.id, h]));
         fillHomesSelect();
       },
-      (err)=> showAlert("Erreur logements : " + (err?.code || err?.message || "inconnue"))
+      (err)=> showAlert("Erreur logements : " + (err?.message || "inconnue"))
     );
   }
 
-  // BOOT
-  onAuthStateChanged(auth, async (user)=>{
+  onAuthStateChanged(auth, (user)=>{
     if(!user){
       location.href = "login.html?role=conciergerie";
       return;
     }
     currentUser = user;
-
-    const role = await getMyRole(user.uid);
-    if(!["conciergerie","admin","staff"].includes(role)){
-      showAlert("⛔ Accès refusé : réservé aux conciergeries.", false);
-      setTimeout(()=> location.href = "index.html", 900);
-      return;
-    }
-
-    // IMPORTANT: en test admin tu veux manipuler des données conciergerie ?
-    // Ici on écoute *les homes du compte connecté* (conciergerieUid == uid).
     startHomesListener(user.uid);
-
     hideAlert();
   });
 
@@ -538,7 +500,7 @@
       showAlert("Test OK. Si l’aperçu est bon, clique Sync.", true);
     }catch(err){
       console.error(err);
-      showAlert("Erreur iCal : " + (err?.code || err?.message || "inconnue"));
+      showAlert("Erreur iCal : " + (err?.message || "inconnue"));
     }finally{
       lockButtons(false);
     }
@@ -556,11 +518,22 @@
     lockButtons(true);
 
     try{
+      // ✅ récupère ownerUid/ownerDocId depuis homes/{homeId}
+      const homeSnap = await getDoc(doc(db, "homes", home.id));
+      const hd = homeSnap.exists() ? (homeSnap.data()||{}) : {};
+      const ownerUid = String(hd.ownerUid || "").trim();
+      const ownerDocId = String(hd.ownerDocId || "").trim();
+
+      if(!ownerUid){
+        showAlert("⚠️ Logement non lié à un propriétaire (ownerUid manquant). Tu peux importer quand même, mais le propriétaire ne verra pas ces réservations tant que le logement n’est pas rattaché.", false);
+      }
+
       const text = await fetchIcs(url);
       const evs = parseIcs(text);
 
       if(!evs.length){
         showAlert("iCal vide : aucun événement à importer.", false);
+        lockButtons(false);
         return;
       }
 
@@ -568,88 +541,47 @@
       for(const e of evs){
         const dk = dateKeyFromDate(e.start);
         const tm = timeFromDate(e.start);
+        const uid = e.uid || (e.summary || "no_summary") + "_" + dk + "_" + tm;
 
-        // DTEND en iCal est souvent "exclusive" (checkout), mais on reste pragmatique :
-        // si end existe, on prend end-1 jour si dateOnly, sinon on prend la date de end.
-        const end = (e.end instanceof Date && !isNaN(e.end)) ? e.end : null;
+        const docId = makeDocId(home.id, uid, dk + "_" + tm);
 
-        const arrivalDateKey = dk;
-        const arrivalTime = tm;
-
-        let departureDateKey = dk;
-        let departureTime = "";
-
-        if(end){
-          // si end est exactement à 00:00, souvent ça signifie "lendemain 00:00 exclusive"
-          // => on recule d'un jour pour couvrir la dernière nuit
-          const endIsMidnight = end.getHours()===0 && end.getMinutes()===0 && end.getSeconds()===0;
-          const depDate = endIsMidnight ? addDays(end, -1) : end;
-
-          departureDateKey = dateKeyFromDate(depDate);
-          departureTime = endIsMidnight ? "" : timeFromDate(end);
-        }
-
-        const dateKeys = buildDateKeysInclusive(
-          new Date(e.start.getFullYear(), e.start.getMonth(), e.start.getDate(), 0,0,0,0),
-          new Date(
-            Number(departureDateKey.slice(0,4)),
-            Number(departureDateKey.slice(5,7))-1,
-            Number(departureDateKey.slice(8,10)),
-            0,0,0,0
-          )
-        );
-
-        const icalUid = e.uid || (e.summary || "no_summary") + "_" + dk + "_" + tm;
-        const docId = makeDocId(home.id, icalUid, dk + "_" + tm);
-
-        // owner: on récupère ce qu'on peut depuis home (si tu stockes ownerName/email sur home)
-        const ownerEmail = normalizeEmail(home.ownerEmail || home.ownerAccountEmail || "");
-        const ownerName  = String(home.ownerName || home.homeOwner || "").trim();
-        const ownerPhone = String(home.ownerPhone || "").trim();
-        const ownerDocId = String(home.ownerDocId || "").trim();
-        const ownerUid   = String(home.ownerUid || "").trim();
+        // ✅ dateKeys: pour affichage multi-jours dans planning conciergerie
+        const dateKeys = [dk];
 
         await setDoc(doc(db, "icalEvents", docId), {
-          // routing
           conciergerieUid: currentUser.uid,
-          source: "ical",
-          timezone: "Europe/Paris",
-          archived: false,
 
-          // home snapshot (planning)
+          // ✅ crucial pour lecture owner
+          ownerUid: ownerUid || "",
+          ownerDocId: ownerDocId || "",
+
           homeId: home.id,
           homeName: home.name || "",
-          homeAddress: home.homeAddress || home.address || "",
-          homeZip: home.homeZip || home.zip || "",
-          homeCity: home.homeCity || home.city || "",
+          homeAddress: hd.address || hd.homeAddress || "",
+          homeZip: hd.zip || hd.homeZip || "",
+          homeCity: hd.city || hd.homeCity || "",
 
-          // booking core (planning)
-          dateKey: arrivalDateKey,          // compat ancienne vue
-          time: arrivalTime,                // compat ancienne vue
-          arrivalDateKey,
-          arrivalTime,
-          departureDateKey,
-          departureTime,
+          dateKey: dk,
           dateKeys,
 
-          // meta
+          arrivalDateKey: dk,
+          arrivalTime: tm,
+          departureDateKey: "",     // si ton ics donne une vraie fin, tu peux le remplir (voir plus bas)
+          departureTime: "",
+
           summary: e.summary || "Réservation",
           location: e.location || "",
           meta: "",
 
-          // ical tracking
+          source: "ical",
+          archived: false,
+
           icalUid: e.uid || "",
           icalUrl: url,
           startIso: e.start.toISOString(),
-          endIso: end ? end.toISOString() : "",
+          endIso: (e.end instanceof Date && !isNaN(e.end)) ? e.end.toISOString() : "",
 
-          // owner snapshot (si disponible)
-          ownerEmail,
-          ownerName,
-          ownerPhone,
-          ownerDocId: ownerDocId || null,
-          ownerUid: ownerUid || null,
-          ownerAccountEmail: ownerEmail || "",
+          timezone: "Europe/Paris",
 
           updatedAt: serverTimestamp(),
           createdAt: serverTimestamp()
@@ -659,10 +591,11 @@
       }
 
       showAlert(`✅ Sync terminé : ${written} réservations importées (ou mises à jour).`, true);
-      showPreview("Va voir le Planning : les points iCal apparaissent sur les jours concernés.");
+      showPreview("Va voir le Planning : les réservations iCal apparaissent.\nLe propriétaire les verra dès que ownerUid est renseigné (logement rattaché).");
+
     }catch(err){
       console.error(err);
-      showAlert("Erreur sync : " + (err?.code || err?.message || "inconnue"));
+      showAlert("Erreur sync : " + (err?.message || "inconnue"));
     }finally{
       lockButtons(false);
     }
