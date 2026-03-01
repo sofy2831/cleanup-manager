@@ -1,4 +1,4 @@
-<!-- docs/conciergerie.html (CORRIGÉ + STABLE — guard via auth-guard.js + bypass dev/staff + profil obligatoire + abonnement) -->
+<!-- docs/conciergerie.html (FIXED + STABLE — requireRole return shape fixed, help/logout/company ok) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -632,7 +632,7 @@ Une aide dédiée s’y trouve pour te guider pas à pas.
   <script type="module">
     import { auth, db, authReady } from "./firebase-init.js";
     import { signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-    import { requireRole, loadIdentity } from "./auth-guard.js";
+    import { requireRole } from "./auth-guard.js";
     import {
       doc, getDoc,
       collection, query, where, orderBy, limit, getDocs
@@ -697,7 +697,7 @@ Une aide dédiée s’y trouve pour te guider pas à pas.
 
     function normalizeEmail(s){ return String(s || "").trim().toLowerCase(); }
 
-    // ✅ Guard BUSINESS (pas auth) : abonnement + profil, avec bypass staff/admin/dev
+    // ✅ Guard BUSINESS (abonnement + profil), bypass staff/admin/dev
     async function guardBusiness(user, role){
       const emailLower = normalizeEmail(user?.email);
       const bypass = FREE_EMAILS.has(emailLower) || (role === "admin") || (role === "staff");
@@ -710,15 +710,12 @@ Une aide dédiée s’y trouve pour te guider pas à pas.
 
         const data = snap.data() || {};
 
-        // bypass total pour toi / staff / admin
         if(bypass) return { ok:true, data, bypass:true };
 
-        // abonnement obligatoire
         if(String(data.subscriptionStatus || "").toLowerCase() !== "active"){
           return { ok:false, reason:"sub_inactive", data, bypass:false };
         }
 
-        // profil obligatoire (billingReady) + compat anciens comptes
         const bp = data.businessProfile || {};
         const legacyLooksComplete =
           String(bp.companyName || "").trim().length > 0 &&
@@ -861,7 +858,6 @@ Une aide dédiée s’y trouve pour te guider pas à pas.
 
       for(const inv of invoices){
         if(!isActionable(inv)) continue;
-
         const ms = getNextActionAtMs(inv);
         if(!ms) continue;
         if(ms <= now) late++;
@@ -892,9 +888,9 @@ Une aide dédiée s’y trouve pour te guider pas à pas.
     });
 
     logoutBtn.addEventListener("click", async ()=>{
-      await signOut(auth);
+      try{ await signOut(auth); }catch(_){}
       try{ localStorage.removeItem("cm_auth"); }catch(_){}
-      location.href = "index.html";
+      location.replace("login.html?role=conciergerie");
     });
 
     // =========================
@@ -902,15 +898,14 @@ Une aide dédiée s’y trouve pour te guider pas à pas.
     // =========================
     await authReady;
 
-    const user = await requireRole(
+    const session = await requireRole(
       ["conciergerie","admin","staff"],
       "login.html?role=conciergerie"
     );
-    if(!user) return;
+    if(!session) return;
 
-    // ✅ rôle réel depuis identities (pas d’invention au doigt mouillé)
-    const ident = await loadIdentity(user.uid);
-    const role = String(ident?.role || "").toLowerCase().trim();
+    const user = session.user;
+    const role = String(session.role || "").toLowerCase().trim(); // vient déjà d'identity
 
     const res = await guardBusiness(user, role);
 
