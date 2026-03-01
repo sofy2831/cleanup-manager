@@ -1,4 +1,3 @@
-<!-- docs/owner-planning.html (FINAL — owner voit events + icalEvents ; iCal visible même sans missions) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -404,12 +403,12 @@ let unsubHomes = null;
 
 /* events (missions) */
 let unsubEventChunks = [];
-let eventsMap = new Map();   // eventId -> event
+let eventsMap = new Map();
 let events = [];
 
 /* icalEvents (réservations) */
 let unsubIcal = null;
-let icalMap = new Map();     // icalId -> booking
+let icalMap = new Map();
 let icals = [];
 
 /* merged */
@@ -453,32 +452,33 @@ function computeRangeKeys(){
   return { minKey: toKey(d0), maxKey: toKey(d1) };
 }
 
+function isInRange(dk, minKey, maxKey){
+  if(!isDateKey(dk)) return false;
+  return dk >= minKey && dk <= maxKey;
+}
+
 function classifyEvent(e){
   const source = String(e.source||"").toLowerCase();
 
+  // ✅ Toute entrée iCal = Réservation (même sans missions)
   const isReservation =
-    source === "ical"
-    || source === "import"
-    || source === "ics"
-    || (!!e.arrivalDateKey && !!e.departureDateKey);
+    source === "ical" || source === "import" || source === "ics" || e.__kind === "ical";
 
   const mt = Array.isArray(e.missionTypes) ? e.missionTypes.map(x=>String(x||"").toUpperCase()) : [];
   const hasLines = Array.isArray(e.lines) && e.lines.length > 0;
   const hasMissions = (mt.length > 0) || hasLines;
 
-  return { isReservation, hasMissions, mt };
+  return { isReservation, hasMissions };
 }
 
 /* merge events + icals */
 function rebuildMerged(){
   merged = [];
 
-  // missions (events)
   for(const e of events){
     merged.push({ ...e, __kind:"event" });
   }
 
-  // reservations (icalEvents)
   for(const b of icals){
     merged.push({
       id: b.id,
@@ -490,14 +490,12 @@ function rebuildMerged(){
       homeCity: String(b.homeCity || ""),
 
       dateKey: String(b.dateKey || b.arrivalDateKey || "").trim(),
-
       arrivalDateKey: String(b.arrivalDateKey || b.dateKey || "").trim(),
       departureDateKey: String(b.departureDateKey || "").trim(),
-
       arrivalTime: String(b.arrivalTime || b.time || "").trim(),
       departureTime: String(b.departureTime || "").trim(),
 
-      lines: [] // pas de missions ici
+      lines: []
     });
   }
 }
@@ -535,13 +533,7 @@ function rebuildMaps(){
         const b = addBucket(dep);
         if(b) b.dep++;
       }
-      // réservation sans bornes -> dot res sur dateKey
-      if(!isDateKey(arr) && !isDateKey(dep) && isDateKey(dk)){
-        const b = addBucket(dk);
-        if(b) b.res++;
-      }
-      // si juste arrivée (cas fréquent iCal) : on marque res aussi sur dateKey si besoin
-      if(isDateKey(arr) && !isDateKey(dep) && isDateKey(dk)){
+      if(isDateKey(dk)){
         const b = addBucket(dk);
         if(b) b.res++;
       }
@@ -592,7 +584,6 @@ function renderList(){
   emptyBox.style.display = "none";
 
   const chosen = homeSelect.value || "__all__";
-
   let filtered = merged.slice();
 
   if(chosen !== "__all__"){
@@ -669,7 +660,7 @@ function renderCalendar(){
 
   const first = new Date(viewMonth.getFullYear(), viewMonth.getMonth(), 1);
   const last  = new Date(viewMonth.getFullYear(), viewMonth.getMonth()+1, 0);
-  const firstDow = (first.getDay() + 6) % 7; // Mon..Sun
+  const firstDow = (first.getDay() + 6) % 7;
   const daysInMonth = last.getDate();
   const prevLast = new Date(viewMonth.getFullYear(), viewMonth.getMonth(), 0).getDate();
 
@@ -757,46 +748,45 @@ function refreshSubtitle(){
   subtitleLine.textContent = `${titleHome} • ${fmtDateKey(minKey)} → ${fmtDateKey(maxKey)} • Jour : ${fmtDateKey(selectedKey)}`;
 }
 
+/* ✅ iCal : query SAFE = ownerUid seulement, filtrage range côté client */
 function listenIcalForOwner(){
   stopIcalListener();
   if(!currentUser) return;
 
-  const { minKey, maxKey } = computeRangeKeys();
-
   const qIcal = query(
     collection(db,"icalEvents"),
-    where("ownerUid","==", String(currentUser.uid)),
-    where("dateKey", ">=", minKey),
-    where("dateKey", "<=", maxKey),
-    orderBy("dateKey","asc"),
-    limit(2000)
+    where("ownerUid","==", String(currentUser.uid))
   );
 
   unsubIcal = onSnapshot(qIcal, (snap)=>{
-    snap.docChanges().forEach(ch=>{
-      if(ch.type === "removed") icalMap.delete(ch.doc.id);
-      else icalMap.set(ch.doc.id, { id: ch.doc.id, ...(ch.doc.data()||{}) });
+    icalMap = new Map();
+
+    snap.forEach(docSnap=>{
+      const data = docSnap.data() || {};
+      if(String(data.ownerUid||"") !== String(currentUser.uid)) return; // parano
+      if(String(data.archived||"") === "true") return;
+
+      icalMap.set(docSnap.id,{ id: docSnap.id, ...data });
     });
 
     icals = Array.from(icalMap.values());
+
+    // range client-side
+    const { minKey, maxKey } = computeRangeKeys();
+    icals = icals.filter(b => isInRange(String(b.dateKey||b.arrivalDateKey||""), minKey, maxKey));
 
     rebuildMerged();
     rebuildMaps();
     renderCalendar();
     renderList();
+
   }, (err)=>{
     console.error(err);
-    const m = String(err?.message||"").toLowerCase();
-    if(m.includes("permission")){
-      showAlert("Accès aux réservations iCal refusé (rules).", false);
-    }else if(m.includes("index")){
-      showAlert("Index Firestore manquant pour icalEvents (ownerUid + dateKey).", false);
-    }else{
-      showAlert("Erreur chargement réservations iCal.", false);
-    }
+    showAlert("Accès aux réservations iCal refusé (rules).", false);
   });
 }
 
+/* missions */
 function listenEventsByHomeIds(){
   stopEventListeners();
   hideAlert();
@@ -840,11 +830,8 @@ function listenEventsByHomeIds(){
 
     const unsub = onSnapshot(qEvents, (snap)=>{
       snap.docChanges().forEach(ch=>{
-        if(ch.type === "removed"){
-          eventsMap.delete(ch.doc.id);
-        }else{
-          eventsMap.set(ch.doc.id, { id: ch.doc.id, ...(ch.doc.data()||{}) });
-        }
+        if(ch.type === "removed") eventsMap.delete(ch.doc.id);
+        else eventsMap.set(ch.doc.id, { id: ch.doc.id, ...(ch.doc.data()||{}) });
       });
 
       events = Array.from(eventsMap.values());
@@ -898,7 +885,6 @@ function listenHomesForOwner(){
 
     fillHomes();
 
-    // listeners
     listenEventsByHomeIds();
     listenIcalForOwner();
 
@@ -911,8 +897,9 @@ function listenHomesForOwner(){
 /* UI handlers */
 homeSelect.addEventListener("change", ()=>{
   refreshSubtitle();
-  listenEventsByHomeIds();   // missions filtrées par home
-  listenIcalForOwner();      // réservations filtrées par dateKey/ownerUid (et renderList filtre homeId)
+  listenEventsByHomeIds();
+  // iCal reste ownerUid-only + filtrage homeId dans renderList
+  listenIcalForOwner();
 });
 rangeSelect.addEventListener("change", ()=>{
   refreshSubtitle();
@@ -956,7 +943,7 @@ onAuthStateChanged(auth, async (user)=>{
 
   refreshSubtitle();
   renderCalendar();
-  renderList(); // vide au départ
+  renderList();
 
   listenHomesForOwner();
 });
