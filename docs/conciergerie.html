@@ -1,4 +1,4 @@
-<!-- docs/conciergerie.html (FIXED + STABLE — requireRole return shape fixed, help/logout/company ok) -->
+<!-- docs/conciergerie.html (STABLE — sans auth-guard.js, aide + déconnexion OK, companyName OK, guard users.role + abonnement/profil) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -631,8 +631,7 @@ Une aide dédiée s’y trouve pour te guider pas à pas.
 
   <script type="module">
     import { auth, db, authReady } from "./firebase-init.js";
-    import { signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-    import { requireRole } from "./auth-guard.js";
+    import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
       doc, getDoc,
       collection, query, where, orderBy, limit, getDocs
@@ -655,6 +654,22 @@ Une aide dédiée s’y trouve pour te guider pas à pas.
     const helpBtn = document.getElementById("helpBtn");
     const helpBubble = document.getElementById("helpBubble");
 
+    function showAlert(msg, ok=false){
+      alertBox.style.display = "block";
+      alertBox.classList.toggle("ok", !!ok);
+      alertBox.textContent = msg;
+    }
+    function hideAlert(){
+      alertBox.style.display = "none";
+      alertBox.classList.remove("ok");
+      alertBox.textContent = "";
+    }
+    function setStat(el, n){
+      el.textContent = Number.isFinite(n) ? String(n) : "—";
+    }
+    function normalizeEmail(s){ return String(s || "").trim().toLowerCase(); }
+
+    // HELP UI
     function setHelpOpen(open){
       helpBubble.style.display = open ? "block" : "none";
       helpBtn.setAttribute("aria-expanded", open ? "true" : "false");
@@ -673,43 +688,28 @@ Une aide dédiée s’y trouve pour te guider pas à pas.
       if(e.key === "Escape") setHelpOpen(false);
     });
 
-    let lastRec = { today:0, late:0 };
+    // LOGOUT -> login conciergerie
+    logoutBtn.addEventListener("click", async ()=>{
+      try{ await signOut(auth); }catch(_){}
+      try{ localStorage.removeItem("cm_auth"); }catch(_){}
+      location.replace("login.html?role=conciergerie");
+    });
 
-    function showAlert(msg, ok=false){
-      alertBox.style.display = "block";
-      alertBox.classList.toggle("ok", !!ok);
-      alertBox.textContent = msg;
-    }
-    function hideAlert(){
-      alertBox.style.display = "none";
-      alertBox.classList.remove("ok");
-      alertBox.textContent = "";
-    }
-
+    // BUSINESS GUARD (abonnement + profil) avec bypass
     const FREE_EMAILS = new Set([
       "mathilde.debout31@gmail.com",
       "s.dumas974@gmail.com"
     ]);
 
-    function setStat(el, n){
-      el.textContent = Number.isFinite(n) ? String(n) : "—";
-    }
-
-    function normalizeEmail(s){ return String(s || "").trim().toLowerCase(); }
-
-    // ✅ Guard BUSINESS (abonnement + profil), bypass staff/admin/dev
     async function guardBusiness(user, role){
       const emailLower = normalizeEmail(user?.email);
       const bypass = FREE_EMAILS.has(emailLower) || (role === "admin") || (role === "staff");
 
       try{
         const snap = await getDoc(doc(db, "users", user.uid));
-        if(!snap.exists()){
-          return { ok:false, reason:"no_profile", bypass };
-        }
+        if(!snap.exists()) return { ok:false, reason:"no_profile", bypass };
 
         const data = snap.data() || {};
-
         if(bypass) return { ok:true, data, bypass:true };
 
         if(String(data.subscriptionStatus || "").toLowerCase() !== "active"){
@@ -728,31 +728,26 @@ Une aide dédiée s’y trouve pour te guider pas à pas.
           (data.billingReady === true) ||
           (data.billingReady === false ? false : legacyLooksComplete);
 
-        if(!billingReady){
-          return { ok:false, reason:"profile_missing", data, bypass:false };
-        }
-
+        if(!billingReady) return { ok:false, reason:"profile_missing", data, bypass:false };
         return { ok:true, data, bypass:false };
       }catch(e){
-        console.log("[GUARD] Firestore error:", e?.code, e?.message, e);
-        return { ok:false, reason:"error", errorCode: e?.code || "" };
+        return { ok:false, reason:"error", errorCode:e?.code || "" };
       }
     }
 
-    async function loadCompanyProfile(user){
+    async function loadCompanyProfile(uid){
       try{
-        const uSnap = await getDoc(doc(db, "users", user.uid));
+        const uSnap = await getDoc(doc(db, "users", uid));
         const data = uSnap.exists() ? (uSnap.data()||{}) : {};
-        const company = String(data?.businessProfile?.companyName || "").trim();
+        const company =
+          String(data?.businessProfile?.companyName || data?.companyName || "").trim();
         companyLine.textContent = company || "Conciergerie";
       }catch{
         companyLine.textContent = "Conciergerie";
       }
     }
 
-    async function loadStatsFromEvents(user){
-      const uid = user.uid;
-
+    async function loadStatsFromEvents(uid){
       const qEvents = query(
         collection(db, "events"),
         where("conciergerieUid", "==", uid),
@@ -771,15 +766,15 @@ Une aide dédiée s’y trouve pour te guider pas à pas.
       const ownerNoAccountSet = new Set();
 
       for(const ev of events){
-        const ownerEmail = (ev.ownerEmail || "").toString().trim().toLowerCase();
+        const ownerEmail = String(ev.ownerEmail || "").trim().toLowerCase();
         if(ownerEmail) owners.add(ownerEmail);
 
-        const homeId = (ev.homeId || "").toString().trim();
+        const homeId = String(ev.homeId || "").trim();
         const homeKey = homeId || ((ev.homeName || "Logement") + "|" + (ev.homeCity || ev.city || ""));
         if(homeKey.trim()) homes.add(homeKey.trim());
 
-        const agentEmail = (ev.assignedToEmail || ev.agentEmail || "").toString().trim().toLowerCase();
-        const agentName  = (ev.assignedToName || ev.agentName || "").toString().trim();
+        const agentEmail = String(ev.assignedToEmail || ev.agentEmail || "").trim().toLowerCase();
+        const agentName  = String(ev.assignedToName || ev.agentName || "").trim();
         const agentKey = agentEmail || agentName;
         if(agentKey) agents.add(agentKey);
 
@@ -828,9 +823,9 @@ Une aide dédiée s’y trouve pour te guider pas à pas.
       return toMillis(rec.nextActionAt);
     }
 
-    async function loadRecouvrementTodo(user){
-      const uid = user.uid;
+    let lastRec = { today:0, late:0 };
 
+    async function loadRecouvrementTodo(uid){
       const qInv = query(
         collection(db, "salesDocuments"),
         where("conciergerieUid", "==", uid),
@@ -865,7 +860,6 @@ Une aide dédiée s’y trouve pour te guider pas à pas.
       }
 
       lastRec = { today, late };
-
       const total = today + late;
       setStat(statRecouvrement, total);
 
@@ -887,72 +881,64 @@ Une aide dédiée s’y trouve pour te guider pas à pas.
       else location.href = "recouvrement.html";
     });
 
-    logoutBtn.addEventListener("click", async ()=>{
-      try{ await signOut(auth); }catch(_){}
-      try{ localStorage.removeItem("cm_auth"); }catch(_){}
-      location.replace("login.html?role=conciergerie");
-    });
-
-    // =========================
-    // BOOT (stable)
-    // =========================
+    // BOOT
     await authReady;
 
-    const session = await requireRole(
-      ["conciergerie","admin","staff"],
-      "login.html?role=conciergerie"
-    );
-    if(!session) return;
-
-    const user = session.user;
-    const role = String(session.role || "").toLowerCase().trim(); // vient déjà d'identity
-
-    const res = await guardBusiness(user, role);
-
-    if(!res.ok){
-      console.log("[GUARD FAIL]", res.reason, res.errorCode || "");
-
-      if(res.reason === "sub_inactive"){
-        showAlert("⛔ Abonnement inactif. Merci de choisir une offre.", false);
-        setTimeout(()=> location.href = "abonnement.html?plan=free", 500);
+    onAuthStateChanged(auth, async (user)=>{
+      if(!user){
+        location.replace("login.html?role=conciergerie");
         return;
       }
 
-      if(res.reason === "profile_missing" || res.reason === "no_profile"){
-        showAlert("⚠️ Profil conciergerie à compléter (obligatoire).", false);
-        setTimeout(()=> location.href = "profil-conciergerie.html", 500);
+      // rôle depuis users/{uid} (stable)
+      let role = "";
+      try{
+        const us = await getDoc(doc(db,"users", user.uid));
+        const ud = us.exists() ? (us.data()||{}) : {};
+        role = String(ud.role || "").toLowerCase().trim();
+      }catch(_){}
+
+      if(!["conciergerie","admin","staff"].includes(role)){
+        location.replace("login.html?role=conciergerie");
         return;
       }
 
-      if(res.reason === "error"){
-        showAlert("⛔ Erreur d'accès (règles Firestore ?). Ouvre la console pour voir le code.", false);
+      const res = await guardBusiness(user, role);
+      if(!res.ok){
+        if(res.reason === "sub_inactive"){
+          showAlert("⛔ Abonnement inactif. Merci de choisir une offre.", false);
+          setTimeout(()=> location.href = "abonnement.html?plan=free", 500);
+          return;
+        }
+        if(res.reason === "profile_missing" || res.reason === "no_profile"){
+          showAlert("⚠️ Profil conciergerie à compléter (obligatoire).", false);
+          setTimeout(()=> location.href = "profil-conciergerie.html", 500);
+          return;
+        }
+        showAlert("⛔ Erreur d'accès (règles Firestore ?).", false);
         return;
       }
 
-      location.href = "login.html?role=conciergerie";
-      return;
-    }
+      hideAlert();
+      await loadCompanyProfile(user.uid);
 
-    hideAlert();
+      try{
+        await loadStatsFromEvents(user.uid);
+      }catch{
+        setStat(statClients, NaN);
+        setStat(statClientsNoAccount, NaN);
+        setStat(statLogements, NaN);
+        setStat(statHomesNoAccount, NaN);
+        setStat(statAgents, NaN);
+      }
 
-    await loadCompanyProfile(user);
-
-    try{
-      await loadStatsFromEvents(user);
-    }catch{
-      setStat(statClients, NaN);
-      setStat(statClientsNoAccount, NaN);
-      setStat(statLogements, NaN);
-      setStat(statHomesNoAccount, NaN);
-      setStat(statAgents, NaN);
-    }
-
-    try{
-      await loadRecouvrementTodo(user);
-    }catch{
-      setStat(statRecouvrement, NaN);
-      statRecouvrementHint.textContent = "impayés : —";
-    }
+      try{
+        await loadRecouvrementTodo(user.uid);
+      }catch{
+        setStat(statRecouvrement, NaN);
+        statRecouvrementHint.textContent = "impayés : —";
+      }
+    });
   </script>
 </body>
 </html>
