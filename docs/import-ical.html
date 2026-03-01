@@ -221,6 +221,7 @@
       <div class="small">
         Objectif : importer les réservations (Airbnb/Booking/Google Calendar) pour alimenter le planning.
         <br>Les données sont stockées dans <b>icalEvents</b> et visibles dans le Planning.
+        <br><b>Important :</b> seul le compte conciergerie peut importer.
       </div>
 
       <div class="alert" id="alertBox"></div>
@@ -262,7 +263,6 @@
 
   const alertBox = document.getElementById("alertBox");
   const previewBox = document.getElementById("previewBox");
-
   function showAlert(msg, ok=false){
     alertBox.style.display = "block";
     alertBox.classList.toggle("ok", !!ok);
@@ -293,7 +293,6 @@
   const syncBtn = document.getElementById("syncBtn");
   const clearBtn = document.getElementById("clearBtn");
 
-  // Ton ics test
   const DEFAULT_ICAL = "https://sofy2831.github.io/cleanup-manager/test.ics";
   if(!icalUrlEl.value) icalUrlEl.value = DEFAULT_ICAL;
 
@@ -303,7 +302,6 @@
   function timeFromDate(d){ return pad2(d.getHours()) + ":" + pad2(d.getMinutes()); }
 
   function unfoldIcs(text){
-    // RFC5545: lignes repliées commencent par espace/tab
     const lines = text.replace(/\r\n/g,"\n").split("\n");
     const out = [];
     for(const line of lines){
@@ -318,11 +316,9 @@
   }
 
   function parseIcsDate(value){
-    // value: YYYYMMDD or YYYYMMDDTHHMMSSZ or YYYYMMDDTHHMMSS
     const v = String(value || "").trim();
     if(!v) return null;
 
-    // date only
     if(/^\d{8}$/.test(v)){
       const y = Number(v.slice(0,4));
       const m = Number(v.slice(4,6))-1;
@@ -330,7 +326,6 @@
       return new Date(y,m,d,0,0,0,0);
     }
 
-    // datetime
     const m = v.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(Z)?$/);
     if(!m) return null;
 
@@ -364,15 +359,8 @@
     let cur = null;
 
     for(const line of lines){
-      if(line === "BEGIN:VEVENT"){
-        cur = {};
-        continue;
-      }
-      if(line === "END:VEVENT"){
-        if(cur) events.push(cur);
-        cur = null;
-        continue;
-      }
+      if(line === "BEGIN:VEVENT"){ cur = {}; continue; }
+      if(line === "END:VEVENT"){ if(cur) events.push(cur); cur = null; continue; }
       if(!cur) continue;
 
       const idx = line.indexOf(":");
@@ -380,7 +368,6 @@
 
       const left = line.slice(0, idx);
       const val = line.slice(idx+1);
-
       const key = left.split(";")[0].toUpperCase();
 
       if(key === "UID") cur.uid = val.trim();
@@ -397,7 +384,6 @@
       }
     }
 
-    // garde seulement ceux avec start
     return events.filter(e => e.start instanceof Date && !isNaN(e.start));
   }
 
@@ -413,6 +399,30 @@
       b.style.opacity = locked ? "0.7" : "1";
       b.style.cursor = locked ? "not-allowed" : "pointer";
     });
+  }
+
+  function isAllDayRaw(raw){
+    return /^\d{8}$/.test(String(raw||"").trim());
+  }
+
+  function addDays(d, n){
+    const x = new Date(d.getTime());
+    x.setDate(x.getDate()+n);
+    return x;
+  }
+
+  function daysBetweenInclusive(fromKey, toKey){
+    // fromKey/toKey: YYYY-MM-DD
+    const y1 = Number(fromKey.slice(0,4)), m1 = Number(fromKey.slice(5,7))-1, d1 = Number(fromKey.slice(8,10));
+    const y2 = Number(toKey.slice(0,4)),   m2 = Number(toKey.slice(5,7))-1,   d2 = Number(toKey.slice(8,10));
+    let cur = new Date(y1,m1,d1);
+    const end = new Date(y2,m2,d2);
+    const out = [];
+    while(cur <= end){
+      out.push(dateKeyFromDate(cur));
+      cur = addDays(cur,1);
+    }
+    return out;
   }
 
   // ===== Data =====
@@ -496,7 +506,6 @@
         return `• ${dk} ${tm} — ${e.summary || "Réservation"}`;
       }).join("\n");
       showPreview(head + (sample ? ("\nAperçu:\n" + sample) : "\n(Aucun événement)"));
-
       showAlert("Test OK. Si l’aperçu est bon, clique Sync.", true);
     }catch(err){
       console.error(err);
@@ -518,65 +527,98 @@
     lockButtons(true);
 
     try{
-      // ✅ récupère ownerUid/ownerDocId depuis homes/{homeId}
-      const homeSnap = await getDoc(doc(db, "homes", home.id));
-      const hd = homeSnap.exists() ? (homeSnap.data()||{}) : {};
+      // 🔒 rôle depuis users/{uid} (pas identities)
+      const meSnap = await getDoc(doc(db,"users", currentUser.uid));
+      const myRole = meSnap.exists() ? String(meSnap.data()?.role||"").toLowerCase() : "";
+      if(myRole !== "conciergerie" && myRole !== "admin" && myRole !== "staff"){
+        lockButtons(false);
+        return showAlert("Import iCal réservé aux conciergeries (ou admin/staff).");
+      }
+
+      // home fresh
+      const homeSnap = await getDoc(doc(db,"homes", home.id));
+      if(!homeSnap.exists()){
+        lockButtons(false);
+        return showAlert("Logement introuvable.");
+      }
+      const hd = homeSnap.data() || {};
+
+      // ⚠️ ownerUid obligatoire sinon owner ne lira jamais => on bloque import (sinon tu crées des docs inutilisables)
       const ownerUid = String(hd.ownerUid || "").trim();
       const ownerDocId = String(hd.ownerDocId || "").trim();
-
       if(!ownerUid){
-        showAlert("⚠️ Logement non lié à un propriétaire (ownerUid manquant). Tu peux importer quand même, mais le propriétaire ne verra pas ces réservations tant que le logement n’est pas rattaché.", false);
+        lockButtons(false);
+        return showAlert("Impossible : logement non rattaché à un propriétaire (ownerUid manquant).");
       }
 
       const text = await fetchIcs(url);
       const evs = parseIcs(text);
 
       if(!evs.length){
-        showAlert("iCal vide : aucun événement à importer.", false);
         lockButtons(false);
-        return;
+        return showAlert("iCal vide : aucun événement à importer.", false);
       }
 
       let written = 0;
+
       for(const e of evs){
-        const dk = dateKeyFromDate(e.start);
-        const tm = timeFromDate(e.start);
-        const uid = e.uid || (e.summary || "no_summary") + "_" + dk + "_" + tm;
+        const startKey = dateKeyFromDate(e.start);
 
-        const docId = makeDocId(home.id, uid, dk + "_" + tm);
+        // arrivée
+        const arrivalDateKey = startKey;
+        const arrivalTime = isAllDayRaw(e.dtstartRaw) ? "16:00" : timeFromDate(e.start);
 
-        // ✅ dateKeys: pour affichage multi-jours dans planning conciergerie
-        const dateKeys = [dk];
+        // départ (si DTEND fourni)
+        let departureDateKey = "";
+        let departureTime = "";
 
-        await setDoc(doc(db, "icalEvents", docId), {
+        if(e.end instanceof Date && !isNaN(e.end)){
+          if(isAllDayRaw(e.dtendRaw)){
+            // DTEND date-only = exclusif => dernière nuit = end-1 jour
+            const lastNight = addDays(e.end, -1);
+            departureDateKey = dateKeyFromDate(lastNight);
+            departureTime = "10:00";
+          }else{
+            departureDateKey = dateKeyFromDate(e.end);
+            departureTime = timeFromDate(e.end);
+          }
+        }
+
+        const dateKeys = (departureDateKey && departureDateKey >= arrivalDateKey)
+          ? daysBetweenInclusive(arrivalDateKey, departureDateKey)
+          : [arrivalDateKey];
+
+        const tmForId = arrivalTime || "00:00";
+        const uid = e.uid || (String(e.summary||"no_summary") + "_" + arrivalDateKey + "_" + tmForId);
+        const docId = makeDocId(home.id, uid, arrivalDateKey + "_" + tmForId);
+
+        await setDoc(doc(db,"icalEvents", docId),{
           conciergerieUid: currentUser.uid,
-
-          // ✅ crucial pour lecture owner
-          ownerUid: ownerUid || "",
-          ownerDocId: ownerDocId || "",
+          ownerUid,
+          ownerDocId,
 
           homeId: home.id,
-          homeName: home.name || "",
-          homeAddress: hd.address || hd.homeAddress || "",
-          homeZip: hd.zip || hd.homeZip || "",
-          homeCity: hd.city || hd.homeCity || "",
+          homeName: String(hd.name || home.name || "").trim(),
+          homeAddress: String(hd.address || hd.homeAddress || "").trim(),
+          homeZip: String(hd.zip || hd.homeZip || "").trim(),
+          homeCity: String(hd.city || hd.homeCity || "").trim(),
 
-          dateKey: dk,
+          dateKey: arrivalDateKey,
           dateKeys,
 
-          arrivalDateKey: dk,
-          arrivalTime: tm,
-          departureDateKey: "",     // si ton ics donne une vraie fin, tu peux le remplir (voir plus bas)
-          departureTime: "",
+          arrivalDateKey,
+          arrivalTime,
+          departureDateKey,
+          departureTime,
 
-          summary: e.summary || "Réservation",
-          location: e.location || "",
+          summary: String(e.summary || "Réservation").trim(),
+          location: String(e.location || "").trim(),
           meta: "",
 
           source: "ical",
           archived: false,
 
-          icalUid: e.uid || "",
+          icalUid: String(e.uid || "").trim(),
           icalUrl: url,
           startIso: e.start.toISOString(),
           endIso: (e.end instanceof Date && !isNaN(e.end)) ? e.end.toISOString() : "",
@@ -585,13 +627,13 @@
 
           updatedAt: serverTimestamp(),
           createdAt: serverTimestamp()
-        }, { merge: true });
+        }, { merge:true });
 
         written++;
       }
 
       showAlert(`✅ Sync terminé : ${written} réservations importées (ou mises à jour).`, true);
-      showPreview("Va voir le Planning : les réservations iCal apparaissent.\nLe propriétaire les verra dès que ownerUid est renseigné (logement rattaché).");
+      showPreview("OK.\n• Côté conciergerie : visible dans Planning.\n• Côté propriétaire : visible dès que le logement est rattaché (ownerUid OK).");
 
     }catch(err){
       console.error(err);
