@@ -1,4 +1,4 @@
-<!-- docs/profil-conciergerie.html (PATCH: "Tableau de bord" + pas de déconnexion + libellé Storage masqué + URL logo masquée + nav identique conciergerie.html) -->
+<!-- docs/profil-conciergerie.html (CORRIGÉ COMPLET — support ?next=abonnement&plan=... + retour intelligent, design conservé) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -220,7 +220,7 @@
     .logoMeta{ min-width:220px; flex:1; }
     .logoMeta .line{ font-size:12px; color:#444; font-weight:900; line-height:1.35; }
 
-    /* ✅ URL cachée : on ne montre pas le https / downloadURL */
+    /* ✅ URL cachée */
     .logoMeta .url{ display:none; }
 
     .progress{
@@ -269,7 +269,6 @@
       box-shadow: 0 10px 22px rgba(0,0,0,0.10);
     }
 
-    /* PC: même largeur que le contenu */
     @media(min-width: 860px){
       .bottom-nav{
         position: static;
@@ -296,7 +295,6 @@
     <div class="topbar">
       <!-- ✅ Dashboard -> Tableau de bord -->
       <a class="pill" href="conciergerie.html">← Tableau de bord</a>
-      <!-- ✅ Déconnexion supprimée (déjà sur tableau de bord) -->
     </div>
 
     <div class="brand">
@@ -315,7 +313,6 @@
     <section class="card">
       <div class="cardTitle">
         <span>Logo</span>
-        <!-- ✅ Storage masqué côté user -->
         <span class="tiny">Logo de votre conciergerie</span>
       </div>
       <div class="tiny" style="margin-top:8px;">PNG/JPG/WebP • carré conseillé • max 2 Mo.</div>
@@ -504,10 +501,25 @@
   </nav>
 
   <script type="module">
-    import { auth, db, storage } from "./firebase-init.js";
+    import { auth, db, storage, authReady } from "./firebase-init.js";
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import { doc, getDoc, setDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
     import { ref as sRef, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js";
+
+    // =========================
+    // Onboarding routing: ?next=abonnement&plan=free|pro|...
+    // =========================
+    const qs = new URLSearchParams(location.search);
+    const NEXT = (qs.get("next") || "").trim().toLowerCase();      // "abonnement" ou ""
+    const PLAN = (qs.get("plan") || "free").trim().toLowerCase();  // "free" par défaut
+
+    function goNextAfterProfile(){
+      if(NEXT === "abonnement"){
+        location.href = "abonnement.html?plan=" + encodeURIComponent(PLAN || "free");
+        return;
+      }
+      location.href = "conciergerie.html";
+    }
 
     // UI
     const emailLine = document.getElementById("emailLine");
@@ -607,7 +619,7 @@
         logoFallback.style.display = "none";
         logoStatus.textContent = "Logo chargé";
 
-        // ✅ url masquée pour l'utilisateur
+        // url masquée
         logoUrlLine.textContent = "—";
 
         removeLogoBtn.disabled = false;
@@ -668,86 +680,85 @@
       logoProgressBar.style.width = "0%";
       pickLogoBtn.disabled = false;
 
-      // email de login peut rester ici (utile) — si tu veux le masquer aussi, dis-le
       emailLine.textContent = currentUser.email || currentUser.uid;
     }
 
     async function saveProfile(){
-  hideAlert();
-  const err = validate();
-  if(err){ showAlert("⛔ " + err); return; }
+      hideAlert();
+      const err = validate();
+      if(err){ showAlert("⛔ " + err); return; }
 
-  const prevBp = currentProfileDoc?.businessProfile || {};
+      const prevBp = currentProfileDoc?.businessProfile || {};
 
-  // ✅ Version PRO : profil "ready" si minimum requis
-  const isReady =
-    String(companyName.value || "").trim().length > 0 &&
-    String(billingEmail.value || "").trim().length > 0 &&
-    String(addrStreet.value || "").trim().length > 0 &&
-    String(addrZip.value || "").trim().length > 0 &&
-    String(addrCity.value || "").trim().length > 0;
+      // Ready si minimum requis
+      const isReady =
+        String(companyName.value || "").trim().length > 0 &&
+        String(billingEmail.value || "").trim().length > 0 &&
+        String(addrStreet.value || "").trim().length > 0 &&
+        String(addrZip.value || "").trim().length > 0 &&
+        String(addrCity.value || "").trim().length > 0;
 
-  const payload = {
-    billingReady: !!isReady,              // ✅ ICI (top-level)
-    businessProfile: {
-      companyName: (companyName.value || "").trim(),
-      legalForm: (legalForm.value || "").trim(),
-      displayName: (displayName.value || "").trim(),
-      phone: (phone.value || "").trim(),
-      billingEmail: (billingEmail.value || "").trim(),
-      website: (website.value || "").trim(),
-      address: {
-        street: (addrStreet.value || "").trim(),
-        zip: (addrZip.value || "").trim(),
-        city: (addrCity.value || "").trim(),
-        country: (addrCountry.value || "").trim() || "France",
-      },
-      registration: {
-        siret: cleanDigits(siret.value),
-        ape: (ape.value || "").trim().toUpperCase(),
-        rcs: (rcs.value || "").trim(),
-        rm: (rm.value || "").trim(),
-      },
-      vat: {
-        enabled: tvaYesBtn.classList.contains("active"),
-        number: (vatNumber.value || "").trim(),
-      },
-      bank: {
-        name: (bankName.value || "").trim(),
-        bic: cleanBic(bic.value),
-        iban: cleanIban(iban.value),
-      },
-      logoUrl: (prevBp.logoUrl || "").trim(),
-      logoPath: (prevBp.logoPath || "").trim(),
-      updatedAt: serverTimestamp(),
-    },
-    updatedAt: serverTimestamp(),
-  };
+      const payload = {
+        billingReady: !!isReady,
+        businessProfile: {
+          companyName: (companyName.value || "").trim(),
+          legalForm: (legalForm.value || "").trim(),
+          displayName: (displayName.value || "").trim(),
+          phone: (phone.value || "").trim(),
+          billingEmail: (billingEmail.value || "").trim(),
+          website: (website.value || "").trim(),
+          address: {
+            street: (addrStreet.value || "").trim(),
+            zip: (addrZip.value || "").trim(),
+            city: (addrCity.value || "").trim(),
+            country: (addrCountry.value || "").trim() || "France",
+          },
+          registration: {
+            siret: cleanDigits(siret.value),
+            ape: (ape.value || "").trim().toUpperCase(),
+            rcs: (rcs.value || "").trim(),
+            rm: (rm.value || "").trim(),
+          },
+          vat: {
+            enabled: tvaYesBtn.classList.contains("active"),
+            number: (vatNumber.value || "").trim(),
+          },
+          bank: {
+            name: (bankName.value || "").trim(),
+            bic: cleanBic(bic.value),
+            iban: cleanIban(iban.value),
+          },
+          logoUrl: (prevBp.logoUrl || "").trim(),
+          logoPath: (prevBp.logoPath || "").trim(),
+          updatedAt: serverTimestamp(),
+        },
+        updatedAt: serverTimestamp(),
+      };
 
-  saveBtn.disabled = true;
-  saveBtn.style.opacity = "0.75";
+      saveBtn.disabled = true;
+      saveBtn.style.opacity = "0.75";
 
-  try{
-    await setDoc(doc(db, "users", currentUser.uid), payload, { merge: true });
+      try{
+        await setDoc(doc(db, "users", currentUser.uid), payload, { merge: true });
 
-    if(!isReady){
-      showAlert("⚠️ Profil enregistré, mais incomplet : merci de remplir au minimum Nom, Email facturation, Adresse, CP, Ville.", false);
-      return;
+        if(!isReady){
+          showAlert("⚠️ Profil enregistré, mais incomplet : merci de remplir au minimum Nom, Email facturation, Adresse, CP, Ville.", false);
+          return;
+        }
+
+        showAlert("✅ Profil enregistré.", true);
+
+        // ✅ IMPORTANT : si onboarding -> abonnement, sinon dashboard
+        setTimeout(()=> goNextAfterProfile(), 350);
+
+      }catch(e){
+        console.error(e);
+        showAlert("⛔ Erreur enregistrement : " + (e?.message || "inconnue"));
+      }finally{
+        saveBtn.disabled = false;
+        saveBtn.style.opacity = "1";
+      }
     }
-
-    showAlert("✅ Profil enregistré.", true);
-
-    // ✅ Optionnel mais pratique : revenir au dashboard direct
-    setTimeout(()=> location.href = "conciergerie.html", 350);
-
-  }catch(e){
-    console.error(e);
-    showAlert("⛔ Erreur enregistrement : " + (e?.message || "inconnue"));
-  }finally{
-    saveBtn.disabled = false;
-    saveBtn.style.opacity = "1";
-  }
-}
 
     // Logo select
     pickLogoBtn.addEventListener("click", ()=> logoFile.click());
@@ -911,7 +922,15 @@
     tvaNoBtn.addEventListener("click", ()=> setTvaMode(false));
     tvaYesBtn.addEventListener("click", ()=> setTvaMode(true));
 
-    backBtn.addEventListener("click", ()=> location.href = "conciergerie.html");
+    // ✅ Retour intelligent (onboarding)
+    backBtn.addEventListener("click", ()=>{
+      if(NEXT === "abonnement"){
+        location.href = "abonnement.html?plan=" + encodeURIComponent(PLAN || "free");
+        return;
+      }
+      location.href = "conciergerie.html";
+    });
+
     saveBtn.addEventListener("click", saveProfile);
 
     onAuthStateChanged(auth, async (user)=>{
@@ -922,6 +941,7 @@
       currentUser = user;
 
       try{
+        await authReady;
         await loadProfile();
       }catch(e){
         console.error(e);
@@ -931,7 +951,3 @@
   </script>
 </body>
 </html>
-
-
-
-
