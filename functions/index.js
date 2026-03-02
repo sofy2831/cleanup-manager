@@ -1,4 +1,5 @@
 const { onRequest } = require("firebase-functions/v2/https");
+const { onDocumentWritten } = require("firebase-functions/v2/firestore");
 const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
 
@@ -33,6 +34,59 @@ function setCors(req, res) {
 }
 
 // =====================
+// Firestore trigger: homes -> users.homesCountActive
+// =====================
+async function countActiveHomes(conciergerieUid) {
+  if (!conciergerieUid) return 0;
+
+  const snap = await admin
+    .firestore()
+    .collection("homes")
+    .where("conciergerieUid", "==", conciergerieUid)
+    .get();
+
+  let count = 0;
+  snap.forEach((d) => {
+    const h = d.data() || {};
+    const status = String(h.status || "active").toLowerCase();
+    if (status !== "archived") count++;
+  });
+
+  return count;
+}
+
+async function refreshHomesCount(conciergerieUid) {
+  if (!conciergerieUid) return;
+
+  const n = await countActiveHomes(conciergerieUid);
+
+  await admin.firestore().doc(`users/${conciergerieUid}`).set(
+    {
+      homesCountActive: n,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+}
+
+exports.onHomeWrite = onDocumentWritten(
+  { document: "homes/{homeId}", region: "europe-west1" },
+  async (event) => {
+    const before = event.data?.before?.exists ? (event.data.before.data() || {}) : null;
+    const after  = event.data?.after?.exists  ? (event.data.after.data() || {})  : null;
+
+    const beforeUid = before ? String(before.conciergerieUid || "").trim() : "";
+    const afterUid  = after  ? String(after.conciergerieUid  || "").trim() : "";
+
+    const uids = new Set();
+    if (beforeUid) uids.add(beforeUid);
+    if (afterUid) uids.add(afterUid);
+
+    await Promise.all([...uids].map((uid) => refreshHomesCount(uid)));
+  }
+);
+
+// =====================
 // API
 // =====================
 exports.api = onRequest(
@@ -56,9 +110,8 @@ exports.api = onRequest(
     // 1) PING
     // =====================
     if (req.method === "GET" && req.path === "/") {
-  return res.json({ ok: true, version: "no-example-v1" });
-}
-
+      return res.json({ ok: true, version: "no-example-v1" });
+    }
 
     // =====================
     // 2) CREATE CHECKOUT SESSION
@@ -89,7 +142,6 @@ exports.api = onRequest(
 
           success_url: `${origin}${basePath}/merci.html?session_id={CHECKOUT_SESSION_ID}`,
           cancel_url: `${origin}${basePath}/abonnement.html?cancel=1`,
-
 
           metadata: { uid, plan: plan || "starter" },
           subscription_data: {
@@ -215,4 +267,3 @@ exports.api = onRequest(
     return res.status(404).json({ error: "Not found" });
   }
 );
-
