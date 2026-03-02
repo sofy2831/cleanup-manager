@@ -1,4 +1,4 @@
-<!-- docs/signup.html (CORRIGÉ — Auth vs Firestore séparés + subscriptionStatus inactive + rollback Auth si Firestore refuse) -->
+<!-- docs/signup.html (CORRIGÉ — Auth vs Firestore séparés + subscriptionStatus inactive + rollback Auth si Firestore refuse + lastLoginEmail + updateProfile) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -121,6 +121,7 @@
       outline:none;
       font-size:14px;
       background:#fff;
+      font-weight:700;
     }
     input:focus{
       border-color: rgba(122,92,255,0.45);
@@ -147,6 +148,8 @@
       margin-top:6px;
     }
     .btn:hover{ transform: translateY(-1px); }
+    .btn:disabled{ opacity:.65; cursor:not-allowed; transform:none; }
+
     .below{
       margin-top:12px;
       font-size:12px;
@@ -226,7 +229,8 @@
     import { auth, db, authReady } from "./firebase-init.js";
     import {
       createUserWithEmailAndPassword,
-      deleteUser
+      deleteUser,
+      updateProfile
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
       doc, setDoc, serverTimestamp
@@ -256,15 +260,13 @@
 
     function lockUI(locked){
       submitBtn.disabled = !!locked;
-      submitBtn.style.opacity = locked ? "0.7" : "1";
-      submitBtn.style.cursor = locked ? "not-allowed" : "pointer";
     }
 
     function buildRedirectAfterSignup(){
-      const plan = getParam("plan");
+      const plan = (getParam("plan") || "free").toLowerCase();
       const qs = new URLSearchParams();
       qs.set("next", "abonnement");
-      qs.set("plan", plan || "free");
+      qs.set("plan", plan);
       return "profil-conciergerie.html?" + qs.toString();
     }
 
@@ -288,6 +290,12 @@
       }
     }
 
+    // Préremplir email si on sort de login / ou si elle a déjà tapé ailleurs
+    try{
+      const last = (localStorage.getItem("lastLoginEmail") || "").trim();
+      if(last && !document.getElementById("email").value) document.getElementById("email").value = last;
+    }catch{}
+
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       if(isSubmitting) return;
@@ -297,19 +305,22 @@
       msgBox.textContent = "";
 
       const email = normalizeEmail(document.getElementById("email").value);
-      const password = document.getElementById("password").value;
-      const tradeName = document.getElementById("company").value.trim();
-      const phone = document.getElementById("phone").value.trim();
+      const password = document.getElementById("password").value || "";
+      const tradeName = (document.getElementById("company").value || "").trim();
+      const phone = (document.getElementById("phone").value || "").trim();
 
       if(!email) { showMsg("Email requis."); lockUI(false); isSubmitting=false; return; }
       if(!email.includes("@")) { showMsg("Email invalide."); lockUI(false); isSubmitting=false; return; }
-      if(!password || password.length < 8) { showMsg("Mot de passe : 8 caractères minimum."); lockUI(false); isSubmitting=false; return; }
+      if(password.length < 8) { showMsg("Mot de passe : 8 caractères minimum."); lockUI(false); isSubmitting=false; return; }
       if(!tradeName) { showMsg("Nom commercial requis."); lockUI(false); isSubmitting=false; return; }
 
       lockUI(true);
 
       try{
         await authReady;
+
+        // mémorise l'email (anti-erreur "j'ai retapé l'autre")
+        try{ localStorage.setItem("lastLoginEmail", email); }catch{}
 
         // 1) AUTH
         let cred;
@@ -323,27 +334,40 @@
           return;
         }
 
-        const uid = cred.user.uid;
+        const user = cred.user;
+        const uid = user.uid;
+
+        // (optionnel mais utile) : displayName côté Auth
+        try{
+          await updateProfile(user, { displayName: tradeName });
+        }catch(e){
+          console.warn("updateProfile failed:", e?.code || e?.message || e);
+        }
 
         // 2) FIRESTORE users/{uid}
         try{
           await setDoc(doc(db, "users", uid), {
             uid,
             role: "conciergerie",
+
             email,
             emailLower: email,
+
             displayName: tradeName,
             phone: phone || "",
-            contact: { email, phone: phone || "" },
 
-            // ✅ abonnement V1 (compatible rules)
+            contact: {
+              email,
+              phone: phone || ""
+            },
+
+            // abonnement V1 : neutre au signup
             plan: "free",
-            subscriptionStatus: "inactive",   // ✅ PAS "active" au signup
+            subscriptionStatus: "inactive",
             subscriptionSource: "self",
             subscribedAt: null,
 
             maxHomes: 2,
-           
 
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp()
@@ -352,7 +376,7 @@
           console.log("FIRESTORE ERROR:", err?.code, err?.message, err);
 
           // rollback Auth (évite user Auth orphelin)
-          try{ await deleteUser(cred.user); }catch(e){}
+          try{ await deleteUser(user); }catch(e){}
 
           showMsg("⛔ " + humanFsError(err));
           lockUI(false);
