@@ -16,6 +16,8 @@
       --text:#111;
       --muted:#666;
       --border: rgba(122,92,255,0.18);
+      --bad:#b3261e;
+      --ok:#1b8f4d;
     }
     *{ box-sizing:border-box; }
     body{
@@ -52,7 +54,11 @@
       color:#5b45c8;
       font-weight:800;
       font-size:12px;
-      margin:8px 0 18px;
+      margin:8px 0 10px;
+    }
+    .pill.bad{
+      border-color: rgba(179,38,30,0.25);
+      color:#7a1d16;
     }
     .btn{
       width:100%;
@@ -76,51 +82,93 @@
       text-decoration:none;
       font-size:13px;
     }
+    .tiny{
+      margin-top:10px;
+      font-size:11px;
+      color:#666;
+      font-weight:800;
+      word-break:break-all;
+      opacity:.85;
+    }
   </style>
 </head>
 
 <body>
   <main class="card">
     <div class="ok">✅</div>
-    <h1>Paiement confirmé</h1>
-    <p class="sub">Merci. Ton abonnement est en cours d’activation.</p>
+    <h1 id="title">Paiement confirmé</h1>
+    <p class="sub" id="subtitle">Merci. Ton abonnement est en cours d’activation.</p>
 
     <div class="pill" id="planPill">Plan : —</div>
 
     <a class="btn" id="goBtn" href="conciergerie.html">Accéder à mon tableau de bord</a>
     <a class="link" href="index.html">Retour à l’accueil</a>
+
+    <div class="tiny" id="debugLine" style="display:none"></div>
   </main>
 
   <script>
+    const FUNCTIONS_BASE = "https://europe-west1-cleanup-manager-d9301.cloudfunctions.net/api";
+
     function getParam(name){
       return (new URLSearchParams(location.search).get(name) || "").trim();
     }
-    function getSession(){
-      try { return JSON.parse(localStorage.getItem("cm_auth") || "null"); }
-      catch(e){ return null; }
+
+    const sessionId = getParam("session_id");
+    const planPill = document.getElementById("planPill");
+    const title = document.getElementById("title");
+    const subtitle = document.getElementById("subtitle");
+    const debugLine = document.getElementById("debugLine");
+
+    async function fetchSession(id){
+      const url = FUNCTIONS_BASE + "/checkout-session?session_id=" + encodeURIComponent(id);
+      const res = await fetch(url, { method:"GET" });
+      const data = await res.json().catch(()=> ({}));
+      return { ok: res.ok, status: res.status, data };
     }
 
-    const plan = getParam("plan");
-    const sessionId = getParam("session_id"); // utile pour debug/support
+    (async ()=>{
+      if(!sessionId){
+        title.textContent = "Paiement confirmé";
+        subtitle.textContent = "Session Stripe introuvable (session_id manquant).";
+        planPill.textContent = "Plan : —";
+        planPill.classList.add("bad");
+        return;
+      }
 
-    // Affichage plan
-    document.getElementById("planPill").textContent = "Plan : " + (plan || "OK");
+      // debug visible
+      debugLine.style.display = "block";
+      debugLine.textContent = "session_id: " + sessionId;
 
-    // Si pas connecté -> rediriger vers login (optionnel)
-    const s = getSession();
-    const goBtn = document.getElementById("goBtn");
+      const r = await fetchSession(sessionId);
 
-    if(!s || !s.uid){
-      // pas de session locale, on propose login
-      goBtn.textContent = "Se connecter";
-      goBtn.href = "login.html";
-    } else {
-      // connecté -> tableau de bord
-      goBtn.href = "conciergerie.html";
-    }
+      if(!r.ok){
+        title.textContent = "Paiement confirmé";
+        subtitle.textContent = "Paiement reçu. Activation en cours (lecture Stripe indisponible).";
+        planPill.textContent = "Plan : OK";
+        planPill.classList.add("bad");
+        console.warn("checkout-session read failed:", r.status, r.data);
+        return;
+      }
 
-    // (optionnel) console debug
-    if(sessionId) console.log("Stripe session_id:", sessionId);
+      const s = r.data || {};
+      const plan = (s.plan || "").toUpperCase() || "OK";
+      const email = s.customer_email || "";
+
+      planPill.textContent = "Plan : " + plan;
+
+      // Si Stripe dit "paid" -> OK
+      if(s.payment_status && s.payment_status !== "paid"){
+        subtitle.textContent = "Paiement en cours de validation…";
+      } else {
+        subtitle.textContent = "Merci. Ton abonnement est en cours d’activation.";
+      }
+
+      // info support (optionnel)
+      if(email){
+        debugLine.textContent = "session_id: " + sessionId + " • " + email;
+      }
+    })();
   </script>
 </body>
 </html>
