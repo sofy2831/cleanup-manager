@@ -19,11 +19,11 @@ const ALLOWED_ORIGINS = ["https://sofy2831.github.io"];
 function setCors(req, res) {
   const origin = req.headers.origin;
 
-  // en prod: whitelist stricte
+  // prod: whitelist stricte
   if (origin && ALLOWED_ORIGINS.includes(origin)) {
     res.set("Access-Control-Allow-Origin", origin);
   } else {
-    // fallback dev (ok)
+    // fallback dev
     res.set("Access-Control-Allow-Origin", origin || "*");
   }
 
@@ -45,10 +45,10 @@ function getPath(req) {
 }
 
 function ensureJsonBody(req) {
-  // Si express a déjà parsé -> ok
+  // express/json déjà passé
   if (req.body && typeof req.body === "object") return req.body;
 
-  // Sinon, on tente de parser rawBody
+  // sinon parse rawBody
   try {
     const raw = req.rawBody ? req.rawBody.toString("utf8") : "";
     if (!raw) return {};
@@ -56,6 +56,10 @@ function ensureJsonBody(req) {
   } catch {
     return {};
   }
+}
+
+function normEmail(s) {
+  return String(s || "").trim().toLowerCase();
 }
 
 // =====================
@@ -97,11 +101,15 @@ async function refreshHomesCount(conciergerieUid) {
 exports.onHomeWrite = onDocumentWritten(
   { document: "homes/{homeId}", region: "europe-west1" },
   async (event) => {
-    const before = event.data?.before?.exists ? (event.data.before.data() || {}) : null;
-    const after  = event.data?.after?.exists  ? (event.data.after.data() || {})  : null;
+    const before = event.data?.before?.exists
+      ? (event.data.before.data() || {})
+      : null;
+    const after = event.data?.after?.exists
+      ? (event.data.after.data() || {})
+      : null;
 
     const beforeUid = before ? String(before.conciergerieUid || "").trim() : "";
-    const afterUid  = after  ? String(after.conciergerieUid  || "").trim() : "";
+    const afterUid = after ? String(after.conciergerieUid || "").trim() : "";
 
     const uids = new Set();
     if (beforeUid) uids.add(beforeUid);
@@ -122,7 +130,7 @@ exports.api = onRequest(
   async (req, res) => {
     setCors(req, res);
 
-    // Preflight CORS
+    // Preflight
     if (req.method === "OPTIONS") {
       return res.status(204).send("");
     }
@@ -140,21 +148,24 @@ exports.api = onRequest(
     // 1) PING
     // =====================
     if (method === "GET" && (path === "/" || path === "")) {
-      return res.json({ ok: true, version: "no-example-v1" });
+      return res.json({ ok: true, version: "api-v2" });
     }
 
     // =====================
     // 2) CREATE CHECKOUT SESSION
-    // POST /create-checkout-session   (car ton base URL = Function URL)
+    // POST /create-checkout-session
+    // body: { uid, email, plan, priceId }
     // =====================
     if (method === "POST" && path === "/create-checkout-session") {
       try {
         const body = ensureJsonBody(req);
-        const { uid, plan, priceId } = body || {};
+        const { uid, plan, priceId, email } = body || {};
 
         if (!uid || !priceId) {
           return res.status(400).json({ error: "uid et priceId requis" });
         }
+
+        const emailNorm = normEmail(email);
 
         // Origine pour redirect
         const origin =
@@ -166,29 +177,42 @@ exports.api = onRequest(
           ? "/cleanup-manager"
           : "";
 
-        // LOG utile
-        console.log("create-checkout-session", { uid, plan: plan || "starter", origin, basePath });
+        console.log("create-checkout-session", {
+          uid,
+          plan: plan || "starter",
+          origin,
+          basePath,
+          email: emailNorm || null,
+        });
 
         const session = await stripe.checkout.sessions.create({
           mode: "subscription",
           line_items: [{ price: priceId, quantity: 1 }],
+
+          // ✅ IMPORTANT : facilite support + rapproche Stripe <-> Firestore
+          customer_email: emailNorm || undefined,
+
           success_url: `${origin}${basePath}/merci.html?session_id={CHECKOUT_SESSION_ID}`,
           cancel_url: `${origin}${basePath}/abonnement.html?cancel=1`,
+
           metadata: { uid, plan: plan || "starter" },
-          subscription_data: { metadata: { uid, plan: plan || "starter" } },
+          subscription_data: {
+            metadata: { uid, plan: plan || "starter" },
+          },
         });
 
         await db.collection("users").doc(uid).set(
           {
             lastCheckoutSessionId: session.id,
             lastCheckoutAt: admin.firestore.FieldValue.serverTimestamp(),
+            // utile support
+            stripeCustomerEmail: emailNorm || admin.firestore.FieldValue.delete(),
           },
           { merge: true }
         );
 
         return res.json({ url: session.url });
       } catch (err) {
-        // Stripe renvoie souvent err.type + err.raw.message
         console.error("❌ create-checkout-session error:", {
           message: err?.message,
           type: err?.type,
@@ -196,6 +220,48 @@ exports.api = onRequest(
           code: err?.code,
         });
         return res.status(500).json({ error: "checkout session failed" });
+      }
+    }
+
+    // =====================
+    // 2bis) READ CHECKOUT SESSION (pour merci.html)
+    // GET /checkout-session?session_id=cs_...
+    // =====================
+    if (method === "GET" && path === "/checkout-session") {
+      try {
+        const sessionId =
+          String(req.query?.session_id || "").trim() ||
+          String(new URL(req.url, "http://localhost").searchParams.get("session_id") || "").trim();
+
+        if (!sessionId) {
+          return res.status(400).json({ error: "session_id requis" });
+        }
+
+        const session = await stripe.checkout.sessions.retrieve(sessionId);
+
+        // On renvoie juste le strict nécessaire au front
+        const plan = session?.metadata?.plan || "starter";
+        const uid = session?.metadata?.uid || null;
+
+        return res.json({
+          id: session.id,
+          uid,
+          plan,
+          payment_status: session.payment_status || null,
+          status: session.status || null,
+          customer_email: session.customer_details?.email || session.customer_email || null,
+          customer: session.customer || null,
+          subscription: session.subscription || null,
+          livemode: !!session.livemode,
+        });
+      } catch (err) {
+        console.error("❌ checkout-session retrieve error:", {
+          message: err?.message,
+          type: err?.type,
+          rawMessage: err?.raw?.message,
+          code: err?.code,
+        });
+        return res.status(500).json({ error: "checkout session read failed" });
       }
     }
 
@@ -229,19 +295,24 @@ exports.api = onRequest(
           );
         }
 
+        // Checkout validé
         if (type === "checkout.session.completed") {
           const session = obj;
           const uid = session?.metadata?.uid || null;
           const plan = session?.metadata?.plan || "starter";
+          const email =
+            session?.customer_details?.email || session?.customer_email || null;
 
           await updateUser(uid, {
             subscriptionStatus: "active",
             plan,
             stripeCustomerId: session.customer || null,
             stripeSubscriptionId: session.subscription || null,
+            stripeCustomerEmail: email ? normEmail(email) : admin.firestore.FieldValue.delete(),
           });
         }
 
+        // Abonnement modifié/supprimé
         if (
           type === "customer.subscription.created" ||
           type === "customer.subscription.updated" ||
@@ -258,6 +329,7 @@ exports.api = onRequest(
           });
         }
 
+        // Paiement échoué
         if (type === "invoice.payment_failed") {
           const invoice = obj;
           const subId = invoice.subscription;
