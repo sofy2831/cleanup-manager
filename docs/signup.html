@@ -1,4 +1,4 @@
-<!-- docs/signup.html (CORRIGÉ — TOUT USERS, sans identities, sans entitlements) -->
+<!-- docs/signup.html (CORRIGÉ — Auth vs Firestore séparés + subscriptionStatus inactive + rollback Auth si Firestore refuse) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -176,7 +176,6 @@
 
 <body>
   <main class="container">
-
     <div class="topbar">
       <a class="pill" href="index.html">← Accueil</a>
       <a class="pill" href="login.html?role=conciergerie">Connexion</a>
@@ -221,13 +220,17 @@
         Déjà un compte ? <a class="link" href="login.html?role=conciergerie">Se connecter</a>
       </div>
     </form>
-
   </main>
 
   <script type="module">
     import { auth, db, authReady } from "./firebase-init.js";
-    import { createUserWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-    import { doc, setDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import {
+      createUserWithEmailAndPassword,
+      deleteUser
+    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+    import {
+      doc, setDoc, serverTimestamp
+    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const form = document.getElementById("signupForm");
     const msgBox = document.getElementById("msgBox");
@@ -258,12 +261,31 @@
     }
 
     function buildRedirectAfterSignup(){
-      // profil conciergerie d'abord, puis abonnement
       const plan = getParam("plan");
       const qs = new URLSearchParams();
       qs.set("next", "abonnement");
       qs.set("plan", plan || "free");
       return "profil-conciergerie.html?" + qs.toString();
+    }
+
+    function humanAuthError(err){
+      const code = (err && err.code) ? String(err.code) : "";
+      switch(code){
+        case "auth/email-already-in-use": return "Cet email est déjà utilisé. Connecte-toi.";
+        case "auth/invalid-email": return "Email invalide.";
+        case "auth/weak-password": return "Mot de passe trop faible (8 caractères minimum).";
+        case "auth/operation-not-allowed": return "Auth email/mot de passe non activé dans Firebase.";
+        default: return "Erreur Auth : " + (err?.message || "inconnue");
+      }
+    }
+
+    function humanFsError(err){
+      const code = (err && err.code) ? String(err.code) : "";
+      switch(code){
+        case "permission-denied": return "Permissions Firestore refusées (rules).";
+        case "failed-precondition": return "Firestore pas prêt / index / config.";
+        default: return "Erreur Firestore : " + (err?.message || "inconnue");
+      }
     }
 
     form.addEventListener("submit", async (e) => {
@@ -287,44 +309,65 @@
       lockUI(true);
 
       try{
-        // ✅ évite les bizarreries de session sur les pages suivantes
         await authReady;
 
-        const cred = await createUserWithEmailAndPassword(auth, email, password);
+        // 1) AUTH
+        let cred;
+        try{
+          cred = await createUserWithEmailAndPassword(auth, email, password);
+        }catch(err){
+          console.log("AUTH ERROR:", err?.code, err?.message, err);
+          showMsg("⛔ " + humanAuthError(err));
+          lockUI(false);
+          isSubmitting=false;
+          return;
+        }
+
         const uid = cred.user.uid;
 
-        // ✅ users/{uid} : SOURCE DE VÉRITÉ (role + abonnement)
-        await setDoc(doc(db, "users", uid), {
-          uid,
-          role: "conciergerie",
-          email,
-          emailLower: email,
-          displayName: tradeName,
-          phone: phone || "",
-          contact: { email, phone: phone || "" },
+        // 2) FIRESTORE users/{uid}
+        try{
+          await setDoc(doc(db, "users", uid), {
+            uid,
+            role: "conciergerie",
+            email,
+            emailLower: email,
+            displayName: tradeName,
+            phone: phone || "",
+            contact: { email, phone: phone || "" },
 
-          // abonnement (V1) : on reste simple, Stripe prod mettra à jour plus tard
-          plan: "free",
-          subscriptionStatus: "inactive",  // ou "free" si tu préfères
-          maxHomes: 2,
-          homesCountActive: 0,
+            // ✅ abonnement V1 (compatible rules)
+            plan: "free",
+            subscriptionStatus: "inactive",   // ✅ PAS "active" au signup
+            subscriptionSource: "self",
+            subscribedAt: null,
 
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp()
-        }, { merge: true });
+            maxHomes: 2,
+            homesCountActive: 0,
 
-        showMsg("Compte créé. Redirection…", "ok");
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp()
+          }, { merge: true });
+        }catch(err){
+          console.log("FIRESTORE ERROR:", err?.code, err?.message, err);
+
+          // rollback Auth (évite user Auth orphelin)
+          try{ await deleteUser(cred.user); }catch(e){}
+
+          showMsg("⛔ " + humanFsError(err));
+          lockUI(false);
+          isSubmitting=false;
+          return;
+        }
+
+        showMsg("✅ Compte créé. Redirection…", "ok");
         window.location.href = buildRedirectAfterSignup();
 
-      } catch(err){
-        const code = err?.code || "";
-        if(code.includes("email-already-in-use")) showMsg("Cet email est déjà utilisé. Connecte-toi.");
-        else if(code.includes("weak-password")) showMsg("Mot de passe trop faible.");
-        else if(code.includes("invalid-email")) showMsg("Email invalide.");
-        else showMsg("Erreur création : " + (err?.message || "inconnue"));
-
+      }catch(err){
+        console.log("GENERAL ERROR:", err);
+        showMsg("⛔ Erreur : " + (err?.message || "inconnue"));
         lockUI(false);
-        isSubmitting = false;
+        isSubmitting=false;
       }
     });
   </script>
