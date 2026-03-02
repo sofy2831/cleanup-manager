@@ -1,4 +1,4 @@
-<!-- docs/login.html (SANS IDENTITIES — routing via users.role + auto-heal prudent + flux owner/conciergerie + reset mdp) -->
+<!-- docs/login.html -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -135,7 +135,13 @@ const passEl  = document.getElementById("password");
 const params = new URLSearchParams(location.search);
 const requestedRole = (params.get("role") || "conciergerie").toLowerCase().trim(); // UI hint
 const token = (params.get("token") || "").trim();
-const next = (params.get("next") || "").trim(); // optionnel (abonnement, etc.)
+const next = (params.get("next") || "").trim();
+
+// Pré-remplit l'email pour éviter "j'ai tapé l'autre mail"
+try{
+  const last = (localStorage.getItem("lastLoginEmail") || "").trim();
+  if(last && !emailEl.value) emailEl.value = last;
+}catch{}
 
 subtitleP.textContent =
   requestedRole === "proprietaire"
@@ -151,7 +157,7 @@ function showMsg(t, ok=false){
 function humanAuthError(err){
   const code = (err && err.code) ? String(err.code) : "";
   switch(code){
-    case "auth/invalid-email": return "Email invalide.";
+    case "auth/invalid-email": return "Email invalide (format).";
     case "auth/user-disabled": return "Compte désactivé.";
     case "auth/user-not-found": return "Compte introuvable (cet email n’existe pas).";
     case "auth/wrong-password": return "Mot de passe incorrect.";
@@ -188,16 +194,13 @@ function looksLikeConciergerieProfile(profile){
   const hasBillingFlag = typeof profile.billingReady === "boolean";
   const hasSubscription = !!String(profile.subscriptionStatus||"").trim() || !!String(profile.plan||"").trim();
   const hasOwnerLink = !!String(profile.ownerDocId||"").trim() || !!String(profile.conciergerieUid||"").trim();
-  // conciergerie => pas censée avoir ownerDocId/conciergerieUid (owner link)
   return (hasBp || hasBillingFlag || hasSubscription) && !hasOwnerLink;
 }
 
-// Auto-heal : si users.role vide, on le renseigne avec prudence (sans escalade)
 async function ensureRoleIfMissing(uid, profile){
   const current = String(profile?.role || "").toLowerCase().trim();
   if(current) return current;
 
-  // si on a des preuves owner => owner
   if(looksLikeOwnerProfile(profile)){
     try{
       await setDoc(doc(db,"users", uid), { role:"proprietaire", updatedAt: serverTimestamp() }, { merge:true });
@@ -208,7 +211,6 @@ async function ensureRoleIfMissing(uid, profile){
     }
   }
 
-  // si on a des preuves conciergerie => conciergerie
   if(looksLikeConciergerieProfile(profile)){
     try{
       await setDoc(doc(db,"users", uid), { role:"conciergerie", updatedAt: serverTimestamp() }, { merge:true });
@@ -219,11 +221,9 @@ async function ensureRoleIfMissing(uid, profile){
     }
   }
 
-  // sinon on n'écrit rien : on route via requestedRole, mais en bloquant si incohérent
   return "";
 }
 
-// ✅ 1) Filet de sécurité : s'assurer que clients/{c_owner_ownerDocId} existe
 async function ensureClientDocForOwner(user, userProfile){
   try{
     const u = userProfile || {};
@@ -238,10 +238,10 @@ async function ensureClientDocForOwner(user, userProfile){
       conciergerieUid,
       clientId: clientDocId,
       clientKey: ownerDocId,
-      ownerDocId: ownerDocId,
+      ownerDocId,
       ownerUid: user.uid,
       uid: user.uid,
-      email: email,
+      email,
       emailLower: email,
       updatedAt: serverTimestamp()
     }, { merge:true });
@@ -253,7 +253,6 @@ async function ensureClientDocForOwner(user, userProfile){
   }
 }
 
-// ✅ 2) Raccorder owners/{ownerDocId}.ownerUid = auth.uid (multi-tenant safe)
 async function ensureOwnerUidOnOwners(ownerDocId, ownerUid, expectedConciergerieUid="", emailLower=""){
   if(!ownerDocId || !ownerUid) return { ok:false, reason:"missing_params" };
 
@@ -276,7 +275,7 @@ async function ensureOwnerUidOnOwners(ownerDocId, ownerUid, expectedConciergerie
   }
 
   const patch = {
-    ownerUid: ownerUid,
+    ownerUid,
     uid: ownerUid,
     updatedAt: serverTimestamp(),
     ownerUidLinkedAt: serverTimestamp()
@@ -304,6 +303,7 @@ resetLink.addEventListener("click", async (e)=>{
   resetLink.style.opacity = "0.6";
 
   try{
+    await authReady;
     await sendPasswordResetEmail(auth, email);
     showMsg("✅ Email de réinitialisation envoyé.\nRegarde ta boîte + spams.", true);
   }catch(err){
@@ -325,10 +325,13 @@ form.addEventListener("submit", async (e)=>{
     const email = normEmail(emailEl.value || "");
     const pass  = (passEl.value || "");
 
+    // mémorise l'email (évite qu'elle retape l'ancien)
+    try{ localStorage.setItem("lastLoginEmail", email); }catch{}
+
     const cred = await signInWithEmailAndPassword(auth, email, pass);
     const user = cred.user;
 
-    // ✅ token propriétaire = priorité absolue (finalisation invite)
+    // ✅ token propriétaire = priorité absolue
     if(token){
       location.replace("invite-proprietaire.html?token="+encodeURIComponent(token));
       return;
@@ -336,11 +339,9 @@ form.addEventListener("submit", async (e)=>{
 
     const profile = await loadUserProfile(user.uid);
 
-    // rôle effectif : users.role (source de vérité) + auto-heal si vide
     const roleFromUsers = await ensureRoleIfMissing(user.uid, profile);
     const effectiveRole = (roleFromUsers || String(profile?.role||"").toLowerCase().trim() || requestedRole);
 
-    // PROPRIÉTAIRE
     if(effectiveRole === "proprietaire" || effectiveRole === "owner"){
       if(!looksLikeOwnerProfile(profile)){
         showMsg("⛔ Compte propriétaire non rattaché. Reconnecte-toi via le lien d’invitation.", false);
@@ -383,9 +384,7 @@ form.addEventListener("submit", async (e)=>{
       return;
     }
 
-    // CONCIERGERIE
     if(effectiveRole === "conciergerie"){
-      // next=abonnement (ou autres) si tu veux gérer un retour de flux
       if(next === "abonnement"){
         location.replace("abonnement.html");
         return;
