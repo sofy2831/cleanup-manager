@@ -318,7 +318,7 @@
   <div class="modal-backdrop" id="clientModalBackdrop" aria-hidden="true">
     <div class="modal" role="dialog" aria-modal="true">
       <h2 id="clientModalTitle">Modifier client</h2>
-      <p id="clientModalHint">Met à jour la fiche <b>clients</b> (et hydrate les logements liés).</p>
+      <p id="clientModalHint">Met à jour les informations de contact et de facturation.</p>
 
       <div class="m-alert" id="clientModalAlert"></div>
 
@@ -346,7 +346,8 @@
           </div>
         </div>
 
-        <div style="margin-top:10px; padding:10px; background:#fff; border-radius:14px; border:1px solid rgba(122,92,255,0.18); box-shadow:0 3px 10px rgba(0,0,0,.06);">
+        <!-- bloc lien caché (technique, pas utilisateur) -->
+        <div style="margin-top:10px; padding:10px; background:#fff; border-radius:14px; border:1px solid rgba(122,92,255,0.18); box-shadow:0 3px 10px rgba(0,0,0,.06); display:none;">
           <div style="font-weight:1000; font-size:12px; color:#333;">Lien</div>
           <div class="tiny" id="linkInfo" style="margin-top:6px;">—</div>
         </div>
@@ -374,7 +375,7 @@
     import {
       doc, getDoc, setDoc, serverTimestamp,
       collection, query, where, getDocs, limit,
-      writeBatch, deleteDoc
+      writeBatch
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const emailLine = document.getElementById("emailLine");
@@ -460,15 +461,15 @@
     let editingOwner = null;
     let editingHomes = [];
 
+    // ✅ remplace l'email conciergerie par le nom société (companyName)
     async function loadCompanyName(){
-      // remplace "mail conciergerie" par companyName (fallback propre)
       try{
         const snap = await getDoc(doc(db,"users", currentUser.uid));
         const d = snap.exists() ? (snap.data() || {}) : {};
         const companyName = String(d.companyName || d.company || d.societe || d.nomSociete || "").trim();
-        emailLine.textContent = companyName || (currentUser.email || currentUser.uid);
+        emailLine.textContent = companyName || "—";
       }catch(e){
-        emailLine.textContent = currentUser.email || currentUser.uid;
+        emailLine.textContent = "—";
       }
     }
 
@@ -696,7 +697,7 @@
         const snap = await getDocs(qi);
         return !snap.empty;
       }catch(e){
-        // En cas de règles / collection absente => on verrouille la suppression plutôt que faire une connerie.
+        // On bloque dans le doute (pas de "vérif impossible" côté user)
         console.warn("billing check error:", e?.message || e);
         return true;
       }
@@ -869,7 +870,7 @@
           await deleteOwnerIfNoBilling(x.ownerDocId);
         });
 
-        // active/désactive suppression selon facturation
+        // active/désactive suppression selon facturation (et bloque dans le doute)
         (async ()=>{
           delBtn.disabled = true;
           delBtn.textContent = "🗑️ Vérif…";
@@ -877,7 +878,7 @@
           if(billed){
             delBtn.disabled = true;
             delBtn.textContent = "🗑️ Suppression bloquée";
-            delBtn.title = "Facturation détectée";
+            delBtn.title = "Suppression bloquée";
           }else{
             delBtn.disabled = false;
             delBtn.textContent = "🗑️ Supprimer";
@@ -918,8 +919,11 @@
       cCity.value = String(c.city || oa.city || "").trim();
 
       clientModalTitle.textContent = "Modifier client";
-      clientModalHint.innerHTML = `Fiche <b>clients</b> (ownerDocId=${esc(editingOwnerDocId)}) • hydrate <b>${editingHomes.length}</b> logement(s)`;
-      linkInfo.textContent = `ownerDocId: ${editingOwnerDocId}` + (o?.uid ? ` • ownerUid(auth): ${o.uid}` : "");
+      // ✅ hint non-technique
+      clientModalHint.textContent = "Met à jour les informations de contact et de facturation.";
+
+      // ✅ lien technique caché + neutralisé
+      linkInfo.textContent = "—";
 
       clientModalBackdrop.style.display = "flex";
       clientModalBackdrop.setAttribute("aria-hidden","false");
