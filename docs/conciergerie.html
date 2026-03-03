@@ -1,4 +1,4 @@
-<!-- docs/conciergerie.html (STABLE — sans auth-guard.js, aide + déconnexion OK, companyName OK, guard users.role + abonnement/profil) -->
+<!-- docs/conciergerie.html (FIX STATS — compte depuis homes/owners, agents depuis events, recouvrement inchangé) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -198,18 +198,18 @@
       white-space:pre-line;
     }
     @media(max-width:520px){
-  .helpBubble{
-    left:50%;
-    right:auto;
-    transform:translateX(-50%);
-    width:calc(100vw - 24px);
-    max-width:640px;
-  }
-  .helpBubble::before{
-    left:50%;
-    right:auto;
-    transform:translateX(-50%) rotate(45deg);
-  }
+      .helpBubble{
+        left:50%;
+        right:auto;
+        transform:translateX(-50%);
+        width:calc(100vw - 24px);
+        max-width:640px;
+      }
+      .helpBubble::before{
+        left:50%;
+        right:auto;
+        transform:translateX(-50%) rotate(45deg);
+      }
     }
 
     .stats{
@@ -757,7 +757,85 @@ Une aide dédiée s’y trouve pour te guider pas à pas.
       }
     }
 
-    async function loadStatsFromEvents(uid){
+    // ✅ STATS: compter depuis homes + owners (pas depuis events)
+    function isArchivedHome(h){
+      return String(h?.status || "").toLowerCase().trim() === "archived";
+    }
+
+    function getOwnerKeyFromHome(h){
+      const od = String(h?.ownerDocId || "").trim();
+      if(od) return "od:" + od;
+      const em = normalizeEmail(h?.ownerAccountEmail || h?.ownerEmail || h?.pendingOwnerEmail || "");
+      if(em) return "em:" + em;
+      return "";
+    }
+
+    async function loadStatsFromHomesOwners(uid){
+      // homes
+      const qHomes = query(
+        collection(db, "homes"),
+        where("conciergerieUid", "==", uid),
+        limit(1500)
+      );
+      const hs = await getDocs(qHomes);
+      const homes = hs.docs.map(d => ({ id:d.id, ...(d.data()||{}) }));
+
+      const activeHomes = homes.filter(h => !isArchivedHome(h));
+      const homesNoAccount = activeHomes.filter(h => !String(h?.ownerUid || "").trim()).length;
+
+      // owners (source de vérité pour "clients")
+      let owners = [];
+      try{
+        const qOwners = query(
+          collection(db, "owners"),
+          where("conciergerieUid", "==", uid),
+          limit(1500)
+        );
+        const os = await getDocs(qOwners);
+        owners = os.docs.map(d => ({ id:d.id, ...(d.data()||{}) }));
+      }catch(_){ owners = []; }
+
+      // clients: priorité owners ; fallback homes si owners vide
+      const clientsAll = new Set();
+      const clientsWithAccount = new Set();
+      const clientsNoAccount = new Set();
+
+      if(owners.length){
+        for(const o of owners){
+          // on ignore les owners explicitement inactifs si tu utilises ce champ
+          if(o?.isActive === false) continue;
+
+          const ownerDocId = String(o?.ownerDocId || o?.id || "").trim();
+          const emailLower = normalizeEmail(o?.emailLower || o?.email || "");
+          const key = ownerDocId ? ("od:" + ownerDocId) : (emailLower ? ("em:" + emailLower) : "");
+          if(!key) continue;
+
+          clientsAll.add(key);
+
+          const hasAccount = !!String(o?.ownerUid || o?.uid || "").trim();
+          if(hasAccount) clientsWithAccount.add(key);
+          else clientsNoAccount.add(key);
+        }
+      }else{
+        for(const h of activeHomes){
+          const key = getOwnerKeyFromHome(h);
+          if(!key) continue;
+          clientsAll.add(key);
+
+          const hasAccount = !!String(h?.ownerUid || "").trim();
+          if(hasAccount) clientsWithAccount.add(key);
+          else clientsNoAccount.add(key);
+        }
+      }
+
+      setStat(statLogements, activeHomes.length);
+      setStat(statHomesNoAccount, homesNoAccount);
+      setStat(statClients, clientsWithAccount.size);
+      setStat(statClientsNoAccount, clientsNoAccount.size);
+    }
+
+    // agents: ok de rester "activité" via events
+    async function loadAgentCountFromEvents(uid){
       const qEvents = query(
         collection(db, "events"),
         where("conciergerieUid", "==", uid),
@@ -768,37 +846,13 @@ Une aide dédiée s’y trouve pour te guider pas à pas.
       const snap = await getDocs(qEvents);
       const events = snap.docs.map(d => ({ id: d.id, ...(d.data() || {}) }));
 
-      const owners = new Set();
-      const homes = new Set();
       const agents = new Set();
-
-      let homesNoOwner = 0;
-      const ownerNoAccountSet = new Set();
-
       for(const ev of events){
-        const ownerEmail = String(ev.ownerEmail || "").trim().toLowerCase();
-        if(ownerEmail) owners.add(ownerEmail);
-
-        const homeId = String(ev.homeId || "").trim();
-        const homeKey = homeId || ((ev.homeName || "Logement") + "|" + (ev.homeCity || ev.city || ""));
-        if(homeKey.trim()) homes.add(homeKey.trim());
-
         const agentEmail = String(ev.assignedToEmail || ev.agentEmail || "").trim().toLowerCase();
         const agentName  = String(ev.assignedToName || ev.agentName || "").trim();
         const agentKey = agentEmail || agentName;
         if(agentKey) agents.add(agentKey);
-
-        const ownerLinked = !!(ev.ownerUid || ev.ownerDocId || ev.ownerId);
-        if(ownerEmail && !ownerLinked) ownerNoAccountSet.add(ownerEmail);
-
-        const homeLinked = !!(ev.ownerUid || ev.ownerDocId || ev.ownerId);
-        if(!homeLinked) homesNoOwner++;
       }
-
-      setStat(statClients, owners.size);
-      setStat(statClientsNoAccount, ownerNoAccountSet.size);
-      setStat(statLogements, homes.size);
-      setStat(statHomesNoAccount, homesNoOwner);
       setStat(statAgents, agents.size);
     }
 
@@ -932,16 +986,24 @@ Une aide dédiée s’y trouve pour te guider pas à pas.
       hideAlert();
       await loadCompanyProfile(user.uid);
 
+      // ✅ stats structurelles: homes/owners
       try{
-        await loadStatsFromEvents(user.uid);
+        await loadStatsFromHomesOwners(user.uid);
       }catch{
         setStat(statClients, NaN);
         setStat(statClientsNoAccount, NaN);
         setStat(statLogements, NaN);
         setStat(statHomesNoAccount, NaN);
+      }
+
+      // agents: activité via events
+      try{
+        await loadAgentCountFromEvents(user.uid);
+      }catch{
         setStat(statAgents, NaN);
       }
 
+      // recouvrement: inchangé
       try{
         await loadRecouvrementTodo(user.uid);
       }catch{
