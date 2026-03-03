@@ -156,6 +156,10 @@
       background:#fff; color:var(--violet); border:2px solid var(--violet);
       box-shadow:0 3px 10px rgba(0,0,0,.06);
     }
+    .mini.danger{
+      background:#fff; color:var(--bad); border:2px solid var(--bad);
+      box-shadow:0 3px 10px rgba(0,0,0,.06);
+    }
     .mini:disabled{ opacity:.55; cursor:not-allowed; }
 
     details.acc{
@@ -277,8 +281,7 @@
     <div class="topbar">
       <a class="pill" href="planning.html" id="backPlanningBtn">← Planning</a>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-        <a class="pill" href="logements.html" id="goLogementsBtn">Logements</a>
-        <button class="pill" id="logoutBtn" type="button">Déconnexion</button>
+        <!-- boutons supprimés (Logements / Déconnexion) -->
       </div>
     </div>
 
@@ -287,7 +290,7 @@
         <div class="logo-icon">✓</div>
         <h1>CleanUp Manager</h1>
       </div>
-      <div class="subtitle">Clients (propriétaires)</div>
+      <div class="subtitle">Gestion de propriétaire</div>
       <div class="emailLine" id="emailLine">—</div>
 
       <div class="alert" id="alertBox"></div>
@@ -305,11 +308,7 @@
           <button class="pill primary" id="refreshBtn" type="button">Rafraîchir</button>
         </div>
 
-        <div class="tiny" style="margin-top:8px;">
-          Source vérité : <b>owners</b>. Fiche stable : <b>clients</b>.
-          Sync <b>owners → clients</b> + snapshot sur <b>homes</b>.
-          <br>Jointure logements : <b>homes.ownerDocId == owners.docId</b> (pas ownerUid).
-        </div>
+        <!-- texte "source de vérité" supprimé -->
 
         <div class="list" id="clientsList"></div>
       </section>
@@ -365,21 +364,20 @@
     <a href="prestation.html">Production</a>
     <a href="import-ical.html">iCal</a>
     <a href="messagerie.html">Messages</a>
-    
+
     <a class="active" href="clients.html">Clients</a>
   </nav>
 
   <script type="module">
     import { auth, db } from "./firebase-init.js";
-    import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+    import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
       doc, getDoc, setDoc, serverTimestamp,
       collection, query, where, getDocs, limit,
-      writeBatch
+      writeBatch, deleteDoc
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const emailLine = document.getElementById("emailLine");
-    const logoutBtn = document.getElementById("logoutBtn");
     const refreshBtn = document.getElementById("refreshBtn");
     const alertBox = document.getElementById("alertBox");
     const countLine = document.getElementById("countLine");
@@ -440,12 +438,6 @@
     }
     function validateZip(zip){ return !zip || /^\d{5}$/.test(zip); }
 
-    logoutBtn.addEventListener("click", async ()=>{
-      await signOut(auth);
-      localStorage.removeItem("cm_auth");
-      location.href = "index.html";
-    });
-
     const FREE_EMAILS = new Set(["mathilde.debout31@gmail.com","s.dumas974@gmail.com"]);
     async function guardConciergerie(user){
       const email = (user.email || "").toLowerCase();
@@ -467,6 +459,18 @@
     let editingOwnerDocId = "";
     let editingOwner = null;
     let editingHomes = [];
+
+    async function loadCompanyName(){
+      // remplace "mail conciergerie" par companyName (fallback propre)
+      try{
+        const snap = await getDoc(doc(db,"users", currentUser.uid));
+        const d = snap.exists() ? (snap.data() || {}) : {};
+        const companyName = String(d.companyName || d.company || d.societe || d.nomSociete || "").trim();
+        emailLine.textContent = companyName || (currentUser.email || currentUser.uid);
+      }catch(e){
+        emailLine.textContent = currentUser.email || currentUser.uid;
+      }
+    }
 
     async function loadClientsCollection(){
       clientsByKey = new Map();
@@ -675,6 +679,93 @@
       return cards;
     }
 
+    // =========================
+    // BILLING CHECK (invoices)
+    // =========================
+    async function hasBillingForOwner(ownerDocId){
+      // “supprimer possible si aucune facturation”
+      // Convention: collection "invoices" avec ownerDocId + conciergerieUid
+      // Si chez toi la collection s'appelle autrement, adapte ici.
+      try{
+        const qi = query(
+          collection(db, "invoices"),
+          where("conciergerieUid","==", currentUser.uid),
+          where("ownerDocId","==", ownerDocId),
+          limit(1)
+        );
+        const snap = await getDocs(qi);
+        return !snap.empty;
+      }catch(e){
+        // En cas de règles / collection absente => on verrouille la suppression plutôt que faire une connerie.
+        console.warn("billing check error:", e?.message || e);
+        return true;
+      }
+    }
+
+    // =========================
+    // ARCHIVE / DELETE
+    // =========================
+    async function archiveOwner(ownerDocId){
+      const sure = confirm("Archiver ce propriétaire ? (il restera dans la base)");
+      if(!sure) return;
+
+      try{
+        const ownerRef = doc(db, "owners", ownerDocId);
+        const clientRef = doc(db, "clients", "c_owner_" + ownerDocId);
+
+        const b = writeBatch(db);
+        b.set(ownerRef, { status:"ARCHIVED", archivedAt: serverTimestamp(), updatedAt: serverTimestamp() }, { merge:true });
+        b.set(clientRef, { status:"ARCHIVED", archivedAt: serverTimestamp(), updatedAt: serverTimestamp() }, { merge:true });
+        await b.commit();
+
+        showAlert("✅ Propriétaire archivé.", true);
+        await reloadAll();
+      }catch(err){
+        console.error(err);
+        showAlert("Erreur archivage : " + (err?.message || "inconnue"));
+      }
+    }
+
+    async function deleteOwnerIfNoBilling(ownerDocId){
+      const billing = await hasBillingForOwner(ownerDocId);
+      if(billing){
+        showAlert("⛔ Suppression bloquée : une facturation existe pour ce propriétaire.", false);
+        return;
+      }
+
+      const sure = confirm("Supprimer ce propriétaire ?\n\nAucune facturation détectée.\nLes logements seront détachés (ownerDocId vidé) mais gardés.");
+      if(!sure) return;
+
+      try{
+        const clientDocId = "c_owner_" + ownerDocId;
+
+        const homesToDetach = allHomes.filter(h => String(h.ownerDocId||"").trim() === ownerDocId);
+
+        const b = writeBatch(db);
+
+        // Détache les logements (on ne supprime pas les logements)
+        for(const h of homesToDetach){
+          b.set(doc(db, "homes", h.id), {
+            ownerDocId: "",
+            ownerUid: "",
+            updatedAt: serverTimestamp()
+          }, { merge:true });
+        }
+
+        // Supprime owner + client
+        b.delete(doc(db, "owners", ownerDocId));
+        b.delete(doc(db, "clients", clientDocId));
+
+        await b.commit();
+
+        showAlert("✅ Propriétaire supprimé (sans facturation).", true);
+        await reloadAll();
+      }catch(err){
+        console.error(err);
+        showAlert("Erreur suppression : " + (err?.message || "inconnue"));
+      }
+    }
+
     function render(){
       const q = norm(searchInput.value || "");
       const cards = buildOwnerCards();
@@ -737,6 +828,8 @@
 
           <div class="iActions">
             <button class="mini ghost" type="button" data-edit="1">✏️ Modifier</button>
+            <button class="mini ghost" type="button" data-archive="1">📦 Archiver</button>
+            <button class="mini danger" type="button" data-delete="1" disabled>🗑️ Supprimer</button>
           </div>
         `;
 
@@ -765,6 +858,32 @@
         div.querySelector('button[data-edit="1"]').addEventListener("click", ()=>{
           openClientModal(x.ownerDocId);
         });
+
+        div.querySelector('button[data-archive="1"]').addEventListener("click", async ()=>{
+          await archiveOwner(x.ownerDocId);
+        });
+
+        const delBtn = div.querySelector('button[data-delete="1"]');
+        delBtn.addEventListener("click", async ()=>{
+          delBtn.disabled = true;
+          await deleteOwnerIfNoBilling(x.ownerDocId);
+        });
+
+        // active/désactive suppression selon facturation
+        (async ()=>{
+          delBtn.disabled = true;
+          delBtn.textContent = "🗑️ Vérif…";
+          const billed = await hasBillingForOwner(x.ownerDocId);
+          if(billed){
+            delBtn.disabled = true;
+            delBtn.textContent = "🗑️ Suppression bloquée";
+            delBtn.title = "Facturation détectée";
+          }else{
+            delBtn.disabled = false;
+            delBtn.textContent = "🗑️ Supprimer";
+            delBtn.title = "Aucune facturation détectée";
+          }
+        })();
       }
     }
 
@@ -930,10 +1049,10 @@
         return;
       }
       currentUser = user;
-      emailLine.textContent = user.email || user.uid;
+
+      await loadCompanyName();
       await reloadAll();
     });
   </script>
 </body>
 </html>
-
