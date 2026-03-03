@@ -290,8 +290,11 @@
         <div class="logo-icon">✓</div>
         <h1>CleanUp Manager</h1>
       </div>
-      <div class="subtitle">Gestion de propriétaire</div>
-      <div class="emailLine" id="emailLine">—</div>
+
+      <!-- ✅ Sous-titre = nom conciergerie -->
+      <div class="subtitle" id="subtitleLine">—</div>
+      <!-- ✅ Ligne secondaire = libellé (au lieu email) -->
+      <div class="emailLine" id="emailLine">Gestion de propriétaires</div>
 
       <div class="alert" id="alertBox"></div>
 
@@ -307,8 +310,6 @@
           </div>
           <button class="pill primary" id="refreshBtn" type="button">Rafraîchir</button>
         </div>
-
-        <!-- texte "source de vérité" supprimé -->
 
         <div class="list" id="clientsList"></div>
       </section>
@@ -365,7 +366,6 @@
     <a href="prestation.html">Production</a>
     <a href="import-ical.html">iCal</a>
     <a href="messagerie.html">Messages</a>
-
     <a class="active" href="clients.html">Clients</a>
   </nav>
 
@@ -378,7 +378,9 @@
       writeBatch
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
+    const subtitleLine = document.getElementById("subtitleLine");
     const emailLine = document.getElementById("emailLine");
+
     const refreshBtn = document.getElementById("refreshBtn");
     const alertBox = document.getElementById("alertBox");
     const countLine = document.getElementById("countLine");
@@ -461,15 +463,28 @@
     let editingOwner = null;
     let editingHomes = [];
 
-    // ✅ remplace l'email conciergerie par le nom société (companyName)
-    async function loadCompanyName(){
+    // ✅ sous-titre = nom conciergerie (companyLine en priorité)
+    async function loadCompanyInfo(){
       try{
         const snap = await getDoc(doc(db,"users", currentUser.uid));
         const d = snap.exists() ? (snap.data() || {}) : {};
-        const companyName = String(d.companyLine ||(d.companyName || d.company || d.societe || d.nomSociete || "").trim();
-        emailLine.textContent = company || "—";
+
+        const company =
+          String(
+            d.companyLine ||
+            d.compagnyLine ||     // fallback si ancienne typo en base
+            d.companyName ||
+            d.company ||
+            d.societe ||
+            d.nomSociete ||
+            ""
+          ).trim();
+
+        subtitleLine.textContent = company || "—";
+        emailLine.textContent = "Gestion de propriétaires";
       }catch(e){
-        emailLine.textContent = "—";
+        subtitleLine.textContent = "—";
+        emailLine.textContent = "Gestion de propriétaires";
       }
     }
 
@@ -480,7 +495,6 @@
         const snap = await getDocs(qc);
         for(const d of snap.docs){
           const data = d.data() || {};
-          // ✅ robuste : accepte clientKey OU ownerDocId
           const key = String(data.clientKey || data.ownerDocId || "").trim();
           if(key) clientsByKey.set(key, { id:d.id, ...data });
         }
@@ -521,7 +535,6 @@
 
     // =========================
     // SYNC owners -> clients + homes snapshot
-    // JOIN: homes.ownerDocId == owners.docId
     // =========================
     async function syncOwnersToClientsAndHomes(){
       try{
@@ -567,11 +580,8 @@
             const ref = doc(db,"clients", clientDocId);
             batch.set(ref, {
               conciergerieUid: currentUser.uid,
-
-              // ✅ écrire les 2, toujours
               clientKey: ownerDocId,
               ownerDocId: ownerDocId,
-
               ownerUid: String(o.uid || "").trim(),
               displayName: fullName || (exists?.displayName || ""),
               email: email || (exists?.email || ""),
@@ -681,30 +691,7 @@
     }
 
     // =========================
-    // BILLING CHECK (invoices)
-    // =========================
-    async function hasBillingForOwner(ownerDocId){
-      // “supprimer possible si aucune facturation”
-      // Convention: collection "invoices" avec ownerDocId + conciergerieUid
-      // Si chez toi la collection s'appelle autrement, adapte ici.
-      try{
-        const qi = query(
-          collection(db, "invoices"),
-          where("conciergerieUid","==", currentUser.uid),
-          where("ownerDocId","==", ownerDocId),
-          limit(1)
-        );
-        const snap = await getDocs(qi);
-        return !snap.empty;
-      }catch(e){
-        // On bloque dans le doute (pas de "vérif impossible" côté user)
-        console.warn("billing check error:", e?.message || e);
-        return true;
-      }
-    }
-
-    // =========================
-    // ARCHIVE / DELETE
+    // ARCHIVE
     // =========================
     async function archiveOwner(ownerDocId){
       const sure = confirm("Archiver ce propriétaire ? (il restera dans la base)");
@@ -724,46 +711,6 @@
       }catch(err){
         console.error(err);
         showAlert("Erreur archivage : " + (err?.message || "inconnue"));
-      }
-    }
-
-    async function deleteOwnerIfNoBilling(ownerDocId){
-      const billing = await hasBillingForOwner(ownerDocId);
-      if(billing){
-        showAlert("⛔ Suppression bloquée : une facturation existe pour ce propriétaire.", false);
-        return;
-      }
-
-      const sure = confirm("Supprimer ce propriétaire ?\n\nAucune facturation détectée.\nLes logements seront détachés (ownerDocId vidé) mais gardés.");
-      if(!sure) return;
-
-      try{
-        const clientDocId = "c_owner_" + ownerDocId;
-
-        const homesToDetach = allHomes.filter(h => String(h.ownerDocId||"").trim() === ownerDocId);
-
-        const b = writeBatch(db);
-
-        // Détache les logements (on ne supprime pas les logements)
-        for(const h of homesToDetach){
-          b.set(doc(db, "homes", h.id), {
-            ownerDocId: "",
-            ownerUid: "",
-            updatedAt: serverTimestamp()
-          }, { merge:true });
-        }
-
-        // Supprime owner + client
-        b.delete(doc(db, "owners", ownerDocId));
-        b.delete(doc(db, "clients", clientDocId));
-
-        await b.commit();
-
-        showAlert("✅ Propriétaire supprimé (sans facturation).", true);
-        await reloadAll();
-      }catch(err){
-        console.error(err);
-        showAlert("Erreur suppression : " + (err?.message || "inconnue"));
       }
     }
 
@@ -830,7 +777,7 @@
           <div class="iActions">
             <button class="mini ghost" type="button" data-edit="1">✏️ Modifier</button>
             <button class="mini ghost" type="button" data-archive="1">📦 Archiver</button>
-            <button class="mini danger" type="button" data-delete="1" disabled>🗑️ Supprimer</button>
+            <button class="mini danger" type="button" data-delete="1" disabled title="Suppression bloquée">🗑️ Suppression bloquée</button>
           </div>
         `;
 
@@ -863,28 +810,6 @@
         div.querySelector('button[data-archive="1"]').addEventListener("click", async ()=>{
           await archiveOwner(x.ownerDocId);
         });
-
-        const delBtn = div.querySelector('button[data-delete="1"]');
-        delBtn.addEventListener("click", async ()=>{
-          delBtn.disabled = true;
-          await deleteOwnerIfNoBilling(x.ownerDocId);
-        });
-
-        // active/désactive suppression selon facturation (et bloque dans le doute)
-        (async ()=>{
-          delBtn.disabled = true;
-          delBtn.textContent = "🗑️ Vérif…";
-          const billed = await hasBillingForOwner(x.ownerDocId);
-          if(billed){
-            delBtn.disabled = true;
-            delBtn.textContent = "🗑️ Suppression bloquée";
-            delBtn.title = "Suppression bloquée";
-          }else{
-            delBtn.disabled = false;
-            delBtn.textContent = "🗑️ Supprimer";
-            delBtn.title = "Aucune facturation détectée";
-          }
-        })();
       }
     }
 
@@ -919,10 +844,7 @@
       cCity.value = String(c.city || oa.city || "").trim();
 
       clientModalTitle.textContent = "Modifier client";
-      // ✅ hint non-technique
       clientModalHint.textContent = "Met à jour les informations de contact et de facturation.";
-
-      // ✅ lien technique caché + neutralisé
       linkInfo.textContent = "—";
 
       clientModalBackdrop.style.display = "flex";
@@ -964,11 +886,8 @@
 
         await setDoc(doc(db,"clients", clientDocId), {
           conciergerieUid: currentUser.uid,
-
-          // ✅ toujours écrire les 2
           clientKey: editingOwnerDocId,
           ownerDocId: editingOwnerDocId,
-
           displayName,
           email: email || "",
           phone: phone || "",
@@ -1054,10 +973,9 @@
       }
       currentUser = user;
 
-      await loadCompanyName();
+      await loadCompanyInfo();
       await reloadAll();
     });
   </script>
 </body>
 </html>
-
