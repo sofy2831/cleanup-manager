@@ -1,21 +1,29 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
-import { getAuth, setPersistence, indexedDBLocalPersistence, browserLocalPersistence, browserSessionPersistence, inMemoryPersistence } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+import {
+  getAuth, setPersistence,
+  indexedDBLocalPersistence, browserLocalPersistence,
+  browserSessionPersistence, inMemoryPersistence
+} from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
 import { getFirestore } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 import { getStorage } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js";
 
 import prod from "./firebase-config.prod.js";
 import dev from "./firebase-config.dev.js";
 
-console.info("[env] hostname=", location.hostname, "isDevHost=", isDevHost);
-
 // DEV seulement pour toi: basé sur hostname (le plus safe)
 const isDevHost =
   location.hostname === "localhost" ||
   location.hostname.startsWith("127.") ||
-  location.hostname.startsWith("dev.") ||          // si tu mets dev.cleanup-manager.tld
-  location.hostname.endsWith(".web.app") && location.hostname.includes("-dev"); // si tu utilises un hosting dev
+  location.hostname.startsWith("dev.") ||
+  (location.hostname.endsWith(".web.app") && location.hostname.includes("-dev"));
+
+console.info("[env] hostname=", location.hostname, "isDevHost=", isDevHost);
 
 const firebaseConfig = isDevHost ? dev : prod;
+
+if (!firebaseConfig || !firebaseConfig.projectId) {
+  throw new Error("[firebase-init] firebaseConfig invalide (dev/prod). Vérifie les exports default.");
+}
 
 export const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
