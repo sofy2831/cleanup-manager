@@ -11,11 +11,16 @@ import prod from "./firebase-config.prod.js";
 import dev from "./firebase-config.dev.js";
 
 // DEV seulement pour toi: basé sur hostname (le plus safe)
-const isDevHost =
-  location.hostname === "localhost" ||
-  location.hostname.startsWith("127.");
+const host = (location.hostname || "").toLowerCase();
 
-console.info("[env] hostname=", location.hostname, "isDevHost=", isDevHost);
+const isDevHost =
+  host === "localhost" ||
+  host.startsWith("127.") ||
+  host === "dev.cleanup-manager.fr" ||
+  host === "cleanup-manager-dev.web.app" ||
+  host === "cleanup-manager-dev.firebaseapp.com";
+
+console.info("[env] hostname=", host, "isDevHost=", isDevHost);
 
 const firebaseConfig = isDevHost ? dev : prod;
 
