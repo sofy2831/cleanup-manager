@@ -6,6 +6,8 @@ import { getStorage } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-
 import prod from "./firebase-config.prod.js";
 import dev from "./firebase-config.dev.js";
 
+console.info("[env] hostname=", location.hostname, "isDevHost=", isDevHost);
+
 // DEV seulement pour toi: basé sur hostname (le plus safe)
 const isDevHost =
   location.hostname === "localhost" ||
@@ -41,3 +43,4 @@ async function applyBestPersistence() {
 }
 
 export const authReady = applyBestPersistence();
+
