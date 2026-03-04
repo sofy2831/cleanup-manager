@@ -13,9 +13,7 @@ import dev from "./firebase-config.dev.js";
 // DEV seulement pour toi: basé sur hostname (le plus safe)
 const isDevHost =
   location.hostname === "localhost" ||
-  location.hostname.startsWith("127.") ||
-  location.hostname.startsWith("dev.") ||
-  (location.hostname.endsWith(".web.app") && location.hostname.includes("-dev"));
+  location.hostname.startsWith("127.");
 
 console.info("[env] hostname=", location.hostname, "isDevHost=", isDevHost);
 
@@ -51,4 +49,5 @@ async function applyBestPersistence() {
 }
 
 export const authReady = applyBestPersistence();
+
 
