@@ -1,17 +1,20 @@
-name: Deploy Firebase DEV
+name: Deploy Firebase DEV (hosting)
 
 on:
   push:
-    branches:
-      - dev
-  workflow_dispatch:
+    branches: [dev]
+    paths:
+      - "docs/**"
+      - "firebase.json"
+      - ".firebaserc"
+      - ".github/workflows/deploy-dev.yml"
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Node
@@ -24,22 +27,23 @@ jobs:
 
       - name: Sanity check hosting folder
         run: |
-          test -d docs || (echo "Missing docs/ folder at repo root" && exit 1)
-          echo "docs/ found"
+          test -d docs
+          test -f docs/index.html || echo "⚠️ docs/index.html manquant (ok si ton entrypoint est différent)"
+          ls -la docs | head
 
       - name: Auth (Service Account)
         env:
-          FIREBASE_SA_DEV: ${{ secrets.FIREBASE_SA_DEV }}
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/service-account.json
         run: |
-          echo "$FIREBASE_SA_DEV" > service-account.json
-          echo "GOOGLE_APPLICATION_CREDENTIALS=$GITHUB_WORKSPACE/service-account.json" >> $GITHUB_ENV
+          printf '%s' '${{ secrets.FIREBASE_SA_DEV }}' > service-account.json
+          node -e "JSON.parse(require('fs').readFileSync('service-account.json','utf8')); console.log('SA JSON ok')"
+          firebase --version
 
       - name: Deploy Hosting to Firebase DEV
         env:
           GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/service-account.json
         run: |
-          firebase --version
-          firebase deploy --only hosting --project cleanup-manager-dev --non-interactive
+          firebase deploy --only hosting --project cleanup-manager-dev
 
       - name: Cleanup
         if: always()
