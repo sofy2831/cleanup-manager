@@ -1,0 +1,50 @@
+name: Deploy Firebase DEV (hosting)
+
+on:
+  push:
+    branches: [dev]
+    paths:
+      - "docs/**"
+      - "firebase.json"
+      - ".firebaserc"
+      - ".github/workflows/deploy-dev.yml"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Firebase CLI
+        run: npm i -g firebase-tools
+
+      - name: Sanity check hosting folder
+        run: |
+          test -d docs
+          test -f docs/index.html || echo "⚠️ docs/index.html manquant (ok si ton entrypoint est différent)"
+          ls -la docs | head
+
+      - name: Auth (Service Account)
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/service-account.json
+        run: |
+          printf '%s' '${{ secrets.FIREBASE_SA_DEV }}' > service-account.json
+          node -e "JSON.parse(require('fs').readFileSync('service-account.json','utf8')); console.log('SA JSON ok')"
+          firebase --version
+
+      - name: Deploy Hosting to Firebase DEV
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/service-account.json
+        run: |
+          firebase deploy --only hosting --project cleanup-manager-dev
+
+      - name: Cleanup
+        if: always()
+        run: rm -f service-account.json
