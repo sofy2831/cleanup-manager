@@ -12,29 +12,36 @@ const STRIPE_SECRET = defineSecret("STRIPE_SECRET");
 const STRIPE_WEBHOOK_SECRET = defineSecret("STRIPE_WEBHOOK_SECRET");
 
 // =====================
-// CORS – GitHub Pages
+// CORS – Firebase Hosting / DEV / local
 // =====================
-const ALLOWED_ORIGINS = ["https://sofy2831.github.io"];
+const ALLOWED_ORIGINS = [
+  "https://cleanup-manager.fr",
+  "https://www.cleanup-manager.fr",
+  "https://dev.cleanup-manager.fr",
+  "https://cleanup-manager-dev.web.app",
+  "https://cleanup-manager-dev.firebaseapp.com",
+  "http://localhost:5000",
+  "http://127.0.0.1:5000",
+  "http://localhost:5500",
+  "http://127.0.0.1:5500",
+];
 
 function setCors(req, res) {
   const origin = req.headers.origin;
 
-  // prod: whitelist stricte
   if (origin && ALLOWED_ORIGINS.includes(origin)) {
     res.set("Access-Control-Allow-Origin", origin);
   } else {
-    // fallback dev
-    res.set("Access-Control-Allow-Origin", origin || "*");
+    res.set("Access-Control-Allow-Origin", "https://cleanup-manager.fr");
   }
 
   res.set("Vary", "Origin");
   res.set("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-  res.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.set("Access-Control-Allow-Headers", "Content-Type, Authorization, stripe-signature");
   res.set("Access-Control-Allow-Credentials", "true");
 }
 
 function getPath(req) {
-  // robuste (Cloud Run / Functions v2)
   try {
     if (req.path) return req.path;
     const u = new URL(req.url, "http://localhost");
@@ -45,10 +52,8 @@ function getPath(req) {
 }
 
 function ensureJsonBody(req) {
-  // express/json déjà passé
   if (req.body && typeof req.body === "object") return req.body;
 
-  // sinon parse rawBody
   try {
     const raw = req.rawBody ? req.rawBody.toString("utf8") : "";
     if (!raw) return {};
@@ -60,6 +65,23 @@ function ensureJsonBody(req) {
 
 function normEmail(s) {
   return String(s || "").trim().toLowerCase();
+}
+
+function planToMaxHomes(plan) {
+  switch (String(plan || "").toLowerCase()) {
+    case "free":
+      return 2;
+    case "starter":
+      return 5;
+    case "pro":
+      return 15;
+    case "business":
+      return 40;
+    case "enterprise":
+      return 9999;
+    default:
+      return 2;
+  }
 }
 
 // =====================
@@ -130,7 +152,6 @@ exports.api = onRequest(
   async (req, res) => {
     setCors(req, res);
 
-    // Preflight
     if (req.method === "OPTIONS") {
       return res.status(204).send("");
     }
@@ -138,7 +159,6 @@ exports.api = onRequest(
     const path = getPath(req);
     const method = req.method;
 
-    // Stripe init
     const stripeKey = STRIPE_SECRET.value();
     const webhookSecret = STRIPE_WEBHOOK_SECRET.value();
     const stripe = require("stripe")(stripeKey);
@@ -148,7 +168,7 @@ exports.api = onRequest(
     // 1) PING
     // =====================
     if (method === "GET" && (path === "/" || path === "")) {
-      return res.json({ ok: true, version: "api-v2" });
+      return res.json({ ok: true, version: "api-v3" });
     }
 
     // =====================
@@ -166,38 +186,38 @@ exports.api = onRequest(
         }
 
         const emailNorm = normEmail(email);
+        const planNorm = String(plan || "starter").toLowerCase();
 
-        // Origine pour redirect
         const origin =
-          req.headers.origin && req.headers.origin.startsWith("http")
+          req.headers.origin && ALLOWED_ORIGINS.includes(req.headers.origin)
             ? req.headers.origin
-            : "https://sofy2831.github.io";
+            : "https://cleanup-manager.fr";
 
-        const basePath = origin.includes("sofy2831.github.io")
-          ? "/cleanup-manager"
-          : "";
+        const basePath = "";
 
         console.log("create-checkout-session", {
           uid,
-          plan: plan || "starter",
+          plan: planNorm,
           origin,
-          basePath,
           email: emailNorm || null,
+          priceId,
         });
 
         const session = await stripe.checkout.sessions.create({
           mode: "subscription",
           line_items: [{ price: priceId, quantity: 1 }],
-
-          // ✅ IMPORTANT : facilite support + rapproche Stripe <-> Firestore
           customer_email: emailNorm || undefined,
-
           success_url: `${origin}${basePath}/merci.html?session_id={CHECKOUT_SESSION_ID}`,
           cancel_url: `${origin}${basePath}/abonnement.html?cancel=1`,
-
-          metadata: { uid, plan: plan || "starter" },
+          metadata: {
+            uid,
+            plan: planNorm,
+          },
           subscription_data: {
-            metadata: { uid, plan: plan || "starter" },
+            metadata: {
+              uid,
+              plan: planNorm,
+            },
           },
         });
 
@@ -205,7 +225,6 @@ exports.api = onRequest(
           {
             lastCheckoutSessionId: session.id,
             lastCheckoutAt: admin.firestore.FieldValue.serverTimestamp(),
-            // utile support
             stripeCustomerEmail: emailNorm || admin.firestore.FieldValue.delete(),
           },
           { merge: true }
@@ -224,14 +243,16 @@ exports.api = onRequest(
     }
 
     // =====================
-    // 2bis) READ CHECKOUT SESSION (pour merci.html)
+    // 2bis) READ CHECKOUT SESSION
     // GET /checkout-session?session_id=cs_...
     // =====================
     if (method === "GET" && path === "/checkout-session") {
       try {
         const sessionId =
           String(req.query?.session_id || "").trim() ||
-          String(new URL(req.url, "http://localhost").searchParams.get("session_id") || "").trim();
+          String(
+            new URL(req.url, "http://localhost").searchParams.get("session_id") || ""
+          ).trim();
 
         if (!sessionId) {
           return res.status(400).json({ error: "session_id requis" });
@@ -239,7 +260,6 @@ exports.api = onRequest(
 
         const session = await stripe.checkout.sessions.retrieve(sessionId);
 
-        // On renvoie juste le strict nécessaire au front
         const plan = session?.metadata?.plan || "starter";
         const uid = session?.metadata?.uid || null;
 
@@ -277,7 +297,9 @@ exports.api = onRequest(
         event = stripe.webhooks.constructEvent(req.rawBody, sig, webhookSecret);
       } catch (err) {
         console.error("❌ Webhook signature error:", err?.message || err);
-        return res.status(400).send(`Webhook Error: ${err?.message || "signature invalid"}`);
+        return res
+          .status(400)
+          .send(`Webhook Error: ${err?.message || "signature invalid"}`);
       }
 
       try {
@@ -305,14 +327,19 @@ exports.api = onRequest(
 
           await updateUser(uid, {
             subscriptionStatus: "active",
+            subscriptionSource: "stripe",
+            subscribedAt: admin.firestore.FieldValue.serverTimestamp(),
             plan,
+            maxHomes: planToMaxHomes(plan),
             stripeCustomerId: session.customer || null,
             stripeSubscriptionId: session.subscription || null,
-            stripeCustomerEmail: email ? normEmail(email) : admin.firestore.FieldValue.delete(),
+            stripeCustomerEmail: email
+              ? normEmail(email)
+              : admin.firestore.FieldValue.delete(),
           });
         }
 
-        // Abonnement modifié/supprimé
+        // Abonnement créé / modifié / supprimé
         if (
           type === "customer.subscription.created" ||
           type === "customer.subscription.updated" ||
@@ -320,13 +347,42 @@ exports.api = onRequest(
         ) {
           const sub = obj;
           const uid = sub?.metadata?.uid || null;
+          const plan = sub?.metadata?.plan || "starter";
           const status = sub.status;
           const isActive = status === "active" || status === "trialing";
 
           await updateUser(uid, {
             subscriptionStatus: isActive ? "active" : "inactive",
+            subscriptionSource: "stripe",
+            plan,
+            maxHomes: planToMaxHomes(plan),
             stripeSubscriptionId: sub.id,
           });
+        }
+
+        // Paiement réussi
+        if (type === "invoice.payment_succeeded") {
+          const invoice = obj;
+          const subId = invoice.subscription;
+
+          if (subId) {
+            const snap = await db
+              .collection("users")
+              .where("stripeSubscriptionId", "==", subId)
+              .limit(1)
+              .get();
+
+            if (!snap.empty) {
+              await snap.docs[0].ref.set(
+                {
+                  subscriptionStatus: "active",
+                  subscriptionSource: "stripe",
+                  updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                },
+                { merge: true }
+              );
+            }
+          }
         }
 
         // Paiement échoué
@@ -345,6 +401,7 @@ exports.api = onRequest(
               await snap.docs[0].ref.set(
                 {
                   subscriptionStatus: "inactive",
+                  subscriptionSource: "stripe",
                   updatedAt: admin.firestore.FieldValue.serverTimestamp(),
                 },
                 { merge: true }
