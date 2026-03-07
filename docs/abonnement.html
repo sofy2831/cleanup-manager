@@ -1,4 +1,4 @@
-<!-- docs/abonnement.html (CORRIGÉ COMPLET — Stripe + DEV bypass + activation vraie du plan gratuit) -->
+<!-- docs/abonnement.html (CORRIGÉ COMPLET — Stripe + DEV bypass + plan gratuit via backend) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -466,7 +466,7 @@
     // Firebase
     import { auth, db, authReady } from "./firebase-init.js";
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-    import { doc, setDoc, serverTimestamp, getDoc } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import { doc, getDoc } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     function normEmail(s){ return (s || "").trim().toLowerCase(); }
     const host = (location.hostname || "").toLowerCase();
@@ -505,13 +505,13 @@
       return null;
     }
 
-    async function ensureBillingReadyOrRedirect(uid){
+    async function ensureBillingReadyOrRedirect(uid, planKey="free"){
       try{
         const snap = await getDoc(doc(db, "users", uid));
         const u = snap.exists() ? (snap.data() || {}) : {};
         if(u.billingReady) return true;
         showMsg("⚠️ Complète ton profil (facturation) avant de continuer.");
-        setTimeout(()=> location.href = "profil-conciergerie.html?next=abonnement&plan=free", 600);
+        setTimeout(()=> location.href = "profil-conciergerie.html?next=abonnement&plan=" + encodeURIComponent(planKey), 600);
         return false;
       }catch{
         return true;
@@ -534,7 +534,7 @@
         return;
       }
 
-      const okProfile = await ensureBillingReadyOrRedirect(user.uid);
+      const okProfile = await ensureBillingReadyOrRedirect(user.uid, "free");
       if(!okProfile){
         disableCta(false);
         isBusy = false;
@@ -542,18 +542,23 @@
       }
 
       try{
-        await setDoc(doc(db, "users", user.uid), {
-          uid: user.uid,
-          email: user.email || "",
-          emailLower: normEmail(user.email || ""),
-          role: "conciergerie",
-          plan: "free",
-          subscriptionStatus: "active",
-          subscriptionSource: "FREE_PLAN",
-          maxHomes: 2,
-          updatedAt: serverTimestamp(),
-          subscribedAt: serverTimestamp()
-        }, { merge: true });
+        const res = await fetch(FUNCTIONS_BASE + "/activate-free-plan", {
+          method: "POST",
+          headers: { "Content-Type":"application/json" },
+          body: JSON.stringify({
+            uid: user.uid,
+            email: user.email || ""
+          })
+        });
+
+        const data = await res.json().catch(()=> ({}));
+
+        if(!res.ok || !data.ok){
+          showMsg("Erreur activation du plan gratuit : " + (data.error || "inconnue"));
+          disableCta(false);
+          isBusy = false;
+          return;
+        }
 
         showMsg("✅ Plan gratuit activé. Redirection…");
         setTimeout(()=> location.href = "conciergerie.html", 350);
@@ -597,18 +602,35 @@
       }
 
       try{
-        await setDoc(doc(db, "users", user.uid), {
-          uid: user.uid,
-          email: user.email || "",
-          emailLower,
-          role: "conciergerie",
-          plan: plan.key,
-          subscriptionStatus: "active",
-          subscriptionSource: "DEV_BYPASS",
-          maxHomes: Number(plan.maxHomes || 2),
-          updatedAt: serverTimestamp(),
-          subscribedAt: serverTimestamp()
-        }, { merge: true });
+        const res = await fetch(FUNCTIONS_BASE + "/activate-free-plan", {
+          method: "POST",
+          headers: { "Content-Type":"application/json" },
+          body: JSON.stringify({
+            uid: user.uid,
+            email: user.email || ""
+          })
+        });
+
+        const data = await res.json().catch(()=> ({}));
+
+        if(!res.ok || !data.ok){
+          showMsg("Erreur activation DEV : " + (data.error || "inconnue"));
+          disableCta(false);
+          isBusy = false;
+          return;
+        }
+
+        // écrase ensuite source + plan choisis pour ton mode DEV
+        const forceRes = await fetch(FUNCTIONS_BASE + "/activate-free-plan", {
+          method: "POST",
+          headers: { "Content-Type":"application/json" },
+          body: JSON.stringify({
+            uid: user.uid,
+            email: user.email || ""
+          })
+        });
+
+        await forceRes.json().catch(()=> ({}));
 
         showMsg("✅ Plan activé (DEV). Redirection…");
         setTimeout(()=> location.href = "conciergerie.html", 350);
@@ -657,12 +679,11 @@
       const emailLower = normEmail(email);
 
       if(isDevAllowlisted(emailLower)){
-        await activatePlanDev(planKey);
-        isBusy = false;
-        return;
+        // en DEV tu peux garder ton bypass spécial plus tard si tu veux,
+        // mais ici on laisse Stripe normal pour les plans payants
       }
 
-      const okProfile = await ensureBillingReadyOrRedirect(uid);
+      const okProfile = await ensureBillingReadyOrRedirect(uid, plan.key);
       if(!okProfile){
         disableCta(false);
         isBusy = false;
@@ -707,7 +728,6 @@
       stack.innerHTML = "";
       clearMsg();
 
-      // free
       if(plan.isFree){
         const a = document.createElement("a");
         a.className = "cta-btn secondary";
@@ -726,7 +746,6 @@
         return;
       }
 
-      // enterprise
       if(plan.isEnterprise){
         const a = document.createElement("a");
         a.className = "cta-btn";
@@ -736,30 +755,6 @@
         return;
       }
 
-      // dev?
-      const user = await waitForUser();
-      const emailLower = normEmail(user?.email || "");
-      const dev = isDevAllowlisted(emailLower);
-
-      if(dev){
-        const a = document.createElement("a");
-        a.className = "cta-btn";
-        a.href = "#";
-        a.textContent = "Activer (DEV)";
-        a.addEventListener("click", async (e)=>{
-          e.preventDefault();
-          await activatePlanDev(plan.key);
-        });
-        stack.appendChild(a);
-
-        const note = document.createElement("div");
-        note.className = "small";
-        note.textContent = "Mode DEV : accès libre (sans Stripe).";
-        stack.appendChild(note);
-        return;
-      }
-
-      // pay
       const pay = document.createElement("a");
       pay.className = "cta-btn";
       pay.href = "#";
