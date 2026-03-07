@@ -1,4 +1,4 @@
-<!-- docs/abonnement.html (CORRIGÉ COMPLET — Stripe + DEV bypass + plan gratuit via backend) -->
+<!-- docs/abonnement.html (CORRIGÉ COMPLET — Stripe + plan gratuit via backend + FUNCTIONS_BASE DEV/PROD dynamique) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -339,8 +339,6 @@
   </div>
 
   <script type="module">
-    const FUNCTIONS_BASE = "https://europe-west1-cleanup-manager-d9301.cloudfunctions.net/api";
-
     const PRICE_STARTER  = "price_1T84fOAB1M9iCDJFB9qiQiQh";
     const PRICE_PRO      = "price_1T84fNAB1M9iCDJFOKSGuGMI";
     const PRICE_BUSINESS = "price_1T84fNAB1M9iCDJFnZCGxkEf";
@@ -478,6 +476,10 @@
       host === "cleanup-manager-dev.web.app" ||
       host === "cleanup-manager-dev.firebaseapp.com";
 
+    const FUNCTIONS_BASE = isDevHost
+      ? "https://europe-west1-cleanup-manager-dev.cloudfunctions.net/api"
+      : "https://europe-west1-cleanup-manager-d9301.cloudfunctions.net/api";
+
     function isDevAllowlisted(emailLower){
       return isDevHost && !!emailLower && DEV_ALLOWLIST.includes(emailLower);
     }
@@ -572,78 +574,6 @@
       }
     }
 
-    async function activatePlanDev(planKey){
-      if(isBusy) return;
-      isBusy = true;
-
-      disableCta(true);
-      clearMsg();
-
-      const plan = PLANS[planKey];
-      if(!plan){
-        showMsg("Plan introuvable.");
-        disableCta(false);
-        isBusy = false;
-        return;
-      }
-
-      const user = await requireLoginOrRedirect(planKey);
-      if(!user){
-        isBusy = false;
-        return;
-      }
-
-      const emailLower = normEmail(user.email || "");
-      if(!isDevAllowlisted(emailLower)){
-        showMsg("⛔ Accès DEV refusé (email non allowlist).");
-        disableCta(false);
-        isBusy = false;
-        return;
-      }
-
-      try{
-        const res = await fetch(FUNCTIONS_BASE + "/activate-free-plan", {
-          method: "POST",
-          headers: { "Content-Type":"application/json" },
-          body: JSON.stringify({
-            uid: user.uid,
-            email: user.email || ""
-          })
-        });
-
-        const data = await res.json().catch(()=> ({}));
-
-        if(!res.ok || !data.ok){
-          showMsg("Erreur activation DEV : " + (data.error || "inconnue"));
-          disableCta(false);
-          isBusy = false;
-          return;
-        }
-
-        // écrase ensuite source + plan choisis pour ton mode DEV
-        const forceRes = await fetch(FUNCTIONS_BASE + "/activate-free-plan", {
-          method: "POST",
-          headers: { "Content-Type":"application/json" },
-          body: JSON.stringify({
-            uid: user.uid,
-            email: user.email || ""
-          })
-        });
-
-        await forceRes.json().catch(()=> ({}));
-
-        showMsg("✅ Plan activé (DEV). Redirection…");
-        setTimeout(()=> location.href = "conciergerie.html", 350);
-
-      }catch(err){
-        console.error(err);
-        showMsg("Erreur activation DEV : " + (err?.message || "inconnue"));
-        disableCta(false);
-      }finally{
-        isBusy = false;
-      }
-    }
-
     async function safeReadJson(res){
       const ct = (res.headers.get("content-type") || "").toLowerCase();
       if(ct.includes("application/json")){
@@ -676,12 +606,6 @@
 
       const uid = user.uid;
       const email = user.email || "";
-      const emailLower = normEmail(email);
-
-      if(isDevAllowlisted(emailLower)){
-        // en DEV tu peux garder ton bypass spécial plus tard si tu veux,
-        // mais ici on laisse Stripe normal pour les plans payants
-      }
 
       const okProfile = await ensureBillingReadyOrRedirect(uid, plan.key);
       if(!okProfile){
