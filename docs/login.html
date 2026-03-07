@@ -133,11 +133,11 @@ const emailEl = document.getElementById("email");
 const passEl  = document.getElementById("password");
 
 const params = new URLSearchParams(location.search);
-const requestedRole = (params.get("role") || "conciergerie").toLowerCase().trim(); // UI hint
+const requestedRole = (params.get("role") || "conciergerie").toLowerCase().trim();
 const token = (params.get("token") || "").trim();
 const next = (params.get("next") || "").trim();
 
-// Pré-remplit l'email pour éviter "j'ai tapé l'autre mail"
+// Pré-remplit l'email
 try{
   const last = (localStorage.getItem("lastLoginEmail") || "").trim();
   if(last && !emailEl.value) emailEl.value = last;
@@ -190,7 +190,11 @@ function looksLikeOwnerProfile(profile){
 function looksLikeConciergerieProfile(profile){
   if(!profile) return false;
   const bp = profile.businessProfile || {};
-  const hasBp = !!(String(bp.companyName||"").trim() || String(bp.billingEmail||"").trim() || String(bp.address?.city||"").trim());
+  const hasBp = !!(
+    String(bp.companyName||"").trim() ||
+    String(bp.billingEmail||"").trim() ||
+    String(bp.address?.city||"").trim()
+  );
   const hasBillingFlag = typeof profile.billingReady === "boolean";
   const hasSubscription = !!String(profile.subscriptionStatus||"").trim() || !!String(profile.plan||"").trim();
   const hasOwnerLink = !!String(profile.ownerDocId||"").trim() || !!String(profile.conciergerieUid||"").trim();
@@ -288,6 +292,20 @@ async function ensureOwnerUidOnOwners(ownerDocId, ownerUid, expectedConciergerie
   return { ok:true, linked:true };
 }
 
+function canAccessConciergerie(profile){
+  if(!profile) return false;
+
+  const status = String(profile.subscriptionStatus || "").toLowerCase().trim();
+  const source = String(profile.subscriptionSource || "").toUpperCase().trim();
+
+  if(status === "active") return true;
+  if(source === "TEST_ACCOUNT") return true;
+  if(source === "BETA_GRANTED") return true;
+  if(source === "MANUAL_ADMIN") return true;
+
+  return false;
+}
+
 resetLink.addEventListener("click", async (e)=>{
   e.preventDefault();
   msgBox.style.display="none";
@@ -325,13 +343,12 @@ form.addEventListener("submit", async (e)=>{
     const email = normEmail(emailEl.value || "");
     const pass  = (passEl.value || "");
 
-    // mémorise l'email (évite qu'elle retape l'ancien)
     try{ localStorage.setItem("lastLoginEmail", email); }catch{}
 
     const cred = await signInWithEmailAndPassword(auth, email, pass);
     const user = cred.user;
 
-    // ✅ token propriétaire = priorité absolue
+    // priorité absolue : token propriétaire
     if(token){
       location.replace("invite-proprietaire.html?token="+encodeURIComponent(token));
       return;
@@ -340,7 +357,11 @@ form.addEventListener("submit", async (e)=>{
     const profile = await loadUserProfile(user.uid);
 
     const roleFromUsers = await ensureRoleIfMissing(user.uid, profile);
-    const effectiveRole = (roleFromUsers || String(profile?.role||"").toLowerCase().trim() || requestedRole);
+    const effectiveRole = (
+      roleFromUsers ||
+      String(profile?.role||"").toLowerCase().trim() ||
+      requestedRole
+    );
 
     if(effectiveRole === "proprietaire" || effectiveRole === "owner"){
       if(!looksLikeOwnerProfile(profile)){
@@ -389,7 +410,13 @@ form.addEventListener("submit", async (e)=>{
         location.replace("abonnement.html");
         return;
       }
-      location.replace("conciergerie.html");
+
+      if(canAccessConciergerie(profile)){
+        location.replace("conciergerie.html");
+        return;
+      }
+
+      location.replace("abonnement.html");
       return;
     }
 
