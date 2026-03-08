@@ -164,11 +164,82 @@ exports.api = onRequest(
     const stripe = require("stripe")(stripeKey);
     const db = admin.firestore();
 
+    async function updateUser(uid, data) {
+      if (!uid) return;
+      await db.collection("users").doc(uid).set(
+        {
+          ...data,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+    }
+
     // =====================
     // 1) PING
     // =====================
     if (method === "GET" && (path === "/" || path === "")) {
-      return res.json({ ok: true, version: "api-v3" });
+      return res.json({ ok: true, version: "api-v4" });
+    }
+
+    // =====================
+    // 1bis) ACTIVATE FREE PLAN
+    // POST /activate-free-plan
+    // body: { uid, email? }
+    // =====================
+    if (method === "POST" && path === "/activate-free-plan") {
+      try {
+        const body = ensureJsonBody(req);
+        const { uid, email } = body || {};
+
+        if (!uid) {
+          return res.status(400).json({ error: "uid requis" });
+        }
+
+        const userRef = db.collection("users").doc(uid);
+        const snap = await userRef.get();
+
+        if (!snap.exists) {
+          return res.status(404).json({ error: "user introuvable" });
+        }
+
+        const u = snap.data() || {};
+
+        if (String(u.role || "").toLowerCase() !== "conciergerie") {
+          return res.status(403).json({ error: "role non autorisé" });
+        }
+
+        if (!u.billingReady) {
+          return res.status(400).json({ error: "billingReady requis" });
+        }
+
+        const emailNorm = normEmail(email || u.email || "");
+
+        await updateUser(uid, {
+          uid,
+          email: u.email || emailNorm || "",
+          emailLower: u.emailLower || emailNorm || "",
+          plan: "free",
+          subscriptionStatus: "active",
+          subscriptionSource: "FREE_PLAN",
+          maxHomes: 2,
+          subscribedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+        return res.json({
+          ok: true,
+          plan: "free",
+          subscriptionStatus: "active",
+          subscriptionSource: "FREE_PLAN",
+          maxHomes: 2,
+        });
+      } catch (err) {
+        console.error("❌ activate-free-plan error:", {
+          message: err?.message,
+          code: err?.code,
+        });
+        return res.status(500).json({ error: "activate free plan failed" });
+      }
     }
 
     // =====================
@@ -305,17 +376,6 @@ exports.api = onRequest(
       try {
         const type = event.type;
         const obj = event.data.object;
-
-        async function updateUser(uid, data) {
-          if (!uid) return;
-          await db.collection("users").doc(uid).set(
-            {
-              ...data,
-              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-            },
-            { merge: true }
-          );
-        }
 
         // Checkout validé
         if (type === "checkout.session.completed") {

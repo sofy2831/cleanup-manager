@@ -1,4 +1,4 @@
-<!-- docs/invite-proprietaire.html (CORRIGÉ — retour planning, envoi universel mailto + partage mobile + signature conciergerie) -->
+<!-- docs/invite-proprietaire.html (FINAL DEV — reuse owner if exists + homes INVITED flow aligned) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -250,12 +250,12 @@
   </div>
 
   <script type="module">
-    import { auth, db } from "./firebase-init.js";
+    import { auth, db, authReady } from "./firebase-init.js";
     import { onAuthStateChanged, createUserWithEmailAndPassword, sendPasswordResetEmail, signOut }
       from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
       doc, getDoc, setDoc, updateDoc, serverTimestamp,
-      collection, query, where, getDocs, writeBatch
+      collection, query, where, getDocs, writeBatch, limit
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     function getParam(name){ return (new URLSearchParams(location.search).get(name) || "").trim(); }
@@ -322,10 +322,10 @@
     const homeHintName = document.getElementById("homeHintName");
 
     const token = getParam("token");
-    const homeIdParam  = getParam("homeId");
-    const fromParam    = getParam("from");
+    const homeIdParam = getParam("homeId");
+    const fromParam = getParam("from");
     const prefillEmail = normalizeEmail(getParam("email"));
-    const prefillName  = (getParam("name") || "").trim();
+    const prefillName = (getParam("name") || "").trim();
 
     function clientDocIdFromOwner(ownerDocId){ return "c_owner_" + String(ownerDocId || "").trim(); }
 
@@ -364,19 +364,81 @@
       return tid;
     }
 
-    async function attachInviteToHomeIfProvided(conciergerieUid, tokenValue, emailLower){
+    function buildBackHref(){
+      if(fromParam === "logements.html") return "logements.html";
+      if(fromParam === "planning.html") return "planning.html";
+      return "planning.html";
+    }
+
+    async function getCompanyNameForUser(uid){
+      try{
+        const snap = await getDoc(doc(db, "users", uid));
+        const d = snap.exists() ? (snap.data() || {}) : {};
+        return String(
+          d.businessProfile?.companyName ||
+          d.companyLine ||
+          d.companyName ||
+          d.company ||
+          d.societe ||
+          d.nomSociete ||
+          d.displayName ||
+          ""
+        ).trim();
+      }catch(e){
+        return "";
+      }
+    }
+
+    async function findExistingOwnerByEmail(conciergerieUid, emailLower){
+      if(!conciergerieUid || !emailLower) return null;
+      try{
+        const q1 = query(
+          collection(db, "owners"),
+          where("conciergerieUid", "==", String(conciergerieUid)),
+          where("emailLower", "==", String(emailLower)),
+          limit(1)
+        );
+        const s1 = await getDocs(q1);
+        if(!s1.empty){
+          const d = s1.docs[0];
+          return { id: d.id, ...(d.data() || {}) };
+        }
+
+        const q2 = query(
+          collection(db, "owners"),
+          where("conciergerieUid", "==", String(conciergerieUid)),
+          where("email", "==", String(emailLower)),
+          limit(1)
+        );
+        const s2 = await getDocs(q2);
+        if(!s2.empty){
+          const d = s2.docs[0];
+          return { id: d.id, ...(d.data() || {}) };
+        }
+      }catch(e){
+        console.warn("findExistingOwnerByEmail:", e?.message || e);
+      }
+      return null;
+    }
+
+    async function attachInviteToHomeIfProvided(conciergerieUid, tokenValue, emailLower, ownerDocId){
       if(!homeIdParam) return;
+
       try{
         const homeRef = doc(db, "homes", homeIdParam);
         const hs = await getDoc(homeRef);
         if(!hs.exists()) return;
+
         const h = hs.data() || {};
-        if(String(h.conciergerieUid||"") !== String(conciergerieUid||"")) return;
+        if(String(h.conciergerieUid || "") !== String(conciergerieUid || "")) return;
 
         await updateDoc(homeRef, {
-          pendingOwnerEmail: String(emailLower),
-          pendingInviteToken: String(tokenValue),
+          ownerDocId: String(ownerDocId || h.ownerDocId || ""),
+          pendingOwnerEmail: String(emailLower || ""),
+          pendingInviteToken: String(tokenValue || ""),
           ownerLinkStatus: "INVITED",
+          ownerAccountEmail: String(emailLower || h.ownerAccountEmail || ""),
+          ownerEmail: String(emailLower || h.ownerEmail || ""),
           updatedAt: serverTimestamp()
         });
 
@@ -413,6 +475,8 @@
           ownerLinkStatus: "LINKED",
           pendingOwnerEmail: "",
           pendingInviteToken: "",
+          ownerAccountEmail: String(emailLower || h.ownerAccountEmail || ""),
+          ownerEmail: String(emailLower || h.ownerEmail || ""),
           updatedAt: serverTimestamp()
         });
         count++;
@@ -427,24 +491,6 @@
       p.set("self","1");
       if(token) p.set("token", token);
       return "profil-proprietaire.html?" + p.toString();
-    }
-
-    // ✅ récupère le nom de société pour la signature (companyLine)
-    async function getCompanyNameForUser(uid){
-      try{
-        const snap = await getDoc(doc(db, "users", uid));
-        const d = snap.exists() ? (snap.data() || {}) : {};
-        return String(
-          d.companyLine ||
-          d.companyName ||
-          d.company ||
-          d.societe ||
-          d.nomSociete ||
-          ""
-        ).trim();
-      }catch(e){
-        return "";
-      }
     }
 
     // ---------- MODE OWNER ----------
@@ -620,7 +666,13 @@
         });
 
         const linkRes = await autoLinkHomesForOwner(conciergerieUid, userEmail, token, ownerDocId, user.uid);
-        await ensureThreadOnAccept(conciergerieUid, ownerDocId, user.uid, { ownerName: fullname || "Propriétaire", ownerEmailLower: userEmail }, linkRes.names);
+        await ensureThreadOnAccept(
+          conciergerieUid,
+          ownerDocId,
+          user.uid,
+          { ownerName: fullname || "Propriétaire", ownerEmailLower: userEmail },
+          linkRes.names
+        );
 
         showAlert(alertOwner, `✅ Compte lié. Logements liés : ${linkRes.count}. Redirection…`, true);
         setTimeout(()=> location.replace(profileRedirectUrl()), 650);
@@ -707,7 +759,7 @@
     });
 
     // ---------- MODE CONCIERGERIE ----------
-    const FREE_EMAILS = new Set(["Mathildeconciergerie45@gmail.com","s.dumas974@gmail.com"]);
+    const FREE_EMAILS = new Set(["mathildeconciergerie45@gmail.com","s.dumas974@gmail.com"]);
 
     async function guardConciergerie(user){
       const email = (user.email || "").toLowerCase();
@@ -717,13 +769,15 @@
         if(!snap.exists()) return false;
         const d = snap.data() || {};
         return (d.role === "conciergerie" || d.role === "admin") && d.subscriptionStatus === "active";
-      }catch(e){ return false; }
+      }catch(e){
+        return false;
+      }
     }
 
     async function bootConciergerieMode(){
       pageSubtitle.textContent = "Inviter un propriétaire";
       backLink.textContent = "← Retour";
-      backLink.href = "planning.html";
+      backLink.href = buildBackHref();
 
       conciergerieCard.classList.remove("hidden");
       ownerCard.classList.add("hidden");
@@ -742,12 +796,14 @@
             homeHint.style.display = "inline";
             homeHintName.textContent = (h.name || homeIdParam);
           }
-        }catch{}
+        }catch(e){}
       }
 
       let wired = false;
 
       onAuthStateChanged(auth, async (user)=>{
+        await authReady;
+
         if(!user){
           badgeLine.textContent = "Non connecté";
           showAlert(alertConciergerie, "⛔ Connecte-toi en conciergerie pour générer une invitation.", false);
@@ -783,36 +839,59 @@
           try{
             const t = randToken(24);
 
-            const ownerRef = doc(collection(db, "owners"));
-            const ownerDocId = ownerRef.id;
+            let owner = await findExistingOwnerByEmail(user.uid, email);
+            let ownerDocId = "";
+            let ownerRef = null;
 
-            await setDoc(ownerRef, {
-              ownerDocId,
-              conciergerieUid: user.uid,
-              email,
-              emailLower: email,
-              fullname: name || "",
-              phone: "",
-              status: "INVITED",
-              isActive: true,
-              ownerUid: "",
-              uid: "",
-              inviteToken: t,
-              invitedBy: user.email || user.uid,
-              address: { street:"", address2:"", zip:"", city:"", country:"FR" },
-              createdAt: serverTimestamp(),
-              updatedAt: serverTimestamp()
-            }, { merge:true });
+            if(owner){
+              ownerDocId = String(owner.ownerDocId || owner.id || "").trim();
+              ownerRef = doc(db, "owners", ownerDocId);
+
+              await setDoc(ownerRef, {
+                ownerDocId,
+                conciergerieUid: user.uid,
+                email,
+                emailLower: email,
+                fullname: name || owner.fullname || "",
+                status: owner.ownerUid ? "ACTIVE" : "INVITED",
+                isActive: true,
+                inviteToken: t,
+                invitedBy: user.email || user.uid,
+                updatedAt: serverTimestamp()
+              }, { merge:true });
+
+            }else{
+              ownerRef = doc(collection(db, "owners"));
+              ownerDocId = ownerRef.id;
+
+              await setDoc(ownerRef, {
+                ownerDocId,
+                conciergerieUid: user.uid,
+                email,
+                emailLower: email,
+                fullname: name || "",
+                phone: "",
+                status: "INVITED",
+                isActive: true,
+                ownerUid: "",
+                uid: "",
+                inviteToken: t,
+                invitedBy: user.email || user.uid,
+                address: { street:"", address2:"", zip:"", city:"", country:"FR" },
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp()
+              }, { merge:true });
+            }
 
             await upsertClient(ownerDocId, user.uid, {
               status: "INVITED",
               isActive: true,
-              ownerUid: "",
-              uid: "",
+              ownerUid: String(owner?.ownerUid || ""),
+              uid: String(owner?.uid || ""),
               email,
               emailLower: email,
-              fullname: name || "",
-              phone: "",
+              fullname: name || owner?.fullname || "",
+              phone: String(owner?.phone || ""),
               inviteToken: t,
               invitedBy: user.email || user.uid,
               createdAt: serverTimestamp()
@@ -830,7 +909,7 @@
               createdAt: serverTimestamp()
             }, { merge:true });
 
-            await attachInviteToHomeIfProvided(user.uid, t, email);
+            await attachInviteToHomeIfProvided(user.uid, t, email, ownerDocId);
 
             const base = `${location.origin}${location.pathname}`;
             const url = `${base}?token=${encodeURIComponent(t)}`;
@@ -864,7 +943,11 @@
               }
             };
 
-            showAlert(alertConciergerie, "✅ Invitation générée. Copiez puis envoyez le lien.", true);
+            if(owner){
+              showAlert(alertConciergerie, "✅ Invitation régénérée sur un propriétaire existant. Lien prêt à envoyer.", true);
+            }else{
+              showAlert(alertConciergerie, "✅ Invitation générée. Copiez puis envoyez le lien.", true);
+            }
 
           }catch(err){
             console.error(err);
@@ -879,7 +962,7 @@
           try{
             await navigator.clipboard.writeText(inviteLink.textContent || "");
             showAlert(alertConciergerie, "✅ Lien copié.", true);
-          }catch{
+          }catch(e){
             showAlert(alertConciergerie, "Impossible de copier. Copie manuelle : " + esc(inviteLink.textContent||""), false);
           }
         });
@@ -892,6 +975,7 @@
       conciergerieCard.classList.add("hidden");
 
       onAuthStateChanged(auth, async (u)=>{
+        await authReady;
         ownerAuthedUser = u || null;
         if(u && invite){
           const invEmail = normalizeEmail(invite.email || "");

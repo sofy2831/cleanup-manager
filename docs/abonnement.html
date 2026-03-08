@@ -1,4 +1,4 @@
-<!-- docs/abonnement.html (CORRIGÉ COMPLET — Stripe + DEV bypass, robuste JSON, anti double clic) -->
+<!-- docs/abonnement.html (CORRIGÉ COMPLET — Stripe + plan gratuit via backend + FUNCTIONS_BASE DEV/PROD dynamique) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -339,8 +339,6 @@
   </div>
 
   <script type="module">
-    const FUNCTIONS_BASE = "https://europe-west1-cleanup-manager-d9301.cloudfunctions.net/api";
-
     const PRICE_STARTER  = "price_1T84fOAB1M9iCDJFB9qiQiQh";
     const PRICE_PRO      = "price_1T84fNAB1M9iCDJFOKSGuGMI";
     const PRICE_BUSINESS = "price_1T84fNAB1M9iCDJFnZCGxkEf";
@@ -466,21 +464,25 @@
     // Firebase
     import { auth, db, authReady } from "./firebase-init.js";
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-    import { doc, setDoc, serverTimestamp, getDoc } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import { doc, getDoc } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     function normEmail(s){ return (s || "").trim().toLowerCase(); }
-const host = (location.hostname || "").toLowerCase();
+    const host = (location.hostname || "").toLowerCase();
 
-const isDevHost =
-  host === "localhost" ||
-  host.startsWith("127.") ||
-  host === "dev.cleanup-manager.fr" ||
-  host === "cleanup-manager-dev.web.app" ||
-  host === "cleanup-manager-dev.firebaseapp.com";
-    
+    const isDevHost =
+      host === "localhost" ||
+      host.startsWith("127.") ||
+      host === "dev.cleanup-manager.fr" ||
+      host === "cleanup-manager-dev.web.app" ||
+      host === "cleanup-manager-dev.firebaseapp.com";
+
+    const FUNCTIONS_BASE = isDevHost
+      ? "https://europe-west1-cleanup-manager-dev.cloudfunctions.net/api"
+      : "https://europe-west1-cleanup-manager-d9301.cloudfunctions.net/api";
+
     function isDevAllowlisted(emailLower){
-  return isDevHost && !!emailLower && DEV_ALLOWLIST.includes(emailLower);
-}
+      return isDevHost && !!emailLower && DEV_ALLOWLIST.includes(emailLower);
+    }
 
     async function waitForUser(){
       await authReady;
@@ -505,68 +507,67 @@ const isDevHost =
       return null;
     }
 
-    // (optionnel mais utile) : si billingReady pas true => pousser vers profil
-    async function ensureBillingReadyOrRedirect(uid){
+    async function ensureBillingReadyOrRedirect(uid, planKey="free"){
       try{
         const snap = await getDoc(doc(db, "users", uid));
         const u = snap.exists() ? (snap.data() || {}) : {};
         if(u.billingReady) return true;
-        showMsg("⚠️ Complète ton profil (facturation) avant de payer.");
-        setTimeout(()=> location.href = "profil-conciergerie.html?next=abonnement&plan=pro", 600);
+        showMsg("⚠️ Complète ton profil (facturation) avant de continuer.");
+        setTimeout(()=> location.href = "profil-conciergerie.html?next=abonnement&plan=" + encodeURIComponent(planKey), 600);
         return false;
       }catch{
-        return true; // ne bloque pas si Firestore a un souci
+        return true;
       }
     }
 
     let isBusy = false;
 
-    async function activatePlanDev(planKey){
+    async function activatePlanFree(){
       if(isBusy) return;
       isBusy = true;
 
       disableCta(true);
       clearMsg();
 
-      const plan = PLANS[planKey];
-      if(!plan){
-        showMsg("Plan introuvable.");
-        disableCta(false);
+      const plan = PLANS.free;
+      const user = await requireLoginOrRedirect(plan.key);
+      if(!user){
         isBusy = false;
         return;
       }
 
-      const user = await requireLoginOrRedirect(planKey);
-      if(!user){ isBusy=false; return; }
-
-      const emailLower = normEmail(user.email || "");
-      if(!isDevAllowlisted(emailLower)){
-        showMsg("⛔ Accès DEV refusé (email non allowlist).");
+      const okProfile = await ensureBillingReadyOrRedirect(user.uid, "free");
+      if(!okProfile){
         disableCta(false);
         isBusy = false;
         return;
       }
 
       try{
-        await setDoc(doc(db, "users", user.uid), {
-          uid: user.uid,
-          email: user.email || "",
-          emailLower,
-          role: "conciergerie",
-          plan: plan.key,
-          subscriptionStatus: "active",
-          subscriptionSource: "DEV_BYPASS",
-          maxHomes: Number(plan.maxHomes || 2),
-          updatedAt: serverTimestamp(),
-          subscribedAt: serverTimestamp()
-        }, { merge: true });
+        const res = await fetch(FUNCTIONS_BASE + "/activate-free-plan", {
+          method: "POST",
+          headers: { "Content-Type":"application/json" },
+          body: JSON.stringify({
+            uid: user.uid,
+            email: user.email || ""
+          })
+        });
 
-        showMsg("✅ Plan activé (DEV). Redirection…");
+        const data = await res.json().catch(()=> ({}));
+
+        if(!res.ok || !data.ok){
+          showMsg("Erreur activation du plan gratuit : " + (data.error || "inconnue"));
+          disableCta(false);
+          isBusy = false;
+          return;
+        }
+
+        showMsg("✅ Plan gratuit activé. Redirection…");
         setTimeout(()=> location.href = "conciergerie.html", 350);
 
       }catch(err){
         console.error(err);
-        showMsg("Erreur activation DEV : " + (err?.message || "inconnue"));
+        showMsg("Erreur activation du plan gratuit : " + (err?.message || "inconnue"));
         disableCta(false);
       }finally{
         isBusy = false;
@@ -598,20 +599,15 @@ const isDevHost =
       }
 
       const user = await requireLoginOrRedirect(planKey);
-      if(!user){ isBusy=false; return; }
-
-      const uid = user.uid;
-      const email = user.email || "";
-      const emailLower = normEmail(email);
-
-      if(isDevAllowlisted(emailLower)){
-        await activatePlanDev(planKey);
+      if(!user){
         isBusy = false;
         return;
       }
 
-      // optionnel: vérifier profil
-      const okProfile = await ensureBillingReadyOrRedirect(uid);
+      const uid = user.uid;
+      const email = user.email || "";
+
+      const okProfile = await ensureBillingReadyOrRedirect(uid, plan.key);
       if(!okProfile){
         disableCta(false);
         isBusy = false;
@@ -624,7 +620,7 @@ const isDevHost =
           headers: { "Content-Type":"application/json" },
           body: JSON.stringify({
             uid,
-            email,               // ✅ utilisé par Functions pour customer_email
+            email,
             plan: plan.key,
             priceId: plan.priceId
           })
@@ -656,7 +652,6 @@ const isDevHost =
       stack.innerHTML = "";
       clearMsg();
 
-      // free
       if(plan.isFree){
         const a = document.createElement("a");
         a.className = "cta-btn secondary";
@@ -664,24 +659,17 @@ const isDevHost =
         a.textContent = "Activer Gratuit";
         a.addEventListener("click", async (e)=>{
           e.preventDefault();
-          const user = await requireLoginOrRedirect(plan.key);
-          if(!user) return;
-
-          const qs = new URLSearchParams();
-          qs.set("next", "abonnement");
-          qs.set("plan", "free");
-          location.href = "profil-conciergerie.html?" + qs.toString();
+          await activatePlanFree();
         });
         stack.appendChild(a);
 
         const note = document.createElement("div");
         note.className = "small";
-        note.textContent = "Aucun paiement. Tu peux passer à un plan payant quand tu dépasses 2 logements.";
+        note.textContent = "Aucun paiement. Accès limité à 2 logements actifs.";
         stack.appendChild(note);
         return;
       }
 
-      // enterprise
       if(plan.isEnterprise){
         const a = document.createElement("a");
         a.className = "cta-btn";
@@ -691,30 +679,6 @@ const isDevHost =
         return;
       }
 
-      // dev?
-      const user = await waitForUser();
-      const emailLower = normEmail(user?.email || "");
-      const dev = isDevAllowlisted(emailLower);
-
-      if(dev){
-        const a = document.createElement("a");
-        a.className = "cta-btn";
-        a.href = "#";
-        a.textContent = "Activer (DEV)";
-        a.addEventListener("click", async (e)=>{
-          e.preventDefault();
-          await activatePlanDev(plan.key);
-        });
-        stack.appendChild(a);
-
-        const note = document.createElement("div");
-        note.className = "small";
-        note.textContent = "Mode DEV : accès libre (sans Stripe).";
-        stack.appendChild(note);
-        return;
-      }
-
-      // pay
       const pay = document.createElement("a");
       pay.className = "cta-btn";
       pay.href = "#";

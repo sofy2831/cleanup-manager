@@ -1,4 +1,4 @@
-<!-- docs/logements.html (PATCHÉ — authReady + DEV_ALLOWLIST + redirect login safe) -->
+<!-- docs/logements.html (FINAL DEV — quota UX + resend invite + delete allowed if no events/icalEvents) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -37,7 +37,7 @@
     align-items:center;
     padding:16px 16px 32px;
     box-sizing:border-box;
-    padding-bottom: 96px;
+    padding-bottom:96px;
   }
 
   .topbar{
@@ -114,7 +114,6 @@
     font-weight:900;
   }
 
-  /* ✅ badge gardé mais caché */
   .badge{
     margin-top:10px;
     padding:4px 10px;
@@ -129,9 +128,8 @@
     display:none;
   }
 
-  /* ✅ Aide bulle jaune (clic pour ouvrir/fermer) */
   .helpWrap{
-    display:none; /* affichée seulement si utile (JS) */
+    display:none;
     position:relative;
     flex-shrink:0;
     max-width:980px;
@@ -159,7 +157,6 @@
     box-shadow:0 0 0 3px rgba(255,140,0,0.22), 0 14px 30px rgba(0,0,0,0.10);
   }
 
-  /* ✅ bulle arrondie : ancrée à droite + pas de débordement */
   .helpBubble{
     position:absolute;
     top:48px;
@@ -322,21 +319,11 @@
   }
 
   .item.needs-link{
-    outline: 3px solid rgba(179,38,30,0.18);
-    box-shadow:0 12px 26px rgba(179,38,30,0.10);
     position:relative;
   }
   .item.needs-link::before{
-    content:"À LIER";
-    position:absolute;
-    top:10px; right:10px;
-    font-size:11px;
-    font-weight:1000;
-    padding:4px 10px;
-    border-radius:999px;
-    background:rgba(179,38,30,0.10);
-    color:var(--bad);
-    border:1px solid rgba(179,38,30,0.20);
+    display:none;
+    content:"";
   }
 
   .item-top{
@@ -388,7 +375,7 @@
   .mini-btn.disabled{
     opacity:.45;
     pointer-events:none;
-    filter: grayscale(1);
+    filter:grayscale(1);
   }
 
   .empty{
@@ -466,37 +453,37 @@
   .kv b{ color:#111; }
 
   .bottom-nav{
-    position: fixed;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    z-index: 60;
-    display: flex;
-    gap: 6px;
-    justify-content: space-around;
-    align-items: center;
-    padding: 10px 10px calc(10px + env(safe-area-inset-bottom));
-    background: rgba(255,255,255,0.92);
-    border-top: 1px solid var(--border);
-    backdrop-filter: blur(10px);
+    position:fixed;
+    left:0;
+    right:0;
+    bottom:0;
+    z-index:60;
+    display:flex;
+    gap:6px;
+    justify-content:space-around;
+    align-items:center;
+    padding:10px 10px calc(10px + env(safe-area-inset-bottom));
+    background:rgba(255,255,255,0.92);
+    border-top:1px solid var(--border);
+    backdrop-filter:blur(10px);
   }
 
   .bottom-nav a{
-    flex: 1;
-    text-align: center;
-    text-decoration: none;
-    font-size: 11px;
-    font-weight: 900;
-    color: #666;
-    padding: 10px 8px;
-    border-radius: 999px;
-    white-space: nowrap;
+    flex:1;
+    text-align:center;
+    text-decoration:none;
+    font-size:11px;
+    font-weight:900;
+    color:#666;
+    padding:10px 8px;
+    border-radius:999px;
+    white-space:nowrap;
   }
 
   .bottom-nav a.active{
-    background: linear-gradient(90deg,var(--violet-main),var(--violet-dark));
+    background:linear-gradient(90deg,var(--violet-main),var(--violet-dark));
     color:#fff;
-    box-shadow: 0 10px 22px rgba(0,0,0,0.10);
+    box-shadow:0 10px 22px rgba(0,0,0,0.10);
   }
   </style>
 </head>
@@ -575,7 +562,7 @@ réservations + interventions + facturation = bloquées.
     </nav>
   </div>
 
-  <!-- MODALE LOGEMENT (create/edit) -->
+  <!-- MODALE LOGEMENT -->
   <div class="modal-backdrop" id="modalBackdrop" aria-hidden="true">
     <div class="modal" role="dialog" aria-modal="true">
       <h2 id="modalTitle">Ajouter un logement</h2>
@@ -626,7 +613,7 @@ réservations + interventions + facturation = bloquées.
     </div>
   </div>
 
-  <!-- MODALE RÉSERVATION (icalEvents) -->
+  <!-- MODALE RÉSERVATION -->
   <div class="modal-backdrop" id="bookingBackdrop" aria-hidden="true">
     <div class="modal" role="dialog" aria-modal="true" aria-label="Créer une réservation">
       <h2 id="bookingModalTitle">Créer une réservation</h2>
@@ -673,7 +660,7 @@ réservations + interventions + facturation = bloquées.
     </div>
   </div>
 
-  <script type="module">
+<script type="module">
   import { auth, db, app, authReady } from "./firebase-init.js";
   console.log("PROJECT_ID", app.options.projectId);
 
@@ -691,7 +678,6 @@ réservations + interventions + facturation = bloquées.
   const alertBox = document.getElementById("alertBox");
   const companyLine = document.getElementById("companyLine");
 
-  // ✅ Sous-titre : companyName (stable, pas d'écrasement par "—")
   async function loadCompanyProfile(user){
     try{
       const snap = await getDoc(doc(db, "users", user.uid));
@@ -762,7 +748,7 @@ réservations + interventions + facturation = bloquées.
   const homeType = document.getElementById("homeType");
   const saveBtn = document.getElementById("saveBtn");
 
-  // booking modal
+  // ===== booking modal =====
   const bookingBackdrop = document.getElementById("bookingBackdrop");
   const bookingAlert = document.getElementById("bookingAlert");
   const bookingForm = document.getElementById("bookingForm");
@@ -851,8 +837,7 @@ réservations + interventions + facturation = bloquées.
     return out;
   }
 
-  // ===== Abonnement guard =====
-  // ✅ DEV bypass propre : UNIQUEMENT ces emails (en minuscule)
+  // ===== abonnement guard =====
   const DEV_ALLOWLIST = new Set([
     "mathildeconciergerie45@gmail.com",
     "s.dumas974@gmail.com"
@@ -867,10 +852,55 @@ réservations + interventions + facturation = bloquées.
     }
   }
 
+  async function refreshSubscriptionState(uid){
+    try{
+      const data = await getUserProfile(uid);
+      currentUserProfile = data || {};
+      currentMaxHomes = Number(currentUserProfile.maxHomes || 0);
+      currentHomesCountActive = Number(currentUserProfile.homesCountActive || 0);
+    }catch(e){
+      currentUserProfile = {};
+      currentMaxHomes = 0;
+      currentHomesCountActive = 0;
+    }
+  }
+
+  function canCreateHome(){
+    if(!currentMaxHomes) return false;
+    return currentHomesCountActive < currentMaxHomes;
+  }
+
+  function canRestoreHome(){
+    if(!currentMaxHomes) return false;
+    return currentHomesCountActive < currentMaxHomes;
+  }
+
+  function getHomesLimitMessage(){
+    return `⛔ Limite atteinte : ${currentHomesCountActive}/${currentMaxHomes} logement(s) actifs pour votre abonnement.\nArchive un logement ou passe à l’abonnement supérieur.`;
+  }
+
+  function getRestoreLimitMessage(){
+    return `⛔ Restauration bloquée : ${currentHomesCountActive}/${currentMaxHomes} logement(s) actifs.\nArchive un logement actif ou augmente l’abonnement.`;
+  }
+
+  function updateAddButtonState(){
+    const blocked = !canCreateHome();
+    addBtn.disabled = blocked;
+    addBtn.title = blocked ? getHomesLimitMessage().replaceAll("\n"," ") : "";
+    addBtn.textContent = blocked ? "Limite atteinte" : "+ Ajouter";
+  }
+
+  function refreshQuotaVisualMessage(){
+    if(currentMaxHomes > 0 && currentHomesCountActive >= currentMaxHomes){
+      showAlert(getHomesLimitMessage(), false);
+    }else{
+      hideAlert();
+    }
+  }
+
   async function guardConciergerie(user){
     const email = (user.email || "").toLowerCase();
 
-    // ✅ bypass DEV : ne dépend QUE de l'email auth actuel
     if(DEV_ALLOWLIST.has(email)) return true;
 
     try{
@@ -881,11 +911,15 @@ réservations + interventions + facturation = bloquées.
     }
   }
 
-  // ===== Data =====
+  // ===== data =====
   let currentUid = null;
   let allHomes = [];
   let showArchived = false;
   let editingHomeId = null;
+
+  let currentUserProfile = null;
+  let currentMaxHomes = 0;
+  let currentHomesCountActive = 0;
 
   function isArchived(h){ return h?.status === "archived"; }
 
@@ -1034,8 +1068,6 @@ réservations + interventions + facturation = bloquées.
   }
 
   async function loadHomes(){
-    hideAlert();
-
     const user = auth.currentUser;
     if(!user?.uid){
       showAlert("Firebase non connecté (auth.currentUser null). Recharge / reconnecte-toi.");
@@ -1059,14 +1091,17 @@ réservations + interventions + facturation = bloquées.
       });
 
       await loadOwnersIndex();
+      await refreshSubscriptionState(currentUid);
+      updateAddButtonState();
       render();
+      refreshQuotaVisualMessage();
     }catch(err){
       console.error("Erreur lecture homes:", err);
       showAlert("Erreur lecture homes : " + (err?.message || "inconnue"));
     }
   }
 
-  // ===== Home modal =====
+  // ===== home modal =====
   function openHomeModalCreate(){
     editingHomeId = null;
     modalTitle.textContent = "Ajouter un logement";
@@ -1102,9 +1137,10 @@ réservations + interventions + facturation = bloquées.
     homeForm.reset();
     homeType.value = "Studio";
     editingHomeId = null;
+    refreshQuotaVisualMessage();
   }
 
-  // ===== Booking modal =====
+  // ===== booking modal =====
   function fillBookingHomeSelect(selectedId){
     bookingHomeSelect.innerHTML = "";
     for(const h of allHomes){
@@ -1188,6 +1224,7 @@ réservations + interventions + facturation = bloquées.
     bookingBackdrop.setAttribute("aria-hidden","true");
     bookingForm.reset();
     hideBookingAlert();
+    refreshQuotaVisualMessage();
   }
 
   bookingHomeSelect.addEventListener("change", ()=>{
@@ -1217,7 +1254,7 @@ réservations + interventions + facturation = bloquées.
   cancelBookingBtn.addEventListener("click", closeBookingModal);
   bookingBackdrop.addEventListener("click", (e)=>{ if(e.target === bookingBackdrop) closeBookingModal(); });
 
-  // ===== Render list =====
+  // ===== render list =====
   function buildInviteUrlForHome(h){
     const p = new URLSearchParams();
     p.set("from", "logements.html");
@@ -1248,8 +1285,6 @@ réservations + interventions + facturation = bloquées.
         h.type, h.homeType,
         h.ownerAccountEmail, h.ownerEmail,
         h.pendingOwnerEmail,
-
-        // snapshot owner
         h.ownerAccountName,
         h.ownerAddress1, h.ownerAddress2,
         h.ownerZip, h.ownerCity
@@ -1261,7 +1296,11 @@ réservations + interventions + facturation = bloquées.
     helpWrap.style.display = hasNeedLink ? "flex" : "none";
     if(!hasNeedLink) setHelpOpen(false);
 
-    countLabelEl.textContent = filtered.length + " / " + homes.length;
+    const quotaTxt = currentMaxHomes
+      ? `Actifs : ${currentHomesCountActive}/${currentMaxHomes} • Affichés : ${filtered.length}/${homes.length}`
+      : `${filtered.length} / ${homes.length}`;
+
+    countLabelEl.textContent = quotaTxt;
     homesListEl.innerHTML = "";
 
     if(!filtered.length){
@@ -1314,7 +1353,7 @@ réservations + interventions + facturation = bloquées.
       const accountChip = ownerUid
         ? `<span class="chip ok">Compte actif ✅</span>`
         : (ownerDocId
-            ? `<span class="chip orange">Fiche liée (attente acceptation)</span>`
+            ? `<span class="chip orange">Invitation en attente</span>`
             : (existingOwner
                 ? `<span class="chip orange">Propriétaire existant (${existingOwnerCount} logement(s))</span>`
                 : (pendingEmail
@@ -1325,14 +1364,24 @@ réservations + interventions + facturation = bloquées.
           );
 
       const canBook = !!ownerUid && !isArchived(h);
+      const hasOwnerEmail = !!normEmail(ownerEmail);
 
       const associateBtn = (existingOwner)
         ? `<button class="mini-btn ok" type="button" data-assoc="${escapeHtml(h.id)}">🔗 Associer</button>`
         : ``;
 
-      const inviteBtn = (isArchived(h) || ownerUid || ownerDocId || existingOwner)
-        ? `<span class="mini-btn disabled">${ownerUid ? "Invité" : (ownerDocId ? "Lié" : (existingOwner ? "Associer" : "Inviter"))}</span>`
-        : `<a class="mini-btn" href="${escapeHtml(buildInviteUrlForHome(h))}" data-invite="${escapeHtml(h.id)}">✉️ Inviter</a>`;
+      let inviteBtn = "";
+      if(isArchived(h)){
+        inviteBtn = `<span class="mini-btn disabled">Inviter</span>`;
+      }else if(ownerUid){
+        inviteBtn = `<span class="mini-btn disabled">Compte actif</span>`;
+      }else if(!hasOwnerEmail){
+        inviteBtn = `<span class="mini-btn disabled" title="Ajoute un email propriétaire dans Modifier">Email requis</span>`;
+      }else if(ownerDocId){
+        inviteBtn = `<a class="mini-btn" href="${escapeHtml(buildInviteUrlForHome(h))}" data-invite="${escapeHtml(h.id)}">🔁 Renvoyer l’invite</a>`;
+      }else{
+        inviteBtn = `<a class="mini-btn" href="${escapeHtml(buildInviteUrlForHome(h))}" data-invite="${escapeHtml(h.id)}">✉️ Inviter</a>`;
+      }
 
       const bookingBtn = isArchived(h)
         ? `<span class="mini-btn disabled">Réservation</span>`
@@ -1340,6 +1389,14 @@ réservations + interventions + facturation = bloquées.
             ? `<button class="mini-btn primary" type="button" data-book="${h.id}">➕ Réservation</button>`
             : `<span class="mini-btn disabled" title="Compte propriétaire non connecté">Réservation</span>`
           );
+
+      const restoreBtn = isArchived(h)
+        ? (
+            canRestoreHome()
+              ? `<button class="mini-btn" type="button" data-unarchive="${h.id}">Restaurer</button>`
+              : `<span class="mini-btn disabled" title="${escapeHtml(getRestoreLimitMessage().replaceAll('\n',' '))}">Restaurer</span>`
+          )
+        : `<button class="mini-btn" type="button" data-archive="${h.id}">Archiver</button>`;
 
       item.innerHTML = `
         <div class="item-top">
@@ -1365,11 +1422,7 @@ réservations + interventions + facturation = bloquées.
             ${bookingBtn}
             <button class="mini-btn" type="button" data-edit="${h.id}">✏️ Modifier</button>
             <button class="mini-btn red" type="button" data-delete="${h.id}">Supprimer</button>
-            ${
-              isArchived(h)
-                ? `<button class="mini-btn" type="button" data-unarchive="${h.id}">Restaurer</button>`
-                : `<button class="mini-btn" type="button" data-archive="${h.id}">Archiver</button>`
-            }
+            ${restoreBtn}
           </div>
         </div>
       `;
@@ -1427,9 +1480,7 @@ réservations + interventions + facturation = bloquées.
             archivedAt: serverTimestamp(),
             updatedAt: serverTimestamp()
           });
-          const h = allHomes.find(x=>x.id===id);
-          if(h) h.status = "archived";
-          render();
+          await loadHomes();
         }catch(err){
           console.error(err);
           showAlert("Erreur archive : " + (err?.message || "inconnue"));
@@ -1441,15 +1492,19 @@ réservations + interventions + facturation = bloquées.
       btn.addEventListener("click", async ()=>{
         hideAlert();
         const id = btn.getAttribute("data-unarchive");
+
+        if(!canRestoreHome()){
+          showAlert(getRestoreLimitMessage());
+          return;
+        }
+
         try{
           await updateDoc(doc(db,"homes",id), {
             status: "active",
             unarchivedAt: serverTimestamp(),
             updatedAt: serverTimestamp()
           });
-          const h = allHomes.find(x=>x.id===id);
-          if(h) h.status = "active";
-          render();
+          await loadHomes();
         }catch(err){
           console.error(err);
           showAlert("Erreur restauration : " + (err?.message || "inconnue"));
@@ -1496,9 +1551,7 @@ réservations + interventions + facturation = bloquées.
 
         try{
           await deleteDoc(doc(db,"homes", id));
-          allHomes = allHomes.filter(x=>x.id !== id);
-          computeOwnerHomeCounts();
-          render();
+          await loadHomes();
           showAlert("✅ Logement supprimé.", true);
         }catch(err){
           console.error(err);
@@ -1508,12 +1561,20 @@ réservations + interventions + facturation = bloquées.
     });
   }
 
-  // ===== Home modal open/close =====
-  addBtn.addEventListener("click", openHomeModalCreate);
+  // ===== modal open/close =====
+  addBtn.addEventListener("click", ()=>{
+    hideAlert();
+    if(!canCreateHome()){
+      showAlert(getHomesLimitMessage());
+      return;
+    }
+    openHomeModalCreate();
+  });
+
   cancelBtn.addEventListener("click", closeHomeModal);
   modalBackdrop.addEventListener("click", (e)=>{ if(e.target === modalBackdrop) closeHomeModal(); });
 
-  // ===== Create / Update home =====
+  // ===== create / update home =====
   homeForm.addEventListener("submit", async (e)=>{
     e.preventDefault();
     hideAlert();
@@ -1521,6 +1582,11 @@ réservations + interventions + facturation = bloquées.
     const user = auth.currentUser;
     if(!user?.uid){
       showAlert("Non connecté. Recharge la page.");
+      return;
+    }
+
+    if(!editingHomeId && !canCreateHome()){
+      showAlert(getHomesLimitMessage());
       return;
     }
 
@@ -1599,7 +1665,7 @@ réservations + interventions + facturation = bloquées.
             showAlert("✅ Logement créé. Maintenant → clique “Inviter” sur la ligne du logement.", true);
           }
         }else{
-          showAlert("✅ Logement créé. Maintenant → clique “Inviter” sur la ligne du logement.", true);
+          showAlert("✅ Logement créé. Ajoute un email propriétaire puis clique “Inviter”.", true);
         }
       }
     }catch(err){
@@ -1608,10 +1674,11 @@ réservations + interventions + facturation = bloquées.
     }finally{
       saveBtn.disabled = false;
       saveBtn.style.opacity = "1";
+      updateAddButtonState();
     }
   });
 
-  // ===== Booking dates guard =====
+  // ===== booking dates guard =====
   function compareDateKeys(aKey, bKey){
     const a = parseDateKey(aKey);
     const b = parseDateKey(bKey);
@@ -1642,7 +1709,7 @@ réservations + interventions + facturation = bloquées.
   arrivalDateInput.addEventListener("change", ()=>{ validateBookingDates(true); });
   departureDateInput.addEventListener("change", ()=>{ validateBookingDates(true); });
 
-  // ===== Create booking (icalEvents) =====
+  // ===== create booking =====
   bookingForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     hideBookingAlert();
@@ -1752,21 +1819,21 @@ réservations + interventions + facturation = bloquées.
     }
   });
 
-  // ===== Events =====
+  // ===== events =====
   searchInputEl.addEventListener("input", render);
 
   toggleArchivedBtn.addEventListener("click", ()=>{
     showArchived = !showArchived;
     toggleArchivedBtn.textContent = showArchived ? "Masquer archivés" : "Afficher archivés";
     render();
+    refreshQuotaVisualMessage();
   });
 
-  // ===== Init =====
+  // ===== init =====
   onAuthStateChanged(auth, async (user)=>{
-    await authReady; // ✅ important iOS/Safari
+    await authReady;
 
     if(!user){
-      // ✅ évite l'historique pour limiter les "retours bizarres" iOS
       location.replace("login.html?role=conciergerie&next=logements");
       return;
     }
@@ -1781,7 +1848,6 @@ réservations + interventions + facturation = bloquées.
     await loadCompanyProfile(user);
     await loadHomes();
   });
-  </script>
-
+</script>
 </body>
 </html>
