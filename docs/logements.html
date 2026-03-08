@@ -673,7 +673,7 @@ réservations + interventions + facturation = bloquées.
     </div>
   </div>
 
-  <script type="module">
+<script type="module">
   import { auth, db, app, authReady } from "./firebase-init.js";
   console.log("PROJECT_ID", app.options.projectId);
 
@@ -852,7 +852,6 @@ réservations + interventions + facturation = bloquées.
   }
 
   // ===== Abonnement guard =====
-  // ✅ DEV bypass propre : UNIQUEMENT ces emails (en minuscule)
   const DEV_ALLOWLIST = new Set([
     "mathildeconciergerie45@gmail.com",
     "s.dumas974@gmail.com"
@@ -867,10 +866,37 @@ réservations + interventions + facturation = bloquées.
     }
   }
 
+  async function refreshSubscriptionState(uid){
+    try{
+      const data = await getUserProfile(uid);
+      currentUserProfile = data || {};
+      currentMaxHomes = Number(currentUserProfile.maxHomes || 0);
+      currentHomesCountActive = Number(currentUserProfile.homesCountActive || 0);
+    }catch(e){
+      currentUserProfile = {};
+      currentMaxHomes = 0;
+      currentHomesCountActive = 0;
+    }
+  }
+
+  function canCreateHome(){
+    if(!currentMaxHomes) return false;
+    return currentHomesCountActive < currentMaxHomes;
+  }
+
+  function getHomesLimitMessage(){
+    return `⛔ Limite atteinte : ${currentHomesCountActive}/${currentMaxHomes} logement(s) actifs pour votre abonnement.\nPasse à l’abonnement supérieur pour ajouter un nouveau logement.`;
+  }
+
+  function updateAddButtonState(){
+    const blocked = !canCreateHome();
+    addBtn.disabled = blocked;
+    addBtn.title = blocked ? getHomesLimitMessage().replaceAll("\n"," ") : "";
+  }
+
   async function guardConciergerie(user){
     const email = (user.email || "").toLowerCase();
 
-    // ✅ bypass DEV : ne dépend QUE de l'email auth actuel
     if(DEV_ALLOWLIST.has(email)) return true;
 
     try{
@@ -886,6 +912,10 @@ réservations + interventions + facturation = bloquées.
   let allHomes = [];
   let showArchived = false;
   let editingHomeId = null;
+
+  let currentUserProfile = null;
+  let currentMaxHomes = 0;
+  let currentHomesCountActive = 0;
 
   function isArchived(h){ return h?.status === "archived"; }
 
@@ -1059,6 +1089,8 @@ réservations + interventions + facturation = bloquées.
       });
 
       await loadOwnersIndex();
+      await refreshSubscriptionState(currentUid);
+      updateAddButtonState();
       render();
     }catch(err){
       console.error("Erreur lecture homes:", err);
@@ -1261,7 +1293,11 @@ réservations + interventions + facturation = bloquées.
     helpWrap.style.display = hasNeedLink ? "flex" : "none";
     if(!hasNeedLink) setHelpOpen(false);
 
-    countLabelEl.textContent = filtered.length + " / " + homes.length;
+    const quotaTxt = currentMaxHomes
+      ? `Actifs : ${currentHomesCountActive}/${currentMaxHomes} • Affichés : ${filtered.length}/${homes.length}`
+      : `${filtered.length} / ${homes.length}`;
+
+    countLabelEl.textContent = quotaTxt;
     homesListEl.innerHTML = "";
 
     if(!filtered.length){
@@ -1427,9 +1463,7 @@ réservations + interventions + facturation = bloquées.
             archivedAt: serverTimestamp(),
             updatedAt: serverTimestamp()
           });
-          const h = allHomes.find(x=>x.id===id);
-          if(h) h.status = "archived";
-          render();
+          await loadHomes();
         }catch(err){
           console.error(err);
           showAlert("Erreur archive : " + (err?.message || "inconnue"));
@@ -1447,9 +1481,7 @@ réservations + interventions + facturation = bloquées.
             unarchivedAt: serverTimestamp(),
             updatedAt: serverTimestamp()
           });
-          const h = allHomes.find(x=>x.id===id);
-          if(h) h.status = "active";
-          render();
+          await loadHomes();
         }catch(err){
           console.error(err);
           showAlert("Erreur restauration : " + (err?.message || "inconnue"));
@@ -1496,9 +1528,7 @@ réservations + interventions + facturation = bloquées.
 
         try{
           await deleteDoc(doc(db,"homes", id));
-          allHomes = allHomes.filter(x=>x.id !== id);
-          computeOwnerHomeCounts();
-          render();
+          await loadHomes();
           showAlert("✅ Logement supprimé.", true);
         }catch(err){
           console.error(err);
@@ -1509,7 +1539,15 @@ réservations + interventions + facturation = bloquées.
   }
 
   // ===== Home modal open/close =====
-  addBtn.addEventListener("click", openHomeModalCreate);
+  addBtn.addEventListener("click", ()=>{
+    hideAlert();
+    if(!canCreateHome()){
+      showAlert(getHomesLimitMessage());
+      return;
+    }
+    openHomeModalCreate();
+  });
+
   cancelBtn.addEventListener("click", closeHomeModal);
   modalBackdrop.addEventListener("click", (e)=>{ if(e.target === modalBackdrop) closeHomeModal(); });
 
@@ -1521,6 +1559,11 @@ réservations + interventions + facturation = bloquées.
     const user = auth.currentUser;
     if(!user?.uid){
       showAlert("Non connecté. Recharge la page.");
+      return;
+    }
+
+    if(!editingHomeId && !canCreateHome()){
+      showAlert(getHomesLimitMessage());
       return;
     }
 
@@ -1763,10 +1806,9 @@ réservations + interventions + facturation = bloquées.
 
   // ===== Init =====
   onAuthStateChanged(auth, async (user)=>{
-    await authReady; // ✅ important iOS/Safari
+    await authReady;
 
     if(!user){
-      // ✅ évite l'historique pour limiter les "retours bizarres" iOS
       location.replace("login.html?role=conciergerie&next=logements");
       return;
     }
@@ -1781,7 +1823,9 @@ réservations + interventions + facturation = bloquées.
     await loadCompanyProfile(user);
     await loadHomes();
   });
-  </script>
+</script>
+
 
 </body>
 </html>
+
