@@ -37,7 +37,10 @@ function setCors(req, res) {
 
   res.set("Vary", "Origin");
   res.set("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-  res.set("Access-Control-Allow-Headers", "Content-Type, Authorization, stripe-signature");
+  res.set(
+    "Access-Control-Allow-Headers",
+    "Content-Type, Authorization, stripe-signature"
+  );
   res.set("Access-Control-Allow-Credentials", "true");
 }
 
@@ -85,7 +88,7 @@ function planToMaxHomes(plan) {
 }
 
 // =====================
-// Firestore trigger: homes -> users.homesCountActive
+// Stats helpers
 // =====================
 async function countActiveHomes(conciergerieUid) {
   if (!conciergerieUid) return 0;
@@ -106,20 +109,96 @@ async function countActiveHomes(conciergerieUid) {
   return count;
 }
 
-async function refreshHomesCount(conciergerieUid) {
-  if (!conciergerieUid) return;
+async function countHomes(conciergerieUid) {
+  if (!conciergerieUid) return 0;
 
-  const n = await countActiveHomes(conciergerieUid);
+  const snap = await admin
+    .firestore()
+    .collection("homes")
+    .where("conciergerieUid", "==", conciergerieUid)
+    .get();
 
-  await admin.firestore().doc(`users/${conciergerieUid}`).set(
-    {
-      homesCountActive: n,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    },
-    { merge: true }
-  );
+  return snap.size || 0;
 }
 
+async function countOwners(conciergerieUid) {
+  if (!conciergerieUid) return 0;
+
+  const snap = await admin
+    .firestore()
+    .collection("owners")
+    .where("conciergerieUid", "==", conciergerieUid)
+    .get();
+
+  return snap.size || 0;
+}
+
+async function countAgents(conciergerieUid) {
+  if (!conciergerieUid) return 0;
+
+  const snap = await admin
+    .firestore()
+    .collection("agents")
+    .where("conciergerieUid", "==", conciergerieUid)
+    .get();
+
+  let count = 0;
+  snap.forEach((d) => {
+    const a = d.data() || {};
+    const status = String(a.status || "active").toLowerCase();
+    if (status !== "archived" && status !== "inactive") count++;
+  });
+
+  return count;
+}
+
+async function rebuildStatsFor(conciergerieUid) {
+  if (!conciergerieUid) return;
+
+  const db = admin.firestore();
+  const userRef = db.doc(`users/${conciergerieUid}`);
+  const userSnap = await userRef.get();
+  const user = userSnap.exists ? (userSnap.data() || {}) : {};
+
+  const [homesCount, activeHomes, ownersCount, agentsCount] = await Promise.all([
+    countHomes(conciergerieUid),
+    countActiveHomes(conciergerieUid),
+    countOwners(conciergerieUid),
+    countAgents(conciergerieUid),
+  ]);
+
+  const plan = String(user.plan || "free").toLowerCase();
+  const maxHomes =
+    Number.isFinite(Number(user.maxHomes)) && Number(user.maxHomes) > 0
+      ? Number(user.maxHomes)
+      : planToMaxHomes(plan);
+
+  const payload = {
+    conciergerieUid,
+    homesCount,
+    activeHomes,
+    ownersCount,
+    agentsCount,
+    maxHomes,
+    plan,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+
+  await Promise.all([
+    db.doc(`statsConciergerie/${conciergerieUid}`).set(payload, { merge: true }),
+    userRef.set(
+      {
+        homesCountActive: activeHomes,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    ),
+  ]);
+}
+
+// =====================
+// Firestore triggers
+// =====================
 exports.onHomeWrite = onDocumentWritten(
   { document: "homes/{homeId}", region: "europe-west1" },
   async (event) => {
@@ -137,7 +216,49 @@ exports.onHomeWrite = onDocumentWritten(
     if (beforeUid) uids.add(beforeUid);
     if (afterUid) uids.add(afterUid);
 
-    await Promise.all([...uids].map((uid) => refreshHomesCount(uid)));
+    await Promise.all([...uids].map((uid) => rebuildStatsFor(uid)));
+  }
+);
+
+exports.onOwnerWrite = onDocumentWritten(
+  { document: "owners/{ownerId}", region: "europe-west1" },
+  async (event) => {
+    const before = event.data?.before?.exists
+      ? (event.data.before.data() || {})
+      : null;
+    const after = event.data?.after?.exists
+      ? (event.data.after.data() || {})
+      : null;
+
+    const beforeUid = before ? String(before.conciergerieUid || "").trim() : "";
+    const afterUid = after ? String(after.conciergerieUid || "").trim() : "";
+
+    const uids = new Set();
+    if (beforeUid) uids.add(beforeUid);
+    if (afterUid) uids.add(afterUid);
+
+    await Promise.all([...uids].map((uid) => rebuildStatsFor(uid)));
+  }
+);
+
+exports.onAgentWrite = onDocumentWritten(
+  { document: "agents/{agentId}", region: "europe-west1" },
+  async (event) => {
+    const before = event.data?.before?.exists
+      ? (event.data.before.data() || {})
+      : null;
+    const after = event.data?.after?.exists
+      ? (event.data.after.data() || {})
+      : null;
+
+    const beforeUid = before ? String(before.conciergerieUid || "").trim() : "";
+    const afterUid = after ? String(after.conciergerieUid || "").trim() : "";
+
+    const uids = new Set();
+    if (beforeUid) uids.add(beforeUid);
+    if (afterUid) uids.add(afterUid);
+
+    await Promise.all([...uids].map((uid) => rebuildStatsFor(uid)));
   }
 );
 
@@ -179,7 +300,7 @@ exports.api = onRequest(
     // 1) PING
     // =====================
     if (method === "GET" && (path === "/" || path === "")) {
-      return res.json({ ok: true, version: "api-v4" });
+      return res.json({ ok: true, version: "api-v5" });
     }
 
     // =====================
@@ -225,6 +346,8 @@ exports.api = onRequest(
           maxHomes: 2,
           subscribedAt: admin.firestore.FieldValue.serverTimestamp(),
         });
+
+        await rebuildStatsFor(uid);
 
         return res.json({
           ok: true,
@@ -340,7 +463,8 @@ exports.api = onRequest(
           plan,
           payment_status: session.payment_status || null,
           status: session.status || null,
-          customer_email: session.customer_details?.email || session.customer_email || null,
+          customer_email:
+            session.customer_details?.email || session.customer_email || null,
           customer: session.customer || null,
           subscription: session.subscription || null,
           livemode: !!session.livemode,
@@ -397,6 +521,8 @@ exports.api = onRequest(
               ? normEmail(email)
               : admin.firestore.FieldValue.delete(),
           });
+
+          await rebuildStatsFor(uid);
         }
 
         // Abonnement créé / modifié / supprimé
@@ -418,6 +544,8 @@ exports.api = onRequest(
             maxHomes: planToMaxHomes(plan),
             stripeSubscriptionId: sub.id,
           });
+
+          await rebuildStatsFor(uid);
         }
 
         // Paiement réussi
@@ -433,6 +561,8 @@ exports.api = onRequest(
               .get();
 
             if (!snap.empty) {
+              const uid = snap.docs[0].id;
+
               await snap.docs[0].ref.set(
                 {
                   subscriptionStatus: "active",
@@ -441,6 +571,8 @@ exports.api = onRequest(
                 },
                 { merge: true }
               );
+
+              await rebuildStatsFor(uid);
             }
           }
         }
@@ -458,6 +590,8 @@ exports.api = onRequest(
               .get();
 
             if (!snap.empty) {
+              const uid = snap.docs[0].id;
+
               await snap.docs[0].ref.set(
                 {
                   subscriptionStatus: "inactive",
@@ -466,6 +600,8 @@ exports.api = onRequest(
                 },
                 { merge: true }
               );
+
+              await rebuildStatsFor(uid);
             }
           }
         }
