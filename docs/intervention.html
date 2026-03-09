@@ -1,4 +1,4 @@
-<!-- docs/intervention.html (FINAL — INTERVENTIONS cohérent avec nouvelle-prestation + compat ancien lines + guard conciergerieUid + guard conciergerie page) -->
+<!-- docs/intervention.html (FINAL — sélection interventions à envoyer + guard conciergerie strict + cohérent nouvelle-prestation) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -161,6 +161,7 @@
       background:#fff; font-size:13px; outline:none;
     }
     textarea{ resize:vertical; }
+
     .btnrow{ display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; align-items:center; }
 
     .hintBox{
@@ -169,6 +170,50 @@
       font-size:12px; font-weight:800; color:#444; line-height:1.35;
     }
     .hintBox b{ font-weight:900; }
+
+    .selectorBox{
+      margin-top:6px;
+      display:flex;
+      flex-direction:column;
+      gap:8px;
+      background:#fff;
+      border:1px solid rgba(122,92,255,0.18);
+      border-radius:16px;
+      padding:10px;
+      box-shadow:0 3px 10px rgba(0,0,0,.06);
+    }
+    .selectorRow{
+      display:flex;
+      gap:10px;
+      align-items:flex-start;
+      padding:10px;
+      border-radius:14px;
+      background:rgba(122,92,255,0.05);
+      border:1px solid rgba(122,92,255,0.10);
+    }
+    .selectorRow input[type="checkbox"]{
+      width:18px;
+      height:18px;
+      margin-top:2px;
+      flex-shrink:0;
+    }
+    .selectorMain{
+      min-width:0;
+      flex:1;
+    }
+    .selectorTitle{
+      font-size:13px;
+      font-weight:900;
+      color:#222;
+    }
+    .selectorSub{
+      margin-top:3px;
+      font-size:12px;
+      font-weight:800;
+      color:#666;
+      line-height:1.35;
+      white-space:pre-wrap;
+    }
 
     .photosBox{
       margin-top:8px;
@@ -316,7 +361,7 @@
         </div>
 
         <div class="hintBox" id="missionsHint">
-          <b>Missions envoyées à l’agent :</b> —
+          <b>Résumé agent :</b> —
         </div>
 
         <div class="photosBox" id="photosBox" style="display:none;">
@@ -340,6 +385,11 @@
         <label class="mini">Nom conciergerie (optionnel)</label>
         <input id="conciergerieName" type="text" placeholder="Ex. CleanUp Manager" />
 
+        <div class="mini">Interventions à envoyer</div>
+        <div class="selectorBox" id="sendSelectorBox">
+          <div class="mini" id="sendSelectorEmpty">Aucune intervention exploitable.</div>
+        </div>
+
         <div class="btnrow">
           <button class="pill primary" id="genLinkBtn" type="button">Générer liens</button>
           <button class="pill" id="copyBtn" type="button" disabled>Copier</button>
@@ -349,7 +399,7 @@
         <textarea id="linkBox" rows="7" style="margin-top:8px;" readonly placeholder="Les liens apparaîtront ici…"></textarea>
 
         <div class="mini" style="margin-top:10px;">
-          Checklist : token 24h. Photos : token 24h via agent-photos.html (PHOTOS bypass).
+          Le token dure 24h. N’envoie que les interventions utiles pour cette fenêtre.
         </div>
       </aside>
     </div>
@@ -383,6 +433,9 @@
     const agentEmail = document.getElementById("agentEmail");
     const conciergerieName = document.getElementById("conciergerieName");
 
+    const sendSelectorBox = document.getElementById("sendSelectorBox");
+    const sendSelectorEmpty = document.getElementById("sendSelectorEmpty");
+
     const genLinkBtn = document.getElementById("genLinkBtn");
     const copyBtn = document.getElementById("copyBtn");
     const mailtoBtn = document.getElementById("mailtoBtn");
@@ -391,8 +444,6 @@
     const photosBox = document.getElementById("photosBox");
     const photosWrap = document.getElementById("photosWrap");
     const photosTotalBadge = document.getElementById("photosTotalBadge");
-
-   
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -419,17 +470,17 @@
     function isDateKey(s){ return /^\d{4}-\d{2}-\d{2}$/.test(String(s||"").trim()); }
 
     async function guardConciergerie(user){
-  try{
-    const snap = await getDoc(doc(db,"users",user.uid));
-    if(!snap.exists()) return false;
+      try{
+        const snap = await getDoc(doc(db,"users",user.uid));
+        if(!snap.exists()) return false;
 
-    const d = snap.data() || {};
-    return (d.role === "conciergerie" || d.role === "admin")
-      && String(d.subscriptionStatus || "").toLowerCase() === "active";
-  }catch(e){
-    return false;
-  }
-}
+        const d = snap.data() || {};
+        return (d.role === "conciergerie" || d.role === "admin")
+          && String(d.subscriptionStatus || "").toLowerCase() === "active";
+      }catch(e){
+        return false;
+      }
+    }
 
     function applyBackLink(){
       const returnTo = (qs("returnTo") || "").toLowerCase().trim();
@@ -540,43 +591,121 @@
       return (interventions || []).find(iv => iv.key === key) || null;
     }
 
-    function missionTypesFromInterventions(interventions, fallbackType){
+    function interventionHasContent(iv){
+      if(!iv) return false;
+      return (Array.isArray(iv.lines) && iv.lines.length > 0) || !!String(iv.note || "").trim();
+    }
+
+    function missionsFromOneIntervention(iv){
       const out = new Set();
-      const ft = String(fallbackType||"").toUpperCase().trim();
-      if(["MENAGE","CHECKIN","CHECKOUT","LINGE","MAINTENANCE","KITS"].includes(ft)) out.add(ft);
+      if(!iv) return [];
 
-      for(const iv of (interventions || [])){
-        const ivType = String(iv?.type || "").toUpperCase().trim();
-        const ivTitle = normTxt(iv?.title || "");
+      const ivType = String(iv.type || "").toUpperCase().trim();
+      const ivTitle = normTxt(iv.title || "");
 
-        if(ivType === "ARRIVEE" || ivTitle.includes("arrivee")) out.add("CHECKIN");
-        if(ivType === "INTER_SEJOUR" || ivTitle.includes("inter-sejour") || ivTitle.includes("inter sejour")) out.add("MENAGE");
-        if(ivType === "DEPART" || ivTitle.includes("depart")) out.add("CHECKOUT");
+      if(ivType === "ARRIVEE" || ivTitle.includes("arrivee")){
+        out.add("CHECKIN");
+      }
+      if(ivType === "INTER_SEJOUR" || ivTitle.includes("inter-sejour") || ivTitle.includes("inter sejour")){
+        out.add("MENAGE");
+      }
+      if(ivType === "DEPART" || ivTitle.includes("depart")){
+        out.add("CHECKOUT");
+      }
 
-        const lines = Array.isArray(iv?.lines) ? iv.lines : [];
-        for(const l of lines){
-          const label = normTxt(l?.label || l?.name || l?.title || "");
-          if(!label) continue;
+      const lines = Array.isArray(iv.lines) ? iv.lines : [];
+      for(const l of lines){
+        const label = normTxt(l?.label || l?.name || l?.title || "");
+        if(!label) continue;
 
-          if(label.includes("check-in") || label.includes("check in") || label.includes("arrivee")) out.add("CHECKIN");
-          if(label.includes("check-out") || label.includes("check out") || label.includes("depart")) out.add("CHECKOUT");
-          if(label.includes("menage") || label.includes("nettoyage")) out.add("MENAGE");
+        if(label.includes("check-in") || label.includes("check in") || label.includes("arrivee")) out.add("CHECKIN");
+        if(label.includes("check-out") || label.includes("check out") || label.includes("depart")) out.add("CHECKOUT");
+        if(label.includes("menage") || label.includes("nettoyage")) out.add("MENAGE");
 
-          if(label.includes("linge") || label.includes("drap") || label.includes("serviette")
-            || label.includes("collecte") || label.includes("lavage") || label.includes("sechage")
-            || label.includes("lessive") || label.includes("blanch")) out.add("LINGE");
+        if(label.includes("linge") || label.includes("drap") || label.includes("serviette")
+          || label.includes("collecte") || label.includes("lavage") || label.includes("sechage")
+          || label.includes("lessive") || label.includes("blanch")) out.add("LINGE");
 
-          if(label.includes("maintenance") || label.includes("reparation") || label.includes("bricol")
-            || label.includes("artisan") || label.includes("fuite") || label.includes("serrure")) out.add("MAINTENANCE");
+        if(label.includes("maintenance") || label.includes("reparation") || label.includes("bricol")
+          || label.includes("artisan") || label.includes("fuite") || label.includes("serrure")) out.add("MAINTENANCE");
 
-          if(label.includes("kit") || label.includes("consommable") || label.includes("capsule")
-            || label.includes("shampo") || label.includes("savon") || label.includes("reassort")) out.add("KITS");
-        }
+        if(label.includes("kit") || label.includes("consommable") || label.includes("capsule")
+          || label.includes("shampo") || label.includes("savon") || label.includes("reassort")) out.add("KITS");
       }
 
       if(out.size === 0) out.add("MENAGE");
       const order = ["MENAGE","CHECKIN","CHECKOUT","LINGE","MAINTENANCE","KITS"];
       return order.filter(x => out.has(x));
+    }
+
+    function getSelectedInterventionKeys(){
+      return Array.from(sendSelectorBox.querySelectorAll('input[type="checkbox"][data-iv-key]:checked'))
+        .map(el => String(el.getAttribute("data-iv-key") || "").trim())
+        .filter(Boolean);
+    }
+
+    function buildMissionTypesFromSelection(interventions, selectedKeys){
+      const out = new Set();
+      for(const key of selectedKeys){
+        const iv = findIntervention(interventions, key);
+        const missionTypes = missionsFromOneIntervention(iv);
+        missionTypes.forEach(t => out.add(t));
+      }
+      const order = ["MENAGE","CHECKIN","CHECKOUT","LINGE","MAINTENANCE","KITS"];
+      return order.filter(x => out.has(x));
+    }
+
+    function renderSendSelector(interventions){
+      sendSelectorBox.innerHTML = "";
+      const visible = (Array.isArray(interventions) ? interventions : []).filter(interventionHasContent);
+
+      if(!visible.length){
+        sendSelectorBox.innerHTML = `<div class="mini" id="sendSelectorEmpty">Aucune intervention exploitable.</div>`;
+        return;
+      }
+
+      for(const iv of visible){
+        const lines = Array.isArray(iv.lines) ? iv.lines : [];
+        const subtotal = computeTotalFromLines(lines);
+        const missionTypes = missionsFromOneIntervention(iv);
+        const row = document.createElement("label");
+        row.className = "selectorRow";
+        row.innerHTML = `
+          <input type="checkbox" data-iv-key="${esc(iv.key)}" ${iv.completed ? "checked" : ""}>
+          <div class="selectorMain">
+            <div class="selectorTitle">${esc(iv.title)} • ${esc(iv.dateKey || "—")}</div>
+            <div class="selectorSub">
+${esc(`${lines.length} ligne(s) • ${money(subtotal)}${missionTypes.length ? " • " + missionTypes.map(missionLabel).join(", ") : ""}`)}
+            </div>
+          </div>
+        `;
+        sendSelectorBox.appendChild(row);
+      }
+
+      sendSelectorBox.querySelectorAll('input[type="checkbox"][data-iv-key]').forEach(el=>{
+        el.addEventListener("change", refreshMissionHintFromSelection);
+      });
+    }
+
+    function refreshMissionHintFromSelection(){
+      const selectedKeys = getSelectedInterventionKeys();
+      const missionTypes = buildMissionTypesFromSelection(currentInterventions, selectedKeys);
+
+      const parts = selectedKeys.map(key=>{
+        const iv = findIntervention(currentInterventions, key);
+        if(!iv) return null;
+        const m = missionsFromOneIntervention(iv).map(missionLabel).join(", ");
+        return `${iv.title} (${iv.dateKey || "—"}${m ? " • " + m : ""})`;
+      }).filter(Boolean);
+
+      if(!parts.length){
+        missionsHint.innerHTML = `<b>Résumé agent :</b> aucune intervention sélectionnée.`;
+        return;
+      }
+
+      missionsHint.innerHTML =
+        `<b>Résumé agent :</b> ${esc(parts.join(" | "))}` +
+        `${missionTypes.length ? `<br><b>Missions techniques :</b> ${esc(missionTypes.map(missionLabel).join(", "))}` : ""}`;
     }
 
     function isTime(s){ return /^\d{2}:\d{2}$/.test(String(s||"").trim()); }
@@ -671,7 +800,6 @@
     let currentUser = null;
     let currentEvent = null;
     let currentInterventions = [];
-    let inferredMissionTypes = ["MENAGE"];
 
     function renderInterventions(interventions){
       linesBox.innerHTML = "";
@@ -890,17 +1018,8 @@
       const total = (e.total != null) ? Number(e.total) : computeTotalFromLines(flatLines);
       totalValue.textContent = money(total);
 
-      inferredMissionTypes = missionTypesFromInterventions(currentInterventions, e.type);
-
-      const schedPreview = inferredMissionTypes.map(t=>{
-        const s = computeScheduleForMission(currentEvent, t);
-        const when = s.scheduledDateKey
-          ? `${s.scheduledDateKey}${s.scheduledTime ? " • " + s.scheduledTime : ""}`
-          : "—";
-        return `${missionLabel(t)} (${when})`;
-      }).join(", ");
-
-      missionsHint.innerHTML = `<b>Missions envoyées à l’agent :</b> ${esc(schedPreview || inferredMissionTypes.map(missionLabel).join(", "))}`;
+      renderSendSelector(currentInterventions);
+      refreshMissionHintFromSelection();
 
       agentName.value = e.assignedToName || "";
       agentEmail.value = e.assignedToEmail || "";
@@ -998,15 +1117,31 @@
       if(!email || !name) return showAlert("Nom + email agent requis.");
       if(!/^\S+@\S+\.\S+$/.test(email)) return showAlert("Email agent invalide.");
 
-      const missionTypes = (Array.isArray(inferredMissionTypes) && inferredMissionTypes.length)
-        ? inferredMissionTypes.slice()
-        : ["MENAGE"];
+      const selectedKeys = getSelectedInterventionKeys();
+      if(!selectedKeys.length){
+        return showAlert("Choisis au moins une intervention à envoyer.");
+      }
+
+      const missionTypes = buildMissionTypesFromSelection(currentInterventions, selectedKeys);
+      if(!missionTypes.length){
+        return showAlert("Aucune mission exploitable pour les interventions cochées.");
+      }
 
       const tokenId = randomToken(20);
       const expiresAtMs = Date.now() + 24*60*60*1000;
       const expiresAt = Timestamp.fromMillis(expiresAtMs);
 
       const e = currentEvent || {};
+      const selectedInterventions = selectedKeys.map(key => {
+        const iv = findIntervention(currentInterventions, key);
+        return iv ? {
+          key: iv.key,
+          label: iv.title,
+          dateKey: iv.dateKey || "",
+          note: iv.note || ""
+        } : null;
+      }).filter(Boolean);
+
       const prestaSnapshot = {
         homeName: e.homeName || "Logement",
         homeCity: (e.homeCity || "").trim(),
@@ -1017,7 +1152,8 @@
         departureTime: e.departureTime || "",
         homeAddress: (e.homeAddress || e.address || "").trim(),
         homeZip: (e.homeZip || e.zip || "").trim(),
-        meta: (e.meta || "").trim()
+        meta: (e.meta || "").trim(),
+        selectedInterventions
       };
 
       const missionSchedules = {};
@@ -1039,6 +1175,8 @@
         agentName: name,
         conciergerieName: (conciergerieName?.value || "").trim() || null,
 
+        selectedInterventionKeys: selectedKeys,
+        selectedInterventions,
         missionTypes,
         missionSchedules,
         presta: prestaSnapshot,
@@ -1075,12 +1213,13 @@
       linkBox.value =
         `Checklist (token 24h):\n${tokenLink}\n\n` +
         `Photos (token 24h):\n${photosLink}\n\n` +
+        `Interventions envoyées:\n${selectedInterventions.map(iv => `- ${iv.label} (${iv.dateKey || "—"})`).join("\n")}\n\n` +
         `Missions autorisées:\n${missionTypes.join(", ")}`;
 
       copyBtn.disabled = false;
       mailtoBtn.disabled = false;
 
-      showAlert("Liens générés (checklist + photos).", true);
+      showAlert("Liens générés pour les interventions cochées.", true);
       await load();
     }
 
@@ -1156,5 +1295,3 @@
   </script>
 </body>
 </html>
-
-
