@@ -1,4 +1,4 @@
-<!-- docs/agent.html (FINAL — checklist via token ; ✅ PLUS AUCUN “TROP TÔT” ; redirige missionfini avec recap) -->
+<!-- docs/agent.html (FINAL — checklist via token ; limité aux interventions/missions envoyées ; fin prestation ok) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -92,6 +92,32 @@
     }
     .agentMini{ margin-top:6px; font-size:11px; font-weight:900; color:var(--muted); }
 
+    .selectedBox{
+      margin-top:10px;
+      display:flex;
+      flex-direction:column;
+      gap:8px;
+    }
+    .selItem{
+      background:#fff;
+      border:1px solid rgba(122,92,255,0.16);
+      border-radius:14px;
+      padding:10px;
+      box-shadow:0 3px 10px rgba(0,0,0,.05);
+    }
+    .selTitle{
+      font-size:13px;
+      font-weight:900;
+      color:#222;
+    }
+    .selSub{
+      margin-top:3px;
+      font-size:12px;
+      font-weight:800;
+      color:#666;
+      white-space:pre-wrap;
+    }
+
     .missions{ display:flex; flex-direction:column; gap:10px; margin-top:10px; }
     .mcard{
       background:#fff; border-radius:16px; border:1px solid rgba(0,0,0,0.03);
@@ -143,11 +169,6 @@
     .locked{
       border-left:5px solid rgba(122,92,255,0.55);
       background:linear-gradient(180deg,#ffffff 0%, rgba(122,92,255,0.06) 100%);
-    }
-    /* ✅ plus de tooEarly => on garde la classe mais elle ne sera jamais appliquée */
-    .tooEarly{
-      border-left:5px solid rgba(179,38,30,0.45);
-      background:linear-gradient(180deg,#ffffff 0%, rgba(179,38,30,0.05) 100%);
     }
 
     .footerCard{ display:flex; flex-direction:column; gap:10px; }
@@ -207,10 +228,15 @@
       </section>
 
       <section class="card">
+        <div class="mini">Interventions envoyées</div>
+        <div class="selectedBox" id="selectedBox"></div>
+      </section>
+
+      <section class="card">
         <div class="mini" style="margin-bottom:6px;">Commentaire global (optionnel)</div>
         <textarea id="globalComment" rows="2" placeholder="Ex. remarque générale, incident, manque matériel..."></textarea>
         <div class="mini" style="margin-top:8px;">
-          Astuce : mets ici tout ce qui concerne 1 ou plusieurs missions (ça sera envoyé avec “Terminer”).
+          Astuce : mets ici tout ce qui concerne 1 ou plusieurs missions.
         </div>
       </section>
 
@@ -245,6 +271,7 @@
     const noteLine = document.getElementById("noteLine");
     const agentLine= document.getElementById("agentLine");
 
+    const selectedBox = document.getElementById("selectedBox");
     const missionsWrap = document.getElementById("missionsWrap");
 
     const chipToken = document.getElementById("chipToken");
@@ -317,18 +344,6 @@
       const ms = ts?.toMillis ? ts.toMillis() : NaN;
       if(Number.isFinite(ms)) return Date.now() < ms;
       return false;
-    }
-
-    /* ✅ On garde les helpers date (pas utilisés pour bloquer), mais inoffensifs */
-    function isDateKey(s){ return /^\d{4}-\d{2}-\d{2}$/.test(String(s||"").trim()); }
-    function isTime(s){ return /^\d{2}:\d{2}$/.test(String(s||"").trim()); }
-    function toLocalMs(dateKey, timeHHmm){
-      const d = String(dateKey||"").trim();
-      if(!isDateKey(d)) return 0;
-      const t = isTime(timeHHmm) ? String(timeHHmm).trim() : "00:00";
-      const dt = new Date(`${d}T${t}:00`);
-      const ms = dt.getTime();
-      return Number.isFinite(ms) ? ms : 0;
     }
 
     function compactChecklistTemplate(type){
@@ -452,6 +467,7 @@
 
     let tokenDoc = null;
     let TYPES = ["MENAGE"];
+    let selectedInterventions = [];
 
     function setPrestaHeaderFromToken(presta){
       const e = presta || {};
@@ -476,6 +492,24 @@
       }else{
         noteLine.style.display = "none";
         noteLine.textContent = "";
+      }
+    }
+
+    function renderSelectedInterventions(list){
+      selectedBox.innerHTML = "";
+      if(!Array.isArray(list) || !list.length){
+        selectedBox.innerHTML = `<div class="mini">Aucune intervention précisée dans le token.</div>`;
+        return;
+      }
+
+      for(const iv of list){
+        const div = document.createElement("div");
+        div.className = "selItem";
+        div.innerHTML = `
+          <div class="selTitle">${esc(iv?.label || iv?.key || "Intervention")}</div>
+          <div class="selSub">${esc((iv?.dateKey || "—") + (iv?.note ? " • " + iv.note : ""))}</div>
+        `;
+        selectedBox.appendChild(div);
       }
     }
 
@@ -531,14 +565,10 @@
         : "Toutes les missions sont terminées. Tu peux enregistrer la prestation.";
     }
 
-    /* ✅ NO DATE GATING: toujours dispo si token OK (sauf locked/done) */
-    function computeAvailableInfo(){
-      return { canStart:true, whenMs:0, whenTxt:"" };
-    }
-
     async function load(){
       hideAlert();
       missionsWrap.innerHTML = "";
+      selectedBox.innerHTML = "";
       subLine.textContent = "Chargement…";
 
       if(!token || !prestationId){
@@ -559,7 +589,8 @@
       }
       tokenDoc = tSnap.data() || {};
 
-      if(String(tokenDoc.prestationId) !== String(prestationId)){
+      const tokenPid = String(tokenDoc.prestationId || tokenDoc.eventId || "").trim();
+      if(tokenPid !== String(prestationId)){
         showAlert("⛔ Token ≠ prestation.");
         chipStatus.innerHTML = `<span class="chip bad">SCOPE</span>`;
         subLine.textContent = "";
@@ -584,6 +615,9 @@
       agentLine.textContent = `Agent : ${(tokenDoc.agentName || "—")}${tokenDoc.agentEmail ? " • " + tokenDoc.agentEmail : ""}`;
 
       TYPES = normalizeTypeList(tokenDoc.missionTypes);
+      selectedInterventions = Array.isArray(tokenDoc.selectedInterventions) ? tokenDoc.selectedInterventions : [];
+      renderSelectedInterventions(selectedInterventions);
+
       subLine.textContent = "";
 
       const missions = [];
@@ -602,7 +636,7 @@
       if(missingDocs.length){
         showAlert(
           "⚠️ Missions manquantes côté Firestore : " + missingDocs.join(", ") + "\n" +
-          "=> Retourne dans intervention.html → Générer lien (ça doit créer events/{prestationId}/missions/{TYPE})."
+          "=> Retourne dans intervention.html → Générer lien."
         );
       }
 
@@ -623,9 +657,6 @@
         const done = !!d.agentDone;
         const status = (d.status || "").toUpperCase() || "—";
 
-        const avail = computeAvailableInfo(d);
-        const tooEarly = false; // ✅ supprimé
-
         const tpl = compactChecklistTemplate(m.id);
         const savedItems = checklistToArray(extractChecklistRaw(d));
         const doneByKey = {};
@@ -639,7 +670,7 @@
 
         const checklistHtml = items.map((it, idx)=>{
           const id = `chk_${m.id}_${idx}`;
-          const disabled = (locked) ? "disabled" : "";
+          const disabled = locked ? "disabled" : "";
           return `
             <div class="chk">
               <input type="checkbox" id="${id}" data-k="${esc(it.key)}" ${it.done ? "checked" : ""} ${disabled} />
@@ -657,11 +688,16 @@
           (done ? " done" : "") +
           (locked ? " locked" : "");
 
+        const schedTxt = [
+          d.scheduledDateKey || "",
+          d.scheduledTime || ""
+        ].filter(Boolean).join(" • ");
+
         wrap.innerHTML = `
           <div class="mhead">
             <div>
               <div class="mtitle">${missionTitle(d.missionId || d.type || m.id)} ${locked ? "• verrouillée" : ""}</div>
-              <div class="msub">Status : ${esc(status)} ${done ? "\n✔ Terminée" : ""}</div>
+              <div class="msub">Status : ${esc(status)}${schedTxt ? "\nPrévu : " + esc(schedTxt) : ""}${done ? "\n✔ Terminée" : ""}</div>
             </div>
             <div>
               ${chipFor(status)}
@@ -673,7 +709,7 @@
           </div>
 
           <div class="actions">
-            <button class="btn" type="button" data-done="${esc(m.id)}" ${(locked) ? "disabled" : ""}>Terminer</button>
+            <button class="btn" type="button" data-done="${esc(m.id)}" ${locked ? "disabled" : ""}>Terminer</button>
           </div>
         `;
         missionsWrap.appendChild(wrap);
@@ -740,7 +776,6 @@
 
       lockUI(true);
       try{
-        // ✅ re-check token avant d’écrire
         if(!tokenValid(tokenDoc)){
           showAlert("⛔ Token expiré. Demande un nouveau lien.");
           return;
