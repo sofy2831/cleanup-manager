@@ -1,4 +1,4 @@
-<!-- docs/intervention.html (FINAL — INTERVENTIONS cohérent avec nouvelle-prestation + compat ancien lines + guard conciergerieUid) -->
+<!-- docs/intervention.html (FINAL — INTERVENTIONS cohérent avec nouvelle-prestation + compat ancien lines + guard conciergerieUid + guard conciergerie page) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -392,6 +392,8 @@
     const photosWrap = document.getElementById("photosWrap");
     const photosTotalBadge = document.getElementById("photosTotalBadge");
 
+    const FREE_EMAILS = new Set(["mathilde.debout31@gmail.com","s.dumas974@gmail.com"]);
+
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
       alertBox.classList.toggle("ok", !!ok);
@@ -415,6 +417,20 @@
     }
 
     function isDateKey(s){ return /^\d{4}-\d{2}-\d{2}$/.test(String(s||"").trim()); }
+
+    async function guardConciergerie(user){
+      const email = (user.email || "").toLowerCase();
+      if(FREE_EMAILS.has(email)) return true;
+
+      try{
+        const snap = await getDoc(doc(db,"users",user.uid));
+        if(!snap.exists()) return false;
+        const d = snap.data() || {};
+        return (d.role === "conciergerie" || d.role === "admin") && d.subscriptionStatus === "active";
+      }catch(e){
+        return false;
+      }
+    }
 
     function applyBackLink(){
       const returnTo = (qs("returnTo") || "").toLowerCase().trim();
@@ -1102,8 +1118,12 @@
       try{
         await generateLinks();
       }catch(err){
-        console.error(err);
-        showAlert("Erreur génération : " + (err?.code || err?.message || "inconnue"));
+        console.error("GEN_LINKS_ERROR", err);
+        showAlert(
+          "Erreur génération : "
+          + (err?.code || "inconnue")
+          + "\nmessage : " + (err?.message || "—")
+        );
       }finally{
         genLinkBtn.disabled = false;
         genLinkBtn.textContent = "Générer liens";
@@ -1111,7 +1131,17 @@
     });
 
     onAuthStateChanged(auth, async (u)=>{
-      if(!u) return location.href="login.html";
+      if(!u){
+        location.href = "login.html?role=conciergerie";
+        return;
+      }
+
+      const ok = await guardConciergerie(u);
+      if(!ok){
+        location.href = "abonnement.html?plan=starter";
+        return;
+      }
+
       currentUser = u;
 
       applyBackLink();
