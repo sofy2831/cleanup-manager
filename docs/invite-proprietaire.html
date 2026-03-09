@@ -1,4 +1,4 @@
-<!-- docs/invite-proprietaire.html (FINAL DEV — reuse owner if exists + homes INVITED flow aligned) -->
+<!-- docs/invite-proprietaire.html (FINAL DEV — token persisted + existing owner login flow fixed) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -207,10 +207,14 @@
       </div>
 
       <div class="small" style="margin-bottom:10px;">
-        Crée ton accès propriétaire avec l’email indiqué. Si tu as déjà un compte, connecte-toi, puis réouvre ce lien.
+        Crée ton accès propriétaire avec l’email indiqué. Si tu as déjà un compte, connecte-toi puis reviens automatiquement ici pour finaliser le rattachement.
       </div>
 
       <div class="alert" id="alertOwner"></div>
+
+      <div class="alt-actions" id="loginOwnerActions" style="margin-bottom:10px;">
+        <a class="btn" id="ownerLoginBtn" href="login.html?role=proprietaire">🔐 Se connecter</a>
+      </div>
 
       <form id="inviteForm">
         <label for="email">Email</label>
@@ -287,6 +291,9 @@
       el.innerHTML = "";
     }
 
+    const STORAGE_INVITE_TOKEN = "cleanup_owner_invite_token";
+    const STORAGE_INVITE_EMAIL = "cleanup_owner_invite_email";
+
     const badgeLine = document.getElementById("badgeLine");
     const pageSubtitle = document.getElementById("pageSubtitle");
     const backLink = document.getElementById("backLink");
@@ -310,6 +317,7 @@
     const invitedByLabel = document.getElementById("invitedByLabel");
     const form = document.getElementById("inviteForm");
     const createBtn = document.getElementById("createBtn");
+    const ownerLoginBtn = document.getElementById("ownerLoginBtn");
 
     const emailEl = document.getElementById("email");
     const fullnameEl = document.getElementById("fullname");
@@ -321,11 +329,27 @@
     const homeHint = document.getElementById("homeHint");
     const homeHintName = document.getElementById("homeHintName");
 
-    const token = getParam("token");
+    const tokenParam = getParam("token");
     const homeIdParam = getParam("homeId");
     const fromParam = getParam("from");
     const prefillEmail = normalizeEmail(getParam("email"));
     const prefillName = (getParam("name") || "").trim();
+
+    if(tokenParam){
+      try{ sessionStorage.setItem(STORAGE_INVITE_TOKEN, tokenParam); }catch{}
+    }
+    const token = tokenParam || (() => {
+      try{ return sessionStorage.getItem(STORAGE_INVITE_TOKEN) || ""; }catch{ return ""; }
+    })();
+
+    function ownerLoginUrl(){
+      const p = new URLSearchParams();
+      p.set("role", "proprietaire");
+      if(token) p.set("token", token);
+      return "login.html?" + p.toString();
+    }
+
+    ownerLoginBtn.href = ownerLoginUrl();
 
     function clientDocIdFromOwner(ownerDocId){ return "c_owner_" + String(ownerDocId || "").trim(); }
 
@@ -507,12 +531,16 @@
         `⛔ Vous êtes connecté avec <b>${esc(currentEmail||"")}</b> alors que l’invitation est pour <b>${esc(expectedEmail||"")}</b>.<br><br>
          <div class="alt-actions">
            <button id="logoutBtn" class="btn primary" type="button">Se déconnecter</button>
+           <a class="btn" href="${esc(ownerLoginUrl())}">Se connecter avec le bon compte</a>
          </div>`,
         false
       );
       setTimeout(()=>{
         document.getElementById("logoutBtn")?.addEventListener("click", async ()=>{
-          try{ await signOut(auth); location.reload(); }catch(e){}
+          try{
+            await signOut(auth);
+            location.replace(ownerLoginUrl());
+          }catch(e){}
         });
       },0);
     }
@@ -520,7 +548,7 @@
     async function loadInvite(){
       pageSubtitle.textContent = "Accès propriétaire";
       backLink.textContent = "← Connexion";
-      backLink.href = token ? ("login.html?role=proprietaire&token="+encodeURIComponent(token)) : "login.html?role=proprietaire";
+      backLink.href = ownerLoginUrl();
 
       ownerCard.classList.remove("hidden");
       conciergerieCard.classList.add("hidden");
@@ -529,6 +557,13 @@
       hideAlert(alertOwner);
 
       try{
+        if(!token){
+          badgeLine.textContent = "Invitation introuvable";
+          showAlert(alertOwner, `⛔ Lien d’invitation manquant.<br><br><a class="btn" href="${esc(ownerLoginUrl())}">Connexion propriétaire</a>`, false);
+          disableOwnerForm();
+          return;
+        }
+
         const snap = await getDoc(doc(db, "invites", token));
         if(!snap.exists()){
           badgeLine.textContent = "Invitation introuvable";
@@ -540,6 +575,10 @@
         invite = snap.data() || {};
         const invEmail = normalizeEmail(invite.email || "");
         const ownerDocId = String(invite.ownerDocId || "").trim();
+
+        if(invEmail){
+          try{ sessionStorage.setItem(STORAGE_INVITE_EMAIL, invEmail); }catch{}
+        }
 
         if(!invEmail){
           badgeLine.textContent = "Invitation invalide";
@@ -555,8 +594,23 @@
         }
 
         if(invite.status === "accepted" || invite.usedAt){
+          // si déjà accepté mais user connecté avec le bon compte -> profil
+          if(ownerAuthedUser && normalizeEmail(ownerAuthedUser.email || "") === invEmail){
+            badgeLine.textContent = "Invitation déjà finalisée";
+            showAlert(alertOwner, "✅ Invitation déjà utilisée. Redirection…", true);
+            setTimeout(()=> location.replace(profileRedirectUrl()), 400);
+            return;
+          }
+
           badgeLine.textContent = "Invitation déjà utilisée";
-          showAlert(alertOwner, "⛔ Cette invitation a déjà été utilisée. Demandez un nouveau lien.", false);
+          showAlert(
+            alertOwner,
+            `⛔ Cette invitation a déjà été utilisée.<br><br>
+             <div class="alt-actions">
+               <a class="btn primary" href="${esc(ownerLoginUrl())}">Se connecter</a>
+             </div>`,
+            false
+          );
           disableOwnerForm();
           return;
         }
@@ -619,6 +673,7 @@
           uid: user.uid,
           role: "proprietaire",
           email: userEmail,
+          emailLower: userEmail,
           conciergerieUid,
           ownerDocId,
           inviteToken: token,
@@ -674,6 +729,11 @@
           linkRes.names
         );
 
+        try{
+          sessionStorage.removeItem(STORAGE_INVITE_TOKEN);
+          sessionStorage.removeItem(STORAGE_INVITE_EMAIL);
+        }catch{}
+
         showAlert(alertOwner, `✅ Compte lié. Logements liés : ${linkRes.count}. Redirection…`, true);
         setTimeout(()=> location.replace(profileRedirectUrl()), 650);
 
@@ -705,6 +765,11 @@
       const invEmail = normalizeEmail(invite.email || "");
       if(invEmail && email !== invEmail) return showAlert(alertOwner, "⛔ Email différent de l’invitation.", false);
 
+      try{
+        sessionStorage.setItem(STORAGE_INVITE_TOKEN, token || "");
+        sessionStorage.setItem(STORAGE_INVITE_EMAIL, email || "");
+      }catch{}
+
       createBtn.disabled = true;
       createBtn.style.opacity = "0.75";
 
@@ -721,8 +786,9 @@
             alertOwner,
             `⛔ Cet email a déjà un compte.<br><br>
              <b>1)</b> Connectez-vous avec cet email.<br>
-             <b>2)</b> Puis réouvrez ce lien d’invitation (finalisation automatique).<br><br>
+             <b>2)</b> Le rattachement se fera automatiquement après connexion.<br><br>
              <div class="alt-actions">
+               <a class="btn primary" href="${esc(ownerLoginUrl())}">Se connecter</a>
                <button id="resetNowBtn" class="btn" type="button">Réinitialiser le mot de passe</button>
              </div>`,
             false
@@ -734,7 +800,15 @@
               btn.disabled = true; btn.style.opacity = "0.75";
               try{
                 await sendPasswordResetEmail(auth, email);
-                showAlert(alertOwner, "✅ Email de réinitialisation envoyé. Connectez-vous puis réouvrez ce lien.", true);
+                showAlert(
+                  alertOwner,
+                  `✅ Email de réinitialisation envoyé.<br><br>
+                   Ensuite connectez-vous ici :<br>
+                   <div class="alt-actions">
+                     <a class="btn primary" href="${esc(ownerLoginUrl())}">Se connecter</a>
+                   </div>`,
+                  true
+                );
               }catch(resetErr){
                 console.error(resetErr);
                 showAlert(alertOwner, "Erreur reset : " + esc(resetErr?.message || "inconnue"), false);
@@ -922,7 +996,7 @@
             const subject = "Invitation – Accès propriétaire CleanUp Manager";
             const bodyText =
               `Bonjour${name ? " " + name : ""},\n\n` +
-              `Voici votre lien pour créer votre accès propriétaire :\n` +
+              `Voici votre lien pour créer ou rattacher votre accès propriétaire :\n` +
               `${url}\n\n` +
               `Important : utilisez cet email (${email}) pour accepter l’invitation.\n\n` +
               `Cordialement,\n` +
@@ -977,6 +1051,11 @@
       onAuthStateChanged(auth, async (u)=>{
         await authReady;
         ownerAuthedUser = u || null;
+
+        if(u && !token){
+          return;
+        }
+
         if(u && invite){
           const invEmail = normalizeEmail(invite.email || "");
           const cur = normalizeEmail(u.email || "");
@@ -995,4 +1074,3 @@
   </script>
 </body>
 </html>
-
