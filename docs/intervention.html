@@ -1,4 +1,4 @@
-<!-- docs/intervention.html (FINAL — sélection interventions à envoyer + guard conciergerie strict + cohérent nouvelle-prestation) -->
+<!-- docs/intervention.html (FINAL — sélection interventions à envoyer + badge "Envoyé le" + agentLinks map + guard conciergerie strict) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -201,6 +201,13 @@
       min-width:0;
       flex:1;
     }
+    .selectorHead{
+      display:flex;
+      justify-content:space-between;
+      gap:8px;
+      align-items:flex-start;
+      flex-wrap:wrap;
+    }
     .selectorTitle{
       font-size:13px;
       font-weight:900;
@@ -213,6 +220,18 @@
       color:#666;
       line-height:1.35;
       white-space:pre-wrap;
+    }
+    .sentBadge{
+      display:inline-flex;
+      align-items:center;
+      gap:6px;
+      padding:4px 8px;
+      border-radius:999px;
+      background:rgba(27,143,77,0.12);
+      color:var(--ok);
+      font-size:11px;
+      font-weight:900;
+      white-space:nowrap;
     }
 
     .photosBox{
@@ -396,7 +415,7 @@
           <button class="pill" id="mailtoBtn" type="button" disabled>Envoyer email</button>
         </div>
 
-        <textarea id="linkBox" rows="7" style="margin-top:8px;" readonly placeholder="Les liens apparaîtront ici…"></textarea>
+        <textarea id="linkBox" rows="8" style="margin-top:8px;" readonly placeholder="Les liens apparaîtront ici…"></textarea>
 
         <div class="mini" style="margin-top:10px;">
           Le token dure 24h. N’envoie que les interventions utiles pour cette fenêtre.
@@ -408,7 +427,7 @@
   <script type="module">
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-    import { doc, getDoc, setDoc, serverTimestamp, Timestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import { doc, getDoc, setDoc, updateDoc, serverTimestamp, Timestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const helloLine = document.getElementById("helloLine");
     const companyLine = document.getElementById("companyLine");
@@ -434,7 +453,6 @@
     const conciergerieName = document.getElementById("conciergerieName");
 
     const sendSelectorBox = document.getElementById("sendSelectorBox");
-    const sendSelectorEmpty = document.getElementById("sendSelectorEmpty");
 
     const genLinkBtn = document.getElementById("genLinkBtn");
     const copyBtn = document.getElementById("copyBtn");
@@ -468,6 +486,17 @@
     }
 
     function isDateKey(s){ return /^\d{4}-\d{2}-\d{2}$/.test(String(s||"").trim()); }
+
+    function formatTs(ts){
+      try{
+        const d = ts?.toDate ? ts.toDate() : (ts instanceof Date ? ts : null);
+        if(!d || Number.isNaN(d.getTime())) return "";
+        const pad = n => String(n).padStart(2,"0");
+        return `${pad(d.getDate())}/${pad(d.getMonth()+1)} à ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      }catch{
+        return "";
+      }
+    }
 
     async function guardConciergerie(user){
       try{
@@ -603,15 +632,9 @@
       const ivType = String(iv.type || "").toUpperCase().trim();
       const ivTitle = normTxt(iv.title || "");
 
-      if(ivType === "ARRIVEE" || ivTitle.includes("arrivee")){
-        out.add("CHECKIN");
-      }
-      if(ivType === "INTER_SEJOUR" || ivTitle.includes("inter-sejour") || ivTitle.includes("inter sejour")){
-        out.add("MENAGE");
-      }
-      if(ivType === "DEPART" || ivTitle.includes("depart")){
-        out.add("CHECKOUT");
-      }
+      if(ivType === "ARRIVEE" || ivTitle.includes("arrivee")) out.add("CHECKIN");
+      if(ivType === "INTER_SEJOUR" || ivTitle.includes("inter-sejour") || ivTitle.includes("inter sejour")) out.add("MENAGE");
+      if(ivType === "DEPART" || ivTitle.includes("depart")) out.add("CHECKOUT");
 
       const lines = Array.isArray(iv.lines) ? iv.lines : [];
       for(const l of lines){
@@ -655,12 +678,12 @@
       return order.filter(x => out.has(x));
     }
 
-    function renderSendSelector(interventions){
+    function renderSendSelector(interventions, agentLinks = {}){
       sendSelectorBox.innerHTML = "";
       const visible = (Array.isArray(interventions) ? interventions : []).filter(interventionHasContent);
 
       if(!visible.length){
-        sendSelectorBox.innerHTML = `<div class="mini" id="sendSelectorEmpty">Aucune intervention exploitable.</div>`;
+        sendSelectorBox.innerHTML = `<div class="mini">Aucune intervention exploitable.</div>`;
         return;
       }
 
@@ -668,15 +691,19 @@
         const lines = Array.isArray(iv.lines) ? iv.lines : [];
         const subtotal = computeTotalFromLines(lines);
         const missionTypes = missionsFromOneIntervention(iv);
+        const linkMeta = agentLinks?.[iv.key] || null;
+        const sentTxt = formatTs(linkMeta?.sentAt);
+
         const row = document.createElement("label");
         row.className = "selectorRow";
         row.innerHTML = `
           <input type="checkbox" data-iv-key="${esc(iv.key)}" ${iv.completed ? "checked" : ""}>
           <div class="selectorMain">
-            <div class="selectorTitle">${esc(iv.title)} • ${esc(iv.dateKey || "—")}</div>
-            <div class="selectorSub">
-${esc(`${lines.length} ligne(s) • ${money(subtotal)}${missionTypes.length ? " • " + missionTypes.map(missionLabel).join(", ") : ""}`)}
+            <div class="selectorHead">
+              <div class="selectorTitle">${esc(iv.title)} • ${esc(iv.dateKey || "—")}</div>
+              ${sentTxt ? `<span class="sentBadge">Envoyé le ${esc(sentTxt)}</span>` : ``}
             </div>
+            <div class="selectorSub">${esc(`${lines.length} ligne(s) • ${money(subtotal)}${missionTypes.length ? " • " + missionTypes.map(missionLabel).join(", ") : ""}`)}</div>
           </div>
         `;
         sendSelectorBox.appendChild(row);
@@ -1018,7 +1045,7 @@ ${esc(`${lines.length} ligne(s) • ${money(subtotal)}${missionTypes.length ? " 
       const total = (e.total != null) ? Number(e.total) : computeTotalFromLines(flatLines);
       totalValue.textContent = money(total);
 
-      renderSendSelector(currentInterventions);
+      renderSendSelector(currentInterventions, e.agentLinks || {});
       refreshMissionHintFromSelection();
 
       agentName.value = e.assignedToName || "";
@@ -1193,12 +1220,21 @@ ${esc(`${lines.length} ligne(s) • ${money(subtotal)}${missionTypes.length ? " 
 
       await upsertPhotosMissionForToken({ tokenId });
 
-      await setDoc(doc(db,"events",prestationId),{
+      const eventPatch = {
         assignedToEmail: email,
         assignedToName: name,
         dayToken: tokenId,
         updatedAt: serverTimestamp()
-      }, { merge:true });
+      };
+
+      for(const ivKey of selectedKeys){
+        eventPatch[`agentLinks.${ivKey}.sentAt`] = serverTimestamp();
+        eventPatch[`agentLinks.${ivKey}.sentToEmail`] = email;
+        eventPatch[`agentLinks.${ivKey}.sentToName`] = name;
+        eventPatch[`agentLinks.${ivKey}.tokenId`] = tokenId;
+      }
+
+      await updateDoc(doc(db,"events",prestationId), eventPatch);
 
       const base = location.href.split("?")[0];
 
