@@ -248,8 +248,8 @@
 
       <div class="preview" id="previewBox"></div>
 
-      <div class="small">
-        Astuce test : <span style="font-weight:900;">ton iCal de test</span> est pré-rempli.
+      <div class="small" id="icalHint">
+        Colle le lien iCal de la plateforme de réservation du logement.
       </div>
     </div>
   </div>
@@ -264,6 +264,8 @@
 
   const alertBox = document.getElementById("alertBox");
   const previewBox = document.getElementById("previewBox");
+  const icalHint = document.getElementById("icalHint");
+
   function showAlert(msg, ok=false){
     alertBox.style.display = "block";
     alertBox.classList.toggle("ok", !!ok);
@@ -294,10 +296,27 @@
   const syncBtn = document.getElementById("syncBtn");
   const clearBtn = document.getElementById("clearBtn");
 
-  const DEFAULT_ICAL = "https://sofy2831.github.io/cleanup-manager/test.ics";
-  if(!icalUrlEl.value) icalUrlEl.value = DEFAULT_ICAL;
+  const IS_DEV_HOST =
+    location.hostname.includes("cleanup-manager-dev") ||
+    location.hostname.includes("localhost") ||
+    location.hostname.includes("127.0.0.1");
 
-  // ===== Utils =====
+    const DEFAULT_ICAL = location.origin + "/test.ics";
+
+ 
+  if(IS_DEV_HOST && !icalUrlEl.value){
+    icalUrlEl.value = DEFAULT_ICAL;
+  }
+
+  if(icalHint){
+    if(IS_DEV_HOST){
+      icalHint.innerHTML = 'Astuce test : <span style="font-weight:900;">ton iCal de test</span> est pré-rempli.';
+    } else {
+      icalHint.textContent = "Colle le lien iCal de la plateforme de réservation du logement.";
+    }
+  }
+
+  
   function pad2(n){ return n < 10 ? "0"+n : ""+n; }
   function dateKeyFromDate(d){ return d.getFullYear()+"-"+pad2(d.getMonth()+1)+"-"+pad2(d.getDate()); }
   function timeFromDate(d){ return pad2(d.getHours()) + ":" + pad2(d.getMinutes()); }
@@ -413,7 +432,6 @@
   }
 
   function daysBetweenInclusive(fromKey, toKey){
-    // fromKey/toKey: YYYY-MM-DD
     const y1 = Number(fromKey.slice(0,4)), m1 = Number(fromKey.slice(5,7))-1, d1 = Number(fromKey.slice(8,10));
     const y2 = Number(toKey.slice(0,4)),   m2 = Number(toKey.slice(5,7))-1,   d2 = Number(toKey.slice(8,10));
     let cur = new Date(y1,m1,d1);
@@ -457,7 +475,7 @@
     for(const h of homes){
       const opt = document.createElement("option");
       opt.value = h.id;
-      opt.textContent = `${h.name || "Logement"} (${h.city || "—"})`;
+      opt.textContent = `${h.name || "Logement"} (${h.city || h.homeCity || "—"})`;
       homeSelect.appendChild(opt);
     }
   }
@@ -488,7 +506,9 @@
 
   // ===== Actions =====
   testBtn.addEventListener("click", async ()=>{
-    hideAlert(); hidePreview();
+    hideAlert();
+    hidePreview();
+
     const home = getSelectedHome();
     const url = (icalUrlEl.value || "").trim();
 
@@ -506,6 +526,7 @@
         const tm = timeFromDate(e.start);
         return `• ${dk} ${tm} — ${e.summary || "Réservation"}`;
       }).join("\n");
+
       showPreview(head + (sample ? ("\nAperçu:\n" + sample) : "\n(Aucun événement)"));
       showAlert("Test OK. Si l’aperçu est bon, clique Sync.", true);
     }catch(err){
@@ -517,7 +538,9 @@
   });
 
   syncBtn.addEventListener("click", async ()=>{
-    hideAlert(); hidePreview();
+    hideAlert();
+    hidePreview();
+
     const home = getSelectedHome();
     const url = (icalUrlEl.value || "").trim();
 
@@ -528,7 +551,6 @@
     lockButtons(true);
 
     try{
-      // 🔒 rôle depuis users/{uid} (pas identities)
       const meSnap = await getDoc(doc(db,"users", currentUser.uid));
       const myRole = meSnap.exists() ? String(meSnap.data()?.role||"").toLowerCase() : "";
       if(myRole !== "conciergerie" && myRole !== "admin" && myRole !== "staff"){
@@ -536,7 +558,6 @@
         return showAlert("Import iCal réservé aux conciergeries (ou admin/staff).");
       }
 
-      // home fresh
       const homeSnap = await getDoc(doc(db,"homes", home.id));
       if(!homeSnap.exists()){
         lockButtons(false);
@@ -544,7 +565,6 @@
       }
       const hd = homeSnap.data() || {};
 
-      // ⚠️ ownerUid obligatoire sinon owner ne lira jamais => on bloque import (sinon tu crées des docs inutilisables)
       const ownerUid = String(hd.ownerUid || "").trim();
       const ownerDocId = String(hd.ownerDocId || "").trim();
       if(!ownerUid){
@@ -565,19 +585,16 @@
       for(const e of evs){
         const startKey = dateKeyFromDate(e.start);
 
-        // arrivée
         const arrivalDateKey = startKey;
         const arrivalTime = isAllDayRaw(e.dtstartRaw) ? "16:00" : timeFromDate(e.start);
 
-        // départ (si DTEND fourni)
         let departureDateKey = "";
         let departureTime = "";
 
         if(e.end instanceof Date && !isNaN(e.end)){
           if(isAllDayRaw(e.dtendRaw)){
-            // DTEND date-only = exclusif => dernière nuit = end-1 jour
-            const lastNight = addDays(e.end, -1);
-            departureDateKey = dateKeyFromDate(lastNight);
+            // DTEND date-only = date de départ (exclusive dans Ical)
+            departureDateKey = dateKeyFromDate(e.end);
             departureTime = "10:00";
           }else{
             departureDateKey = dateKeyFromDate(e.end);
@@ -645,9 +662,10 @@
   });
 
   clearBtn.addEventListener("click", ()=>{
-    hideAlert(); hidePreview();
+    hideAlert();
+    hidePreview();
     homeSelect.value = "";
-    icalUrlEl.value = DEFAULT_ICAL;
+    icalUrlEl.value = IS_DEV_HOST ? DEFAULT_ICAL : "";
     showAlert("OK. Choisis un logement et relance un test.", true);
   });
 </script>
