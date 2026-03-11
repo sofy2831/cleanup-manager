@@ -1,4 +1,4 @@
-<!-- docs/planning.html (FINAL — facture depuis interventions + rules-friendly queries + role gate users/{uid}) -->
+<!-- docs/planning.html (FINAL — missionQueue + validation par mission + event opStatus synthétique + facture depuis event/interventions) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -340,6 +340,17 @@
       box-shadow: 0 18px 34px rgba(0,0,0,0.10);
     }
 
+    .item.validateMissionRow{
+      background: linear-gradient(90deg, rgba(255,140,0,0.14), rgba(255,255,255,1) 55%);
+      border-left: 6px solid rgba(255,140,0,0.50);
+      cursor:pointer;
+      transition: transform .06s ease, box-shadow .10s ease;
+    }
+    .item.validateMissionRow:hover{
+      transform: translateY(-1px);
+      box-shadow: 0 18px 34px rgba(0,0,0,0.10);
+    }
+
     .iMain{ min-width:0; flex:1; }
     .iTop{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
     .iTitle{
@@ -596,10 +607,15 @@
               💡 Aide
             </button>
             <div class="helpBubble" data-help-bubble="validate" role="dialog" aria-modal="false" aria-label="Aide validation">
-              <p class="hbTitle">Fin de mission → validation</p>
-              <p class="hbText">Quand l’agent a terminé, reviens dans “À valider” :
-• tu vérifies
-• tu cliques sur “Valider”</p>
+              <p class="hbTitle">Validation par mission</p>
+              <p class="hbText">Ici tu valides les missions une par une.
+Exemples :
+• Arrivée
+• Inter-séjour
+• Départ
+• Libre
+
+La prestation passe en “RÉALISÉE” seulement quand toutes les missions envoyées ont été validées.</p>
             </div>
           </div>
 
@@ -607,7 +623,7 @@
         </div>
 
         <div class="tiny" style="margin-top:6px;">
-          Interventions terminées par les agents, en attente de validation.
+          Missions terminées par les agents, en attente de validation.
         </div>
         <div class="list" id="toValidateList" style="margin-top:10px;"></div>
       </section>
@@ -868,7 +884,7 @@
     return String(packs?.[key]?.note || "").trim();
   }
   function computeEventLabelFromPacks(packs){
-    const keys = ["arrival","departure","other"];
+    const keys = ["arrival","midstay","departure","other"];
     for(const k of keys){
       const ls = packLines(packs, k);
       const first = ls.find(x => (x?.label || "").trim());
@@ -879,7 +895,7 @@
     return "";
   }
   function computePacksStats(packs){
-    const keys = ["arrival","departure","other"];
+    const keys = ["arrival","midstay","departure","other"];
     let lines = 0;
     let usefulPacks = 0;
     for(const k of keys){
@@ -899,6 +915,36 @@
     if(key === "departure") return "Départ";
     if(key === "other") return "Libre";
     return "Intervention";
+  }
+
+  function missionLabelFromId(missionId){
+    const x = String(missionId || "").toUpperCase().trim();
+    if(x === "CHECKIN") return "Arrivée";
+    if(x === "MENAGE") return "Inter-séjour";
+    if(x === "CHECKOUT") return "Départ";
+    if(x === "MAINTENANCE") return "Libre";
+    if(x === "LINGE") return "Linge";
+    if(x === "KITS") return "Kits";
+    if(x === "PHOTOS") return "Photos";
+    return x || "Mission";
+  }
+
+  function normalizeMissionStatus(s){
+    const x = String(s || "").toUpperCase().trim();
+    if(x === "A_VALIDER" || x === "À VALIDER" || x === "À_VALIDER") return "A_VALIDER";
+    if(x === "VALIDEE" || x === "VALIDÉE") return "VALIDEE";
+    if(x === "ASSIGNEE" || x === "ASSIGNÉE") return "ASSIGNEE";
+    if(x === "EN_COURS" || x === "EN COURS") return "EN_COURS";
+    if(x === "TERMINEE" || x === "TERMINÉE") return "A_VALIDER";
+    return x || "A_FAIRE";
+  }
+
+  function isTrackedMission(d){
+    const missionId = String(d?.missionId || d?.type || "").toUpperCase().trim();
+    if(!missionId || missionId === "PHOTOS") return false;
+    const status = normalizeMissionStatus(d?.status || "");
+    const hasToken = String(d?.dayToken || "").trim().length > 0;
+    return hasToken || ["ASSIGNEE","EN_COURS","A_VALIDER","VALIDEE"].includes(status);
   }
 
   function normalizeInterventions(eventDoc){
@@ -1261,6 +1307,104 @@
     }
   }
 
+  async function loadMissionsForEvent(eventObj){
+    const out = [];
+    try{
+      const snap = await getDocs(collection(db, "events", eventObj.id, "missions"));
+      snap.forEach(d=>{
+        const md = d.data() || {};
+        out.push({
+          id: d.id,
+          ...md
+        });
+      });
+    }catch(err){
+      console.warn("loadMissionsForEvent failed", eventObj.id, err);
+    }
+    return out;
+  }
+
+  function synthesizeEventStatusFromMissions(missions){
+    const tracked = (Array.isArray(missions) ? missions : []).filter(isTrackedMission);
+    if(!tracked.length) return "EN_COURS";
+
+    const statuses = tracked.map(m => normalizeMissionStatus(m.status || ""));
+    if(statuses.every(s => s === "VALIDEE")) return "REALISEE";
+    if(statuses.some(s => s === "A_VALIDER")) return "A_VALIDER";
+    return "EN_COURS";
+  }
+
+  async function recalcEventStatus(eventId){
+    const mDocs = await loadMissionsForEvent({ id:eventId });
+    const nextStatus = synthesizeEventStatusFromMissions(mDocs);
+
+    await updateDoc(doc(db, "events", eventId), {
+      opStatus: nextStatus,
+      statusUpdatedAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    });
+
+    return nextStatus;
+  }
+
+  async function loadMissionQueueForMonth(){
+    const { startKey, endKey } = monthRangeKeys(viewYear, viewMonth);
+
+    let docs = [];
+    try{
+      const qQueue = query(
+        collection(db, "missionQueue"),
+        where("conciergerieUid", "==", currentUser.uid),
+        where("status", "==", "A_VALIDER"),
+        where("missionDateKey", ">=", startKey),
+        where("missionDateKey", "<=", endKey),
+        orderBy("missionDateKey", "asc"),
+        orderBy("missionTime", "asc"),
+        limit(1200)
+      );
+      const snap = await getDocs(qQueue);
+      docs = snap.docs.map(d => ({ id:d.id, ...(d.data() || {}) }));
+    }catch(err){
+      console.error("Erreur lecture missionQueue:", err);
+      const m = String(err?.message || "").toLowerCase();
+      if(m.includes("permission")){
+        showAlert("Erreur Firestore (missionQueue) : Missing or insufficient permissions.");
+      }else if(m.includes("index")){
+        showAlert("Index manquant pour missionQueue (conciergerieUid + status + missionDateKey + missionTime).");
+      }else{
+        showAlert("Erreur Firestore (missionQueue) : " + (err?.message || "inconnue"));
+      }
+      docs = [];
+    }
+
+    const rows = [];
+    for(const qd of docs){
+      const ev = allEvents.find(x => x.id === String(qd.eventId || "").trim());
+      rows.push({
+        queueId: String(qd.queueId || qd.id || "").trim(),
+        eventId: String(qd.eventId || "").trim(),
+        missionId: String(qd.missionId || "").trim().toUpperCase(),
+        missionLabel: String(qd.missionLabel || missionLabelFromId(qd.missionId)).trim(),
+        missionDateKey: String(qd.missionDateKey || "").trim(),
+        missionTime: String(qd.missionTime || "").trim(),
+        assignedToName: String(qd.assignedToName || "").trim(),
+        assignedToEmail: String(qd.assignedToEmail || "").trim(),
+        homeId: String(qd.homeId || "").trim(),
+        homeName: String(qd.homeName || "").trim(),
+        homeCity: String(qd.homeCity || "").trim(),
+        event: ev || null
+      });
+    }
+
+    rows.sort((a,b)=>{
+      const ak = `${a.missionDateKey || ""} ${a.missionTime || ""} ${a.homeName || ""}`;
+      const bk = `${b.missionDateKey || ""} ${b.missionTime || ""} ${b.homeName || ""}`;
+      return ak.localeCompare(bk);
+    });
+
+    toValidate = rows;
+  }
+
   async function loadEventsForMonth(){
     allEvents = [];
     eventsByDate = new Map();
@@ -1370,15 +1514,14 @@
       const arr = eventsByDate.get(obj.dateKey) || [];
       arr.push(obj);
       eventsByDate.set(obj.dateKey, arr);
-
-      if(obj.opStatus === "A_VALIDER") toValidate.push(obj);
     }
 
     for(const [k, arr] of eventsByDate.entries()){
       arr.sort((a,b)=> (a.time||"").localeCompare(b.time||""));
       eventsByDate.set(k, arr);
     }
-    toValidate.sort((a,b)=> (a.dateKey+a.time).localeCompare(b.dateKey+b.time));
+
+    await loadMissionQueueForMonth();
   }
 
   async function loadAllForMonth(){
@@ -1393,33 +1536,38 @@
     rewriteNavLinks();
   }
 
-  async function validateEvent(ev){
-    if(!ev?.id) return;
+  async function validateMission(row){
+    if(!row?.eventId || !row?.missionId || !row?.queueId) return;
     hideAlert();
+
     try{
-      await updateDoc(doc(db,"events", ev.id), {
-        opStatus: "REALISEE",
-        statusUpdatedAt: serverTimestamp(),
+      await updateDoc(doc(db, "events", row.eventId, "missions", row.missionId), {
+        status: "VALIDEE",
+        validatedAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       });
 
-      showAlert("✅ Prestation validée (RÉALISÉE).", true);
+      await deleteDoc(doc(db, "missionQueue", row.queueId));
+
+      const nextStatus = await recalcEventStatus(row.eventId);
+
+      showAlert(`✅ Mission validée. Statut prestation : ${opLabel(nextStatus)}.`, true);
 
       await loadAllForMonth();
 
-      selectedDateKey = ev.dateKey || selectedDateKey;
+      selectedDateKey = row.missionDateKey || row.event?.dateKey || selectedDateKey;
       setFocusParams(selectedDateKey, "");
       renderCalendar();
       renderDayList();
 
       if(eventModalBack.style.display === "flex"){
-        const refreshed = allEvents.find(x=>x.id === ev.id);
+        const refreshed = allEvents.find(x=>x.id === row.eventId);
         if(refreshed) openEventDetail(refreshed);
       }
 
     }catch(err){
       console.error(err);
-      showAlert("Erreur validation : " + (err?.message || "inconnue"));
+      showAlert("Erreur validation mission : " + (err?.message || "inconnue"));
     }
   }
 
@@ -1672,38 +1820,33 @@
       return;
     }
 
-    for(const ev of toValidate){
-      const title = `${ev.homeName}${ev.homeCity ? " — " + ev.homeCity : ""}`;
-      const per = periodLabel(ev);
-
-      const label = (ev.packLabel || "").trim();
-      const labelPart = label ? `• ${label}` : "";
-
-      const sub = [
-        per ? `Période: ${per}` : null,
-        ev.assignedToName ? `Agent: ${ev.assignedToName}` : null,
-        labelPart ? `Intervention: ${label}` : null
-      ].filter(Boolean).join(" • ");
+    for(const row of toValidate){
+      const ev = row.event || null;
+      const title = `${row.homeName || ev?.homeName || "Logement"}${row.homeCity || ev?.homeCity ? " — " + (row.homeCity || ev?.homeCity || "") : ""}`;
+      const agent = row.assignedToName || row.assignedToEmail || "—";
+      const missionDate = row.missionDateKey ? fmtFRDateKey(row.missionDateKey) : "—";
+      const missionTime = row.missionTime || "";
+      const dateLine = missionTime ? `${missionDate} • ${missionTime}` : missionDate;
 
       const div = document.createElement("div");
-      div.className = "item prestaRow";
+      div.className = "item validateMissionRow";
       div.innerHTML = `
         <div class="iMain">
           <div class="iTop">
             <span class="badge blue">À VALIDER</span>
-            <span class="badge">Prestation</span>
+            <span class="badge">Mission</span>
           </div>
           <div class="iTitle">${esc(title)}</div>
-          <div class="iSub">${esc(sub || "—")}</div>
+          <div class="iSub">${esc(`Mission à valider : ${row.missionLabel} • Date : ${dateLine} • Agent : ${agent}`)}</div>
 
           <div class="actionsRow">
-            <button class="mini" type="button" data-validate="${esc(ev.id)}" title="Valider">
+            <button class="mini" type="button" data-validate-mission="${esc(row.queueId)}" title="Valider">
               <span class="ico">✅</span><span class="txt">Valider</span>
             </button>
-            <button class="mini ghost" type="button" data-open-presta="${esc(ev.id)}" title="Ouvrir">
+            <button class="mini ghost" type="button" data-open-presta="${esc(row.eventId)}" title="Ouvrir">
               <span class="ico">🛈</span><span class="txt">Ouvrir</span>
             </button>
-            <button class="mini ghost" type="button" data-open-day="${esc(ev.dateKey)}" title="Voir jour">
+            <button class="mini ghost" type="button" data-open-day="${esc(row.missionDateKey || ev?.dateKey || "")}" title="Voir jour">
               <span class="ico">📅</span><span class="txt">Voir jour</span>
             </button>
           </div>
@@ -1711,12 +1854,24 @@
       `;
       toValidateList.appendChild(div);
 
-      div.addEventListener("click", ()=> openEventDetail(ev));
-      div.querySelector(`[data-validate="${CSS.escape(ev.id)}"]`)?.addEventListener("click", (e)=>{ e.stopPropagation(); validateEvent(ev); });
-      div.querySelector(`[data-open-presta="${CSS.escape(ev.id)}"]`)?.addEventListener("click", (e)=>{ e.stopPropagation(); openEventDetail(ev); });
-      div.querySelector(`[data-open-day="${CSS.escape(ev.dateKey)}"]`)?.addEventListener("click", (e)=>{
+      div.addEventListener("click", ()=>{
+        if(ev) openEventDetail(ev);
+      });
+
+      div.querySelector(`[data-validate-mission="${CSS.escape(row.queueId)}"]`)?.addEventListener("click", (e)=>{
         e.stopPropagation();
-        selectedDateKey = ev.dateKey;
+        validateMission(row);
+      });
+
+      div.querySelector(`[data-open-presta="${CSS.escape(row.eventId)}"]`)?.addEventListener("click", (e)=>{
+        e.stopPropagation();
+        if(ev) openEventDetail(ev);
+        else openIntervention(row.eventId);
+      });
+
+      div.querySelector(`[data-open-day="${CSS.escape(row.missionDateKey || ev?.dateKey || "")}"]`)?.addEventListener("click", (e)=>{
+        e.stopPropagation();
+        selectedDateKey = row.missionDateKey || ev?.dateKey || selectedDateKey;
         setFocusParams(selectedDateKey, "");
         renderCalendar();
         renderDayList();
@@ -1753,11 +1908,21 @@
     calendarGrid.innerHTML = "";
     const cells = buildMonthCells(viewYear, viewMonth);
 
+    const validateByDate = new Map();
+    for(const row of toValidate){
+      const dk = row.missionDateKey || row.event?.dateKey || "";
+      if(!dk) continue;
+      const arr = validateByDate.get(dk) || [];
+      arr.push(row);
+      validateByDate.set(dk, arr);
+    }
+
     for(const c of cells){
       const dk = toDateKey(c.date);
 
       const presta = eventsByDate.get(dk) || [];
       const books = bookingsByDate.get(dk) || [];
+      const validateRows = validateByDate.get(dk) || [];
 
       const perHome = new Map();
       function setIfHigher(homeId, cls){
@@ -1781,6 +1946,10 @@
         else if(st === "ANNULEE") setIfHigher(ev.homeId, "cancel");
         else setIfHigher(ev.homeId, "");
       }
+      for(const vr of validateRows){
+        const hId = vr.homeId || vr.event?.homeId || "";
+        if(hId) setIfHigher(hId, "validate");
+      }
       for(const b of books){
         setIfHigher(b.homeId, dotClassForIcal(b.source));
       }
@@ -1789,14 +1958,27 @@
 
       const initials = [];
       const seen = new Set();
-      for(const ev of presta){
-        const ini = agentInitial(ev.assignedToName || ev.assignedToEmail);
+
+      for(const vr of validateRows){
+        const ini = agentInitial(vr.assignedToName || vr.assignedToEmail);
         if(!ini) continue;
-        const key = ini + "|" + (ev.assignedToEmail || ev.assignedToName || "");
+        const key = ini + "|" + (vr.assignedToEmail || vr.assignedToName || "");
         if(seen.has(key)) continue;
         seen.add(key);
-        initials.push({ ini, cls: iniClassByStatus(ev.opStatus) });
+        initials.push({ ini, cls: "blue" });
         if(initials.length >= 4) break;
+      }
+
+      if(initials.length < 4){
+        for(const ev of presta){
+          const ini = agentInitial(ev.assignedToName || ev.assignedToEmail);
+          if(!ini) continue;
+          const key = ini + "|" + (ev.assignedToEmail || ev.assignedToName || "");
+          if(seen.has(key)) continue;
+          seen.add(key);
+          initials.push({ ini, cls: iniClassByStatus(ev.opStatus) });
+          if(initials.length >= 4) break;
+        }
       }
 
       const isSelected = (dk === selectedDateKey);
@@ -1806,7 +1988,7 @@
       div.innerHTML = `
         <div class="dayNum">
           <span>${esc(c.date.getDate())}</span>
-          <span class="badge" style="${(presta.length + books.length) ? "" : "opacity:.45;"}">${presta.length + books.length}</span>
+          <span class="badge" style="${(presta.length + books.length + validateRows.length) ? "" : "opacity:.45;"}">${presta.length + books.length + validateRows.length}</span>
         </div>
 
         <div class="dots">
@@ -1974,8 +2156,9 @@
             <div class="helpWrap" data-help-wrap="aftervalidate">
               <button class="helpBtn" type="button" data-help-btn="aftervalidate" aria-expanded="false">💡 Aide</button>
               <div class="helpBubble" data-help-bubble="aftervalidate" role="dialog" aria-modal="false" aria-label="Aide facturation">
-                <p class="hbTitle">Après validation</p>
-                <p class="hbText">Une fois la prestation validée, tu peux passer à la facturation depuis ici.</p>
+                <p class="hbTitle">Après validation complète</p>
+                <p class="hbText">La facture reste basée sur la prestation globale.
+Tu factures quand toutes les missions envoyées ont été validées.</p>
               </div>
             </div>
           </div>
@@ -2042,15 +2225,9 @@
               <span class="ico">🛈</span><span class="txt">Ouvrir</span>
             </button>
 
-            <button class="mini ghost" type="button" data-open-facture="${esc(ev.id)}" title="Facture">
+            <button class="mini ghost" type="button" data-open-facture="${esc(ev.id)}" title="Facture" ${st !== "REALISEE" ? "disabled" : ""}>
               <span class="ico">💶</span><span class="txt">Facture</span>
             </button>
-
-            ${ st === "A_VALIDER"
-              ? `<button class="mini" type="button" data-validate="${esc(ev.id)}" title="Valider">
-                   <span class="ico">✅</span><span class="txt">Valider</span>
-                 </button>`
-              : `` }
           </div>
         </div>
       `;
@@ -2065,8 +2242,7 @@
 
       div.querySelector(`[data-open-photos="${CSS.escape(ev.id)}"]`)?.addEventListener("click", (e)=>{ e.stopPropagation(); openProofsAdmin(ev.id); });
       div.querySelector(`[data-open-presta="${CSS.escape(ev.id)}"]`)?.addEventListener("click", (e)=>{ e.stopPropagation(); openEventDetail(ev); });
-      div.querySelector(`[data-open-facture="${CSS.escape(ev.id)}"]`)?.addEventListener("click", (e)=>{ e.stopPropagation(); openFacture(ev); });
-      div.querySelector(`[data-validate="${CSS.escape(ev.id)}"]`)?.addEventListener("click", (e)=>{ e.stopPropagation(); validateEvent(ev); });
+      div.querySelector(`[data-open-facture="${CSS.escape(ev.id)}"]`)?.addEventListener("click", (e)=>{ e.stopPropagation(); if(st === "REALISEE") openFacture(ev); });
 
       div.querySelector(`[data-open-intervention="${CSS.escape(ev.id)}"]`)?.addEventListener("click",(e)=>{
         e.stopPropagation();

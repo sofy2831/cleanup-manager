@@ -1256,6 +1256,104 @@ match /homes/{homeId} {
       allow delete: if false;
     }
 
+        // =========================================================
+    // DAY TOKENS
+    // =========================================================
+    match /dayTokens/{tokenId} {
+
+      // création par la conciergerie
+      allow create: if signedIn()
+        && (request.resource.data.conciergerieUid is string)
+        && request.resource.data.conciergerieUid == myUid()
+        && (request.resource.data.prestationId is string)
+        && request.resource.data.prestationId != "";
+
+      // lecture par la conciergerie propriétaire
+      allow get, read: if signedIn()
+        && (resource.data.conciergerieUid is string)
+        && resource.data.conciergerieUid == myUid();
+
+      // lecture publique par possession du token exact
+      // le tokenId EST déjà le secret dans l’URL
+      allow get: if true;
+
+      // update uniquement par la conciergerie propriétaire
+      allow update: if signedIn()
+        && (resource.data.conciergerieUid is string)
+        && resource.data.conciergerieUid == myUid()
+        && (request.resource.data.conciergerieUid is string)
+        && request.resource.data.conciergerieUid == resource.data.conciergerieUid;
+
+      allow list: if false;
+      allow delete: if false;
+    }
+
+        // =========================================================
+    // MISSION QUEUE
+    // 1 doc = 1 mission en attente de validation
+    // docId conseillé : {eventId}_{missionId}
+    // =========================================================
+    match /missionQueue/{queueId} {
+
+      // lecture / liste par la conciergerie propriétaire
+      allow get, list, read: if signedIn()
+        && (resource.data.conciergerieUid is string)
+        && resource.data.conciergerieUid == myUid();
+
+      // création via token agent actif
+      allow create: if
+        (request.resource.data.eventId is string)
+        && request.resource.data.eventId != ""
+
+        && (request.resource.data.missionId is string)
+        && request.resource.data.missionId != ""
+
+        && (request.resource.data.queueId is string)
+        && request.resource.data.queueId == queueId
+
+        && (request.resource.data.status is string)
+        && request.resource.data.status == "A_VALIDER"
+
+        && (request.resource.data.conciergerieUid is string)
+        && request.resource.data.conciergerieUid != ""
+
+        && (request.resource.data.dayToken is string)
+        && request.resource.data.dayToken.size() > 0
+        && tokenIsActiveById(request.resource.data.dayToken)
+        && tokenMatchesEvent(request.resource.data.dayToken, request.resource.data.eventId)
+        && tokenAllowsMission(request.resource.data.dayToken, request.resource.data.missionId);
+
+      // update via token agent actif ou par la conciergerie
+      allow update: if
+        (
+          signedIn()
+          && (resource.data.conciergerieUid is string)
+          && resource.data.conciergerieUid == myUid()
+        )
+        ||
+        (
+          (resource.data.dayToken is string)
+          && resource.data.dayToken.size() > 0
+          && tokenIsActiveById(resource.data.dayToken)
+          && tokenMatchesEvent(resource.data.dayToken, resource.data.eventId)
+          && tokenAllowsMission(resource.data.dayToken, resource.data.missionId)
+
+          && (request.resource.data.queueId is string)
+          && request.resource.data.queueId == resource.data.queueId
+
+          && (request.resource.data.eventId is string)
+          && request.resource.data.eventId == resource.data.eventId
+
+          && (request.resource.data.missionId is string)
+          && request.resource.data.missionId == resource.data.missionId
+        );
+
+      // suppression par la conciergerie propriétaire
+      allow delete: if signedIn()
+        && (resource.data.conciergerieUid is string)
+        && resource.data.conciergerieUid == myUid();
+    }
+
     // =========================================================
 
     // DEFAULT DENY

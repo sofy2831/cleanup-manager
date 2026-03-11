@@ -1,4 +1,4 @@
-<!-- docs/agent.html (FINAL — checklist via token ; limité aux interventions/missions envoyées ; fin prestation ok) -->
+<!-- docs/agent.html (FINAL — checklist via token ; missionQueue sync avec dayToken ; limité aux interventions/missions envoyées ; fin prestation ok) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -259,7 +259,7 @@
 
   <script type="module">
     import { db } from "./firebase-init.js";
-    import { doc, getDoc, updateDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import { doc, getDoc, setDoc, updateDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const alertBox = document.getElementById("alertBox");
     const subLine = document.getElementById("subLine");
@@ -315,6 +315,17 @@
       if(t==="LINGE") return "Linge";
       if(t==="MAINTENANCE") return "Maintenance";
       if(t==="KITS") return "Kits & consommables";
+      return t || "Mission";
+    }
+
+    function missionQueueLabel(type){
+      const t = (type||"").toUpperCase();
+      if(t==="CHECKIN") return "Arrivée";
+      if(t==="MENAGE") return "Inter-séjour";
+      if(t==="CHECKOUT") return "Départ";
+      if(t==="MAINTENANCE") return "Libre";
+      if(t==="LINGE") return "Linge";
+      if(t==="KITS") return "Kits";
       return t || "Mission";
     }
 
@@ -462,12 +473,17 @@
       return obj;
     }
 
+    function buildQueueId(eventId, missionId){
+      return `${String(eventId || "").trim()}_${String(missionId || "").trim().toUpperCase()}`;
+    }
+
     const token = qs("token");
     const prestationId = qs("prestationId");
 
     let tokenDoc = null;
     let TYPES = ["MENAGE"];
     let selectedInterventions = [];
+    let currentEventCache = null;
 
     function setPrestaHeaderFromToken(presta){
       const e = presta || {};
@@ -565,6 +581,60 @@
         : "Toutes les missions sont terminées. Tu peux enregistrer la prestation.";
     }
 
+    async function loadEventCache(){
+      try{
+        const snap = await getDoc(doc(db, "events", prestationId));
+        if(snap.exists()){
+          currentEventCache = { id:snap.id, ...(snap.data() || {}) };
+        }else{
+          currentEventCache = null;
+        }
+      }catch(err){
+        console.error("loadEventCache", err);
+        currentEventCache = null;
+      }
+    }
+
+    async function upsertMissionQueue(type, missionData){
+      const queueId = buildQueueId(prestationId, type);
+      const presta = tokenDoc?.presta || {};
+
+      const payload = {
+        queueId,
+        dayToken: String(token || "").trim(),
+        conciergerieUid: String(tokenDoc?.conciergerieUid || "").trim(),
+
+        eventId: String(prestationId || "").trim(),
+        missionId: String(type || "").trim().toUpperCase(),
+
+        homeId: String(presta?.homeId || currentEventCache?.homeId || "").trim(),
+        homeName: String(presta?.homeName || currentEventCache?.homeName || "Logement").trim(),
+        homeCity: String(presta?.homeCity || currentEventCache?.homeCity || "").trim(),
+        homeAddress: String(presta?.homeAddress || currentEventCache?.homeAddress || "").trim(),
+        homeZip: String(presta?.homeZip || currentEventCache?.homeZip || "").trim(),
+
+        missionLabel: missionQueueLabel(type),
+        missionDateKey: String(missionData?.scheduledDateKey || "").trim(),
+        missionTime: String(missionData?.scheduledTime || "").trim(),
+        status: "A_VALIDER",
+
+        assignedToName: String(tokenDoc?.agentName || missionData?.assignedToName || "").trim(),
+        assignedToEmail: String(tokenDoc?.agentEmail || missionData?.assignedToEmail || "").trim().toLowerCase(),
+
+        arrivalDateKey: String(presta?.arrivalDateKey || "").trim(),
+        departureDateKey: String(presta?.departureDateKey || "").trim(),
+        eventDateKey: String(presta?.arrivalDateKey || presta?.dateKey || "").trim(),
+
+        eventOpStatus: "A_VALIDER",
+        proofPhotosTotal: Number(currentEventCache?.proofPhotosTotal || 0) || 0,
+
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      };
+
+      await setDoc(doc(db, "missionQueue", queueId), payload, { merge:true });
+    }
+
     async function load(){
       hideAlert();
       missionsWrap.innerHTML = "";
@@ -610,6 +680,8 @@
         return;
       }
       chipStatus.innerHTML = `<span class="chip ok">OK</span>`;
+
+      await loadEventCache();
 
       setPrestaHeaderFromToken(tokenDoc?.presta || {});
       agentLine.textContent = `Agent : ${(tokenDoc.agentName || "—")}${tokenDoc.agentEmail ? " • " + tokenDoc.agentEmail : ""}`;
@@ -751,6 +823,12 @@
 
           try{
             await updateDoc(doc(db, "events", prestationId, "missions", type), payload);
+
+            const refreshedMission = await getDoc(doc(db, "events", prestationId, "missions", type));
+            const missionData = refreshedMission.exists() ? (refreshedMission.data() || {}) : d;
+
+            await upsertMissionQueue(type, missionData);
+
             showAlert(`✅ Mission "${type}" terminée (verrouillée).`, true);
             await load();
           }catch(err){
