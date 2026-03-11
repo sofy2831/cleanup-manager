@@ -1,4 +1,4 @@
-<!-- docs/agent.html (FINAL — checklist via token ; missionQueue sync avec dayToken ; limité aux interventions/missions envoyées ; fin prestation ok) -->
+<!-- docs/agent.html (FINAL — checklist via token ; missionQueue sync avec dayToken + missionDetail ; limité aux interventions/missions envoyées ; fin prestation ok) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -329,6 +329,55 @@
       return t || "Mission";
     }
 
+    function normalizeTxt(s){
+      return String(s || "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase()
+        .trim();
+    }
+
+    function missionDefaultDetail(type){
+      const t = String(type || "").toUpperCase().trim();
+      if(t === "CHECKIN") return "Check-in";
+      if(t === "CHECKOUT") return "Check-out";
+      if(t === "MENAGE") return "Ménage";
+      if(t === "LINGE") return "Linge";
+      if(t === "KITS") return "Kits & consommables";
+      if(t === "MAINTENANCE") return "Maintenance";
+      return "Intervention";
+    }
+
+    function missionKeyFromType(type){
+      const t = String(type || "").toUpperCase().trim();
+      if(t === "CHECKIN") return "arrival";
+      if(t === "MENAGE" || t === "LINGE" || t === "KITS") return "midstay";
+      if(t === "CHECKOUT") return "departure";
+      if(t === "MAINTENANCE") return "other";
+      return "";
+    }
+
+    function findInterventionByMissionType(type){
+      const key = missionKeyFromType(type);
+      if(!key) return null;
+      return (selectedInterventions || []).find(iv => String(iv?.key || "").trim() === key) || null;
+    }
+
+    function guessMissionDetail(type){
+      const fallback = missionDefaultDetail(type);
+      const iv = findInterventionByMissionType(type);
+
+      if(!iv) return fallback;
+
+      const note = String(iv.note || "").trim();
+      if(note) return note;
+
+      const label = String(iv.label || "").trim();
+      if(label && !["Arrivée","Inter-séjour","Départ","Libre"].includes(label)) return label;
+
+      return fallback;
+    }
+
     function chipFor(st){
       const s = (st||"").toUpperCase();
       if(s==="VALIDEE") return `<span class="chip ok">VALIDÉE</span>`;
@@ -598,6 +647,7 @@
     async function upsertMissionQueue(type, missionData){
       const queueId = buildQueueId(prestationId, type);
       const presta = tokenDoc?.presta || {};
+      const missionDetail = guessMissionDetail(type);
 
       const payload = {
         queueId,
@@ -614,6 +664,7 @@
         homeZip: String(presta?.homeZip || currentEventCache?.homeZip || "").trim(),
 
         missionLabel: missionQueueLabel(type),
+        missionDetail: missionDetail,
         missionDateKey: String(missionData?.scheduledDateKey || "").trim(),
         missionTime: String(missionData?.scheduledTime || "").trim(),
         status: "A_VALIDER",
