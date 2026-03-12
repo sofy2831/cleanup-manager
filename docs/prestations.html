@@ -1,4 +1,4 @@
-<!-- docs/prestations.html (FINAL — INTERVENTIONS V1 + Modifier -> nouvelle-prestation + Interventions -> intervention.html + Photos -> preuves-admin.html + RETOUR CONTEXTE) -->
+<!-- docs/prestations.html (FINAL — DETAIL UNIQUEMENT VIA BOUTON + BADGE MISSIONS RESTANTES + RETOUR CONTEXTE) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -20,6 +20,8 @@
       --muted:#666;
       --bad:#b3261e;
       --ok:#1b8f4d;
+      --warn:#9a4f00;
+      --warn-bg:rgba(255,140,0,0.16);
       --border: rgba(122,92,255,0.18);
       --shadow:0 14px 36px rgba(0,0,0,0.08);
     }
@@ -357,6 +359,7 @@
       color:var(--bad);
       background:#fff;
     }
+
     .badge{
       margin-left:auto;
       background:var(--violet-light);
@@ -370,6 +373,15 @@
     .badge.small{
       padding:6px 8px;
       font-size:11px;
+      margin-left:0;
+    }
+    .badge.warn{
+      background:var(--warn-bg);
+      color:var(--warn);
+    }
+    .badge.ok{
+      background:rgba(27,143,77,0.14);
+      color:var(--ok);
     }
 
     .empty{
@@ -590,11 +602,11 @@
           <button class="helpBtn" type="button" data-help-btn="intervention" aria-expanded="false">💡 Aide</button>
           <div class="helpBubble" data-help-bubble="intervention" role="dialog" aria-modal="false" aria-label="Aide intervention agent">
             <p class="hbTitle">Interventions</p>
-            <p class="hbText">• “Interventions” = exécution du dossier (arrivée / inter-séjour / départ / libre).
-• “Modifier” renvoie sur nouvelle-prestation en mode édition.
+            <p class="hbText">• “Modifier” renvoie sur nouvelle-prestation en mode édition.
 • “Interventions” ouvre intervention.html.
 • “Photos” ouvre preuves-admin.html.
-• Une prestation peut contenir plusieurs interventions à des dates différentes.</p>
+• Le bouton “Détails” ouvre la modale.
+• Le badge mission indique ce qu’il reste vraiment à valider côté missions techniques.</p>
           </div>
         </div>
       </div>
@@ -809,17 +821,31 @@
 
     function normalizeOpStatus(s){
       const x = asRaw(s);
-      if(x === "DRAFT" || x === "BROUILLON" || x === "EN COURS") return "EN_COURS";
-      if(x === "REALISEE" || x === "RÉALISÉE" || x === "DONE") return "REALISEE";
+      if(x === "REALISEE" || x === "RÉALISÉE" || x === "DONE" || x === "VALIDEE" || x === "VALIDÉE") return "REALISEE";
       if(x === "ANNULEE" || x === "ANNULÉE" || x === "CANCELLED") return "ANNULEE";
+      if(x === "A_VALIDER" || x === "À VALIDER" || x === "À_VALIDER") return "A_VALIDER";
       return "EN_COURS";
     }
     function opLabel(st){
       const s = normalizeOpStatus(st);
       if(s==="EN_COURS") return "EN COURS";
+      if(s==="A_VALIDER") return "À VALIDER";
       if(s==="REALISEE") return "RÉALISÉE";
       if(s==="ANNULEE") return "ANNULÉE";
       return s;
+    }
+
+    function normalizeMissionStatus(s){
+      const x = asRaw(s);
+      if(x === "VALIDEE" || x === "VALIDÉE") return "VALIDEE";
+      if(x === "A_VALIDER" || x === "À VALIDER" || x === "À_VALIDER" || x === "TERMINEE" || x === "TERMINÉE") return "A_VALIDER";
+      if(x === "ASSIGNEE" || x === "ASSIGNÉE" || x === "A_FAIRE" || x === "EN_COURS" || x === "EN COURS") return "EN_COURS";
+      return "EN_COURS";
+    }
+
+    function isTrackedMissionDoc(m){
+      const id = String(m?.missionId || m?.type || "").toUpperCase().trim();
+      return !!id && id !== "PHOTOS";
     }
 
     const FREE_EMAILS = new Set(["mathilde.debout31@gmail.com","s.dumas974@gmail.com"]);
@@ -883,10 +909,10 @@
         midstay: {
           label:"Inter-séjour",
           type:"INTER_SEJOUR",
-          lines:[],
-          note:"",
-          dateKey:String(x?.interstayDateKey || "").trim(),
-          completedAt:null
+          lines:Array.isArray(packs?.midstay?.lines) ? packs.midstay.lines : [],
+          note:String(packs?.midstay?.note || "").trim(),
+          dateKey:String(packs?.midstay?.dateKey || x?.interstayDateKey || "").trim(),
+          completedAt:packs?.midstay?.doneAt || packs?.midstay?.validatedAt || null
         },
         departure: {
           label:"Départ",
@@ -1045,6 +1071,24 @@
       location.href = `preuves-admin.html?prestationId=${encodeURIComponent(prestationId)}`;
     }
 
+    function missionBadgeHtml(it){
+      const pending = Number(it.pendingTrackedMissions || 0);
+      const total = Number(it.totalTrackedMissions || 0);
+
+      if(total > 0){
+        if(pending > 0){
+          return `<span class="badge small warn">${esc(`Missions : ${pending} restante(s)`)}</span>`;
+        }
+        return `<span class="badge small ok">Missions : OK</span>`;
+      }
+
+      const pendingInterventions = countUsefulPendingInterventions(it.interventions || {});
+      if(pendingInterventions > 0){
+        return `<span class="badge small warn">${esc(`Interventions : ${pendingInterventions} à finir`)}</span>`;
+      }
+      return `<span class="badge small ok">Interventions : OK</span>`;
+    }
+
     function renderList(){
       listEl.innerHTML = "";
 
@@ -1065,9 +1109,6 @@
         const op = normalizeOpStatus(it.opStatus);
         const title = `${it.homeName || "Logement"}${it.homeCity ? " — " + it.homeCity : ""}${it.homeType ? " (" + it.homeType + ")" : ""}`;
 
-        const pending = countUsefulPendingInterventions(it.interventions || {});
-        const progLabel = pending > 0 ? `Interventions : ${pending} à faire` : "Interventions : OK";
-
         const div = document.createElement("div");
         div.className = "item";
         div.innerHTML = `
@@ -1080,7 +1121,7 @@
               <button class="mini" type="button" data-photos="${esc(it.id)}" title="Photos">📷</button>
               ${ (op==="EN_COURS") ? `<button class="mini danger" type="button" data-del="${esc(it.id)}">Supprimer</button>` : `` }
               <button class="mini" type="button" data-program="${esc(it.id)}">Interventions</button>
-              <span class="badge small">${esc(progLabel)}</span>
+              ${missionBadgeHtml(it)}
               <span class="badge">${esc(money(Number(it.total || 0)))}</span>
             </div>
           </div>
@@ -1114,11 +1155,6 @@
           e.stopPropagation();
           selectItem(it.id);
           deleteSelected();
-        });
-
-        div.addEventListener("click", ()=>{
-          selectItem(it.id);
-          openDetailModal();
         });
       }
     }
@@ -1259,32 +1295,23 @@
       }
     }
 
-    async function autoOpenFromQuery(){
-      const openId = qs("open");
-      if(!openId) return;
+    async function syncMissionProgress(itemsList){
+      await Promise.all(itemsList.map(async (it)=>{
+        try{
+          const snap = await getDocs(collection(db, "events", it.id, "missions"));
+          const missions = snap.docs.map(d => d.data() || {});
+          const tracked = missions.filter(isTrackedMissionDoc);
 
-      const found = items.find(x=>x.id === openId);
-      if(found){
-        selectItem(openId);
-        openDetailModal();
-        return;
-      }
-
-      try{
-        const snap = await getDoc(doc(db,"events", openId));
-        if(!snap.exists()) return;
-        const x = snap.data() || {};
-        if(x.conciergerieUid !== currentUser.uid) return;
-
-        const obj = mapEventToItem(openId, x);
-        items.unshift(obj);
-
-        renderList();
-        selectItem(openId);
-        openDetailModal();
-      }catch(err){
-        console.error(err);
-      }
+          it.totalTrackedMissions = tracked.length;
+          it.validatedTrackedMissions = tracked.filter(m => normalizeMissionStatus(m.status) === "VALIDEE").length;
+          it.pendingTrackedMissions = Math.max(0, it.totalTrackedMissions - it.validatedTrackedMissions);
+        }catch(err){
+          console.warn("Mission progress unreadable for", it.id, err);
+          it.totalTrackedMissions = 0;
+          it.validatedTrackedMissions = 0;
+          it.pendingTrackedMissions = 0;
+        }
+      }));
     }
 
     function mapEventToItem(id, x){
@@ -1323,6 +1350,9 @@
         total: (x.total != null) ? Number(x.total) : computedTotal,
 
         createdAt: x.createdAt || null,
+        totalTrackedMissions: 0,
+        validatedTrackedMissions: 0,
+        pendingTrackedMissions: 0,
         _search: ""
       };
 
@@ -1345,9 +1375,10 @@
         return mapEventToItem(d.id, x);
       });
 
+      await syncMissionProgress(items);
+
       renderList();
       renderDetail();
-      await autoOpenFromQuery();
     }
 
     onAuthStateChanged(auth, async (user)=>{
@@ -1385,6 +1416,7 @@
       try{
         hideAlert();
         selected = null;
+        closeDetailModal();
         await loadInitial();
       }catch(err){
         console.error(err);
