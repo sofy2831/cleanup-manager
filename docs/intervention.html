@@ -1,4 +1,4 @@
-<!-- docs/intervention.html (FINAL — aide complète + sélection interventions à envoyer + badge "Envoyé le" + agentLinks map + guard conciergerie strict) -->
+<!-- docs/intervention.html (CORRIGÉ — sélection stable + nettoyage missions non envoyées + agentLinks cohérents) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -405,18 +405,17 @@
 Ce que tu fais à droite :
 1. tu renseignes le nom de l’agent et son mail.
 2. tu coches uniquement les interventions à lui envoyer, suivant les dates.
-4. tu cliques sur “Générer liens”
-5. tu copies les liens ou tu passes par “Envoyer email”
+3. tu cliques sur “Générer liens”.
+4. tu copies les liens ou tu passes par “Envoyer email”.
 
 Durée :
-• le token expire après 24h
-Donc ne génère pas les liens 3 jours trop tôt. 
+• le token expire après 24h.
+Donc ne génère pas les liens 3 jours trop tôt.
 
 Badge “Envoyé le” :
-• cela indique qu’un lien a déjà été envoyé pour cette intervention
-• ce n’est pas un blocage
-• tu peux régénérer un nouveau lien si nécessaire</p>
-
+• cela indique qu’un lien a déjà été envoyé pour cette intervention.
+• ce n’est pas un blocage.
+• tu peux régénérer un nouveau lien si nécessaire.</p>
           </div>
         </div>
       </div>
@@ -525,7 +524,10 @@ Badge “Envoyé le” :
   <script type="module">
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-    import { doc, getDoc, setDoc, updateDoc, serverTimestamp, Timestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import {
+      doc, getDoc, setDoc, updateDoc, deleteDoc, deleteField,
+      serverTimestamp, Timestamp
+    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const helloLine = document.getElementById("helloLine");
     const companyLine = document.getElementById("companyLine");
@@ -560,6 +562,8 @@ Badge “Envoyé le” :
     const photosBox = document.getElementById("photosBox");
     const photosWrap = document.getElementById("photosWrap");
     const photosTotalBadge = document.getElementById("photosTotalBadge");
+
+    const ALL_TECH_MISSIONS = ["MENAGE","CHECKIN","CHECKOUT","LINGE","MAINTENANCE","KITS"];
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -811,85 +815,82 @@ Badge “Envoyé le” :
     }
 
     function missionsFromOneIntervention(iv){
-  const out = new Set();
-  if(!iv) return [];
+      const out = new Set();
+      if(!iv) return [];
 
-  const lines = Array.isArray(iv.lines) ? iv.lines : [];
+      const lines = Array.isArray(iv.lines) ? iv.lines : [];
 
-  for(const l of lines){
-    const label = normTxt(l?.label || l?.name || l?.title || "");
-    const category = normTxt(l?.category || "");
-    if(!label && !category) continue;
+      for(const l of lines){
+        const label = normTxt(l?.label || l?.name || l?.title || "");
+        const category = normTxt(l?.category || "");
+        if(!label && !category) continue;
 
-    const text = `${label} ${category}`.trim();
+        const text = `${label} ${category}`.trim();
 
-    if(
-      text.includes("check-in") ||
-      text.includes("check in") ||
-      text.includes("arrivee") ||
-      text.includes("check-in/out")
-    ){
-      if(label.includes("check-in") || label.includes("check in") || label.includes("arrivee")){
-        out.add("CHECKIN");
+        if(
+          label.includes("check-in") ||
+          label.includes("check in") ||
+          label.includes("arrivee")
+        ){
+          out.add("CHECKIN");
+        }
+
+        if(
+          label.includes("check-out") ||
+          label.includes("check out")
+        ){
+          out.add("CHECKOUT");
+        }
+
+        if(
+          label.includes("menage") ||
+          label.includes("nettoyage")
+        ){
+          out.add("MENAGE");
+        }
+
+        if(
+          text.includes("linge") ||
+          text.includes("drap") ||
+          text.includes("serviette") ||
+          text.includes("collecte") ||
+          text.includes("lavage") ||
+          text.includes("sechage") ||
+          text.includes("lessive") ||
+          text.includes("blanch")
+        ){
+          out.add("LINGE");
+        }
+
+        if(
+          text.includes("maintenance") ||
+          text.includes("reparation") ||
+          text.includes("bricol") ||
+          text.includes("artisan") ||
+          text.includes("fuite") ||
+          text.includes("serrure") ||
+          text.includes("urgence") ||
+          text.includes("ampoule") ||
+          text.includes("joint")
+        ){
+          out.add("MAINTENANCE");
+        }
+
+        if(
+          text.includes("kit") ||
+          text.includes("consommable") ||
+          text.includes("capsule") ||
+          text.includes("shampo") ||
+          text.includes("savon") ||
+          text.includes("reassort")
+        ){
+          out.add("KITS");
+        }
       }
-    }
 
-    if(
-      text.includes("check-out") ||
-      text.includes("check out")
-    ){
-      out.add("CHECKOUT");
+      const order = ["MENAGE","CHECKIN","CHECKOUT","LINGE","MAINTENANCE","KITS"];
+      return order.filter(x => out.has(x));
     }
-
-    if(
-      text.includes("menage") ||
-      text.includes("nettoyage")
-    ){
-      out.add("MENAGE");
-    }
-
-    if(
-      text.includes("linge") ||
-      text.includes("drap") ||
-      text.includes("serviette") ||
-      text.includes("collecte") ||
-      text.includes("lavage") ||
-      text.includes("sechage") ||
-      text.includes("lessive") ||
-      text.includes("blanch")
-    ){
-      out.add("LINGE");
-    }
-
-    if(
-      text.includes("maintenance") ||
-      text.includes("reparation") ||
-      text.includes("bricol") ||
-      text.includes("artisan") ||
-      text.includes("fuite") ||
-      text.includes("serrure") ||
-      text.includes("urgence") ||
-      text.includes("ampoule") ||
-      text.includes("joint")
-    ){
-      out.add("MAINTENANCE");
-    }
-
-    if(
-      text.includes("kit") ||
-      text.includes("consommable") ||
-      text.includes("capsule") ||
-      text.includes("shampo") ||
-      text.includes("savon") ||
-      text.includes("reassort")
-    ){
-      out.add("KITS");
-    }
-  }
-
-  const order = ["MENAGE","CHECKIN","CHECKOUT","LINGE","MAINTENANCE","KITS"];
-  return order.filter(x => out.has(x));
-}
 
     function getSelectedInterventionKeys(){
       return Array.from(sendSelectorBox.querySelectorAll('input[type="checkbox"][data-iv-key]:checked'))
@@ -909,44 +910,42 @@ Badge “Envoyé le” :
     }
 
     function renderSendSelector(interventions, agentLinks = {}){
-  sendSelectorBox.innerHTML = "";
-  const visible = (Array.isArray(interventions) ? interventions : []).filter(interventionHasContent);
+      sendSelectorBox.innerHTML = "";
+      const visible = (Array.isArray(interventions) ? interventions : []).filter(interventionHasContent);
 
-  if(!visible.length){
-    sendSelectorBox.innerHTML = `<div class="mini">Aucune intervention exploitable.</div>`;
-    return;
-  }
+      if(!visible.length){
+        sendSelectorBox.innerHTML = `<div class="mini">Aucune intervention exploitable.</div>`;
+        return;
+      }
 
-  for(const iv of visible){
-    const lines = Array.isArray(iv.lines) ? iv.lines : [];
-    const subtotal = computeTotalFromLines(lines);
-    const missionTypes = missionsFromOneIntervention(iv);
-    const linkMeta = agentLinks?.[iv.key] || null;
-    const sentTxt = formatTs(linkMeta?.sentAt);
+      for(const iv of visible){
+        const lines = Array.isArray(iv.lines) ? iv.lines : [];
+        const subtotal = computeTotalFromLines(lines);
+        const missionTypes = missionsFromOneIntervention(iv);
+        const linkMeta = agentLinks?.[iv.key] || null;
+        const sentTxt = formatTs(linkMeta?.sentAt);
+        const isSent = !!linkMeta?.tokenId;
 
-    // ✅ une intervention est cochée seulement si un lien a déjà été généré pour elle
-    const isSent = !!linkMeta?.tokenId;
+        const row = document.createElement("label");
+        row.className = "selectorRow";
+        row.innerHTML = `
+          <input type="checkbox" data-iv-key="${esc(iv.key)}" ${isSent ? "checked" : ""}>
+          <div class="selectorMain">
+            <div class="selectorHead">
+              <div class="selectorTitle">${esc(iv.title)} • ${esc(iv.dateKey || "—")}</div>
+              ${sentTxt ? `<span class="sentBadge">Envoyé le ${esc(sentTxt)}</span>` : ``}
+            </div>
+            <div class="selectorSub">${esc(`${lines.length} ligne(s) • ${money(subtotal)}${missionTypes.length ? " • " + missionTypes.map(missionLabel).join(", ") : ""}`)}</div>
+          </div>
+        `;
+        sendSelectorBox.appendChild(row);
+      }
 
-    const row = document.createElement("label");
-    row.className = "selectorRow";
-    row.innerHTML = `
-      <input type="checkbox" data-iv-key="${esc(iv.key)}" ${isSent ? "checked" : ""}>
-      <div class="selectorMain">
-        <div class="selectorHead">
-          <div class="selectorTitle">${esc(iv.title)} • ${esc(iv.dateKey || "—")}</div>
-          ${sentTxt ? `<span class="sentBadge">Envoyé le ${esc(sentTxt)}</span>` : ``}
-        </div>
-        <div class="selectorSub">${esc(`${lines.length} ligne(s) • ${money(subtotal)}${missionTypes.length ? " • " + missionTypes.map(missionLabel).join(", ") : ""}`)}</div>
-      </div>
-    `;
-    sendSelectorBox.appendChild(row);
-  }
+      sendSelectorBox.querySelectorAll('input[type="checkbox"][data-iv-key]').forEach(el=>{
+        el.addEventListener("change", refreshMissionHintFromSelection);
+      });
+    }
 
-  sendSelectorBox.querySelectorAll('input[type="checkbox"][data-iv-key]').forEach(el=>{
-    el.addEventListener("change", refreshMissionHintFromSelection);
-  });
-}
-    
     function refreshMissionHintFromSelection(){
       const selectedKeys = getSelectedInterventionKeys();
       const missionTypes = buildMissionTypesFromSelection(currentInterventions, selectedKeys);
@@ -1307,11 +1306,11 @@ Badge “Envoyé le” :
       const sched = computeScheduleForMission(currentEvent, missionType);
 
       await setDoc(mRef, {
-  type: missionType,
-  missionId: missionType,
-  conciergerieUid: currentUser.uid,
-  eventId: String(prestationId),
-  prestationId: String(prestationId),
+        type: missionType,
+        missionId: missionType,
+        conciergerieUid: currentUser.uid,
+        eventId: String(prestationId),
+        prestationId: String(prestationId),
 
         scheduledDateKey: sched.scheduledDateKey || "",
         scheduledTime: sched.scheduledTime || "",
@@ -1331,6 +1330,28 @@ Badge “Envoyé le” :
       }, { merge: true });
     }
 
+    async function removeMissionIfUnlocked(missionType){
+      if(!missionType || missionType === "PHOTOS") return;
+
+      const mRef = doc(db, "events", prestationId, "missions", missionType);
+
+      try{
+        const mSnap = await getDoc(mRef);
+        if(!mSnap.exists()) return;
+
+        const d = mSnap.data() || {};
+        const locked = !!d.locked;
+        const status = String(d.status || "").toUpperCase().trim();
+
+        if(locked) return;
+        if(status === "VALIDEE") return;
+
+        await deleteDoc(mRef);
+      }catch(err){
+        console.warn("removeMissionIfUnlocked", missionType, err);
+      }
+    }
+
     async function upsertPhotosMissionForToken({ tokenId }) {
       const mRef = doc(db, "events", prestationId, "missions", "PHOTOS");
 
@@ -1347,11 +1368,11 @@ Badge “Envoyé le” :
       if(locked) return;
 
       await setDoc(mRef, {
-  missionId: "PHOTOS",
-  type: "PHOTOS",
-  conciergerieUid: currentUser.uid,
-  eventId: String(prestationId),
-  prestationId: String(prestationId),
+        missionId: "PHOTOS",
+        type: "PHOTOS",
+        conciergerieUid: currentUser.uid,
+        eventId: String(prestationId),
+        prestationId: String(prestationId),
 
         dayToken: tokenId,
 
@@ -1453,14 +1474,27 @@ Badge “Envoyé le” :
         await upsertMissionForToken({ tokenId, email, name, missionType: t });
       }
 
+      for (const t of ALL_TECH_MISSIONS) {
+        if(!missionTypes.includes(t)){
+          await removeMissionIfUnlocked(t);
+        }
+      }
+
       await upsertPhotosMissionForToken({ tokenId });
 
       const eventPatch = {
         assignedToEmail: email,
         assignedToName: name,
         dayToken: tokenId,
+        missionTypes,
+        missionsInitialized: true,
         updatedAt: serverTimestamp()
       };
+
+      const visibleInterventions = (Array.isArray(currentInterventions) ? currentInterventions : []).filter(interventionHasContent);
+      for(const iv of visibleInterventions){
+        eventPatch[`agentLinks.${iv.key}`] = deleteField();
+      }
 
       for(const ivKey of selectedKeys){
         eventPatch[`agentLinks.${ivKey}.sentAt`] = serverTimestamp();
@@ -1566,6 +1600,4 @@ Badge “Envoyé le” :
     });
   </script>
 </body>
-
 </html>
-
