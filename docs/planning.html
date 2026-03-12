@@ -791,15 +791,15 @@ La prestation passe en “RÉALISÉE” seulement quand toutes les missions envo
   }
 
   function normalizeOpStatus(s){
-  const x = asRaw(s);
-  if(x === "TERMINEE" || x === "TERMINÉE") return "A_VALIDER";
-  if(x === "DRAFT" || x === "BROUILLON" || x === "EN COURS" || x === "EN_COURS") return "EN_COURS";
-  if(x === "A_VALIDER" || x === "À VALIDER" || x === "À_VALIDER") return "A_VALIDER";
-  if(x === "DONE" || x === "REALISEE" || x === "RÉALISÉE" || x === "VALIDEE" || x === "VALIDÉE") return "REALISEE";
-  if(x === "ANNULEE" || x === "ANNULÉE" || x === "CANCELLED") return "ANNULEE";
-  if(x === "ASSIGNEE" || x === "ASSIGNÉE" || x === "A_FAIRE") return "EN_COURS";
-  return "EN_COURS";
-}
+    const x = asRaw(s);
+    if(x === "TERMINEE" || x === "TERMINÉE") return "A_VALIDER";
+    if(x === "DRAFT" || x === "BROUILLON" || x === "EN COURS" || x === "EN_COURS") return "EN_COURS";
+    if(x === "A_VALIDER" || x === "À VALIDER" || x === "À_VALIDER") return "A_VALIDER";
+    if(x === "DONE" || x === "REALISEE" || x === "RÉALISÉE" || x === "VALIDEE" || x === "VALIDÉE") return "REALISEE";
+    if(x === "ANNULEE" || x === "ANNULÉE" || x === "CANCELLED") return "ANNULEE";
+    if(x === "ASSIGNEE" || x === "ASSIGNÉE" || x === "A_FAIRE") return "EN_COURS";
+    return "EN_COURS";
+  }
   function opLabel(st){
     const s = normalizeOpStatus(st);
     if(s === "EN_COURS") return "EN COURS";
@@ -936,9 +936,9 @@ La prestation passe en “RÉALISÉE” seulement quand toutes les missions envo
   }
 
   function isTrackedMission(d){
-  const missionId = String(d?.missionId || d?.type || "").toUpperCase().trim();
-  return !!missionId && missionId !== "PHOTOS";
-}
+    const missionId = String(d?.missionId || d?.type || "").toUpperCase().trim();
+    return !!missionId && missionId !== "PHOTOS";
+  }
 
   function normalizeInterventions(eventDoc){
     const e = eventDoc || {};
@@ -1004,6 +1004,112 @@ La prestation passe en “RÉALISÉE” seulement quand toutes les missions envo
     }
 
     return out;
+  }
+
+  function normTxt(s){
+    return String(s || "")
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "");
+  }
+
+  function expectedMissionTypesFromInterventions(eventDoc){
+    const interventions = normalizeInterventions(eventDoc);
+    const out = new Set();
+
+    for(const iv of interventions){
+      const lines = Array.isArray(iv.lines) ? iv.lines : [];
+      for(const l of lines){
+        const label = normTxt(l?.label || l?.name || l?.title || "");
+        const category = normTxt(l?.category || "");
+        const text = `${label} ${category}`.trim();
+
+        if(!text) continue;
+
+        if(
+          label.includes("check-in") ||
+          label.includes("check in") ||
+          label.includes("arrivee")
+        ){
+          out.add("CHECKIN");
+        }
+
+        if(
+          label.includes("check-out") ||
+          label.includes("check out")
+        ){
+          out.add("CHECKOUT");
+        }
+
+        if(
+          text.includes("menage") ||
+          text.includes("nettoyage")
+        ){
+          out.add("MENAGE");
+        }
+
+        if(
+          text.includes("linge") ||
+          text.includes("drap") ||
+          text.includes("serviette") ||
+          text.includes("collecte") ||
+          text.includes("lavage") ||
+          text.includes("sechage") ||
+          text.includes("lessive") ||
+          text.includes("blanch")
+        ){
+          out.add("LINGE");
+        }
+
+        if(
+          text.includes("maintenance") ||
+          text.includes("reparation") ||
+          text.includes("bricol") ||
+          text.includes("artisan") ||
+          text.includes("fuite") ||
+          text.includes("serrure") ||
+          text.includes("urgence") ||
+          text.includes("ampoule") ||
+          text.includes("joint")
+        ){
+          out.add("MAINTENANCE");
+        }
+
+        if(
+          text.includes("kit") ||
+          text.includes("consommable") ||
+          text.includes("capsule") ||
+          text.includes("shampo") ||
+          text.includes("savon") ||
+          text.includes("reassort")
+        ){
+          out.add("KITS");
+        }
+      }
+    }
+
+    const order = ["CHECKIN","MENAGE","CHECKOUT","LINGE","MAINTENANCE","KITS"];
+    return order.filter(x => out.has(x));
+  }
+
+  function synthesizeEventStatusFromExpectedMissions(eventDoc, missions){
+    const expected = expectedMissionTypesFromInterventions(eventDoc);
+    if(!expected.length) return "EN_COURS";
+
+    const tracked = (Array.isArray(missions) ? missions : []).filter(isTrackedMission);
+    const byId = new Map();
+
+    for(const m of tracked){
+      const missionId = String(m?.missionId || m?.type || "").toUpperCase().trim();
+      if(!missionId) continue;
+      byId.set(missionId, normalizeMissionStatus(m.status || ""));
+    }
+
+    const expectedStatuses = expected.map(id => byId.get(id) || "MISSING");
+
+    if(expectedStatuses.some(s => s === "A_VALIDER")) return "A_VALIDER";
+    if(expectedStatuses.every(s => s === "VALIDEE")) return "REALISEE";
+    return "EN_COURS";
   }
 
   function getParam(name){
@@ -1315,19 +1421,14 @@ La prestation passe en “RÉALISÉE” seulement quand toutes les missions envo
     return out;
   }
 
-  function synthesizeEventStatusFromMissions(missions){
-    const tracked = (Array.isArray(missions) ? missions : []).filter(isTrackedMission);
-    if(!tracked.length) return "EN_COURS";
-
-    const statuses = tracked.map(m => normalizeMissionStatus(m.status || ""));
-    if(statuses.every(s => s === "VALIDEE")) return "REALISEE";
-    if(statuses.some(s => s === "A_VALIDER")) return "A_VALIDER";
-    return "EN_COURS";
-  }
-
   async function recalcEventStatus(eventId){
+    const eSnap = await getDoc(doc(db, "events", eventId));
+    if(!eSnap.exists()) throw new Error("Prestation introuvable.");
+
+    const eventDoc = { id: eSnap.id, ...(eSnap.data() || {}) };
     const mDocs = await loadMissionsForEvent({ id:eventId });
-    const nextStatus = synthesizeEventStatusFromMissions(mDocs);
+
+    const nextStatus = synthesizeEventStatusFromExpectedMissions(eventDoc, mDocs);
 
     await updateDoc(doc(db, "events", eventId), {
       opStatus: nextStatus,
