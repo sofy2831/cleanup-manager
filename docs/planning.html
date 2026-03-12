@@ -1,4 +1,4 @@
-<!-- docs/planning.html (FINAL — missionQueue + validation par mission + event opStatus synthétique + facture depuis event/interventions) -->
+<!-- docs/planning.html (FINAL — missionQueue + missionDetail + validation par mission + event opStatus synthétique + facture depuis event/interventions) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -597,7 +597,6 @@
 
       <div class="alert" id="alertBox"></div>
 
-      <!-- À VALIDER -->
       <section class="card">
         <div class="cardTitle">
           <span>À valider</span>
@@ -629,7 +628,6 @@ La prestation passe en “RÉALISÉE” seulement quand toutes les missions envo
       </section>
 
       <div class="grid">
-        <!-- CALENDRIER -->
         <section class="card">
           <div class="cardTitle">
             <span>Calendrier</span>
@@ -662,7 +660,6 @@ La prestation passe en “RÉALISÉE” seulement quand toutes les missions envo
           </div>
         </section>
 
-        <!-- LISTE JOUR -->
         <section class="card">
           <div class="cardTitle">
             <span id="dayTitle">Jour</span>
@@ -682,7 +679,6 @@ La prestation passe en “RÉALISÉE” seulement quand toutes les missions envo
     <a href="messagerie.html">Messages</a>
   </nav>
 
-  <!-- MODALE Réservation -->
   <div class="modalBack" id="modalBack" role="dialog" aria-modal="true" aria-label="Détails réservation">
     <div class="modal">
       <div class="modalHead">
@@ -694,7 +690,6 @@ La prestation passe en “RÉALISÉE” seulement quand toutes les missions envo
     </div>
   </div>
 
-  <!-- MODALE Prestation -->
   <div class="modalBack" id="eventModalBack" role="dialog" aria-modal="true" aria-label="Détails prestation">
     <div class="modal">
       <div class="modalHead">
@@ -798,10 +793,11 @@ La prestation passe en “RÉALISÉE” seulement quand toutes les missions envo
   function normalizeOpStatus(s){
     const x = asRaw(s);
     if(x === "TERMINEE" || x === "TERMINÉE") return "A_VALIDER";
-    if(x === "DRAFT" || x === "BROUILLON" || x === "EN COURS") return "EN_COURS";
-    if(x === "A_VALIDER" || x === "À VALIDER") return "A_VALIDER";
-    if(x === "DONE" || x === "REALISEE" || x === "RÉALISÉE") return "REALISEE";
+    if(x === "DRAFT" || x === "BROUILLON" || x === "EN COURS" || x === "EN_COURS") return "EN_COURS";
+    if(x === "A_VALIDER" || x === "À VALIDER" || x === "À_VALIDER") return "A_VALIDER";
+    if(x === "DONE" || x === "REALISEE" || x === "RÉALISÉE" || x === "VALIDEE" || x === "VALIDÉE") return "REALISEE";
     if(x === "ANNULEE" || x === "ANNULÉE" || x === "CANCELLED") return "ANNULEE";
+    if(x === "ASSIGNEE" || x === "ASSIGNÉE" || x === "A_FAIRE") return "EN_COURS";
     return "EN_COURS";
   }
   function opLabel(st){
@@ -941,10 +937,7 @@ La prestation passe en “RÉALISÉE” seulement quand toutes les missions envo
 
   function isTrackedMission(d){
     const missionId = String(d?.missionId || d?.type || "").toUpperCase().trim();
-    if(!missionId || missionId === "PHOTOS") return false;
-    const status = normalizeMissionStatus(d?.status || "");
-    const hasToken = String(d?.dayToken || "").trim().length > 0;
-    return hasToken || ["ASSIGNEE","EN_COURS","A_VALIDER","VALIDEE"].includes(status);
+    return !!missionId && missionId !== "PHOTOS";
   }
 
   function normalizeInterventions(eventDoc){
@@ -1013,6 +1006,112 @@ La prestation passe en “RÉALISÉE” seulement quand toutes les missions envo
     return out;
   }
 
+  function normTxt(s){
+    return String(s || "")
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "");
+  }
+
+  function expectedMissionTypesFromInterventions(eventDoc){
+    const interventions = normalizeInterventions(eventDoc);
+    const out = new Set();
+
+    for(const iv of interventions){
+      const lines = Array.isArray(iv.lines) ? iv.lines : [];
+      for(const l of lines){
+        const label = normTxt(l?.label || l?.name || l?.title || "");
+        const category = normTxt(l?.category || "");
+        const text = `${label} ${category}`.trim();
+
+        if(!text) continue;
+
+        if(
+          label.includes("check-in") ||
+          label.includes("check in") ||
+          label.includes("arrivee")
+        ){
+          out.add("CHECKIN");
+        }
+
+        if(
+          label.includes("check-out") ||
+          label.includes("check out")
+        ){
+          out.add("CHECKOUT");
+        }
+
+        if(
+          text.includes("menage") ||
+          text.includes("nettoyage")
+        ){
+          out.add("MENAGE");
+        }
+
+        if(
+          text.includes("linge") ||
+          text.includes("drap") ||
+          text.includes("serviette") ||
+          text.includes("collecte") ||
+          text.includes("lavage") ||
+          text.includes("sechage") ||
+          text.includes("lessive") ||
+          text.includes("blanch")
+        ){
+          out.add("LINGE");
+        }
+
+        if(
+          text.includes("maintenance") ||
+          text.includes("reparation") ||
+          text.includes("bricol") ||
+          text.includes("artisan") ||
+          text.includes("fuite") ||
+          text.includes("serrure") ||
+          text.includes("urgence") ||
+          text.includes("ampoule") ||
+          text.includes("joint")
+        ){
+          out.add("MAINTENANCE");
+        }
+
+        if(
+          text.includes("kit") ||
+          text.includes("consommable") ||
+          text.includes("capsule") ||
+          text.includes("shampo") ||
+          text.includes("savon") ||
+          text.includes("reassort")
+        ){
+          out.add("KITS");
+        }
+      }
+    }
+
+    const order = ["CHECKIN","MENAGE","CHECKOUT","LINGE","MAINTENANCE","KITS"];
+    return order.filter(x => out.has(x));
+  }
+
+  function synthesizeEventStatusFromExpectedMissions(eventDoc, missions){
+    const expected = expectedMissionTypesFromInterventions(eventDoc);
+    if(!expected.length) return "EN_COURS";
+
+    const tracked = (Array.isArray(missions) ? missions : []).filter(isTrackedMission);
+    const byId = new Map();
+
+    for(const m of tracked){
+      const missionId = String(m?.missionId || m?.type || "").toUpperCase().trim();
+      if(!missionId) continue;
+      byId.set(missionId, normalizeMissionStatus(m.status || ""));
+    }
+
+    const expectedStatuses = expected.map(id => byId.get(id) || "MISSING");
+
+    if(expectedStatuses.some(s => s === "A_VALIDER")) return "A_VALIDER";
+    if(expectedStatuses.every(s => s === "VALIDEE")) return "REALISEE";
+    return "EN_COURS";
+  }
+
   function getParam(name){
     return new URLSearchParams(location.search).get(name) || "";
   }
@@ -1074,7 +1173,6 @@ La prestation passe en “RÉALISÉE” seulement quand toutes les missions envo
     }
   });
 
-  /* HELP */
   function closeAllHelpBubbles(){
     document.querySelectorAll("[data-help-bubble]").forEach(b=> b.style.display = "none");
     document.querySelectorAll("[data-help-btn]").forEach(btn=> btn.setAttribute("aria-expanded","false"));
@@ -1157,7 +1255,6 @@ La prestation passe en “RÉALISÉE” seulement quand toutes les missions envo
   window.addEventListener("resize", ()=> closeAllHelpBubbles());
   window.addEventListener("scroll", ()=> closeAllHelpBubbles(), true);
 
-  /* STATE */
   let currentUser = null;
   let myRole = "";
 
@@ -1324,19 +1421,14 @@ La prestation passe en “RÉALISÉE” seulement quand toutes les missions envo
     return out;
   }
 
-  function synthesizeEventStatusFromMissions(missions){
-    const tracked = (Array.isArray(missions) ? missions : []).filter(isTrackedMission);
-    if(!tracked.length) return "EN_COURS";
-
-    const statuses = tracked.map(m => normalizeMissionStatus(m.status || ""));
-    if(statuses.every(s => s === "VALIDEE")) return "REALISEE";
-    if(statuses.some(s => s === "A_VALIDER")) return "A_VALIDER";
-    return "EN_COURS";
-  }
-
   async function recalcEventStatus(eventId){
+    const eSnap = await getDoc(doc(db, "events", eventId));
+    if(!eSnap.exists()) throw new Error("Prestation introuvable.");
+
+    const eventDoc = { id: eSnap.id, ...(eSnap.data() || {}) };
     const mDocs = await loadMissionsForEvent({ id:eventId });
-    const nextStatus = synthesizeEventStatusFromMissions(mDocs);
+
+    const nextStatus = synthesizeEventStatusFromExpectedMissions(eventDoc, mDocs);
 
     await updateDoc(doc(db, "events", eventId), {
       opStatus: nextStatus,
@@ -1385,6 +1477,7 @@ La prestation passe en “RÉALISÉE” seulement quand toutes les missions envo
         eventId: String(qd.eventId || "").trim(),
         missionId: String(qd.missionId || "").trim().toUpperCase(),
         missionLabel: String(qd.missionLabel || missionLabelFromId(qd.missionId)).trim(),
+        missionDetail: String(qd.missionDetail || "").trim(),
         missionDateKey: String(qd.missionDateKey || "").trim(),
         missionTime: String(qd.missionTime || "").trim(),
         assignedToName: String(qd.assignedToName || "").trim(),
@@ -1392,6 +1485,8 @@ La prestation passe en “RÉALISÉE” seulement quand toutes les missions envo
         homeId: String(qd.homeId || "").trim(),
         homeName: String(qd.homeName || "").trim(),
         homeCity: String(qd.homeCity || "").trim(),
+        homeAddress: String(qd.homeAddress || "").trim(),
+        homeZip: String(qd.homeZip || "").trim(),
         event: ev || null
       });
     }
@@ -1658,7 +1753,7 @@ La prestation passe en “RÉALISÉE” seulement quand toutes les missions envo
     }
   }
 
-  function openEventDetail(ev){
+  function openEventDetail(ev, missionRow = null){
     const st = normalizeOpStatus(ev.opStatus);
 
     eventModalTitle.textContent = "Détails prestation";
@@ -1673,11 +1768,24 @@ La prestation passe en “RÉALISÉE” seulement quand toutes les missions envo
     const label = (ev.packLabel || "").trim();
     const stats = ev.packs ? computePacksStats(ev.packs) : null;
 
+    const missionPart = missionRow
+      ? `
+        <div><b>Mission technique</b> : ${esc(missionRow.missionLabel || "—")}</div>
+        <div><b>Détail mission</b> : ${esc(missionRow.missionDetail || "—")}</div>
+        <div><b>Date mission</b> : ${esc(
+          missionRow.missionDateKey
+            ? `${fmtFRDateKey(missionRow.missionDateKey)}${missionRow.missionTime ? " • " + missionRow.missionTime : ""}`
+            : "—"
+        )}</div>
+      `
+      : "";
+
     eventModalBody.innerHTML = `
       <div><b>Logement</b> : ${esc(title)}</div>
       ${addr ? `<div><b>Adresse</b> : ${esc(addr)}</div>` : ``}
       <div><b>Période</b> : ${esc(per)}</div>
       <div><b>Statut</b> : ${esc(opLabel(st))}</div>
+      ${missionPart}
       ${label ? `<div><b>Intervention</b> : ${esc(label)}</div>` : ``}
       ${stats ? `<div><b>Packs</b> : ${esc(String(stats.usefulPacks))} pack(s) utiles • ${esc(String(stats.lines))} ligne(s)</div>` : ``}
       ${ev.assignedToName || ev.assignedToEmail ? `<div><b>Agent</b> : ${esc(ev.assignedToName || ev.assignedToEmail)}</div>` : ``}
@@ -1827,6 +1935,7 @@ La prestation passe en “RÉALISÉE” seulement quand toutes les missions envo
       const missionDate = row.missionDateKey ? fmtFRDateKey(row.missionDateKey) : "—";
       const missionTime = row.missionTime || "";
       const dateLine = missionTime ? `${missionDate} • ${missionTime}` : missionDate;
+      const detailLine = row.missionDetail || "—";
 
       const div = document.createElement("div");
       div.className = "item validateMissionRow";
@@ -1837,7 +1946,8 @@ La prestation passe en “RÉALISÉE” seulement quand toutes les missions envo
             <span class="badge">Mission</span>
           </div>
           <div class="iTitle">${esc(title)}</div>
-          <div class="iSub">${esc(`Mission à valider : ${row.missionLabel} • Date : ${dateLine} • Agent : ${agent}`)}</div>
+          <div class="iSub">${esc(`Mission technique : ${row.missionLabel} • Détail mission : ${detailLine}`)}</div>
+          <div class="iSub">${esc(`Date : ${dateLine} • Agent : ${agent}`)}</div>
 
           <div class="actionsRow">
             <button class="mini" type="button" data-validate-mission="${esc(row.queueId)}" title="Valider">
@@ -1855,7 +1965,7 @@ La prestation passe en “RÉALISÉE” seulement quand toutes les missions envo
       toValidateList.appendChild(div);
 
       div.addEventListener("click", ()=>{
-        if(ev) openEventDetail(ev);
+        if(ev) openEventDetail(ev, row);
       });
 
       div.querySelector(`[data-validate-mission="${CSS.escape(row.queueId)}"]`)?.addEventListener("click", (e)=>{
@@ -1865,7 +1975,7 @@ La prestation passe en “RÉALISÉE” seulement quand toutes les missions envo
 
       div.querySelector(`[data-open-presta="${CSS.escape(row.eventId)}"]`)?.addEventListener("click", (e)=>{
         e.stopPropagation();
-        if(ev) openEventDetail(ev);
+        if(ev) openEventDetail(ev, row);
         else openIntervention(row.eventId);
       });
 
@@ -2156,9 +2266,8 @@ La prestation passe en “RÉALISÉE” seulement quand toutes les missions envo
             <div class="helpWrap" data-help-wrap="aftervalidate">
               <button class="helpBtn" type="button" data-help-btn="aftervalidate" aria-expanded="false">💡 Aide</button>
               <div class="helpBubble" data-help-bubble="aftervalidate" role="dialog" aria-modal="false" aria-label="Aide facturation">
-                <p class="hbTitle">Après validation complète</p>
-                <p class="hbText">La facture reste basée sur la prestation globale.
-Tu factures quand toutes les missions envoyées ont été validées.</p>
+                <p class="hbTitle">Facturation</p>
+                <p class="hbText">La facture est disponible seulement quand la prestation est entièrement validée, donc au statut “RÉALISÉE”.</p>
               </div>
             </div>
           </div>
