@@ -1,4 +1,4 @@
-<!-- docs/devis.html (FINAL — owners picker uses owners.fullname + owners.emailLower + owners.address.{address1,street,address2,zip,city} | FIX ids + FIX client inputs) -->
+<!-- docs/devis.html (FINAL — TVA par ligne SERVICE 20% / PRODUCT 10% + snapshot document) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -353,7 +353,7 @@
       <div class="box" id="boxLignes">
         <div class="card-title">
           <span>Lignes</span>
-          <span class="small">prestations</span>
+          <span class="small">prestations / produits</span>
         </div>
 
         <div class="alert" id="alertBox"></div>
@@ -581,7 +581,6 @@
     const pageTitleEl = document.getElementById("pageTitle");
     const bankKv = document.getElementById("bankKv");
 
-    // FIX ids (matching HTML)
     const clientDisplayNameInput = document.getElementById("clientDisplayNameInput");
     const clientEmailInput = document.getElementById("clientEmailInput");
     const clientAddress1Input = document.getElementById("clientAddress1Input");
@@ -589,7 +588,6 @@
     const clientZipInput = document.getElementById("clientZipInput");
     const clientCityInput = document.getElementById("clientCityInput");
 
-    // owner picker UI
     const pickOwnerBtn = document.getElementById("pickOwnerBtn");
     const clearClientBtn = document.getElementById("clearClientBtn");
 
@@ -701,11 +699,8 @@
       clientCityInput.value = "";
     }
 
-    // ✅ mapping owners -> client inputs (owners schema)
     function fillClientFromOwner(owner){
       const addr = owner?.address || {};
-
-      // address1 en priorité, sinon street (compat)
       const address1 =
         String(addr.address1 || "").trim() ||
         String(addr.street || "").trim() ||
@@ -723,7 +718,6 @@
       clientCityInput.value = city;
     }
 
-    // Query sans orderBy => évite index composite
     async function searchOwners(term){
       const q = String(term || "").trim().toLowerCase();
       if(q.length < 2) return [];
@@ -753,7 +747,6 @@
           return name.includes(q) || email.includes(q) || addr.includes(q);
         }).slice(0, 30);
 
-        // on renvoie EXACTEMENT le shape owners (avec compat address1/street)
         return filtered.map(owner => ({
           id: owner.id,
           fullname: String(owner.fullname || "").trim(),
@@ -786,7 +779,6 @@
         btn.type = "button";
         btn.className = "resultBtn";
 
-        // affiche address1 si présent, sinon street
         const a1 = String((o.address?.address1 || o.address?.street || "")).trim();
 
         btn.innerHTML = `
@@ -835,7 +827,7 @@
       showAlert("✅ Bloc client réinitialisé (nouveau client).", true);
     });
 
-    // ===== reste (inchangé) =====
+    // ===== Helpers =====
     function todayDdmmyyyy(){
       const d = new Date();
       const dd = String(d.getDate()).padStart(2,"0");
@@ -897,16 +889,94 @@
     penB2BEl.addEventListener("change", syncPenaltyText);
     penB2CEl.addEventListener("change", syncPenaltyText);
 
-    function computeTotals(linesArr, tvaEnabled, tvaRate){
-      let ht = 0;
-      for(const l of (Array.isArray(linesArr) ? linesArr : [])){
-        const qty = Number(l?.qty)||0;
-        const up  = Number(l?.unitPrice)||0;
-        ht += qty * up;
+    // ===== TVA =====
+    function getVatSnapshotFromProfile(){
+      const bp = (profileData?.businessProfile || {});
+      const enabled = !!bp.vat?.enabled;
+      return {
+        enabled,
+        serviceRate: enabled ? 0.20 : 0,
+        productRate: enabled ? 0.10 : 0
+      };
+    }
+
+    function getVatRate(lineType, vatEnabled, vatSnapshot){
+      if(!vatEnabled) return 0;
+      if(lineType === "SERVICE") return Number(vatSnapshot?.serviceRate ?? 0.20);
+      if(lineType === "PRODUCT") return Number(vatSnapshot?.productRate ?? 0.10);
+      return 0;
+    }
+
+    function computeLine(line, vatEnabled, vatSnapshot){
+      const qty = Number(line?.qty) || 0;
+      const unitPrice = Number(line?.unitPrice) || 0;
+      const vatRate = getVatRate(String(line?.lineType || "SERVICE").trim(), vatEnabled, vatSnapshot);
+
+      const totalHT = qty * unitPrice;
+      const totalTVA = totalHT * vatRate;
+      const totalTTC = totalHT + totalTVA;
+
+      return {
+        ...line,
+        vatRate,
+        totalHT,
+        totalTVA,
+        totalTTC
+      };
+    }
+
+    function computeDocument(linesArr, vatEnabled, vatSnapshot){
+      const safeLines = Array.isArray(linesArr) ? linesArr : [];
+      const computedLines = safeLines.map(l => computeLine(l, vatEnabled, vatSnapshot));
+
+      let totalHT = 0;
+      let totalTVA = 0;
+      let totalTTC = 0;
+
+      for(const l of computedLines){
+        totalHT += Number(l.totalHT) || 0;
+        totalTVA += Number(l.totalTVA) || 0;
+        totalTTC += Number(l.totalTTC) || 0;
       }
-      const tva = tvaEnabled ? (ht * (Number(tvaRate)||0)) : 0;
-      const ttc = ht + tva;
-      return { ht, tva, ttc };
+
+      return {
+        lines: computedLines,
+        totalHT,
+        totalTVA,
+        totalTTC
+      };
+    }
+
+    function getTvaExemptionText(){
+      const bp = (profileData?.businessProfile || {});
+      const txt = String(bp?.tvaExemptionText || "").trim();
+      return txt || "TVA non applicable – art. 293 B du CGI";
+    }
+
+    function inferLineTypeFromTemplate(tpl, selectedKey){
+      if(selectedKey === "__OTHER__") return "SERVICE";
+
+      const key = String(selectedKey || tpl?.key || "").toUpperCase();
+      const category = String(tpl?.category || "").toLowerCase();
+      const label = String(tpl?.label || "").toLowerCase();
+
+      if(
+        category.includes("kit") ||
+        category.includes("consommable") ||
+        key.includes("KIT") ||
+        key.includes("PROD") ||
+        label.includes("kit") ||
+        label.includes("café") ||
+        label.includes("the") ||
+        label.includes("thé") ||
+        label.includes("shampoing") ||
+        label.includes("gel douche") ||
+        label.includes("savon")
+      ){
+        return "PRODUCT";
+      }
+
+      return "SERVICE";
     }
 
     async function loadProfile(uid){
@@ -993,6 +1063,8 @@
         bic: String(bank.bic || "").trim()
       };
 
+      const vatSnapshot = getVatSnapshotFromProfile();
+
       return {
         companyName: String(bp.companyName || "Conciergerie").trim(),
         logoUrl: String(bp.logoUrl || "").trim(),
@@ -1011,10 +1083,11 @@
         },
         bank: bankSnap,
         vat: {
-          enabled: !!bp.vat?.enabled,
-          rate: Number.isFinite(Number(bp.vat?.rate)) ? Number(bp.vat.rate) : 0,
+          enabled: !!vatSnapshot.enabled,
+          serviceRate: Number(vatSnapshot.serviceRate || 0),
+          productRate: Number(vatSnapshot.productRate || 0)
         },
-        tvaExemptionText: String(bp.tvaExemptionText || "").trim(),
+        tvaExemptionText: !vatSnapshot.enabled ? getTvaExemptionText() : "",
         conditions: {
           cancellationPercent: Number.isFinite(Number(bp.conditions?.cancellationPercent))
             ? Number(bp.conditions.cancellationPercent)
@@ -1052,7 +1125,6 @@
       clearClientBtn.disabled = !!locked;
     }
 
-    // client mapping in quote = displayName + email + address1/2 + zip + city
     function readClientInputs(){
       return {
         clientDisplayName: (clientDisplayNameInput.value || "").trim(),
@@ -1138,13 +1210,17 @@
       if(!key) return { ok:false, msg:"Choisis une prestation." };
 
       let label = "";
+      let lineType = "SERVICE";
+
       if(key === "__OTHER__"){
         label = (otherNameEl.value || "").trim();
         if(!label) return { ok:false, msg:"Renseigne le nom du produit (Autre)." };
+        lineType = "SERVICE";
       }else{
         const t = getTemplateByKey(key);
         label = (t?.label || "").trim();
         if(!label) return { ok:false, msg:"Prestation invalide." };
+        lineType = inferLineTypeFromTemplate(t, key);
       }
 
       const qty = Number(qtyEl.value);
@@ -1170,7 +1246,8 @@
           unitPrice,
           note,
           clientNote,
-          suggestedPrice: suggested
+          suggestedPrice: suggested,
+          lineType
         }
       };
     }
@@ -1187,10 +1264,17 @@
       suggestLine.style.display = "none";
     }
 
+    function getComputedState(){
+      const vatSnapshot = getVatSnapshotFromProfile();
+      const vatEnabled = !!vatSnapshot.enabled;
+      return computeDocument(lines, vatEnabled, vatSnapshot);
+    }
+
     function renderLines(){
       linesList.innerHTML = "";
+      const computed = getComputedState();
 
-      if(!lines.length){
+      if(!computed.lines.length){
         const empty = document.createElement("div");
         empty.style.background = "#fff";
         empty.style.borderRadius = "14px";
@@ -1202,16 +1286,10 @@
         empty.textContent = "Aucune ligne. Ajoute au moins une prestation.";
         linesList.appendChild(empty);
       }else{
-        const bp = (profileData?.businessProfile || {});
-        const tvaEnabled = !!bp.vat?.enabled;
-        const tvaRate = Number.isFinite(Number(bp.vat?.rate)) ? Number(bp.vat.rate) : 0;
-
-        lines.forEach((l, idx)=>{
+        computed.lines.forEach((l, idx)=>{
           const qty = Number(l.qty)||0;
           const up = Number(l.unitPrice)||0;
-          const ht = qty * up;
-          const tva = tvaEnabled ? (ht * tvaRate) : 0;
-          const ttc = ht + tva;
+          const rate = Math.round((Number(l.vatRate)||0) * 100);
 
           const div = document.createElement("div");
           div.className = "line-item";
@@ -1221,7 +1299,9 @@
               <div class="li-sub">
                 <b>${esc(String(qty))}</b> ${esc(l.unit || "unité")}
                 • ${esc(money(up))} / ${esc(l.unit || "unité")}
-                • total <b>${esc(money(ttc))}</b>
+                • <b>${esc(l.lineType || "SERVICE")}</b>
+                • TVA <b>${esc(String(rate))}%</b>
+                • total <b>${esc(money(l.totalTTC))}</b>
               </div>
 
               ${l.clientNote ? `<div class="li-note client"><b>Note client :</b> ${esc(l.clientNote)}</div>` : ``}
@@ -1248,19 +1328,25 @@
     }
 
     function refreshTotalsUI(){
-      const bp = (profileData?.businessProfile || {});
-      const tvaEnabled = !!bp.vat?.enabled;
-      const tvaRate = Number.isFinite(Number(bp.vat?.rate)) ? Number(bp.vat.rate) : 0;
+      const computed = getComputedState();
+      const vatSnapshot = getVatSnapshotFromProfile();
 
-      const totals = computeTotals(lines, tvaEnabled, tvaRate);
-      totalLabel.textContent = money(totals.ttc);
-      amountEl.value = Number.isFinite(totals.ttc) ? totals.ttc.toFixed(2) : "";
+      totalLabel.textContent = money(computed.totalTTC);
+      amountEl.value = Number.isFinite(computed.totalTTC) ? computed.totalTTC.toFixed(2) : "";
 
-      if(tvaEnabled){
-        totalSubLine.textContent = `HT ${money(totals.ht)} • TVA ${Math.round(tvaRate*100)}% ${money(totals.tva)}`;
+      if(vatSnapshot.enabled){
+        const serviceTVA = computed.lines
+          .filter(l => l.lineType === "SERVICE")
+          .reduce((s,l)=> s + (Number(l.totalTVA)||0), 0);
+
+        const productTVA = computed.lines
+          .filter(l => l.lineType === "PRODUCT")
+          .reduce((s,l)=> s + (Number(l.totalTVA)||0), 0);
+
+        totalSubLine.textContent =
+          `HT ${money(computed.totalHT)} • TVA ${money(computed.totalTVA)} (services ${money(serviceTVA)} • produits ${money(productTVA)})`;
       }else{
-        const ex = String(bp?.tvaExemptionText || "").trim();
-        totalSubLine.textContent = ex ? ex : "TVA non applicable (art. 293B CGI)";
+        totalSubLine.textContent = getTvaExemptionText();
       }
     }
 
@@ -1318,7 +1404,12 @@
         unitPrice: Number(x?.unitPrice)||0,
         note: String(x?.note || "").trim(),
         clientNote: String(x?.clientNote || "").trim(),
-        suggestedPrice: String(x?.suggestedPrice || "").trim()
+        suggestedPrice: String(x?.suggestedPrice || "").trim(),
+        lineType: String(x?.lineType || "SERVICE").trim(),
+        vatRate: Number(x?.vatRate)||0,
+        totalHT: Number(x?.totalHT)||0,
+        totalTVA: Number(x?.totalTVA)||0,
+        totalTTC: Number(x?.totalTTC)||0
       })) : [];
 
       if(quoteData.quotePaymentTerm) paymentTermEl.value = quoteData.quotePaymentTerm;
@@ -1352,6 +1443,9 @@
         throw new Error("Client : nom + email obligatoires (création devis).");
       }
 
+      const vatSnapshot = getVatSnapshotFromProfile();
+      const computed = computeDocument(lines, vatSnapshot.enabled, vatSnapshot);
+
       const newRef = doc(collection(db, "salesDocuments"));
       docId = newRef.id;
       quoteRef = newRef;
@@ -1370,14 +1464,20 @@
         commercialStatus: "DEVIS",
 
         clientDisplayName: client.clientDisplayName,
-        clientName: client.clientDisplayName,  // compat
+        clientName: client.clientDisplayName,
         clientEmail: client.clientEmail,
         clientAddress1: client.clientAddress1,
         clientAddress2: client.clientAddress2,
         clientZip: client.clientZip,
         clientCity: client.clientCity,
 
-        lines: [],
+        vatEnabled: !!vatSnapshot.enabled,
+        vatSnapshot,
+        totalHT: computed.totalHT,
+        totalTVA: computed.totalTVA,
+        totalTTC: computed.totalTTC,
+
+        lines: computed.lines,
 
         quotePaymentTerm: paymentTermEl.value,
         quotePaymentMode: (getSelectedPayMode() || "VIREMENT"),
@@ -1420,18 +1520,27 @@
         nextQuoteNumber = await ensureQuoteNumber(currentUser.uid, year);
       }
 
+      const vatSnapshot = getVatSnapshotFromProfile();
+      const computed = computeDocument(lines, vatSnapshot.enabled, vatSnapshot);
+
       const patch = {
         businessSnapshot: buildBusinessSnapshotFromProfile(),
 
         clientDisplayName: client.clientDisplayName,
-        clientName: client.clientDisplayName, // compat
+        clientName: client.clientDisplayName,
         clientEmail: client.clientEmail,
         clientAddress1: client.clientAddress1,
         clientAddress2: client.clientAddress2,
         clientZip: client.clientZip,
         clientCity: client.clientCity,
 
-        lines: lines.map(l => ({
+        vatEnabled: !!vatSnapshot.enabled,
+        vatSnapshot,
+        totalHT: computed.totalHT,
+        totalTVA: computed.totalTVA,
+        totalTTC: computed.totalTTC,
+
+        lines: computed.lines.map(l => ({
           label: String(l.label||"").trim(),
           ref: String(l.ref||"").trim(),
           qty: Number(l.qty)||0,
@@ -1439,7 +1548,12 @@
           unitPrice: Number(l.unitPrice)||0,
           note: String(l.note||"").trim(),
           clientNote: String(l.clientNote||"").trim(),
-          suggestedPrice: String(l.suggestedPrice||"").trim()
+          suggestedPrice: String(l.suggestedPrice||"").trim(),
+          lineType: String(l.lineType||"SERVICE").trim(),
+          vatRate: Number(l.vatRate)||0,
+          totalHT: Number(l.totalHT)||0,
+          totalTVA: Number(l.totalTVA)||0,
+          totalTTC: Number(l.totalTTC)||0
         })),
 
         quotePaymentTerm: paymentTermEl.value,
@@ -1471,6 +1585,8 @@
     function buildDraftPreviewObject(){
       const client = readClientInputs();
       const bs = buildBusinessSnapshotFromProfile();
+      const vatSnapshot = getVatSnapshotFromProfile();
+      const computed = computeDocument(lines, vatSnapshot.enabled, vatSnapshot);
 
       return {
         conciergerieUid: currentUser.uid,
@@ -1483,14 +1599,20 @@
         quoteStatus: String(quoteData?.quoteStatus || "DRAFT").trim(),
 
         clientDisplayName: client.clientDisplayName,
-        clientName: client.clientDisplayName, // compat
+        clientName: client.clientDisplayName,
         clientEmail: client.clientEmail,
         clientAddress1: client.clientAddress1,
         clientAddress2: client.clientAddress2,
         clientZip: client.clientZip,
         clientCity: client.clientCity,
 
-        lines: lines.map(l => ({
+        vatEnabled: !!vatSnapshot.enabled,
+        vatSnapshot,
+        totalHT: computed.totalHT,
+        totalTVA: computed.totalTVA,
+        totalTTC: computed.totalTTC,
+
+        lines: computed.lines.map(l => ({
           label: String(l.label||"").trim(),
           ref: String(l.ref||"").trim(),
           qty: Number(l.qty)||0,
@@ -1498,7 +1620,12 @@
           unitPrice: Number(l.unitPrice)||0,
           note: String(l.note||"").trim(),
           clientNote: String(l.clientNote||"").trim(),
-          suggestedPrice: String(l.suggestedPrice||"").trim()
+          suggestedPrice: String(l.suggestedPrice||"").trim(),
+          lineType: String(l.lineType||"SERVICE").trim(),
+          vatRate: Number(l.vatRate)||0,
+          totalHT: Number(l.totalHT)||0,
+          totalTVA: Number(l.totalTVA)||0,
+          totalTTC: Number(l.totalTTC)||0
         })),
 
         quotePaymentTerm: paymentTermEl.value,
