@@ -1,4 +1,4 @@
-<!-- docs/devis-apercu.html (FINAL — owner=1 support + security ownerUid+ownerVisible + backLink owner + forbid owner on draft=1) -->
+<!-- docs/devis-apercu.html (FINAL — HT / TVA / TTC par ligne + totaux HT/TVA/TTC + owner=1 support + security ownerUid+ownerVisible + forbid owner on draft=1) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -183,7 +183,7 @@
       font-weight:700;
     }
     .totalRow .big{ font-size:17px; font-weight:800; }
-    .totalSub{ margin-top:6px; font-size:11.5px; color:var(--muted); font-weight:500; }
+    .totalSub{ margin-top:6px; font-size:11.5px; color:var(--muted); font-weight:500; line-height:1.4; }
 
     .payBox{
       border:1px solid rgba(0,0,0,0.06);
@@ -384,8 +384,10 @@
           <tr>
             <th>Prestation</th>
             <th class="right">Qté</th>
-            <th class="right">PU</th>
-            <th class="right">Total</th>
+            <th class="right">PU HT</th>
+            <th class="right">Total HT</th>
+            <th class="right">TVA</th>
+            <th class="right">Total TTC</th>
           </tr>
         </thead>
         <tbody id="linesBody"></tbody>
@@ -394,10 +396,18 @@
       <div class="summary">
         <div class="totalBox">
           <div class="totalRow">
-            <div>Total</div>
+            <div>Total HT</div>
+            <div id="totalHt">0,00 €</div>
+          </div>
+          <div class="totalRow" style="margin-top:4px;">
+            <div>Total TVA</div>
+            <div id="totalTva">0,00 €</div>
+          </div>
+          <div class="totalRow" style="margin-top:6px;">
+            <div>Total TTC</div>
             <div class="big" id="totalTtc">0,00 €</div>
           </div>
-          <div class="totalSub" id="tvaLine">TVA non applicable (art. 293B CGI)</div>
+          <div class="totalSub" id="tvaLine">TVA non applicable – art. 293 B du CGI</div>
         </div>
 
         <div class="payBox">
@@ -476,6 +486,8 @@
     const sigClientTextEl  = document.getElementById("sigClientText");
 
     const linesBody = document.getElementById("linesBody");
+    const totalHtEl = document.getElementById("totalHt");
+    const totalTvaEl = document.getElementById("totalTva");
     const totalTtcEl = document.getElementById("totalTtc");
     const tvaLineEl  = document.getElementById("tvaLine");
 
@@ -543,16 +555,6 @@
       return mode || "—";
     }
 
-    function computeTotals(linesArr, vatEnabled, vatRate){
-      let ht = 0;
-      for(const l of (Array.isArray(linesArr) ? linesArr : [])){
-        ht += (Number(l?.qty)||0) * (Number(l?.unitPrice)||0);
-      }
-      const tva = vatEnabled ? (ht * (Number(vatRate)||0)) : 0;
-      const ttc = ht + tva;
-      return { ht, tva, ttc };
-    }
-
     function getPenaltyTemplate(mode){
       const m = String(mode||"").toUpperCase();
       if(m === "B2B"){
@@ -571,6 +573,60 @@
     document.querySelectorAll('input[name="acceptChoice"]').forEach(r=>{
       r.addEventListener("change", refreshClientSigState);
     });
+
+    function normalizeVatSnapshot(bs){
+      const enabled = !!bs?.vat?.enabled;
+      return {
+        enabled,
+        serviceRate: enabled ? Number(bs?.vat?.serviceRate ?? 0.20) : 0,
+        productRate: enabled ? Number(bs?.vat?.productRate ?? 0.10) : 0
+      };
+    }
+
+    function computeLine(line, vatSnapshot){
+      const qty = Number(line?.qty) || 0;
+      const unitPrice = Number(line?.unitPrice) || 0;
+      const lineType = String(line?.lineType || "SERVICE").trim().toUpperCase();
+
+      let vatRate = Number(line?.vatRate);
+      if(!Number.isFinite(vatRate)){
+        vatRate = !vatSnapshot.enabled
+          ? 0
+          : (lineType === "PRODUCT" ? vatSnapshot.productRate : vatSnapshot.serviceRate);
+      }
+
+      const totalHT = Number.isFinite(Number(line?.totalHT)) ? Number(line.totalHT) : (qty * unitPrice);
+      const totalTVA = Number.isFinite(Number(line?.totalTVA)) ? Number(line.totalTVA) : (totalHT * vatRate);
+      const totalTTC = Number.isFinite(Number(line?.totalTTC)) ? Number(line.totalTTC) : (totalHT + totalTVA);
+
+      return {
+        ...line,
+        qty,
+        unitPrice,
+        lineType,
+        vatRate,
+        totalHT,
+        totalTVA,
+        totalTTC
+      };
+    }
+
+    function computeDocument(linesArr, bs){
+      const vatSnapshot = normalizeVatSnapshot(bs);
+      const lines = (Array.isArray(linesArr) ? linesArr : []).map(l => computeLine(l, vatSnapshot));
+
+      let totalHT = 0;
+      let totalTVA = 0;
+      let totalTTC = 0;
+
+      for(const l of lines){
+        totalHT += Number(l.totalHT) || 0;
+        totalTVA += Number(l.totalTVA) || 0;
+        totalTTC += Number(l.totalTTC) || 0;
+      }
+
+      return { lines, totalHT, totalTVA, totalTTC, vatSnapshot };
+    }
 
     function applyBusinessSnapshot(bs){
       const companyName = String(bs?.companyName || "Conciergerie").trim();
@@ -633,7 +689,7 @@
     }
 
     function renderClient(d){
-      const name  = String(d?.clientName || "").trim();
+      const name  = String(d?.clientDisplayName || d?.clientName || "").trim();
       const email = String(d?.clientEmail || "").trim();
 
       const a1 = String(d?.clientAddress1 || "").trim();
@@ -662,47 +718,53 @@
       refreshClientSigState();
     }
 
-    function renderLines(d, bs){
-      const arr = Array.isArray(d?.lines) ? d.lines : [];
+    function renderLinesAndTotals(d, bs){
+      const computed = computeDocument(d?.lines || [], bs);
       linesBody.innerHTML = "";
 
-      const vatEnabled = !!bs?.vat?.enabled;
-      const vatRate = Number.isFinite(Number(bs?.vat?.rate)) ? Number(bs.vat.rate) : 0;
-
-      if(!arr.length){
+      if(!computed.lines.length){
         const tr = document.createElement("tr");
-        tr.innerHTML = `<td colspan="4" class="mut">Aucune ligne</td>`;
+        tr.innerHTML = `<td colspan="6" class="mut">Aucune ligne</td>`;
         linesBody.appendChild(tr);
       }else{
-        for(const l of arr){
-          const qty = Number(l?.qty)||0;
+        for(const l of computed.lines){
+          const qty = Number(l.qty)||0;
           const unit = String(l?.unit || "").trim();
-          const up = Number(l?.unitPrice)||0;
-          const ht = qty * up;
-          const tva = vatEnabled ? (ht * vatRate) : 0;
-          const ttc = ht + tva;
-
+          const up = Number(l.unitPrice)||0;
           const label = String(l?.label || "Prestation").trim();
+          const ratePct = Math.round((Number(l.vatRate)||0) * 100);
 
           const tr = document.createElement("tr");
           tr.innerHTML = `
             <td>${esc(label)}</td>
             <td class="right">${esc(String(qty))}${unit ? " " + esc(unit) : ""}</td>
             <td class="right">${esc(money(up))}</td>
-            <td class="right">${esc(money(ttc))}</td>
+            <td class="right">${esc(money(l.totalHT))}</td>
+            <td class="right">${esc(String(ratePct))}% • ${esc(money(l.totalTVA))}</td>
+            <td class="right">${esc(money(l.totalTTC))}</td>
           `;
           linesBody.appendChild(tr);
         }
       }
 
-      const totals = computeTotals(arr, vatEnabled, vatRate);
-      totalTtcEl.textContent = money(totals.ttc);
+      totalHtEl.textContent = money(computed.totalHT);
+      totalTvaEl.textContent = money(computed.totalTVA);
+      totalTtcEl.textContent = money(computed.totalTTC);
 
-      if(vatEnabled){
-        tvaLineEl.textContent = `HT ${money(totals.ht)} • TVA ${Math.round(vatRate*100)}% ${money(totals.tva)}`;
+      if(computed.vatSnapshot.enabled){
+        const serviceTVA = computed.lines
+          .filter(l => String(l.lineType || "").toUpperCase() === "SERVICE")
+          .reduce((s,l)=> s + (Number(l.totalTVA)||0), 0);
+
+        const productTVA = computed.lines
+          .filter(l => String(l.lineType || "").toUpperCase() === "PRODUCT")
+          .reduce((s,l)=> s + (Number(l.totalTVA)||0), 0);
+
+        tvaLineEl.textContent =
+          `TVA totale ${money(computed.totalTVA)} • services ${money(serviceTVA)} • produits ${money(productTVA)}`;
       }else{
         const ex = String(bs?.tvaExemptionText || "").trim();
-        tvaLineEl.textContent = ex || "TVA non applicable (art. 293B CGI)";
+        tvaLineEl.textContent = ex || "TVA non applicable – art. 293 B du CGI";
       }
     }
 
@@ -775,12 +837,12 @@
         cond2.textContent = "";
       }
 
-      if(!!bs?.vat?.enabled){
-        const r = Number.isFinite(Number(bs?.vat?.rate)) ? Number(bs.vat.rate) : 0;
-        cond3.innerHTML = `<b>TVA</b> : ${esc(String(Math.round(r*100)))}% (si applicable)`;
+      const vatSnapshot = normalizeVatSnapshot(bs);
+      if(vatSnapshot.enabled){
+        cond3.innerHTML = `<b>TVA</b> : services ${esc(String(Math.round(vatSnapshot.serviceRate*100)))}% • produits ${esc(String(Math.round(vatSnapshot.productRate*100)))}%`;
       }else{
         const ex = String(bs?.tvaExemptionText || "").trim();
-        cond3.innerHTML = `<b>TVA</b> : ${esc(ex || "non applicable (art. 293B CGI)")}`;
+        cond3.innerHTML = `<b>TVA</b> : ${esc(ex || "non applicable (art. 293 B du CGI)")}`;
       }
     }
 
@@ -846,16 +908,13 @@
 
       setBackLink(docId, ownerView);
 
-      // ⛔ owner ne doit JAMAIS voir un aperçu brouillon (sessionStorage)
       if(ownerView && isDraftPreview){
         showError("Aperçu brouillon interdit côté propriétaire.");
         return;
       }
 
       try{
-        // ===== source data =====
         if(isDraftPreview){
-          // conciergerie uniquement (ownerView déjà bloqué)
           const draft = loadDraftFromSession();
           if(draft){
             docData = { ...draft };
@@ -907,15 +966,13 @@
           }
         }
 
-        // ===== business snapshot =====
         const bs = (docData?.businessSnapshot || {});
         const appliedBs = applyBusinessSnapshot(bs);
         applyCompanySignature(appliedBs);
 
-        // ===== render =====
         renderDocHeader(docData);
         renderClient(docData);
-        renderLines(docData, appliedBs || {});
+        renderLinesAndTotals(docData, appliedBs || {});
         renderPaymentAndConditions(docData, appliedBs || {});
         renderPenalty(docData);
 
@@ -927,4 +984,3 @@
   </script>
 </body>
 </html>
-
