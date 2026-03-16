@@ -218,7 +218,6 @@
       .page{ padding-bottom: 28px; }
     }
 
-    /* Modal owner picker */
     .modalBack{ display:none; position:fixed; inset:0; background:rgba(0,0,0,.35); z-index:9999; padding:16px; }
     .modalBox{
       max-width:720px; margin:6vh auto; background:#fff; border-radius:16px;
@@ -298,7 +297,6 @@
     </div>
 
     <div class="grid4">
-      <!-- 1) Société -->
       <div class="box" id="boxSociete">
         <div class="headRow">
           <div class="bizLogo">
@@ -313,7 +311,6 @@
         </div>
       </div>
 
-      <!-- 2) Client -->
       <div class="box" id="boxClient">
         <div class="headTitle">Client</div>
 
@@ -349,7 +346,6 @@
         </div>
       </div>
 
-      <!-- 3) Lignes -->
       <div class="box" id="boxLignes">
         <div class="card-title">
           <span>Lignes</span>
@@ -434,7 +430,6 @@
         </div>
       </div>
 
-      <!-- 4) Paramètres devis -->
       <div class="box" id="boxDevis">
         <div class="card-title">
           <span>Devis</span>
@@ -534,7 +529,6 @@
     <a href="messagerie.html">Messages</a>
   </nav>
 
-  <!-- Modal propriétaire existant -->
   <div id="ownerModal" class="modalBack" aria-hidden="true">
     <div class="modalBox">
       <div class="modalTitle">
@@ -671,7 +665,6 @@
       return Math.round((Number(n) || 0) * 100) / 100;
     }
 
-    // ===== Owner picker =====
     function openOwnerModal(){
       ownerModal.style.display = "block";
       ownerModal.setAttribute("aria-hidden","false");
@@ -830,7 +823,6 @@
       showAlert("✅ Bloc client réinitialisé (nouveau client).", true);
     });
 
-    // ===== Helpers =====
     function todayDdmmyyyy(){
       const d = new Date();
       const dd = String(d.getDate()).padStart(2,"0");
@@ -892,16 +884,16 @@
     penB2BEl.addEventListener("change", syncPenaltyText);
     penB2CEl.addEventListener("change", syncPenaltyText);
 
-    // ===== TVA =====
     function getVatSnapshotFromProfile(){
       const bp = (profileData?.businessProfile || {});
-  const enabled = !!bp.vat?.enabled;
+      const enabled = !!bp.vat?.enabled;
+
       return {
-    enabled,
-    serviceRate: enabled ? 0.20 : 0,
-    productRate: enabled ? 0.10 : 0
-  };
-}
+        enabled,
+        serviceRate: enabled ? 0.20 : 0,
+        productRate: enabled ? 0.10 : 0
+      };
+    }
 
     function getVatRate(lineType, vatEnabled, vatSnapshot){
       if(!vatEnabled) return 0;
@@ -962,9 +954,32 @@
     }
 
     function getTvaExemptionText(){
+      const docTxt = String(quoteData?.businessSnapshot?.tvaExemptionText || "").trim();
+      if(docTxt) return docTxt;
+
       const bp = (profileData?.businessProfile || {});
       const txt = String(bp?.tvaExemptionText || "").trim();
       return txt || "TVA non applicable – art. 293 B du CGI";
+    }
+
+    function getDocumentVatContext(){
+      const docVatSnapshot = quoteData?.vatSnapshot;
+      if(docVatSnapshot && typeof docVatSnapshot === "object"){
+        return {
+          vatSnapshot: {
+            enabled: !!docVatSnapshot.enabled,
+            serviceRate: Number(docVatSnapshot.serviceRate || 0),
+            productRate: Number(docVatSnapshot.productRate || 0)
+          },
+          vatEnabled: !!docVatSnapshot.enabled
+        };
+      }
+
+      const profileVatSnapshot = getVatSnapshotFromProfile();
+      return {
+        vatSnapshot: profileVatSnapshot,
+        vatEnabled: !!profileVatSnapshot.enabled
+      };
     }
 
     function inferLineTypeFromTemplate(tpl, selectedKey){
@@ -1030,7 +1045,9 @@
     }
 
     function renderBusinessHeader(){
-      const bp = (profileData?.businessProfile || {});
+      const docBs = quoteData?.businessSnapshot || null;
+      const bp = docBs || (profileData?.businessProfile || {});
+
       const cName = String(bp.companyName || "Conciergerie").trim();
       const street = String(bp.address?.street || "").trim();
       const zip = String(bp.address?.zip || "").trim();
@@ -1056,8 +1073,24 @@
         ? linesHtml.map(x => `<div class="bizLine">${x}</div>`).join("")
         : "—";
 
-      applyLogoFromProfile(profileData);
-      renderBank();
+      if(docBs?.logoUrl){
+        logoImg.src = docBs.logoUrl; logoImg.style.display = "block"; logoFallback.style.display = "none";
+        bizLogoImg.src = docBs.logoUrl; bizLogoImg.style.display = "block"; bizLogoFallback.style.display = "none";
+      }else{
+        applyLogoFromProfile(profileData);
+      }
+
+      const bankSource = docBs?.bank || null;
+      if(bankSource){
+        const rows = [];
+        if(bankSource.holder) rows.push(`<div class="line"><b>Titulaire</b> : ${esc(bankSource.holder)}</div>`);
+        if(bankSource.bankName) rows.push(`<div class="line"><b>Banque</b> : ${esc(bankSource.bankName)}</div>`);
+        if(bankSource.iban) rows.push(`<div class="line"><b>IBAN</b> : ${esc(bankSource.iban)}</div>`);
+        if(bankSource.bic) rows.push(`<div class="line"><b>BIC</b> : ${esc(bankSource.bic)}</div>`);
+        bankKv.innerHTML = rows.length ? rows.join("") : `<div class="line">—</div>`;
+      }else{
+        renderBank();
+      }
     }
 
     function buildBusinessSnapshotFromProfile(){
@@ -1279,8 +1312,7 @@
     }
 
     function getComputedState(){
-      const vatSnapshot = getVatSnapshotFromProfile();
-      const vatEnabled = !!vatSnapshot.enabled;
+      const { vatSnapshot, vatEnabled } = getDocumentVatContext();
       return computeDocument(lines, vatEnabled, vatSnapshot);
     }
 
@@ -1343,7 +1375,7 @@
 
     function refreshTotalsUI(){
       const computed = getComputedState();
-      const vatSnapshot = getVatSnapshotFromProfile();
+      const { vatSnapshot } = getDocumentVatContext();
 
       totalLabel.textContent = money(computed.totalTTC);
       amountEl.value = Number.isFinite(computed.totalTTC) ? computed.totalTTC.toFixed(2) : "";
@@ -1370,6 +1402,16 @@
       if(!v.ok) return showAlert(v.msg);
 
       lines.push(v.line);
+
+      if(!docId || !quoteData?.vatSnapshot){
+        const currentProfileVat = getVatSnapshotFromProfile();
+        quoteData = {
+          ...(quoteData || {}),
+          vatSnapshot: currentProfileVat,
+          vatEnabled: !!currentProfileVat.enabled
+        };
+      }
+
       showAlert("✅ Ligne ajoutée.", true);
       renderLines();
       refreshTotalsUI();
@@ -1383,10 +1425,14 @@
       const offerUntil = addDaysLabel(todayDdmmyyyy(), offerDays);
       const dueUntil = addDaysLabel(todayDdmmyyyy(), payDays);
 
-      const bp = (profileData?.businessProfile || {});
-      const cancelPct = Number.isFinite(Number(bp?.conditions?.cancellationPercent))
-        ? Number(bp.conditions.cancellationPercent)
-        : 30;
+      const bs = quoteData?.businessSnapshot || null;
+      const cancelPct = Number.isFinite(Number(bs?.conditions?.cancellationPercent))
+        ? Number(bs.conditions.cancellationPercent)
+        : (
+            Number.isFinite(Number(profileData?.businessProfile?.conditions?.cancellationPercent))
+              ? Number(profileData.businessProfile.conditions.cancellationPercent)
+              : 30
+          );
 
       const c = [];
       c.push(`<div class="line"><b>Validité de l’offre</b> : jusqu’au ${esc(offerUntil)}</div>`);
@@ -1488,7 +1534,21 @@
         totalTTC: computed.totalTTC,
         totals: computed.totals,
 
-        lines: computed.lines,
+        lines: computed.lines.map(l => ({
+          label: String(l.label||"").trim(),
+          ref: String(l.ref||"").trim(),
+          qty: Number(l.qty)||0,
+          unit: String(l.unit||"unité").trim(),
+          unitPrice: Number(l.unitPrice)||0,
+          note: String(l.note||"").trim(),
+          clientNote: String(l.clientNote||"").trim(),
+          suggestedPrice: String(l.suggestedPrice||"").trim(),
+          lineType: String(l.lineType||"SERVICE").trim().toUpperCase(),
+          vatRate: Number(l.vatRate)||0,
+          totalHT: Number(l.totalHT)||0,
+          totalTVA: Number(l.totalTVA)||0,
+          totalTTC: Number(l.totalTTC)||0
+        })),
 
         quotePaymentTerm: paymentTermEl.value,
         quotePaymentMode: (getSelectedPayMode() || "VIREMENT"),
@@ -1531,11 +1591,22 @@
         nextQuoteNumber = await ensureQuoteNumber(currentUser.uid, year);
       }
 
-      const vatSnapshot = getVatSnapshotFromProfile();
-      const computed = computeDocument(lines, vatSnapshot.enabled, vatSnapshot);
+      const existingIsListable = !!quoteData?.listable;
+      const existingVatSnapshot = existingIsListable && quoteData?.vatSnapshot
+        ? {
+            enabled: !!quoteData.vatSnapshot.enabled,
+            serviceRate: Number(quoteData.vatSnapshot.serviceRate || 0),
+            productRate: Number(quoteData.vatSnapshot.productRate || 0)
+          }
+        : null;
+
+      const vatSnapshot = existingVatSnapshot || getVatSnapshotFromProfile();
+      const computed = computeDocument(lines, !!vatSnapshot.enabled, vatSnapshot);
 
       const patch = {
-        businessSnapshot: buildBusinessSnapshotFromProfile(),
+        businessSnapshot: existingIsListable
+          ? (quoteData?.businessSnapshot || buildBusinessSnapshotFromProfile())
+          : buildBusinessSnapshotFromProfile(),
 
         clientDisplayName: client.clientDisplayName,
         clientName: client.clientDisplayName,
@@ -1592,13 +1663,27 @@
       const snap = await getDoc(quoteRef);
       quoteData = { id: snap.id, ...(snap.data()||{}) };
       renderRecap();
+      renderLines();
+      refreshTotalsUI();
+      renderConditions();
     }
 
     function buildDraftPreviewObject(){
       const client = readClientInputs();
-      const bs = buildBusinessSnapshotFromProfile();
-      const vatSnapshot = getVatSnapshotFromProfile();
-      const computed = computeDocument(lines, vatSnapshot.enabled, vatSnapshot);
+      const existingIsListable = !!quoteData?.listable;
+      const bs = existingIsListable
+        ? (quoteData?.businessSnapshot || buildBusinessSnapshotFromProfile())
+        : buildBusinessSnapshotFromProfile();
+
+      const vatSnapshot = existingIsListable && quoteData?.vatSnapshot
+        ? {
+            enabled: !!quoteData.vatSnapshot.enabled,
+            serviceRate: Number(quoteData.vatSnapshot.serviceRate || 0),
+            productRate: Number(quoteData.vatSnapshot.productRate || 0)
+          }
+        : getVatSnapshotFromProfile();
+
+      const computed = computeDocument(lines, !!vatSnapshot.enabled, vatSnapshot);
 
       return {
         conciergerieUid: currentUser.uid,
@@ -1732,8 +1817,17 @@
         if(docId){
           await loadQuoteById();
         }else{
-          quoteData = { quoteStatus: "DRAFT", quoteNumber: "" };
+          quoteData = {
+            quoteStatus: "DRAFT",
+            quoteNumber: "",
+            listable: false,
+            vatSnapshot: getVatSnapshotFromProfile(),
+            vatEnabled: !!getVatSnapshotFromProfile().enabled
+          };
           renderRecap();
+          renderLines();
+          refreshTotalsUI();
+          renderConditions();
         }
       }catch(e){
         console.error(e);
