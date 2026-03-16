@@ -334,6 +334,7 @@
       padding:12px;
       background:#fff;
       box-shadow:0 3px 10px rgba(0,0,0,.06);
+      display:none;
     }
     .ownerHead{
       display:flex;
@@ -452,19 +453,17 @@
       </div>
       <div class="modalBody">
 
-        <!-- ✅ bandeau succès (client) -->
         <div id="sendSuccessBar" class="successBar" role="status" aria-live="polite">
           <div class="left">
             <span>✅ Devis marqué comme envoyé (client).</span>
             <span class="pillMini" id="sendSuccessHint">—</span>
           </div>
           <div class="right">
-            <a class="btn" id="afterMailBtn" href="#" target="_blank" rel="noopener">Préparer email</a>
+            <a class="btn" id="afterMailBtn" href="#" target="_blank" rel="noopener">Email</a>
             <button class="btn primary" id="afterCloseBtn" type="button">Fermer</button>
           </div>
         </div>
 
-        <!-- ✅ bandeau succès (proprio) -->
         <div id="pubSuccessBar" class="successBar" role="status" aria-live="polite">
           <div class="left">
             <span>✅ Publié côté propriétaire.</span>
@@ -494,7 +493,7 @@
         <div class="textBlock" id="sendText">—</div>
 
         <div class="copyRow">
-          <a class="btn" id="openEmailSendBtn" href="#" target="_blank" rel="noopener">Préparer email</a>
+          <a class="btn" id="openEmailSendBtn" href="#" target="_blank" rel="noopener">Email</a>
           <button class="btn primary" id="markSentBtn" type="button">Marquer “Envoyé”</button>
         </div>
 
@@ -508,11 +507,10 @@
           <div class="ownerMeta">
             <div>Propriétaire</div><div id="oName">—</div>
             <div>Email</div><div id="oEmail">—</div>
-            <div>OwnerDocId</div><div id="oDocId">—</div>
           </div>
 
           <div class="ownerHint" id="ownerHint">
-            Ce bouton rend le devis visible côté propriétaire (via ownerUid + ownerVisible).
+            Ce bouton rend le devis visible côté propriétaire.
           </div>
 
           <div class="copyRow">
@@ -549,7 +547,9 @@
 
   <script type="module">
     import { auth, db } from "./firebase-init.js";
-    import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+    import {
+      onAuthStateChanged
+    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
       doc, getDoc, collection, query, where, orderBy, limit, getDocs,
       updateDoc, serverTimestamp
@@ -595,7 +595,6 @@
     const ownerPublishState = document.getElementById("ownerPublishState");
     const oName = document.getElementById("oName");
     const oEmail = document.getElementById("oEmail");
-    const oDocId = document.getElementById("oDocId");
     const ownerHint = document.getElementById("ownerHint");
     const publishOwnerBtn = document.getElementById("publishOwnerBtn");
     const copyOwnerLinkBtn = document.getElementById("copyOwnerLinkBtn");
@@ -617,7 +616,7 @@
     let vatEnabled = false;
     let vatRate = 0;
 
-    let modalQuote = null; // {id, data}
+    let modalQuote = null;
     let conciergerieCompanyName = "Conciergerie";
 
     function showAlert(msg, ok=false){
@@ -710,7 +709,7 @@
 
     function buildSendText(d){
       const num = String(d?.quoteNumber || d?.number || "—").trim();
-      const client = String(d?.clientName || "Madame, Monsieur").trim() || "Madame, Monsieur";
+      const client = String(d?.clientDisplayName || d?.clientName || "Madame, Monsieur").trim() || "Madame, Monsieur";
       const amount = fmtMoney(computeTotals(d).ttc);
       return `Objet : Devis ${num}
 
@@ -741,7 +740,6 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
       });
     }
 
-    // ===== Owner publish helpers (devis) =====
     function getOwnerDocIdFromQuote(d){
       const a = String(d?.clientOwnerDocId || "").trim();
       if(a) return a;
@@ -776,7 +774,7 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
         const snap = await getDoc(doc(db,"owners", ownerDocId));
         if(snap.exists()){
           const o = snap.data() || {};
-          name = String(o.displayName || o.name || name).trim() || name;
+          name = String(o.fullname || o.displayName || o.name || name).trim() || name;
           email = String(o.email || email).trim();
         }
       }catch{}
@@ -818,21 +816,20 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
       const ownerDocId = getOwnerDocIdFromQuote(d);
       const alreadyPub = isQuoteAlreadyPublishedToOwner(d);
 
-      ownerPublishState.textContent = alreadyPub ? "déjà publié" : (ownerDocId ? "prêt" : "impossible");
+      if(!ownerDocId){
+        ownerBox.style.display = "none";
+        return;
+      }
+
+      ownerBox.style.display = "block";
+      ownerPublishState.textContent = alreadyPub ? "déjà publié" : "prêt";
       ownerPublishState.style.borderColor = alreadyPub ? "rgba(27,143,77,0.25)" : "rgba(122,92,255,0.25)";
       ownerPublishState.style.background = alreadyPub ? "rgba(27,143,77,0.06)" : "rgba(122,92,255,0.06)";
       ownerPublishState.style.color = alreadyPub ? "#0f5f31" : "#4b2cff";
 
-      if(!ownerDocId){
-        ownerHint.textContent = "Envoi impossible : ownerDocId / clientOwnerDocId manquant sur ce devis (devis non rattaché à un logement).";
-        publishOwnerBtn.disabled = true;
-        copyOwnerLinkBtn.disabled = true;
-        return;
-      }
-
       ownerHint.textContent = alreadyPub
-        ? "Déjà publié : le propriétaire le voit déjà. (Tu peux recopier le lien.)"
-        : "Publier rend le devis visible côté propriétaire (ownerUid + ownerVisible).";
+        ? "Déjà publié : le propriétaire voit déjà ce devis. Tu peux recopier le lien."
+        : "Publier rend ce devis visible côté propriétaire.";
 
       publishOwnerBtn.disabled = alreadyPub;
       copyOwnerLinkBtn.disabled = false;
@@ -850,8 +847,8 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
 
       const ownerDocId = getOwnerDocIdFromQuote(d);
       if(!ownerDocId){
-        refreshOwnerPublishUI(d);
-        return showModalAlert("⛔ Publication impossible : clientOwnerDocId / ownerDocId manquant.", false);
+        ownerBox.style.display = "none";
+        return;
       }
 
       let ownerUid = String(getOwnerUidFast(d) || "").trim();
@@ -859,14 +856,14 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
         ownerUid = await resolveOwnerUidFromOwnerDoc(ownerDocId);
       }
       if(!ownerUid){
-        return showModalAlert("⛔ Publication impossible : ownerUid introuvable (owners.ownerUid).", false);
+        return showModalAlert("⛔ Publication impossible : propriétaire introuvable.", false);
       }
 
       if(isQuoteAlreadyPublishedToOwner(d)){
         refreshOwnerPublishUI(d);
         const link = buildOwnerQuoteLink(quoteDocId);
         showPubSuccess("Devis", link);
-        return showModalAlert("ℹ️ Déjà publié. (Lien disponible.)", true);
+        return showModalAlert("ℹ️ Déjà publié. Lien disponible.", true);
       }
 
       publishOwnerBtn.disabled = true;
@@ -916,26 +913,26 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
 
     async function hydrateOwnerBox(d){
       const ownerDocId = getOwnerDocIdFromQuote(d);
-      oDocId.textContent = ownerDocId || "—";
 
       if(!ownerDocId){
+        ownerBox.style.display = "none";
         oName.textContent = "—";
         oEmail.textContent = "—";
         return;
       }
 
-      const fallbackName = String(d?.ownerName || d?.clientName || "Propriétaire").trim();
-      const fallbackEmail = String(d?.ownerEmail || d?.clientEmail || "").trim();
+      ownerBox.style.display = "block";
+      const fallbackName = String(d?.ownerName || d?.clientDisplayName || d?.clientName || "Propriétaire").trim();
+      const fallbackEmail = String(d?.ownerEmail || "").trim();
       const meta = await resolveOwnerNameEmail(ownerDocId, fallbackName, fallbackEmail);
 
       oName.textContent = meta.name || "—";
       oEmail.textContent = meta.email || "—";
     }
 
-    // ====== Render ======
     function renderItem(id, d){
       const num = String(d?.quoteNumber || d?.number || "—").trim();
-      const client = String(d?.clientName || "—").trim();
+      const client = String(d?.clientDisplayName || d?.clientName || "—").trim();
       const email = String(d?.clientEmail || "").trim();
       const created = ddmmyyyyFromTs(d?.createdAt || d?.quoteUpdatedAt || d?.commercialUpdatedAt);
       const totals = computeTotals(d);
@@ -1036,16 +1033,15 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
         const d = it.data || {};
         const hay = [
           d.quoteNumber, d.number,
-          d.clientName, d.clientEmail,
+          d.clientDisplayName, d.clientName, d.clientEmail,
           d.clientCity, d.clientZip,
-          d.homeName, d.ownerDocId, d.clientOwnerDocId
+          d.homeName
         ].map(x=>normalize(x)).join(" | ");
         return hay.includes(q);
       });
       renderList(filtered);
     }
 
-    // ====== Profile ======
     async function loadProfile(uid){
       const uSnap = await getDoc(doc(db, "users", uid));
       const profile = uSnap.exists() ? (uSnap.data() || {}) : {};
@@ -1073,7 +1069,6 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
       }
     }
 
-    // ====== Load quotes ======
     async function loadQuotes(uid){
       hideAlert();
       listEl.innerHTML = "";
@@ -1097,11 +1092,11 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
       renderList(allItems);
     }
 
-    // ====== SEND modal ======
     function resetAllModalState(){
       resetSendSuccess();
       resetPubSuccess();
       hideModalAlert();
+      ownerBox.style.display = "none";
     }
 
     function openSendModal(item){
@@ -1110,7 +1105,7 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
 
       const d = item.data || {};
       const num = String(d?.quoteNumber || d?.number || "—").trim();
-      const client = String(d?.clientName || "—").trim();
+      const client = String(d?.clientDisplayName || d?.clientName || "—").trim();
       const email = String(d?.clientEmail || "").trim();
       const amount = fmtMoney(computeTotals(d).ttc);
 
@@ -1143,7 +1138,6 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
       markSentBtn.disabled = alreadySent;
       markSentBtn.title = alreadySent ? "Déjà marqué comme envoyé." : "";
 
-      ownerBox.style.display = "";
       hydrateOwnerBox(d).then(()=>{
         refreshOwnerPublishUI(d);
       });
@@ -1189,12 +1183,11 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
       setTimeout(()=> hideModalAlert(), 1200);
     });
 
-    // ====== ACCEPT modal ======
     function openAcceptModal(item){
       modalQuote = item;
       const d = item.data || {};
       const num = String(d?.quoteNumber || d?.number || "—").trim();
-      const client = String(d?.clientName || "—").trim();
+      const client = String(d?.clientDisplayName || d?.clientName || "—").trim();
 
       acceptSubtitle.textContent = `${client} • Devis ${num}`;
       acceptOnlyBtn.setAttribute("data-docid", item.id);
@@ -1240,7 +1233,6 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
       location.href = u.toString();
     });
 
-    // ESC pour fermer modales
     window.addEventListener("keydown",(e)=>{
       if(e.key === "Escape"){
         closeModal(modalMaskSend);
@@ -1248,7 +1240,6 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
       }
     });
 
-    // ====== UI events ======
     clearBtn.addEventListener("click", ()=>{
       searchInput.value = "";
       applySearch();
@@ -1268,7 +1259,6 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
 
     searchInput.addEventListener("input", applySearch);
 
-    // ====== Auth ======
     onAuthStateChanged(auth, async (user)=>{
       if(!user){ location.href = "login.html?role=conciergerie"; return; }
       currentUser = user;
@@ -1284,4 +1274,3 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
   </script>
 </body>
 </html>
-
