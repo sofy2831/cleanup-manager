@@ -1,4 +1,4 @@
-<!-- docs/avoir.html (FINAL — FIX: autosave motif+notes avant aperçu + restore au retour + READONLY après émission) -->
+<!-- docs/avoir.html (ALIGNÉ FACTURE — TVA/HT/TTC figés depuis la facture source + snapshot document + readonly après émission) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -421,7 +421,6 @@
     let invoiceRef = null;    // salesDocuments/INVOICE
     let invoiceData = null;
 
-    // --- helpers ---
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
       alertBox.classList.toggle("ok", !!ok);
@@ -450,6 +449,7 @@
       return (p.get(name) || "").trim();
     }
     function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
+    function round2(n){ return Math.round((Number(n) || 0) * 100) / 100; }
 
     function todayIso(){
       const d = new Date();
@@ -457,18 +457,6 @@
       const mm = String(d.getMonth()+1).padStart(2,"0");
       const dd = String(d.getDate()).padStart(2,"0");
       return `${dd}/${mm}/${yyyy}`;
-    }
-
-    function computeTotals(lines, tvaEnabled, tvaRate){
-      let ht = 0;
-      for(const l of (Array.isArray(lines) ? lines : [])){
-        const qty = Number(l?.qty)||0;
-        const up  = Number(l?.unitPrice)||0;
-        ht += qty * up;
-      }
-      const tva = tvaEnabled ? (ht * (Number(tvaRate)||0)) : 0;
-      const ttc = ht + tva;
-      return { ht, tva, ttc };
     }
 
     function pickDate(v){ const s = String(v||"").trim(); return s || ""; }
@@ -479,6 +467,67 @@
       if(a && !b) return { from:a, to:"", label:`À partir du ${a}` };
       if(!a && b) return { from:"", to:b, label:`Jusqu’au ${b}` };
       return { from:"", to:"", label:"—" };
+    }
+
+    function getInvoiceVatContext(inv){
+      const snap = inv?.vatSnapshot;
+      if(snap && typeof snap === "object"){
+        return {
+          vatEnabled: !!snap.enabled,
+          vatSnapshot: {
+            enabled: !!snap.enabled,
+            serviceRate: Number(snap.serviceRate || 0),
+            productRate: Number(snap.productRate || 0)
+          }
+        };
+      }
+      return {
+        vatEnabled: !!inv?.vatEnabled,
+        vatSnapshot: inv?.vatEnabled ? { enabled:true, serviceRate:0.20, productRate:0.10 } : { enabled:false, serviceRate:0, productRate:0 }
+      };
+    }
+
+    function getLineStoredHT(l){
+      const qty = Number(l?.qty) || 0;
+      const pu = Number(l?.unitPrice) || 0;
+      return Number.isFinite(Number(l?.totalHT)) ? Number(l.totalHT) : round2(qty * pu);
+    }
+    function getLineStoredTVA(l){
+      return Number.isFinite(Number(l?.totalTVA)) ? Number(l.totalTVA) : 0;
+    }
+    function getLineStoredTTC(l){
+      const ht = getLineStoredHT(l);
+      const tva = getLineStoredTVA(l);
+      return Number.isFinite(Number(l?.totalTTC)) ? Number(l.totalTTC) : round2(ht + tva);
+    }
+    function getInvoiceTotalsStored(inv){
+      if(inv?.totals && typeof inv.totals === "object"){
+        return {
+          ht: Number(inv.totals.ht || 0),
+          tva: Number(inv.totals.tva || 0),
+          ttc: Number(inv.totals.ttc || 0)
+        };
+      }
+      if(
+        Number.isFinite(Number(inv?.totalHT)) ||
+        Number.isFinite(Number(inv?.totalTVA)) ||
+        Number.isFinite(Number(inv?.totalTTC))
+      ){
+        return {
+          ht: Number(inv?.totalHT || 0),
+          tva: Number(inv?.totalTVA || 0),
+          ttc: Number(inv?.totalTTC || 0)
+        };
+      }
+
+      const lines = Array.isArray(inv?.lines) ? inv.lines : [];
+      let ht = 0, tva = 0, ttc = 0;
+      for(const l of lines){
+        ht += getLineStoredHT(l);
+        tva += getLineStoredTVA(l);
+        ttc += getLineStoredTTC(l);
+      }
+      return { ht: round2(ht), tva: round2(tva), ttc: round2(ttc) };
     }
 
     function applyLogoFromProfile(profile){
@@ -562,7 +611,6 @@
       return x;
     }
 
-    // ✅ READONLY rules
     function isCreditReadOnly(){
       const st = String(creditData?.creditStatus || "").toUpperCase().trim();
       const hasNum = !!String(creditData?.creditNumber || "").trim();
@@ -572,14 +620,12 @@
     function applyReadOnlyUI(){
       const ro = isCreditReadOnly();
 
-      // champs
       creditReasonEl.disabled = ro;
       creditNotesEl.disabled  = ro;
 
-      // boutons
       if(ro){
         saveBtn.disabled = true;
-        saveBtn.style.display = "none"; // si tu préfères visible mais grisé: commente cette ligne
+        saveBtn.style.display = "none";
       }else{
         saveBtn.style.display = "";
         saveBtn.disabled = !invoiceData;
@@ -618,7 +664,6 @@
     }
 
     function lockUI(locked){
-      // Le verrou "read-only" gagne toujours
       const ro = isCreditReadOnly();
 
       previewBtn.disabled = !!locked || !invoiceData;
@@ -638,34 +683,34 @@
 
     function renderLinesAndTotalsFromInvoice(){
       const inv = invoiceData || {};
-      const bp = (profileData?.businessProfile || {});
-      const tvaEnabled = !!bp.vat?.enabled;
-      const tvaRate = Number.isFinite(Number(bp.vat?.rate)) ? Number(bp.vat.rate) : 0;
+      const lines = Array.isArray(inv.lines) ? inv.lines : [];
+      const totals = getInvoiceTotalsStored(inv);
+      const vatCtx = getInvoiceVatContext(inv);
+      const vatEnabled = !!vatCtx.vatEnabled || Number(totals.tva || 0) > 0;
 
-      thTVA.style.display = tvaEnabled ? "" : "none";
+      thTVA.style.display = vatEnabled ? "" : "none";
       linesTbody.innerHTML = "";
       linesCards.innerHTML = "";
-
-      const lines = Array.isArray(inv.lines) ? inv.lines : [];
 
       for(const l of lines){
         const label = l?.label || "Ligne";
         const qty = Number(l?.qty)||0;
         const unit = l?.unit || "unité";
-        const up = Number(l?.unitPrice)||0;
-
-        const lineHT = qty * up;
-        const lineTVA = tvaEnabled ? (lineHT * tvaRate) : 0;
-        const lineTotal = lineHT + lineTVA;
+        const totalHT = getLineStoredHT(l);
+        const totalTVA = getLineStoredTVA(l);
+        const totalTTC = getLineStoredTTC(l);
+        const puHT = qty > 0 ? round2(totalHT / qty) : Number(l?.unitPrice || 0);
+        const vatRate = Number(l?.vatRate || 0);
+        const ratePct = Math.round(vatRate * 100);
 
         const tr = document.createElement("tr");
         tr.innerHTML = `
           <td class="designation">${esc(label)}</td>
           <td class="num">${esc(qty)}</td>
           <td>${esc(unit)}</td>
-          <td class="num">${esc(fmtMoney(up))}</td>
-          <td class="num" style="${tvaEnabled ? "" : "display:none;"}">${tvaEnabled ? esc(fmtMoney(lineTVA)) : ""}</td>
-          <td class="num">${esc(fmtMoney(lineTotal))}</td>
+          <td class="num">${esc(fmtMoney(puHT))}</td>
+          <td class="num" style="${vatEnabled ? "" : "display:none;"}">${vatEnabled ? `${esc(ratePct)}% • ${esc(fmtMoney(totalTVA))}` : ""}</td>
+          <td class="num">${esc(fmtMoney(totalTTC))}</td>
         `;
         linesTbody.appendChild(tr);
 
@@ -676,23 +721,22 @@
           <div class="g">
             <div><b>Qté</b> : ${esc(qty)}</div>
             <div><b>Unité</b> : ${esc(unit)}</div>
-            <div><b>PU HT</b> : ${esc(fmtMoney(up))}</div>
-            <div><b>Total TTC</b> : ${esc(fmtMoney(lineTotal))}</div>
+            <div><b>PU HT</b> : ${esc(fmtMoney(puHT))}</div>
+            <div><b>Total TTC</b> : ${esc(fmtMoney(totalTTC))}</div>
+            ${vatEnabled ? `<div><b>TVA</b> : ${esc(ratePct)}% • ${esc(fmtMoney(totalTVA))}</div>` : ``}
           </div>
         `;
         linesCards.appendChild(card);
       }
 
-      const totals = computeTotals(lines, tvaEnabled, tvaRate);
-
       const html = [];
-      if(tvaEnabled){
+      if(Number(totals.tva) > 0){
         html.push(`<div class="r"><span>Total HT</span><span>${esc(fmtMoney(-totals.ht))}</span></div>`);
-        html.push(`<div class="r"><span>TVA (${Math.round(tvaRate*100)}%)</span><span>${esc(fmtMoney(-totals.tva))}</span></div>`);
+        html.push(`<div class="r"><span>Total TVA</span><span>${esc(fmtMoney(-totals.tva))}</span></div>`);
         html.push(`<div class="r"><span>Total TTC</span><span>${esc(fmtMoney(-totals.ttc))}</span></div>`);
       }else{
         html.push(`<div class="r"><span>Total TTC</span><span>${esc(fmtMoney(-totals.ttc))}</span></div>`);
-        const ex = String(bp?.tvaExemptionText || "TVA non applicable (art. 293B CGI)").trim();
+        const ex = String(inv?.tvaExemptionText || profileData?.businessProfile?.tvaExemptionText || "TVA non applicable (art. 293B CGI)").trim();
         if(ex) html.push(`<div class="mutedLine">${esc(ex)}</div>`);
       }
       totalsBox.innerHTML = html.join("");
@@ -724,15 +768,12 @@
       renderClientHeaderFromDoc(inv);
       renderLinesAndTotalsFromInvoice();
 
-      // Liaisons techniques cachées
       linkKv.style.display = "none";
       linkKv.innerHTML = "";
 
-      // Hydrate champs depuis Firestore si vides
       if((creditReasonEl.value || "").trim() === "" && cred.creditReason) creditReasonEl.value = cred.creditReason;
       if((creditNotesEl.value || "").trim() === "" && cred.creditNotes) creditNotesEl.value = cred.creditNotes;
 
-      // Applique le mode read-only si émis
       applyReadOnlyUI();
     }
 
@@ -780,17 +821,19 @@
           homeCity: inv.homeCity || "",
           arrivalDateKey: inv.arrivalDateKey || "",
           departureDateKey: inv.departureDateKey || "",
-          lines: Array.isArray(inv.lines) ? inv.lines : [],
+          vatEnabled: !!inv.vatEnabled,
+          vatSnapshot: inv.vatSnapshot || null,
+          totals: inv.totals || null,
           totalHT: inv.totalHT || 0,
           totalTVA: inv.totalTVA || 0,
-          totalTTC: inv.totalTTC || 0
+          totalTTC: inv.totalTTC || 0,
+          lines: Array.isArray(inv.lines) ? inv.lines : []
         }
       };
     }
 
-    // ✅ autosave motif/notes (Firestore si doc existe, sinon sessionStorage fallback)
     async function autosaveCreditDraft(){
-      if(isCreditReadOnly()) return; // pas de modif après émission
+      if(isCreditReadOnly()) return;
 
       const motif = String(creditReasonEl.value || "").trim();
       const notes = String(creditNotesEl.value || "").trim();
@@ -825,7 +868,6 @@
       }catch(e){}
     }
 
-    // ===== Data loading =====
     const docId = getParam("docId");
     const fromDocId = getParam("fromDocId");
 
@@ -924,7 +966,6 @@
       await loadProfile(currentUser.uid);
     }
 
-    // ===== Preview (FIX) =====
     previewBtn.addEventListener("click", async ()=>{
       if(!invoiceData) return;
 
@@ -943,7 +984,6 @@
       }
     });
 
-    // ===== Save =====
     saveBtn.addEventListener("click", async ()=>{
       hideAlert();
       if(!invoiceData) return showAlert("Facture source non chargée.");
@@ -963,12 +1003,18 @@
           creditNumber = await ensureCreditNumber(currentUser.uid, year);
         }
 
-        const bp = (profileData?.businessProfile || {});
-        const tvaEnabled = !!bp.vat?.enabled;
-        const tvaRate = Number.isFinite(Number(bp.vat?.rate)) ? Number(bp.vat.rate) : 0;
+        const totals = getInvoiceTotalsStored(invoiceData);
+        const vatCtx = getInvoiceVatContext(invoiceData);
 
-        const lines = Array.isArray(invoiceData.lines) ? invoiceData.lines : [];
-        const totals = computeTotals(lines, tvaEnabled, tvaRate);
+        const lines = Array.isArray(invoiceData.lines)
+          ? invoiceData.lines.map(l => ({
+              ...l,
+              vatRate: Number(l?.vatRate || 0),
+              totalHT: Number(getLineStoredHT(l) || 0),
+              totalTVA: Number(getLineStoredTVA(l) || 0),
+              totalTTC: Number(getLineStoredTTC(l) || 0)
+            }))
+          : [];
 
         const payload = {
           conciergerieUid: currentUser.uid,
@@ -999,6 +1045,9 @@
           departureDateKey: String(invoiceData.departureDateKey || "").trim() || "",
 
           clientOwnerDocId: invoiceData.clientOwnerDocId || null,
+          ownerDocId: invoiceData.ownerDocId || invoiceData.clientOwnerDocId || null,
+          ownerUid: invoiceData.ownerUid || null,
+
           clientName: String(invoiceData.clientName || "").trim() || "",
           clientEmail: normalizeEmail(invoiceData.clientEmail || ""),
           clientPhone: String(invoiceData.clientPhone || "").trim() || "",
@@ -1007,6 +1056,15 @@
           clientZip: String(invoiceData.clientZip || "").trim() || "",
           clientCity: String(invoiceData.clientCity || "").trim() || "",
           clientCountry: String(invoiceData.clientCountry || "FR").trim() || "FR",
+          clientType: String(invoiceData.clientType || "").trim() || "",
+
+          vatEnabled: !!vatCtx.vatEnabled,
+          vatSnapshot: vatCtx.vatSnapshot || null,
+          totals: {
+            ht: Number(totals.ht) || 0,
+            tva: Number(totals.tva) || 0,
+            ttc: Number(totals.ttc) || 0
+          },
 
           lines,
 
@@ -1059,7 +1117,6 @@
       }
     });
 
-    // ===== Init =====
     onAuthStateChanged(auth, async (user)=>{
       if(!user){ location.href = "login.html?role=conciergerie"; return; }
       currentUser = user;
@@ -1093,5 +1150,3 @@
   </script>
 </body>
 </html>
-
-
