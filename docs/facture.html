@@ -1,4 +1,4 @@
-<!-- docs/facture.html (FINAL — salesDocuments only ; docId canon ; fallback eventId => migrate propre depuis interventions ; client+lignes+totaux cohérents) -->
+<!-- docs/facture.html (FINAL — TVA par ligne SERVICE 20% / PRODUCT 10% + snapshot document + client cohérent) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -546,6 +546,7 @@
       return (p.get(name) || "").trim();
     }
     function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
+    function round2(n){ return Math.round((Number(n) || 0) * 100) / 100; }
 
     function buildBackLink(){
       const p = new URLSearchParams(location.search);
@@ -598,16 +599,114 @@
       return "PARTICULIER";
     }
 
-    function computeTotals(lines, tvaEnabled, tvaRate){
-      let ht = 0;
-      for(const l of (Array.isArray(lines) ? lines : [])){
-        const qty = Number(l?.qty)||0;
-        const up  = Number(l?.unitPrice)||0;
-        ht += qty * up;
+    function getVatSnapshotFromProfile(){
+      const bp = (profileData?.businessProfile || {});
+      const enabled = !!bp.vat?.enabled;
+      return {
+        enabled,
+        serviceRate: enabled ? 0.20 : 0,
+        productRate: enabled ? 0.10 : 0
+      };
+    }
+
+    function getDocumentVatContext(){
+      const snap = docData?.vatSnapshot;
+      if(snap && typeof snap === "object"){
+        return {
+          vatEnabled: !!snap.enabled,
+          vatSnapshot: {
+            enabled: !!snap.enabled,
+            serviceRate: Number(snap.serviceRate || 0),
+            productRate: Number(snap.productRate || 0)
+          }
+        };
       }
-      const tva = tvaEnabled ? (ht * (Number(tvaRate)||0)) : 0;
-      const ttc = ht + tva;
-      return { ht, tva, ttc };
+
+      const fromProfile = getVatSnapshotFromProfile();
+      return {
+        vatEnabled: !!fromProfile.enabled,
+        vatSnapshot: fromProfile
+      };
+    }
+
+    function getVatRate(lineType, vatEnabled, vatSnapshot){
+      if(!vatEnabled) return 0;
+      const lt = String(lineType || "SERVICE").trim().toUpperCase();
+      if(lt === "PRODUCT") return Number(vatSnapshot?.productRate ?? 0.10);
+      return Number(vatSnapshot?.serviceRate ?? 0.20);
+    }
+
+    function inferLineType(raw){
+      const lineType = String(raw?.lineType || "").trim().toUpperCase();
+      if(lineType === "SERVICE" || lineType === "PRODUCT") return lineType;
+
+      const category = String(raw?.category || "").toLowerCase();
+      const label = String(raw?.label || raw?.name || "").toLowerCase();
+
+      if(
+        category.includes("kit") ||
+        category.includes("consommable") ||
+        label.includes("kit") ||
+        label.includes("café") ||
+        label.includes("the") ||
+        label.includes("thé") ||
+        label.includes("shampoing") ||
+        label.includes("gel douche") ||
+        label.includes("savon")
+      ){
+        return "PRODUCT";
+      }
+
+      return "SERVICE";
+    }
+
+    function computeLine(raw, vatEnabled, vatSnapshot){
+      const qty = Number(raw?.qty) || 0;
+      const unitPrice = Number(raw?.unitPrice) || 0;
+      const lineType = inferLineType(raw);
+      const vatRate = getVatRate(lineType, vatEnabled, vatSnapshot);
+      const totalHT = round2(qty * unitPrice);
+      const totalTVA = round2(totalHT * vatRate);
+      const totalTTC = round2(totalHT + totalTVA);
+
+      return {
+        ...raw,
+        label: String(raw?.label || raw?.name || "Ligne").trim(),
+        qty,
+        unit: String(raw?.unit || "unité").trim() || "unité",
+        unitPrice,
+        lineType,
+        vatRate,
+        totalHT,
+        totalTVA,
+        totalTTC
+      };
+    }
+
+    function computeDocument(lines, vatEnabled, vatSnapshot){
+      const computedLines = (Array.isArray(lines) ? lines : []).map(l => computeLine(l, vatEnabled, vatSnapshot));
+
+      let ht = 0;
+      let tva = 0;
+      let ttc = 0;
+
+      for(const l of computedLines){
+        ht += Number(l.totalHT) || 0;
+        tva += Number(l.totalTVA) || 0;
+        ttc += Number(l.totalTTC) || 0;
+      }
+
+      ht = round2(ht);
+      tva = round2(tva);
+      ttc = round2(ttc);
+
+      return {
+        lines: computedLines,
+        totalHT: ht,
+        totalTVA: tva,
+        totalTTC: ttc,
+        totals: { ht, tva, ttc }
+      };
     }
 
     function invoiceStatusLabel(s){
@@ -774,7 +873,6 @@
 
     async function loadOwnerFromOwnersOrNull(conciergerieUid, d){
       const ownerDocId =
-        String(d?.ownerUid || "").trim() ||
         String(d?.ownerDocId || "").trim() ||
         String(d?.clientOwnerDocId || "").trim();
 
@@ -977,63 +1075,61 @@
     }
 
     function renderLinesAndTotals(){
-      const d = docData || {};
-      const bp = (profileData?.businessProfile || {});
+      const { vatEnabled, vatSnapshot } = getDocumentVatContext();
 
-      const tvaEnabled = !!bp.vat?.enabled;
-      const tvaRate = Number.isFinite(Number(bp.vat?.rate)) ? Number(bp.vat.rate) : 0;
-
-      thTVA.style.display = tvaEnabled ? "" : "none";
+      thTVA.style.display = vatEnabled ? "" : "none";
       linesTbody.innerHTML = "";
       linesCards.innerHTML = "";
 
-      const lines = Array.isArray(d.lines) ? d.lines : [];
+      const computed = computeDocument(docData?.lines || [], vatEnabled, vatSnapshot);
 
-      for(const l of lines){
-        const label = l?.label || "Ligne";
-        const qty = Number(l?.qty)||0;
-        const unit = l?.unit || "unité";
-        const up = Number(l?.unitPrice)||0;
-
-        const lineHT = qty * up;
-        const lineTVA = tvaEnabled ? (lineHT * tvaRate) : 0;
-        const lineTotal = lineHT + lineTVA;
+      for(const l of computed.lines){
+        const ratePct = Math.round((Number(l.vatRate) || 0) * 100);
 
         const tr = document.createElement("tr");
         tr.innerHTML = `
-          <td class="designation">${esc(label)}</td>
-          <td class="num">${esc(qty)}</td>
-          <td>${esc(unit)}</td>
-          <td class="num">${esc(fmtMoney(up))}</td>
-          <td class="num" style="${tvaEnabled ? "" : "display:none;"}">${tvaEnabled ? esc(fmtMoney(lineTVA)) : ""}</td>
-          <td class="num">${esc(fmtMoney(lineTotal))}</td>
+          <td class="designation">${esc(l.label || "Ligne")}</td>
+          <td class="num">${esc(l.qty)}</td>
+          <td>${esc(l.unit || "unité")}</td>
+          <td class="num">${esc(fmtMoney(l.unitPrice))}</td>
+          <td class="num" style="${vatEnabled ? "" : "display:none;"}">${vatEnabled ? `${esc(ratePct)}% • ${esc(fmtMoney(l.totalTVA))}` : ""}</td>
+          <td class="num">${esc(fmtMoney(l.totalTTC))}</td>
         `;
         linesTbody.appendChild(tr);
 
         const card = document.createElement("div");
         card.className = "lineCard";
         card.innerHTML = `
-          <div class="t">${esc(label)}</div>
+          <div class="t">${esc(l.label || "Ligne")}</div>
           <div class="g">
-            <div><b>Qté</b> : ${esc(qty)}</div>
-            <div><b>Unité</b> : ${esc(unit)}</div>
-            <div><b>PU HT</b> : ${esc(fmtMoney(up))}</div>
-            <div><b>Total TTC</b> : ${esc(fmtMoney(lineTotal))}</div>
+            <div><b>Qté</b> : ${esc(l.qty)}</div>
+            <div><b>Unité</b> : ${esc(l.unit || "unité")}</div>
+            <div><b>PU HT</b> : ${esc(fmtMoney(l.unitPrice))}</div>
+            <div><b>Total TTC</b> : ${esc(fmtMoney(l.totalTTC))}</div>
+            ${vatEnabled ? `<div><b>TVA</b> : ${esc(ratePct)}% • ${esc(fmtMoney(l.totalTVA))}</div>` : ``}
+            <div><b>Type</b> : ${esc(l.lineType || "SERVICE")}</div>
           </div>
         `;
         linesCards.appendChild(card);
       }
 
-      const totals = computeTotals(lines, tvaEnabled, tvaRate);
-
       const html = [];
-      if(tvaEnabled){
-        html.push(`<div class="r"><span>Total HT</span><span>${esc(fmtMoney(totals.ht))}</span></div>`);
-        html.push(`<div class="r"><span>TVA (${Math.round(tvaRate*100)}%)</span><span>${esc(fmtMoney(totals.tva))}</span></div>`);
-        html.push(`<div class="r"><span>Total TTC</span><span>${esc(fmtMoney(totals.ttc))}</span></div>`);
+      if(vatEnabled){
+        const serviceTVA = computed.lines
+          .filter(l => String(l.lineType || "").toUpperCase() === "SERVICE")
+          .reduce((s,l)=> s + (Number(l.totalTVA)||0), 0);
+
+        const productTVA = computed.lines
+          .filter(l => String(l.lineType || "").toUpperCase() === "PRODUCT")
+          .reduce((s,l)=> s + (Number(l.totalTVA)||0), 0);
+
+        html.push(`<div class="r"><span>Total HT</span><span>${esc(fmtMoney(computed.totalHT))}</span></div>`);
+        html.push(`<div class="r"><span>Total TVA</span><span>${esc(fmtMoney(computed.totalTVA))}</span></div>`);
+        html.push(`<div class="r"><span>Total TTC</span><span>${esc(fmtMoney(computed.totalTTC))}</span></div>`);
+        html.push(`<div class="mutedLine">TVA totale ${esc(fmtMoney(computed.totalTVA))} • services ${esc(fmtMoney(serviceTVA))} • produits ${esc(fmtMoney(productTVA))}</div>`);
       }else{
-        html.push(`<div class="r"><span>Total TTC</span><span>${esc(fmtMoney(totals.ttc))}</span></div>`);
-        const ex = String(bp?.tvaExemptionText || "TVA non applicable (art. 293B CGI)").trim();
+        html.push(`<div class="r"><span>Total TTC</span><span>${esc(fmtMoney(computed.totalTTC))}</span></div>`);
+        const ex = String(profileData?.businessProfile?.tvaExemptionText || "TVA non applicable (art. 293B CGI)").trim();
         if(ex) html.push(`<div class="mutedLine">${esc(ex)}</div>`);
       }
       totalsBox.innerHTML = html.join("");
@@ -1105,12 +1201,14 @@
     function renderBank(){
       const bp = (profileData?.businessProfile || {});
       const bank = (bp.bank || {});
-      const name = String(bank.name || "").trim();
+      const bankName = String(bank.bankName || bank.name || "").trim();
+      const holder = String(bank.holder || "").trim();
       const iban = String(bank.iban || "").trim();
       const bic  = String(bank.bic  || "").trim();
 
       const lines = [];
-      if(name) lines.push(`<div class="line"><b>Banque</b> : ${esc(name)}</div>`);
+      if(holder) lines.push(`<div class="line"><b>Titulaire</b> : ${esc(holder)}</div>`);
+      if(bankName) lines.push(`<div class="line"><b>Banque</b> : ${esc(bankName)}</div>`);
       if(iban) lines.push(`<div class="line"><b>IBAN</b> : ${esc(iban)}</div>`);
       if(bic)  lines.push(`<div class="line"><b>BIC</b> : ${esc(bic)}</div>`);
       bankKv.innerHTML = lines.length ? lines.join("") : `<div class="line">—</div>`;
@@ -1209,7 +1307,7 @@
       }];
     }
 
-    function flattenInvoiceLinesFromEvent(eventDoc){
+    function flattenInvoiceLinesFromEvent(eventDoc, vatEnabled, vatSnapshot){
       const interventions = normalizeInterventions(eventDoc);
       const out = [];
 
@@ -1228,17 +1326,18 @@
           if(!label) continue;
           if(!(qty > 0)) continue;
 
-          out.push({
+          out.push(computeLine({
             label,
             qty,
             unit,
             unitPrice,
             category,
             note,
+            lineType: inferLineType(raw),
             interventionKey: String(iv.key || "").trim(),
             interventionLabel: interventionLabelFromKey(iv.key, iv.title),
             interventionDateKey: String(iv.dateKey || "").trim()
-          });
+          }, vatEnabled, vatSnapshot));
         }
       }
 
@@ -1262,18 +1361,52 @@
       await loadProfile(currentUser.uid);
 
       try{
-        const lines = Array.isArray(docData.lines) ? docData.lines : [];
-        const hasLines = lines.length > 0;
-        const totalsZero = (Number(docData.totalTTC)||0) === 0 && (Number(docData.totalHT)||0) === 0;
-        if(hasLines && totalsZero){
-          const bp = (profileData?.businessProfile || {});
-          const tvaEnabled = !!bp.vat?.enabled;
-          const tvaRate = Number.isFinite(Number(bp.vat?.rate)) ? Number(bp.vat.rate) : 0;
-          const totals = computeTotals(lines, tvaEnabled, tvaRate);
+        const existingVatSnapshot = docData?.vatSnapshot && typeof docData.vatSnapshot === "object"
+          ? {
+              enabled: !!docData.vatSnapshot.enabled,
+              serviceRate: Number(docData.vatSnapshot.serviceRate || 0),
+              productRate: Number(docData.vatSnapshot.productRate || 0)
+            }
+          : null;
+
+        const vatSnapshot = existingVatSnapshot || getVatSnapshotFromProfile();
+        const computed = computeDocument(docData?.lines || [], !!vatSnapshot.enabled, vatSnapshot);
+
+        const needsPatch =
+          !docData?.vatSnapshot ||
+          JSON.stringify((docData?.lines || []).map(l => ({
+            lineType: String(l?.lineType || ""),
+            vatRate: Number(l?.vatRate || 0),
+            totalHT: Number(l?.totalHT || 0),
+            totalTVA: Number(l?.totalTVA || 0),
+            totalTTC: Number(l?.totalTTC || 0)
+          }))) !== JSON.stringify(computed.lines.map(l => ({
+            lineType: String(l?.lineType || ""),
+            vatRate: Number(l?.vatRate || 0),
+            totalHT: Number(l?.totalHT || 0),
+            totalTVA: Number(l?.totalTVA || 0),
+            totalTTC: Number(l?.totalTTC || 0)
+          }))) ||
+          round2(Number(docData?.totalHT || 0)) !== round2(computed.totalHT) ||
+          round2(Number(docData?.totalTVA || 0)) !== round2(computed.totalTVA) ||
+          round2(Number(docData?.totalTTC || 0)) !== round2(computed.totalTTC);
+
+        if(needsPatch){
           await updateDoc(docRef, {
-            totalHT: Number(totals.ht)||0,
-            totalTVA: Number(totals.tva)||0,
-            totalTTC: Number(totals.ttc)||0,
+            vatEnabled: !!vatSnapshot.enabled,
+            vatSnapshot,
+            lines: computed.lines.map(l => ({
+              ...l,
+              lineType: String(l.lineType || "SERVICE").trim().toUpperCase(),
+              vatRate: Number(l.vatRate || 0),
+              totalHT: Number(l.totalHT || 0),
+              totalTVA: Number(l.totalTVA || 0),
+              totalTTC: Number(l.totalTTC || 0)
+            })),
+            totalHT: Number(computed.totalHT) || 0,
+            totalTVA: Number(computed.totalTVA) || 0,
+            totalTTC: Number(computed.totalTTC) || 0,
+            totals: computed.totals,
             updatedAt: serverTimestamp()
           });
           const snap2 = await getDoc(docRef);
@@ -1305,16 +1438,13 @@
       const payMode = String(evData?.invoicePaymentMode || "VIREMENT").toUpperCase();
       const payTerm = String(evData?.invoicePaymentTerm || "RECEPTION").toUpperCase();
 
-      const lines = flattenInvoiceLinesFromEvent(evData);
+      const vatSnapshot = getVatSnapshotFromProfile();
+      const lines = flattenInvoiceLinesFromEvent(evData, !!vatSnapshot.enabled, vatSnapshot);
       if(!lines.length){
         throw new Error("Aucune ligne exploitable trouvée dans les interventions.");
       }
 
-      const bp = (profileData?.businessProfile || {});
-      const tvaEnabled = !!bp.vat?.enabled;
-      const tvaRate = Number.isFinite(Number(bp.vat?.rate)) ? Number(bp.vat.rate) : 0;
-      const totals = computeTotals(lines, tvaEnabled, tvaRate);
-
+      const computed = computeDocument(lines, !!vatSnapshot.enabled, vatSnapshot);
       const inferredClientType = getClientType(evData);
       const defaultPenaltyMode = (inferredClientType === "PRO") ? "B2B" : "B2C";
 
@@ -1343,6 +1473,7 @@
         commercialUpdatedAt: serverTimestamp(),
 
         clientOwnerDocId: resolved.clientOwnerDocId || null,
+        ownerDocId: resolved.clientOwnerDocId || null,
         clientName: resolved.name || String(evData?.ownerName || "").trim() || "",
         clientEmail: resolved.email || normalizeEmail(evData?.ownerEmail || ""),
         clientPhone: resolved.phone || String(evData?.ownerPhone || "").trim() || "",
@@ -1373,10 +1504,13 @@
         invoicePenaltyText: "",
         invoiceShowCancellation: true,
 
-        lines,
-        totalHT: Number(totals.ht) || 0,
-        totalTVA: Number(totals.tva) || 0,
-        totalTTC: Number(totals.ttc) || 0
+        vatEnabled: !!vatSnapshot.enabled,
+        vatSnapshot,
+        lines: computed.lines,
+        totalHT: Number(computed.totalHT) || 0,
+        totalTVA: Number(computed.totalTVA) || 0,
+        totalTTC: Number(computed.totalTTC) || 0,
+        totals: computed.totals
       };
 
       const created = await addDoc(collection(db, "salesDocuments"), payload);
@@ -1506,6 +1640,7 @@
           const resolved = await resolveClientSnapshot(currentUser.uid, docData);
           clientPatch = {
             clientOwnerDocId: resolved.clientOwnerDocId || docData.clientOwnerDocId || null,
+            ownerDocId: resolved.clientOwnerDocId || docData.ownerDocId || null,
             clientName: resolved.name || docData.clientName || "",
             clientEmail: resolved.email || docData.clientEmail || "",
             clientPhone: resolved.phone || docData.clientPhone || "",
@@ -1517,16 +1652,20 @@
           };
         }
 
-        const bp = (profileData?.businessProfile || {});
-        const tvaEnabled = !!bp.vat?.enabled;
-        const tvaRate = Number.isFinite(Number(bp.vat?.rate)) ? Number(bp.vat.rate) : 0;
+        const existingVatSnapshot = invoiceNumber && docData?.vatSnapshot
+          ? {
+              enabled: !!docData.vatSnapshot.enabled,
+              serviceRate: Number(docData.vatSnapshot.serviceRate || 0),
+              productRate: Number(docData.vatSnapshot.productRate || 0)
+            }
+          : null;
 
-        const lines = Array.isArray(docData?.lines) ? docData.lines : [];
-        if(!lines.length){
+        const vatSnapshot = existingVatSnapshot || getVatSnapshotFromProfile();
+        const computed = computeDocument(docData?.lines || [], !!vatSnapshot.enabled, vatSnapshot);
+
+        if(!computed.lines.length){
           throw new Error("Aucune ligne de facture.");
         }
-
-        const totals = computeTotals(lines, tvaEnabled, tvaRate);
 
         const patch = {
           invoiceNotes: (invoiceNotesEl.value || "").trim(),
@@ -1541,9 +1680,20 @@
 
           invoiceShowCancellation: !!showCancelChk.checked,
 
-          totalHT: Number(totals.ht) || 0,
-          totalTVA: Number(totals.tva) || 0,
-          totalTTC: Number(totals.ttc) || 0,
+          vatEnabled: !!vatSnapshot.enabled,
+          vatSnapshot,
+          lines: computed.lines.map(l => ({
+            ...l,
+            lineType: String(l.lineType || "SERVICE").trim().toUpperCase(),
+            vatRate: Number(l.vatRate || 0),
+            totalHT: Number(l.totalHT || 0),
+            totalTVA: Number(l.totalTVA || 0),
+            totalTTC: Number(l.totalTTC || 0)
+          })),
+          totalHT: Number(computed.totalHT) || 0,
+          totalTVA: Number(computed.totalTVA) || 0,
+          totalTTC: Number(computed.totalTTC) || 0,
+          totals: computed.totals,
 
           ...clientPatch
         };
@@ -1641,4 +1791,3 @@
   </script>
 </body>
 </html>
-
