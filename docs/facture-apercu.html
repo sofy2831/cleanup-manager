@@ -828,47 +828,63 @@ const totalTtcEl = document.getElementById("totalTtc");
       cli4.style.display = contact ? "" : "none";
     }
 
-    function renderLines(d, businessProfile){
-      const arr = Array.isArray(d?.lines) ? d.lines : [];
-      linesBody.innerHTML = "";
+function renderLines(d){
+  const arr = Array.isArray(d?.lines) ? d.lines : [];
+  linesBody.innerHTML = "";
 
-      const vatEnabled = !!businessProfile?.vat?.enabled;
-      const vatRate = Number.isFinite(Number(businessProfile?.vat?.rate)) ? Number(businessProfile.vat.rate) : 0;
+  if(!arr.length){
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td colspan="4" class="mut">Aucune ligne</td>`;
+    linesBody.appendChild(tr);
+  }else{
+    for(const l of arr){
+      const qty = Number(l?.qty)||0;
+      const up = getStoredLinePUHT(l);
+      const total = getStoredLineTTC(l);
+      const label = String(l?.label || "Prestation").trim();
 
-      if(!arr.length){
-        const tr = document.createElement("tr");
-        tr.innerHTML = `<td colspan="4" class="mut">Aucune ligne</td>`;
-        linesBody.appendChild(tr);
-      }else{
-        for(const l of arr){
-          const qty = Number(l?.qty)||0;
-          const up = Number(l?.unitPrice)||0;
-          const ht = qty * up;
-          const tva = vatEnabled ? (ht * vatRate) : 0;
-          const total = ht + tva;
-          const label = String(l?.label || "Prestation").trim();
-
-          const tr = document.createElement("tr");
-          tr.innerHTML = `
-            <td>${esc(label)}</td>
-            <td class="right">${esc(qty)}</td>
-            <td class="right">${esc(money(up))}</td>
-            <td class="right">${esc(money(total))}</td>
-          `;
-          linesBody.appendChild(tr);
-        }
-      }
-
-      const totals = computeTotals(arr, vatEnabled, vatRate);
-      totalTtcEl.textContent = money(totals.ttc);
-
-      if(vatEnabled){
-        tvaLineEl.textContent = `HT ${money(totals.ht)} • TVA ${Math.round(vatRate*100)}% ${money(totals.tva)}`;
-      }else{
-        const ex = String(businessProfile?.tvaExemptionText || "").trim();
-        tvaLineEl.textContent = ex || "TVA non applicable (art. 293B CGI)";
-      }
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${esc(label)}</td>
+        <td class="right">${esc(qty)}</td>
+        <td class="right">${esc(money(up))}</td>
+        <td class="right">${esc(money(total))}</td>
+      `;
+      linesBody.appendChild(tr);
     }
+  }
+
+  const totals = getStoredTotals(d);
+  const vatCtx = getVatContext(d);
+  const vatEnabled = !!vatCtx.vatEnabled || Number(totals.tva || 0) > 0;
+
+  totalHtEl.textContent = money(totals.ht);
+  totalTvaEl.textContent = money(totals.tva);
+  totalTtcEl.textContent = money(totals.ttc);
+
+  if(vatEnabled){
+    const serviceTVA = arr
+      .filter(l => String(l?.lineType || "").toUpperCase() === "SERVICE")
+      .reduce((s, l) => s + (Number.isFinite(Number(l?.totalTVA)) ? Number(l.totalTVA) : 0), 0);
+
+    const productTVA = arr
+      .filter(l => String(l?.lineType || "").toUpperCase() === "PRODUCT")
+      .reduce((s, l) => s + (Number.isFinite(Number(l?.totalTVA)) ? Number(l.totalTVA) : 0), 0);
+
+    if(serviceTVA || productTVA){
+      tvaLineEl.textContent =
+        `TVA totale ${money(totals.tva)} • services ${money(serviceTVA)} • produits ${money(productTVA)}`;
+    }else{
+      tvaLineEl.textContent = `HT ${money(totals.ht)} • TVA ${money(totals.tva)}`;
+    }
+  }else{
+    const ex =
+      String(d?.businessSnapshot?.tvaExemptionText || "").trim() ||
+      String(d?.tvaExemptionText || "").trim() ||
+      "TVA non applicable (art. 293B CGI)";
+    tvaLineEl.textContent = ex;
+  }
+}
 
     function renderPaymentAndConditions(d, businessProfile){
       const mode = String(d?.invoicePaymentMode || "VIREMENT").toUpperCase();
