@@ -1,4 +1,4 @@
-<!-- docs/avoir.html (ALIGNÉ FACTURE — TVA/HT/TTC figés depuis la facture source + snapshot document + readonly après émission) -->
+<!-- docs/avoir.html (CORRIGÉ COMPLET — client snapshot hydraté depuis facture/owners/homes + adresse client OK + readonly après émission) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -381,7 +381,6 @@
       collection, query, where, getDocs, limit, addDoc
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
-    // UI
     const alertBox = document.getElementById("alertBox");
     const recapKv = document.getElementById("recapKv");
     const statusBadge = document.getElementById("statusBadge");
@@ -411,14 +410,13 @@
     const previewBtn = document.getElementById("previewBtn");
     const backLink = document.getElementById("backLink");
 
-    // State
     let currentUser = null;
     let profileData = null;
 
-    let creditRef = null;     // salesDocuments/CREDIT
+    let creditRef = null;
     let creditData = null;
 
-    let invoiceRef = null;    // salesDocuments/INVOICE
+    let invoiceRef = null;
     let invoiceData = null;
 
     function showAlert(msg, ok=false){
@@ -545,6 +543,221 @@
       }else{
         bizLogoImg.style.display = "none"; bizLogoFallback.style.display = "block";
       }
+    }
+
+    function extractAddr(obj){
+      const o = obj || {};
+      const a = (o.address && typeof o.address === "object") ? o.address : null;
+      const ba = (o.billingAddress && typeof o.billingAddress === "object") ? o.billingAddress : null;
+
+      const street =
+        String(o.address1 || o.street || o.addr1 || o.line1 || "").trim() ||
+        (typeof o.address === "string" ? String(o.address).trim() : "") ||
+        String(a?.street || a?.line1 || a?.address1 || a?.addr1 || "").trim() ||
+        String(ba?.street || ba?.line1 || ba?.address1 || "").trim();
+
+      const address2 =
+        String(o.address2 || o.addr2 || o.line2 || "").trim() ||
+        String(a?.address2 || a?.line2 || a?.addr2 || "").trim() ||
+        String(ba?.address2 || ba?.line2 || "").trim();
+
+      const zip =
+        String(o.zip || o.postalCode || o.cp || "").trim() ||
+        String(a?.zip || a?.postalCode || a?.cp || "").trim() ||
+        String(ba?.zip || ba?.postalCode || "").trim();
+
+      const city =
+        String(o.city || o.town || o.locality || "").trim() ||
+        String(a?.city || a?.town || a?.locality || "").trim() ||
+        String(ba?.city || ba?.town || "").trim();
+
+      const country =
+        String(o.country || "").trim() ||
+        String(a?.country || "").trim() ||
+        String(ba?.country || "").trim() ||
+        "FR";
+
+      return { street, address2, zip, city, country };
+    }
+
+    async function lookupOwnerByEmailInOwners(conciergerieUid, emailLower){
+      if(!emailLower) return null;
+
+      const qO = query(
+        collection(db,"owners"),
+        where("conciergerieUid", "==", String(conciergerieUid)),
+        where("emailLower", "==", emailLower),
+        where("isActive", "==", true),
+        limit(1)
+      );
+
+      const snap = await getDocs(qO);
+      if(snap.empty) return null;
+
+      const doc0 = snap.docs[0];
+      const o = doc0.data() || {};
+      const addr = extractAddr(o);
+
+      return {
+        docId: doc0.id,
+        email: normalizeEmail(o.email || emailLower),
+        fullname: String(o.fullname || o.displayName || o.name || "").trim(),
+        address1: addr.street,
+        address2: addr.address2,
+        zip: addr.zip,
+        city: addr.city,
+        country: addr.country,
+        phone: String(o.phone || o.tel || o.mobile || "").trim(),
+      };
+    }
+
+    async function loadOwnerFromOwnersOrNull(conciergerieUid, d){
+      const ownerDocId =
+        String(d?.ownerDocId || "").trim() ||
+        String(d?.clientOwnerDocId || "").trim();
+
+      if(ownerDocId){
+        try{
+          const snap = await getDoc(doc(db,"owners", ownerDocId));
+          if(snap.exists()){
+            const o = snap.data() || {};
+            if(String(o.conciergerieUid||"") === String(conciergerieUid)){
+              const addr = extractAddr(o);
+              return {
+                docId: snap.id,
+                email: normalizeEmail(o.email || ""),
+                fullname: String(o.fullname || o.displayName || o.name || "").trim(),
+                address1: addr.street,
+                address2: addr.address2,
+                zip: addr.zip,
+                city: addr.city,
+                country: addr.country,
+                phone: String(o.phone || o.tel || o.mobile || "").trim(),
+              };
+            }
+          }
+        }catch(e){}
+      }
+
+      const emailLower = normalizeEmail(d?.clientEmail || d?.ownerEmail || "");
+      if(emailLower){
+        try{ return await lookupOwnerByEmailInOwners(conciergerieUid, emailLower); }
+        catch(e){ return null; }
+      }
+
+      return null;
+    }
+
+    async function loadHomeOwnerSnapshotOrNull(d){
+      const hid = String(d?.homeId || d?.homeDocId || "").trim();
+      if(!hid) return null;
+
+      try{
+        const snap = await getDoc(doc(db,"homes", hid));
+        if(!snap.exists()) return null;
+        const h = snap.data() || {};
+
+        const ownerName = String(h.ownerName || h.ownerFullname || h.ownerDisplayName || h.owner || "").trim();
+        const ownerPhone = String(h.ownerPhone || h.ownerTel || h.phone || "").trim();
+        const ownerEmail = normalizeEmail(h.ownerEmail || h.ownerAccountEmail || h.email || "");
+
+        const addr = extractAddr(h.owner || h);
+
+        return {
+          fullname: ownerName,
+          email: ownerEmail,
+          phone: ownerPhone,
+          address1: addr.street,
+          address2: addr.address2,
+          zip: addr.zip,
+          city: addr.city,
+          country: addr.country
+        };
+      }catch(e){
+        return null;
+      }
+    }
+
+    function docSnapshotClient(d){
+      const sName = String(d?.clientName || d?.clientCompany || d?.clientFullName || "").trim();
+      const sEmail = normalizeEmail(d?.clientEmail || "");
+      const sPhone = String(d?.clientPhone || "").trim();
+      const sA1 = String(d?.clientAddress1 || d?.clientAddress || "").trim();
+      const sA2 = String(d?.clientAddress2 || "").trim();
+      const sZip = String(d?.clientZip || "").trim();
+      const sCity = String(d?.clientCity || "").trim();
+      const sCountry = String(d?.clientCountry || "FR").trim();
+
+      const eName = String(d?.ownerName || "").trim();
+      const eEmail = normalizeEmail(d?.ownerEmail || "");
+      const ePhone = String(d?.ownerPhone || "").trim();
+      const eA1 = String(d?.ownerAddress1 || "").trim();
+      const eA2 = String(d?.ownerAddress2 || "").trim();
+      const eZip = String(d?.ownerZip || "").trim();
+      const eCity = String(d?.ownerCity || "").trim();
+      const eCountry = String(d?.ownerCountry || "FR").trim();
+
+      return {
+        fullname: sName || eName,
+        email: sEmail || eEmail,
+        phone: sPhone || ePhone,
+        address1: sA1 || eA1,
+        address2: sA2 || eA2,
+        zip: sZip || eZip,
+        city: sCity || eCity,
+        country: sCountry || eCountry
+      };
+    }
+
+    async function resolveClientSnapshot(conciergerieUid, d){
+      const owners = await loadOwnerFromOwnersOrNull(conciergerieUid, d);
+      const homeSnap = await loadHomeOwnerSnapshotOrNull(d);
+      const snap = docSnapshotClient(d);
+
+      const name = (owners?.fullname || snap.fullname || homeSnap?.fullname || "").trim();
+      const email = (owners?.email || snap.email || homeSnap?.email || "").trim();
+      const phone = (owners?.phone || snap.phone || homeSnap?.phone || "").trim();
+
+      const address1 = (owners?.address1 || snap.address1 || homeSnap?.address1 || "").trim();
+      const address2 = (owners?.address2 || snap.address2 || homeSnap?.address2 || "").trim();
+      const zip = (owners?.zip || snap.zip || homeSnap?.zip || "").trim();
+      const city = (owners?.city || snap.city || homeSnap?.city || "").trim();
+      const country = (owners?.country || snap.country || homeSnap?.country || "FR").trim();
+
+      return {
+        clientOwnerDocId: owners?.docId || String(d?.clientOwnerDocId || d?.ownerDocId || "").trim() || null,
+        name, email, phone, address1, address2, zip, city, country
+      };
+    }
+
+    async function hydrateInvoiceClientSnapshotIfMissing(){
+      if(!currentUser?.uid || !invoiceData) return;
+
+      const hasName = !!String(invoiceData.clientName || "").trim();
+      const hasEmail = !!String(invoiceData.clientEmail || "").trim();
+      const hasAddr =
+        !!String(invoiceData.clientAddress1 || "").trim() ||
+        !!String(invoiceData.clientZip || "").trim() ||
+        !!String(invoiceData.clientCity || "").trim();
+
+      if(hasName && hasEmail && hasAddr) return;
+
+      try{
+        const resolved = await resolveClientSnapshot(currentUser.uid, invoiceData);
+        invoiceData = {
+          ...invoiceData,
+          clientOwnerDocId: invoiceData.clientOwnerDocId || resolved.clientOwnerDocId || null,
+          ownerDocId: invoiceData.ownerDocId || resolved.clientOwnerDocId || null,
+          clientName: String(invoiceData.clientName || "").trim() ? invoiceData.clientName : (resolved.name || ""),
+          clientEmail: String(invoiceData.clientEmail || "").trim() ? invoiceData.clientEmail : (resolved.email || ""),
+          clientPhone: String(invoiceData.clientPhone || "").trim() ? invoiceData.clientPhone : (resolved.phone || ""),
+          clientAddress1: String(invoiceData.clientAddress1 || "").trim() ? invoiceData.clientAddress1 : (resolved.address1 || ""),
+          clientAddress2: String(invoiceData.clientAddress2 || "").trim() ? invoiceData.clientAddress2 : (resolved.address2 || ""),
+          clientZip: String(invoiceData.clientZip || "").trim() ? invoiceData.clientZip : (resolved.zip || ""),
+          clientCity: String(invoiceData.clientCity || "").trim() ? invoiceData.clientCity : (resolved.city || ""),
+          clientCountry: String(invoiceData.clientCountry || "").trim() ? invoiceData.clientCountry : (resolved.country || "FR")
+        };
+      }catch(e){}
     }
 
     function renderBusinessHeader(){
@@ -883,6 +1096,8 @@
       if(String(invoiceData.type||"").toUpperCase() !== "INVOICE"){
         throw new Error("fromDocId n’est pas une facture (type INVOICE).");
       }
+
+      await hydrateInvoiceClientSnapshotIfMissing();
     }
 
     async function loadCredit(id){
@@ -1057,6 +1272,15 @@
           clientCity: String(invoiceData.clientCity || "").trim() || "",
           clientCountry: String(invoiceData.clientCountry || "FR").trim() || "FR",
           clientType: String(invoiceData.clientType || "").trim() || "",
+
+          ownerName: String(invoiceData.ownerName || invoiceData.clientName || "").trim() || "",
+          ownerEmail: normalizeEmail(invoiceData.ownerEmail || invoiceData.clientEmail || ""),
+          ownerPhone: String(invoiceData.ownerPhone || invoiceData.clientPhone || "").trim() || "",
+          ownerAddress1: String(invoiceData.ownerAddress1 || invoiceData.clientAddress1 || "").trim() || "",
+          ownerAddress2: String(invoiceData.ownerAddress2 || invoiceData.clientAddress2 || "").trim() || "",
+          ownerZip: String(invoiceData.ownerZip || invoiceData.clientZip || "").trim() || "",
+          ownerCity: String(invoiceData.ownerCity || invoiceData.clientCity || "").trim() || "",
+          ownerCountry: String(invoiceData.ownerCountry || invoiceData.clientCountry || "FR").trim() || "FR",
 
           vatEnabled: !!vatCtx.vatEnabled,
           vatSnapshot: vatCtx.vatSnapshot || null,
