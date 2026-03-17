@@ -1,4 +1,4 @@
-<!-- docs/factures-liste.html (CORRIGÉ COMPLET — mobile cards OK + modale Envoyer scrollable + fonctionnalités conservées) -->
+<!-- docs/factures-liste.html (CORRIGÉ COMPLET — draft=>Facture, bouton Partager, relevé de factures, factures+avoirs conservés) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -511,7 +511,6 @@
       flex-wrap:wrap;
     }
 
-    /* ===== FIX MOBILE CARTES FACTURES ===== */
     @media(max-width:760px){
       .card{
         flex-direction:column;
@@ -564,7 +563,6 @@
       }
     }
 
-    /* ===== FIX MODALES MOBILE ===== */
     @media(max-width:640px){
       .modalMask{
         align-items:flex-start;
@@ -651,7 +649,7 @@
           <input id="searchInput" type="text" placeholder="N° facture, client, email, logement…" />
         </div>
 
-        <button class="btn" id="stmtOpenBtn" type="button">Relevé propriétaire</button>
+        <button class="btn" id="stmtOpenBtn" type="button">Relevé de factures</button>
         <button class="btn" id="clearBtn" type="button">Effacer</button>
         <button class="btn primary" id="refreshBtn" type="button">Rafraîchir</button>
       </div>
@@ -725,6 +723,7 @@
 
         <div class="copyRow">
           <button class="btn" id="openEmailSendBtn" type="button">Email</button>
+          <button class="btn" id="shareSendBtn" type="button">Partager</button>
           <button class="btn primary" id="markSentBtn" type="button">Marquer “Envoyé”</button>
         </div>
 
@@ -783,18 +782,18 @@
     </div>
   </div>
 
-  <!-- Modal relevé propriétaire -->
+  <!-- Modal relevé de factures -->
   <div id="stmtModal" class="modalMask" role="dialog" aria-modal="true" aria-hidden="true">
     <div class="modal">
       <div class="modalHead">
-        <div class="title">Relevé propriétaire (mensuel)</div>
+        <div class="title">Relevé de factures (mensuel)</div>
         <button class="btn" id="stmtCloseBtn" type="button">Fermer</button>
       </div>
 
       <div class="modalBody">
         <div id="stmtSuccessBar" class="successBar" role="status" aria-live="polite">
           <div class="left">
-            <span>✅ Relevé publié côté propriétaire.</span>
+            <span>✅ Relevé de factures publié côté propriétaire.</span>
             <span class="pillMini" id="stmtSuccessHint">—</span>
           </div>
           <div class="right">
@@ -820,7 +819,7 @@
         </div>
 
         <div style="margin-top:12px;">
-          <div class="miniT">Aperçu (draft)</div>
+          <div class="miniT">Aperçu du relevé</div>
           <div class="boxMini" style="margin-top:8px;">
             <div class="miniS" id="stmtCounts">—</div>
 
@@ -845,7 +844,7 @@
 
         <div style="margin-top:12px;">
           <div class="miniT">Message (optionnel)</div>
-          <textarea id="stmtText" class="modalTxt" rows="2" placeholder="Ex: Relevé mensuel."></textarea>
+          <textarea id="stmtText" class="modalTxt" rows="2" placeholder="Ex: Relevé de factures mensuel."></textarea>
         </div>
 
         <div class="modalActions">
@@ -888,6 +887,7 @@
     const modalSubtitleSend = document.getElementById("modalSubtitleSend");
     const sendText = document.getElementById("sendText");
     const openEmailSendBtn = document.getElementById("openEmailSendBtn");
+    const shareSendBtn = document.getElementById("shareSendBtn");
     const sClient = document.getElementById("sClient");
     const sEmail = document.getElementById("sEmail");
     const sInvoice = document.getElementById("sInvoice");
@@ -1038,14 +1038,6 @@
       }
     }
 
-    function ddmmyyyyFromTs(ts){
-      try{
-        const d = ts?.toDate ? ts.toDate() : (ts?.seconds ? new Date(ts.seconds*1000) : null);
-        if(!d) return "—";
-        return d.toLocaleDateString("fr-FR");
-      }catch(_){ return "—"; }
-    }
-
     function pad2(n){ return String(n).padStart(2,"0"); }
 
     function computeHT(lines){
@@ -1081,6 +1073,12 @@
 
     function getInvoiceStatusRaw(x){ return String(x?.invoiceStatus||"").toUpperCase().trim(); }
     function getInvoiceNumber(x){ return String(x?.invoiceNumber||"").trim() || "—"; }
+
+    function isDraftInvoice(x){
+      const raw = getInvoiceStatusRaw(x);
+      const hasNum = !!String(x?.invoiceNumber || "").trim();
+      return raw === "DRAFT" || !hasNum;
+    }
 
     function getInvoiceStatusDisplay(x){
       const raw = getInvoiceStatusRaw(x);
@@ -1292,6 +1290,31 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
       }
       const mailto = buildMailto(ownerEmail, buildEmailSubject(), buildEmailBody());
       window.location.href = mailto;
+    }
+
+    async function shareSendDraft(){
+      if(!modalItem) return;
+
+      const subject = buildEmailSubject();
+      const body = buildEmailBody();
+
+      if(navigator.share){
+        try{
+          await navigator.share({
+            title: subject,
+            text: `${subject}\n\n${body}`
+          });
+        }catch(e){
+          if(String(e?.name || "") !== "AbortError"){
+            showModalAlert("⛔ Partage impossible.", false);
+          }
+        }
+        return;
+      }
+
+      const text = `${subject}\n\n${body}`;
+      const ok = await copyToClipboard(text);
+      showModalAlert(ok ? "✅ Texte copié. Partage non disponible sur ce navigateur." : "⛔ Partage indisponible.", !!ok);
     }
 
     function showSendSuccess(hint){
@@ -1568,6 +1591,9 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
       await hydrateOwnerBox(d);
       refreshOwnerPublishUI();
 
+      shareSendBtn.disabled = false;
+      shareSendBtn.title = navigator.share ? "" : "Partage natif indisponible : copie du texte en secours.";
+
       openModal(modalMaskSend);
     }
 
@@ -1742,6 +1768,7 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
 
       const ownerDocId = getOwnerDocId(d);
       const hasNum = !!String(d?.invoiceNumber || "").trim();
+      const isDraft = isDraftInvoice(d);
 
       const avoirId = getAvoirId(d);
       const avoirActive = !!avoirId;
@@ -1758,6 +1785,7 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
       const redoHref = `facture-nouv.html?fromDocId=${encodeURIComponent(id)}&fromAvoirId=${encodeURIComponent(avoirId)}`;
 
       const canSend = !!ownerDocId && hasNum;
+      const primaryLabel = isDraft ? "Facture" : "Aperçu";
 
       const card = document.createElement("div");
       card.className = "card";
@@ -1779,7 +1807,7 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
         </div>
 
         <div class="right">
-          <button class="btn primary" data-preview="${esc(id)}" type="button">Aperçu</button>
+          <button class="btn primary" data-preview="${esc(id)}" type="button">${esc(primaryLabel)}</button>
           <button class="btn" data-send="${esc(id)}" type="button" ${canSend ? "" : `aria-disabled="true"`}>Envoyer</button>
           <a class="btn" href="reglement.html?docId=${encodeURIComponent(id)}" ${allowReglement ? "" : `aria-disabled="true"`}>Règlement</a>
           ${allowCreateAvoir ? `<a class="btn danger" href="${creerAvoirHref}">Avoir</a>` : ``}
@@ -1789,6 +1817,12 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
       `;
 
       card.querySelector('button[data-preview]')?.addEventListener("click", ()=>{
+        if(isDraft){
+          const u = new URL("facture.html", location.href);
+          u.searchParams.set("docId", id);
+          location.href = u.toString();
+          return;
+        }
         const u = new URL("facture-apercu.html", location.href);
         u.searchParams.set("docId", id);
         location.href = u.toString();
@@ -1938,8 +1972,8 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
     }
 
     function buildStmtEmailSubject(){
-      if(!stmtDraft) return "Relevé mensuel";
-      return `Relevé ${stmtDraft.periodKey}`;
+      if(!stmtDraft) return "Relevé de factures mensuel";
+      return `Relevé de factures ${stmtDraft.periodKey}`;
     }
 
     function buildStmtEmailBody(){
@@ -1956,7 +1990,7 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
       if(ownerName) lines.push(`Bonjour ${ownerName},`);
       lines.push("");
       if(msg) lines.push(msg, "");
-      lines.push(`Veuillez trouver votre relevé mensuel pour ${stmtDraft.periodKey} :`);
+      lines.push(`Veuillez trouver votre relevé de factures pour ${stmtDraft.periodKey} :`);
       lines.push(link);
       lines.push("");
       lines.push("Bonne réception,");
@@ -2031,7 +2065,7 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
       stmtNetTTC.textContent = fmtMoney(stmtDraft.totals.netTTC);
 
       if(!stmtDraft.items.length){
-        stmtItemsBox.innerHTML = `<div class="miniS">Aucune pièce émise sur ce mois pour ce propriétaire.</div>`;
+        stmtItemsBox.innerHTML = `<div class="miniS">Aucune facture ni aucun avoir émis sur ce mois pour ce propriétaire.</div>`;
         return;
       }
 
@@ -2227,7 +2261,7 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
       }
 
       refreshOwnerEmail();
-      stmtText.value = `Relevé ${stmtMonthInput.value}.`;
+      stmtText.value = `Relevé de factures ${stmtMonthInput.value}.`;
 
       openModal(stmtModal);
       await buildStmtDraft();
@@ -2259,6 +2293,7 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
     chkCredit.addEventListener("change", refreshPublishBtnState);
 
     openEmailSendBtn.addEventListener("click", openMailDraft);
+    shareSendBtn.addEventListener("click", shareSendDraft);
     afterMailBtn.addEventListener("click", openMailDraft);
     pubAfterMailBtn.addEventListener("click", openMailDraft);
 
@@ -2307,7 +2342,7 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
       await buildStmtDraft();
     });
     stmtMonthInput.addEventListener("change", async ()=>{
-      stmtText.value = `Relevé ${stmtMonthInput.value}.`;
+      stmtText.value = `Relevé de factures ${stmtMonthInput.value}.`;
       await buildStmtDraft();
     });
 
