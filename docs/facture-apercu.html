@@ -1,4 +1,4 @@
-<!-- docs/facture-apercu.html (FINAL — owner=1 support + security ownerUid/ownerVisible + backLink owner + forbid owner on eventId + NO /users read in owner mode + PRINT FIX) -->
+<!-- docs/facture-apercu.html (CORRIGÉ COMPLET — HT/TVA/TTC stockés + owner=1 + businessSnapshot prioritaire) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -327,14 +327,29 @@
           <tr>
             <th>Prestation</th>
             <th class="right">Qté</th>
-            <th class="right">PU</th>
-            <th class="right">Total</th>
+            <th class="right">PU HT</th>
+            <th class="right">Total TTC</th>
           </tr>
         </thead>
         <tbody id="linesBody"></tbody>
       </table>
 
       <div class="summary">
+        <div class="totalBox">
+          <div class="totalRow">
+            <div>Total HT</div>
+            <div id="totalHt">0,00 €</div>
+          </div>
+          <div class="totalRow">
+            <div>Total TVA</div>
+            <div id="totalTva">0,00 €</div>
+          </div>
+          <div class="totalRow">
+            <div>Total TTC</div>
+            <div class="big" id="totalTtc">0,00 €</div>
+          </div>
+          <div class="totalSub" id="tvaLine">TVA non applicable (art. 293B CGI)</div>
+        </div>
 
         <div class="payBox">
           <h3>Paiement</h3>
@@ -402,8 +417,8 @@
     const linesBody = document.getElementById("linesBody");
 
     const totalHtEl  = document.getElementById("totalHt");
-const totalTvaEl = document.getElementById("totalTva");
-const totalTtcEl = document.getElementById("totalTtc");
+    const totalTvaEl = document.getElementById("totalTva");
+    const totalTtcEl = document.getElementById("totalTtc");
     const tvaLineEl  = document.getElementById("tvaLine");
 
     const payModeEl = document.getElementById("payMode");
@@ -425,11 +440,9 @@ const totalTtcEl = document.getElementById("totalTtc");
 
     const footerEl = document.getElementById("footer");
 
-    // state
     let docData = null;
     let isDraftPreview = false;
 
-    // ✅ PRINT STATE (évite d/docId hors scope)
     let currentDocId = "";
     let currentInvoiceNumber = "";
 
@@ -441,32 +454,39 @@ const totalTtcEl = document.getElementById("totalTtc");
         .replaceAll('"',"&quot;")
         .replaceAll("'","&#039;");
     }
+
     function showError(msg){
       alertBox.style.display = "block";
       alertBox.textContent = "⛔ " + msg;
     }
+
     function money(n){
       const x = Number(n || 0);
       return x.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " €";
     }
+
     function getParam(name){
       const p = new URLSearchParams(location.search);
       return (p.get(name) || "").trim();
     }
+
     function isOwnerMode(){
       return getParam("owner") === "1";
     }
+
     function ddmmyyyy(d){
       const dd = String(d.getDate()).padStart(2,"0");
       const mm = String(d.getMonth()+1).padStart(2,"0");
       const yy = d.getFullYear();
       return `${dd}/${mm}/${yy}`;
     }
+
     function addDays(baseDate, days){
       const d = new Date(baseDate.getTime());
       d.setDate(d.getDate() + (Number(days)||0));
       return d;
     }
+
     function termLabel(term){
       const t = String(term||"").toUpperCase();
       if(t === "RECEPTION") return "À réception";
@@ -476,6 +496,7 @@ const totalTtcEl = document.getElementById("totalTtc");
       if(t === "45J") return "45 jours";
       return term || "—";
     }
+
     function termToDays(term){
       const t = String(term||"").toUpperCase();
       if(t === "RECEPTION") return 0;
@@ -485,6 +506,7 @@ const totalTtcEl = document.getElementById("totalTtc");
       if(t === "45J") return 45;
       return 0;
     }
+
     function modeLabel(mode){
       const m = String(mode||"").toUpperCase();
       if(m === "VIREMENT") return "Virement";
@@ -492,87 +514,77 @@ const totalTtcEl = document.getElementById("totalTtc");
       if(m === "CHEQUE") return "Chèque";
       return mode || "—";
     }
+
     function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
 
-    function computeTotals(linesArr, vatEnabled, vatRate){
-      let ht = 0;
-      for(const l of (Array.isArray(linesArr) ? linesArr : [])){
-        ht += (Number(l?.qty)||0) * (Number(l?.unitPrice)||0);
+    function getVatContext(d){
+      const bs = d?.businessSnapshot || {};
+      const vat = bs?.vat || {};
+      return {
+        vatEnabled: !!vat.enabled,
+        vatRate: Number.isFinite(Number(vat.rate)) ? Number(vat.rate) : 0,
+        serviceRate: Number.isFinite(Number(d?.vatSnapshot?.serviceRate)) ? Number(d.vatSnapshot.serviceRate) : 0.20,
+        productRate: Number.isFinite(Number(d?.vatSnapshot?.productRate)) ? Number(d.vatSnapshot.productRate) : 0.10
+      };
+    }
+
+    function getStoredLinePUHT(l){
+      if(Number.isFinite(Number(l?.unitPrice))) return Number(l.unitPrice);
+      return 0;
+    }
+
+    function getStoredLineTTC(l){
+      if(Number.isFinite(Number(l?.totalTTC))) return Number(l.totalTTC);
+
+      const qty = Number(l?.qty) || 0;
+      const pu = Number(l?.unitPrice) || 0;
+
+      if(Number.isFinite(Number(l?.totalHT)) && Number.isFinite(Number(l?.totalTVA))){
+        return Number(l.totalHT) + Number(l.totalTVA);
       }
-      const tva = vatEnabled ? (ht * (Number(vatRate)||0)) : 0;
-      const ttc = ht + tva;
+
+      return qty * pu;
+    }
+
+    function getStoredTotals(d){
+      const lines = Array.isArray(d?.lines) ? d.lines : [];
+
+      const hasStoredTotals =
+        Number.isFinite(Number(d?.totalHT)) &&
+        Number.isFinite(Number(d?.totalTVA)) &&
+        Number.isFinite(Number(d?.totalTTC));
+
+      if(hasStoredTotals){
+        return {
+          ht: Number(d.totalHT),
+          tva: Number(d.totalTVA),
+          ttc: Number(d.totalTTC)
+        };
+      }
+
+      let ht = 0;
+      let tva = 0;
+      let ttc = 0;
+
+      for(const l of lines){
+        if(Number.isFinite(Number(l?.totalHT))) ht += Number(l.totalHT);
+        else ht += (Number(l?.qty) || 0) * (Number(l?.unitPrice) || 0);
+
+        if(Number.isFinite(Number(l?.totalTVA))) tva += Number(l.totalTVA);
+
+        if(Number.isFinite(Number(l?.totalTTC))) ttc += Number(l.totalTTC);
+        else{
+          const lineHT = Number.isFinite(Number(l?.totalHT))
+            ? Number(l.totalHT)
+            : ((Number(l?.qty) || 0) * (Number(l?.unitPrice) || 0));
+          const lineTVA = Number.isFinite(Number(l?.totalTVA)) ? Number(l.totalTVA) : 0;
+          ttc += lineHT + lineTVA;
+        }
+      }
+
       return { ht, tva, ttc };
     }
 
-function getVatContext(d){
-  const bs = d?.businessSnapshot || {};
-  const vat = bs?.vat || {};
-
-  return {
-    vatEnabled: !!vat.enabled,
-    vatRate: Number.isFinite(Number(vat.rate)) ? Number(vat.rate) : 0,
-    serviceRate: Number.isFinite(Number(d?.vatSnapshot?.serviceRate)) ? Number(d.vatSnapshot.serviceRate) : 0.20,
-    productRate: Number.isFinite(Number(d?.vatSnapshot?.productRate)) ? Number(d.vatSnapshot.productRate) : 0.10
-  };
-}
-
-function getStoredLinePUHT(l){
-  if(Number.isFinite(Number(l?.unitPrice))) return Number(l.unitPrice);
-  return 0;
-}
-
-function getStoredLineTTC(l){
-  if(Number.isFinite(Number(l?.totalTTC))) return Number(l.totalTTC);
-
-  const qty = Number(l?.qty) || 0;
-  const pu = Number(l?.unitPrice) || 0;
-
-  if(Number.isFinite(Number(l?.totalHT)) && Number.isFinite(Number(l?.totalTVA))){
-    return Number(l.totalHT) + Number(l.totalTVA);
-  }
-
-  return qty * pu;
-}
-
-function getStoredTotals(d){
-  const lines = Array.isArray(d?.lines) ? d.lines : [];
-
-  const hasStoredTotals =
-    Number.isFinite(Number(d?.totalHT)) &&
-    Number.isFinite(Number(d?.totalTVA)) &&
-    Number.isFinite(Number(d?.totalTTC));
-
-  if(hasStoredTotals){
-    return {
-      ht: Number(d.totalHT),
-      tva: Number(d.totalTVA),
-      ttc: Number(d.totalTTC)
-    };
-  }
-
-  let ht = 0;
-  let tva = 0;
-  let ttc = 0;
-
-  for(const l of lines){
-    if(Number.isFinite(Number(l?.totalHT))) ht += Number(l.totalHT);
-    else ht += (Number(l?.qty) || 0) * (Number(l?.unitPrice) || 0);
-
-    if(Number.isFinite(Number(l?.totalTVA))) tva += Number(l.totalTVA);
-
-    if(Number.isFinite(Number(l?.totalTTC))) ttc += Number(l.totalTTC);
-    else{
-      const lineHT = Number.isFinite(Number(l?.totalHT))
-        ? Number(l.totalHT)
-        : ((Number(l?.qty) || 0) * (Number(l?.unitPrice) || 0));
-      const lineTVA = Number.isFinite(Number(l?.totalTVA)) ? Number(l.totalTVA) : 0;
-      ttc += lineHT + lineTVA;
-    }
-  }
-
-  return { ht, tva, ttc };
-}
-    
     function getPenaltyTemplate(mode){
       const m = String(mode||"").toUpperCase();
       if(m === "B2B"){
@@ -634,7 +646,6 @@ function getStoredTotals(d){
       return { street, address2, zip, city, country };
     }
 
-    // ✅ conciergerie mode : /users read
     function applyBusinessProfile(profile){
       const bp = (profile?.businessProfile || {});
       const companyName = String(bp.companyName || "Conciergerie").trim();
@@ -680,7 +691,6 @@ function getStoredTotals(d){
       return bp;
     }
 
-    // ✅ owner mode : on utilise businessSnapshot (pas de /users read)
     function applyBusinessSnapshot(bsnap){
       const bp = (bsnap || {});
       const companyName = String(bp.companyName || "Conciergerie").trim();
@@ -897,63 +907,63 @@ function getStoredTotals(d){
       cli4.style.display = contact ? "" : "none";
     }
 
-function renderLines(d){
-  const arr = Array.isArray(d?.lines) ? d.lines : [];
-  linesBody.innerHTML = "";
+    function renderLines(d){
+      const arr = Array.isArray(d?.lines) ? d.lines : [];
+      linesBody.innerHTML = "";
 
-  if(!arr.length){
-    const tr = document.createElement("tr");
-    tr.innerHTML = `<td colspan="4" class="mut">Aucune ligne</td>`;
-    linesBody.appendChild(tr);
-  }else{
-    for(const l of arr){
-      const qty = Number(l?.qty)||0;
-      const up = getStoredLinePUHT(l);
-      const total = getStoredLineTTC(l);
-      const label = String(l?.label || "Prestation").trim();
+      if(!arr.length){
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td colspan="4" class="mut">Aucune ligne</td>`;
+        linesBody.appendChild(tr);
+      }else{
+        for(const l of arr){
+          const qty = Number(l?.qty)||0;
+          const up = getStoredLinePUHT(l);
+          const total = getStoredLineTTC(l);
+          const label = String(l?.label || "Prestation").trim();
 
-      const tr = document.createElement("tr");
-      tr.innerHTML = `
-        <td>${esc(label)}</td>
-        <td class="right">${esc(qty)}</td>
-        <td class="right">${esc(money(up))}</td>
-        <td class="right">${esc(money(total))}</td>
-      `;
-      linesBody.appendChild(tr);
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td>${esc(label)}</td>
+            <td class="right">${esc(qty)}</td>
+            <td class="right">${esc(money(up))}</td>
+            <td class="right">${esc(money(total))}</td>
+          `;
+          linesBody.appendChild(tr);
+        }
+      }
+
+      const totals = getStoredTotals(d);
+      const vatCtx = getVatContext(d);
+      const vatEnabled = !!vatCtx.vatEnabled || Number(totals.tva || 0) > 0;
+
+      totalHtEl.textContent = money(totals.ht);
+      totalTvaEl.textContent = money(totals.tva);
+      totalTtcEl.textContent = money(totals.ttc);
+
+      if(vatEnabled){
+        const serviceTVA = arr
+          .filter(l => String(l?.lineType || "").toUpperCase() === "SERVICE")
+          .reduce((s, l) => s + (Number.isFinite(Number(l?.totalTVA)) ? Number(l.totalTVA) : 0), 0);
+
+        const productTVA = arr
+          .filter(l => String(l?.lineType || "").toUpperCase() === "PRODUCT")
+          .reduce((s, l) => s + (Number.isFinite(Number(l?.totalTVA)) ? Number(l.totalTVA) : 0), 0);
+
+        if(serviceTVA || productTVA){
+          tvaLineEl.textContent =
+            `TVA totale ${money(totals.tva)} • services ${money(serviceTVA)} • produits ${money(productTVA)}`;
+        }else{
+          tvaLineEl.textContent = `HT ${money(totals.ht)} • TVA ${money(totals.tva)}`;
+        }
+      }else{
+        const ex =
+          String(d?.businessSnapshot?.tvaExemptionText || "").trim() ||
+          String(d?.tvaExemptionText || "").trim() ||
+          "TVA non applicable (art. 293B CGI)";
+        tvaLineEl.textContent = ex;
+      }
     }
-  }
-
-  const totals = getStoredTotals(d);
-  const vatCtx = getVatContext(d);
-  const vatEnabled = !!vatCtx.vatEnabled || Number(totals.tva || 0) > 0;
-
-  totalHtEl.textContent = money(totals.ht);
-  totalTvaEl.textContent = money(totals.tva);
-  totalTtcEl.textContent = money(totals.ttc);
-
-  if(vatEnabled){
-    const serviceTVA = arr
-      .filter(l => String(l?.lineType || "").toUpperCase() === "SERVICE")
-      .reduce((s, l) => s + (Number.isFinite(Number(l?.totalTVA)) ? Number(l.totalTVA) : 0), 0);
-
-    const productTVA = arr
-      .filter(l => String(l?.lineType || "").toUpperCase() === "PRODUCT")
-      .reduce((s, l) => s + (Number.isFinite(Number(l?.totalTVA)) ? Number(l.totalTVA) : 0), 0);
-
-    if(serviceTVA || productTVA){
-      tvaLineEl.textContent =
-        `TVA totale ${money(totals.tva)} • services ${money(serviceTVA)} • produits ${money(productTVA)}`;
-    }else{
-      tvaLineEl.textContent = `HT ${money(totals.ht)} • TVA ${money(totals.tva)}`;
-    }
-  }else{
-    const ex =
-      String(d?.businessSnapshot?.tvaExemptionText || "").trim() ||
-      String(d?.tvaExemptionText || "").trim() ||
-      "TVA non applicable (art. 293B CGI)";
-    tvaLineEl.textContent = ex;
-  }
-}
 
     function renderPaymentAndConditions(d, businessProfile){
       const mode = String(d?.invoicePaymentMode || "VIREMENT").toUpperCase();
@@ -1016,7 +1026,6 @@ function renderLines(d){
       penBox.style.display = "";
     }
 
-    // ✅ PRINT FIX (plus de d/docId hors scope)
     printBtn.addEventListener("click", ()=>{
       const originalTitle = document.title;
 
@@ -1065,7 +1074,6 @@ function renderLines(d){
       currentDocId = docId || eventId || "";
       isDraftPreview = (getParam("draft") === "1");
 
-      // owner mode: on force docId (salesDocuments)
       if(isOwnerMode() && eventId){
         showError("Mode propriétaire : eventId non supporté. (Ouvre via docId depuis l’historique.)");
         backLink.href = "owner-facturation.html";
@@ -1084,7 +1092,6 @@ function renderLines(d){
       }
 
       try{
-        // 1) doc source
         let snap = null;
         if(docId){
           snap = await getDoc(doc(db, "salesDocuments", docId));
@@ -1097,7 +1104,6 @@ function renderLines(d){
 
         currentInvoiceNumber = String(docData?.invoiceNumber || "").trim();
 
-        // 2) sécurité owner
         if(isOwnerMode()){
           const ouid = String(docData.ownerUid || "").trim();
           if(!ouid){
@@ -1110,7 +1116,6 @@ function renderLines(d){
             backLink.href = "owner-facturation.html";
             return;
           }
-          // ✅ règle publiée : ownerVisible=true attendu
           if(docData.ownerVisible !== true){
             showError("Accès refusé : document non publié (ownerVisible=false).");
             backLink.href = "owner-facturation.html";
@@ -1122,7 +1127,6 @@ function renderLines(d){
           }
         }
 
-        // 3) draft merge (conciergerie only)
         if(isDraftPreview && !isOwnerMode()){
           const expectedId = docId ? docId : eventId;
           const draft = loadDraftFromSession(expectedId);
@@ -1132,7 +1136,6 @@ function renderLines(d){
           }
         }
 
-        // 4) profile société
         const conciergerieUid = String(docData.conciergerieUid || "").trim();
         if(!conciergerieUid){
           showError("conciergerieUid manquant sur le document.");
@@ -1154,25 +1157,17 @@ function renderLines(d){
           bp = applyBusinessProfile(profile) || {};
         }
 
-        // 5) client
-        // ⚠️ owner mode n’a pas forcément accès à owners/homes selon tes rules.
-        // On tente, mais on ne casse pas si permission denied.
         let ownerFromOwners = null;
         let homeFallback = null;
         if(!isOwnerMode()){
           ownerFromOwners = await loadOwnerFromDoc(conciergerieUid, docData);
           homeFallback = await loadHomeClientFallback(docData);
-        }else{
-          // owner: on se contente du snapshot client présent dans la facture
-          ownerFromOwners = null;
-          homeFallback = null;
         }
-        renderClientHeader(ownerFromOwners, homeFallback, docData);
 
-        // 6) render
+        renderClientHeader(ownerFromOwners, homeFallback, docData);
         renderDocHeader(docData);
         renderHomeAndPeriod(docData);
-        renderLines(docData, bp || {});
+        renderLines(docData);
         renderPaymentAndConditions(docData, bp || {});
         renderBank(bp || {});
         renderPenalty(docData);
