@@ -1,4 +1,4 @@
-<!-- docs/avoir-apercu.html (CORRIGÉ COMPLET — client snapshot OK + colonnes HT/TVA/TTC + owner=1 support + draft=1 conciergerie only + print/footer fix) -->
+<!-- docs/avoir-apercu.html (CORRIGÉ COMPLET — société complète + bas de page complet + suppression note "montants en négatif" + client snapshot OK + owner=1 support + draft=1 conciergerie only) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -481,7 +481,6 @@
         <div class="payBox">
           <h3>Références</h3>
           <div class="line" id="refInv">Facture : —</div>
-          <div class="line" id="refNote">Avoir : montants en négatif</div>
         </div>
       </div>
 
@@ -575,41 +574,6 @@
       return String(s||"").trim().toLowerCase();
     }
 
-    function extractAddr(obj){
-      const o = obj || {};
-      const a = (o.address && typeof o.address === "object") ? o.address : null;
-      const ba = (o.billingAddress && typeof o.billingAddress === "object") ? o.billingAddress : null;
-
-      const street =
-        String(o.address1 || o.street || o.addr1 || o.line1 || "").trim() ||
-        (typeof o.address === "string" ? String(o.address).trim() : "") ||
-        String(a?.street || a?.line1 || a?.address1 || a?.addr1 || "").trim() ||
-        String(ba?.street || ba?.line1 || ba?.address1 || "").trim();
-
-      const address2 =
-        String(o.address2 || o.addr2 || o.line2 || "").trim() ||
-        String(a?.address2 || a?.line2 || a?.addr2 || "").trim() ||
-        String(ba?.address2 || ba?.line2 || "").trim();
-
-      const zip =
-        String(o.zip || o.postalCode || o.cp || "").trim() ||
-        String(a?.zip || a?.postalCode || a?.cp || "").trim() ||
-        String(ba?.zip || ba?.postalCode || "").trim();
-
-      const city =
-        String(o.city || o.town || o.locality || "").trim() ||
-        String(a?.city || a?.town || a?.locality || "").trim() ||
-        String(ba?.city || ba?.town || "").trim();
-
-      const country =
-        String(o.country || "").trim() ||
-        String(a?.country || "").trim() ||
-        String(ba?.country || "").trim() ||
-        "FR";
-
-      return { street, address2, zip, city, country };
-    }
-
     function getStayPeriod(d){
       const pick = (v)=> String(v||"").trim();
       const a = pick(d?.arrivalDateKey || d?.arrivalDate || d?.checkinDate || d?.arrival);
@@ -664,20 +628,58 @@
       return { ht, tva, ttc };
     }
 
-    function applyBusinessSnapshot(bs, profileFallback){
-      const src = (bs && typeof bs === "object") ? bs : (profileFallback?.businessProfile || {});
-      const companyName = String(src.companyName || "Conciergerie").trim();
-      const logoUrl = String(src.logoUrl || "").trim();
+    function buildCompanyLines(src, profileFallback){
+      const companyName = String(src?.companyName || "Conciergerie").trim();
+      const street = String(src?.address?.street || "").trim();
+      const zip = String(src?.address?.zip || "").trim();
+      const city = String(src?.address?.city || "").trim();
 
-      const street = String(src.address?.street || "").trim();
-      const zip = String(src.address?.zip || "").trim();
-      const city = String(src.address?.city || "").trim();
+      const siret = String(src?.registration?.siret || "").trim();
+      const ape = String(src?.registration?.ape || "").trim();
 
-      const siret = String(src.registration?.siret || "").trim();
-      const ape   = String(src.registration?.ape || "").trim();
+      const billingEmail = String(src?.billingEmail || src?.email || profileFallback?.email || "").trim();
+      const phone = String(src?.phone || src?.contact?.phone || "").trim();
 
-      const email = String(src.billingEmail || profileFallback?.email || "").trim();
-      const phone = String(src.phone || src.contact?.phone || "").trim();
+      const footerParts = [];
+      if(companyName) footerParts.push(companyName);
+      if(street) footerParts.push(street);
+      if(zip || city) footerParts.push([zip, city].filter(Boolean).join(" "));
+      if(siret || ape) footerParts.push([siret ? `SIRET ${siret}` : "", ape ? `APE ${ape}` : ""].filter(Boolean).join(" • "));
+      if(billingEmail || phone) footerParts.push([billingEmail, phone].filter(Boolean).join(" • "));
+
+      return {
+        companyName,
+        street,
+        cityLine: [zip, city].filter(Boolean).join(" "),
+        legalLine: [siret ? `SIRET ${siret}` : "", ape ? `APE ${ape}` : ""].filter(Boolean).join(" • "),
+        contactLine: [billingEmail, phone].filter(Boolean).join(" • "),
+        footer: footerParts.join(" • ")
+      };
+    }
+
+    function applyBusinessSnapshot(bs, profileFallback, invoiceForFallback){
+      const snap = (bs && typeof bs === "object") ? bs : {};
+      const inv = invoiceForFallback || {};
+
+      const merged = {
+        companyName: snap.companyName || "",
+        logoUrl: snap.logoUrl || "",
+        address: {
+          street: snap.address?.street || inv.businessAddressStreet || "",
+          zip: snap.address?.zip || inv.businessAddressZip || "",
+          city: snap.address?.city || inv.businessAddressCity || ""
+        },
+        registration: {
+          siret: snap.registration?.siret || inv.businessSiret || "",
+          ape: snap.registration?.ape || inv.businessApe || ""
+        },
+        billingEmail: snap.billingEmail || inv.businessEmail || "",
+        email: snap.email || "",
+        phone: snap.phone || snap.contact?.phone || inv.businessPhone || ""
+      };
+
+      const companyName = String(merged.companyName || "Conciergerie").trim();
+      const logoUrl = String(merged.logoUrl || "").trim();
 
       companyNameEl.textContent = companyName || "Conciergerie";
 
@@ -690,27 +692,21 @@
         logoFallback.style.display = "block";
       }
 
-      soc1.textContent = companyName || "Conciergerie";
-      soc2.textContent = street || "";
-      soc2.style.display = street ? "" : "none";
-      soc3.textContent = [zip, city].filter(Boolean).join(" ") || "";
-      soc3.style.display = (zip || city) ? "" : "none";
-      soc4.textContent = [
-        [siret ? `SIRET ${siret}` : "", ape ? `APE ${ape}` : ""].filter(Boolean).join(" • "),
-        [email, phone].filter(Boolean).join(" • ")
-      ].filter(Boolean).join(" • ");
-      soc4.style.display = soc4.textContent ? "" : "none";
+      const lines = buildCompanyLines(merged, profileFallback);
 
-      const footerParts = [];
-      if(companyName) footerParts.push(companyName);
-      if(street) footerParts.push(street);
-      if(zip || city) footerParts.push([zip, city].filter(Boolean).join(" "));
-      if(siret || ape) footerParts.push([siret ? `SIRET ${siret}` : "", ape ? `APE ${ape}` : ""].filter(Boolean).join(" • "));
-      if(email || phone) footerParts.push([email, phone].filter(Boolean).join(" • "));
+      soc1.textContent = lines.companyName || "Conciergerie";
+      soc2.textContent = lines.street || "";
+      soc2.style.display = lines.street ? "" : "none";
+      soc3.textContent = lines.cityLine || "";
+      soc3.style.display = lines.cityLine ? "" : "none";
 
-      footerEl.textContent = footerParts.join(" • ") || "Document édité par CleanUp Manager";
+      const soc4Text = [lines.legalLine, lines.contactLine].filter(Boolean).join(" • ");
+      soc4.textContent = soc4Text || "";
+      soc4.style.display = soc4Text ? "" : "none";
 
-      return src;
+      footerEl.textContent = lines.footer || "Document édité par CleanUp Manager";
+
+      return merged;
     }
 
     function getClientSnapshotFromDoc(d){
@@ -799,7 +795,8 @@
       const arr = Array.isArray(invoice?.lines) ? invoice.lines : [];
       linesBody.innerHTML = "";
 
-      const hasTVA = Number(getInvoiceTotalsStored(invoice).tva || 0) > 0;
+      const totals = getInvoiceTotalsStored(invoice);
+      const hasTVA = Number(totals.tva || 0) > 0;
 
       if(!arr.length){
         const tr = document.createElement("tr");
@@ -828,7 +825,6 @@
         }
       }
 
-      const totals = getInvoiceTotalsStored(invoice);
       totalHtEl.textContent = money(-totals.ht);
       totalTvaEl.textContent = money(-totals.tva);
       totalTtcEl.textContent = money(-totals.ttc);
@@ -914,9 +910,7 @@
 
             const bsCredit = (creditDoc.businessSnapshot && typeof creditDoc.businessSnapshot === "object") ? creditDoc.businessSnapshot : null;
             const bsInv = (invDoc.businessSnapshot && typeof invDoc.businessSnapshot === "object") ? invDoc.businessSnapshot : null;
-            const businessLike = bsCredit || bsInv || {};
-
-            applyBusinessSnapshot(businessLike, null);
+            const businessLike = applyBusinessSnapshot(bsCredit || bsInv || {}, null, invDoc);
 
             const creditClient = getClientSnapshotFromDoc(creditDoc);
             const invClient = getClientSnapshotFromDoc(invDoc);
@@ -1004,11 +998,10 @@
         const bsInv    = (invDoc.businessSnapshot && typeof invDoc.businessSnapshot === "object") ? invDoc.businessSnapshot : null;
 
         if(isOwnerView){
-          businessLike = bsCredit || bsInv;
-          if(!businessLike){
+          businessLike = applyBusinessSnapshot(bsCredit || bsInv || {}, null, invDoc);
+          if(!(bsCredit || bsInv)){
             showWarn("businessSnapshot manquant sur l’avoir ou la facture liée.");
           }
-          applyBusinessSnapshot(businessLike || {}, null);
         }else{
           const conciergerieUid = String(invDoc.conciergerieUid || creditDoc.conciergerieUid || "").trim();
           if(!conciergerieUid){
@@ -1019,8 +1012,7 @@
 
           const userSnap = await getDoc(doc(db,"users", conciergerieUid));
           const profile = userSnap.exists() ? (userSnap.data()||{}) : {};
-          businessLike = bsCredit || bsInv || (profile.businessProfile || {});
-          applyBusinessSnapshot(businessLike || {}, profile || {});
+          businessLike = applyBusinessSnapshot(bsCredit || bsInv || (profile.businessProfile || {}), profile || {}, invDoc);
         }
 
         const creditClient = getClientSnapshotFromDoc(creditDoc);
