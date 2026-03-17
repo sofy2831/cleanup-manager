@@ -1,4 +1,4 @@
-<!-- docs/facture-apercu.html (CORRIGÉ COMPLET — coordonnées conciergerie robustes + businessSnapshot prioritaire + fallback users.businessProfile + owner=1 + draft concierge only) -->
+<!-- docs/facture-apercu.html (CORRIGÉ COMPLET — TVA sur une ligne + suppression détail virement dans bloc paiement + coordonnées bancaires gardées en section dédiée) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -221,15 +221,15 @@
 
     .right{
       text-align:right;
-      white-space:normal;
+      white-space:nowrap;
     }
 
     .col-presta{ width:34%; }
     .col-qty{ width:12%; }
     .col-pu{ width:13%; }
     .col-tht{ width:13%; }
-    .col-tva{ width:13%; }
-    .col-ttc{ width:15%; }
+    .col-tva{ width:14%; }
+    .col-ttc{ width:14%; }
 
     .summary{
       margin-top:12px;
@@ -343,6 +343,14 @@
         font-size:11.5px;
         padding:7px 6px;
       }
+
+      .col-presta{ width:32%; }
+      .col-qty{ width:12%; }
+      .col-pu{ width:13%; }
+      .col-tht{ width:14%; }
+      .col-tva{ width:15%; }
+      .col-ttc{ width:14%; }
+
       .totalRow .lbl,
       .totalRow .amt,
       .totalRow.ttc .lbl,
@@ -615,15 +623,6 @@
       return 0;
     }
 
-    function modeLabel(mode){
-      const m = String(mode || "").toUpperCase();
-      if(m === "VIREMENT") return "Virement";
-      if(m === "ESPECES") return "Espèces";
-      if(m === "CHEQUE") return "Chèque";
-      if(m === "CB") return "Carte bancaire";
-      return mode || "—";
-    }
-
     function getPenaltyTemplate(mode){
       const m = String(mode || "").toUpperCase();
       if(m === "B2B"){
@@ -765,104 +764,6 @@
       };
     }
 
-    function getBusinessSource(d, fallbackProfile){
-      const bs = getBusinessSnapshot(d);
-      const hasSnapshot = !!Object.keys(bs || {}).length;
-      const src = hasSnapshot ? bs : (fallbackProfile?.businessProfile || {});
-      return {
-        src,
-        hasSnapshot
-      };
-    }
-
-    function getBusinessCompany(src){
-      return String(src?.companyName || "Conciergerie").trim();
-    }
-
-    function getBusinessLogo(src){
-      return String(src?.logoUrl || "").trim();
-    }
-
-    function getBusinessStreet(src){
-      return String(
-        src?.address?.street ||
-        src?.address1 ||
-        src?.street ||
-        ""
-      ).trim();
-    }
-
-    function getBusinessZip(src){
-      return String(
-        src?.address?.zip ||
-        src?.zip ||
-        src?.postalCode ||
-        ""
-      ).trim();
-    }
-
-    function getBusinessCity(src){
-      return String(
-        src?.address?.city ||
-        src?.city ||
-        ""
-      ).trim();
-    }
-
-    function getBusinessSiret(src){
-      return String(
-        src?.registration?.siret ||
-        src?.siret ||
-        ""
-      ).trim();
-    }
-
-    function getBusinessApe(src){
-      return String(
-        src?.registration?.ape ||
-        src?.ape ||
-        ""
-      ).trim();
-    }
-
-    function getBusinessEmail(src, fallbackProfile){
-      return String(
-        src?.billingEmail ||
-        src?.contact?.email ||
-        src?.email ||
-        fallbackProfile?.businessProfile?.billingEmail ||
-        fallbackProfile?.businessProfile?.contact?.email ||
-        fallbackProfile?.email ||
-        ""
-      ).trim();
-    }
-
-    function getBusinessPhone(src, fallbackProfile){
-      return String(
-        src?.phone ||
-        src?.contact?.phone ||
-        fallbackProfile?.businessProfile?.phone ||
-        fallbackProfile?.businessProfile?.contact?.phone ||
-        ""
-      ).trim();
-    }
-
-    function getBankName(src){
-      return String(
-        src?.bank?.name ||
-        src?.bank?.bankName ||
-        ""
-      ).trim();
-    }
-
-    function getBankIban(src){
-      return String(src?.bank?.iban || "").trim();
-    }
-
-    function getBankBic(src){
-      return String(src?.bank?.bic || "").trim();
-    }
-
     async function lookupOwnerByEmailInOwners(conciergerieUid, emailLower){
       if(!emailLower) return null;
 
@@ -979,10 +880,10 @@
       };
     }
 
-    function renderHeader(d, fallbackProfile){
-      const { src } = getBusinessSource(d, fallbackProfile);
-      const company = getBusinessCompany(src);
-      const logoUrl = getBusinessLogo(src);
+    function renderHeader(d){
+      const bs = getBusinessSnapshot(d);
+      const company = String(bs.companyName || "Conciergerie").trim();
+      const logoUrl = String(bs.logoUrl || "").trim();
 
       companyName.textContent = company || "Conciergerie";
 
@@ -1005,18 +906,24 @@
     }
 
     function renderBusinessBlock(d, fallbackProfile){
-      const { src } = getBusinessSource(d, fallbackProfile);
+      const bs = getBusinessSnapshot(d);
+      const src = Object.keys(bs || {}).length ? bs : (fallbackProfile?.businessProfile || {});
 
       const rows = [];
 
-      const company = getBusinessCompany(src);
-      const street = getBusinessStreet(src);
-      const zip = getBusinessZip(src);
-      const city = getBusinessCity(src);
-      const siret = getBusinessSiret(src);
-      const ape = getBusinessApe(src);
-      const email = getBusinessEmail(src, fallbackProfile);
-      const phone = getBusinessPhone(src, fallbackProfile);
+      const company = String(src.companyName || "Conciergerie").trim();
+      const street = String(src.address?.street || "").trim();
+      const zip = String(src.address?.zip || "").trim();
+      const city = String(src.address?.city || "").trim();
+
+      const siret = String(src.registration?.siret || "").trim();
+      const ape = String(src.registration?.ape || "").trim();
+
+      const email =
+        String(src.billingEmail || src.email || fallbackProfile?.email || "").trim();
+
+      const phone =
+        String(src.phone || src.contact?.phone || "").trim();
 
       if(company) rows.push(`<div>${esc(company)}</div>`);
       if(street) rows.push(`<div>${esc(street)}</div>`);
@@ -1148,27 +1055,16 @@
       }
     }
 
-    function renderPayment(d, fallbackProfile){
-      const { src } = getBusinessSource(d, fallbackProfile);
-
+    function renderPayment(d){
       const rows = [];
-      rows.push(`<div><b>Mode</b> : ${esc(modeLabel(String(d?.invoicePaymentMode || "VIREMENT")))}</div>`);
+      rows.push(`<div><b>Mode</b> : ${esc(String(
+        String(d?.invoicePaymentMode || "VIREMENT").toUpperCase() === "VIREMENT" ? "Virement" :
+        String(d?.invoicePaymentMode || "VIREMENT").toUpperCase() === "ESPECES" ? "Espèces" :
+        String(d?.invoicePaymentMode || "VIREMENT").toUpperCase() === "CHEQUE" ? "Chèque" :
+        String(d?.invoicePaymentMode || "VIREMENT").toUpperCase() === "CB" ? "Carte bancaire" :
+        String(d?.invoicePaymentMode || "—")
+      ))}</div>`);
       rows.push(`<div><b>Délai</b> : ${esc(termLabel(String(d?.invoicePaymentTerm || "RECEPTION")))}</div>`);
-
-      if(String(d?.invoicePaymentMode || "").toUpperCase() === "VIREMENT"){
-        const bankBits = [];
-        const bankName = getBankName(src);
-        const iban = getBankIban(src);
-        const bic = getBankBic(src);
-
-        if(bankName) bankBits.push(esc(bankName));
-        if(iban) bankBits.push(`IBAN ${esc(iban)}`);
-        if(bic) bankBits.push(`BIC ${esc(bic)}`);
-
-        if(bankBits.length){
-          rows.push(`<div>Virement : ${bankBits.join(" • ")}</div>`);
-        }
-      }
 
       paymentBlock.innerHTML = rows.join("") || "—";
     }
@@ -1204,17 +1100,14 @@
       conditionsBlock.innerHTML = rows.join("") || "—";
     }
 
-    function renderBank(d, fallbackProfile){
-      const { src } = getBusinessSource(d, fallbackProfile);
+    function renderBank(d){
+      const bs = getBusinessSnapshot(d);
+      const bank = bs?.bank || {};
 
       const rows = [];
-      const bankName = getBankName(src);
-      const iban = getBankIban(src);
-      const bic = getBankBic(src);
-
-      if(bankName) rows.push(`<div>Banque : ${esc(bankName)}</div>`);
-      if(iban) rows.push(`<div>IBAN : ${esc(iban)}</div>`);
-      if(bic) rows.push(`<div>BIC : ${esc(bic)}</div>`);
+      if(bank.name) rows.push(`<div>Banque : ${esc(bank.name)}</div>`);
+      if(bank.iban) rows.push(`<div>IBAN : ${esc(bank.iban)}</div>`);
+      if(bank.bic) rows.push(`<div>BIC : ${esc(bank.bic)}</div>`);
 
       if(!rows.length){
         bankTitle.style.display = "none";
@@ -1235,17 +1128,18 @@
     }
 
     function renderFooter(d, fallbackProfile){
-      const { src } = getBusinessSource(d, fallbackProfile);
+      const bs = getBusinessSnapshot(d);
+      const src = Object.keys(bs || {}).length ? bs : (fallbackProfile?.businessProfile || {});
 
       const parts = [];
-      const company = getBusinessCompany(src);
-      const street = getBusinessStreet(src);
-      const zip = getBusinessZip(src);
-      const city = getBusinessCity(src);
-      const siret = getBusinessSiret(src);
-      const ape = getBusinessApe(src);
-      const email = getBusinessEmail(src, fallbackProfile);
-      const phone = getBusinessPhone(src, fallbackProfile);
+      const company = String(src.companyName || "Conciergerie").trim();
+      const street = String(src.address?.street || "").trim();
+      const zip = String(src.address?.zip || "").trim();
+      const city = String(src.address?.city || "").trim();
+      const siret = String(src.registration?.siret || "").trim();
+      const ape = String(src.registration?.ape || "").trim();
+      const email = String(src.billingEmail || src.email || fallbackProfile?.email || "").trim();
+      const phone = String(src.phone || src.contact?.phone || "").trim();
 
       if(company) parts.push(company);
       if(street) parts.push(street);
@@ -1257,15 +1151,15 @@
     }
 
     function renderAll(d, fallbackProfile, ownerFromOwners, homeFallback){
-      renderHeader(d, fallbackProfile);
+      renderHeader(d);
       renderBusinessBlock(d, fallbackProfile);
       renderClientBlock(ownerFromOwners, homeFallback, d);
       renderHomeBlock(d);
       renderLines(d);
       renderTotals(d);
-      renderPayment(d, fallbackProfile);
+      renderPayment(d);
       renderConditions(d);
-      renderBank(d, fallbackProfile);
+      renderBank(d);
       renderPenalties(d);
       renderFooter(d, fallbackProfile);
     }
