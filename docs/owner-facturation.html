@@ -1,4 +1,4 @@
-<!-- docs/owner-facturation.html (FINAL — OPTION A: Historique ONLY from salesDocuments ownerUid + ownerVisible=true) -->
+<!-- docs/owner-facturation.html (CORRIGÉ COMPLET — historique salesDocuments ownerUid + ownerVisible=true + propagation token + ouverture owner=1 propre) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -201,7 +201,7 @@
 <body>
   <div class="page">
     <div class="topbar">
-      <a class="pill" href="owner-dashboard.html">← Dashboard</a>
+      <a class="pill" id="dashboardLink" href="owner-dashboard.html">← Dashboard</a>
       <span></span>
     </div>
 
@@ -225,10 +225,10 @@
   </div>
 
   <nav class="bottom-nav">
-    <a href="owner-dashboard.html">Dashboard</a>
-    <a href="owner-planning.html">Planning</a>
-    <a href="owner-homes.html">Logements</a>
-    <a href="owner-messages.html">Messages</a>
+    <a id="navDashboard" href="owner-dashboard.html">Dashboard</a>
+    <a id="navPlanning" href="owner-planning.html">Planning</a>
+    <a id="navHomes" href="owner-homes.html">Logements</a>
+    <a id="navMessages" href="owner-messages.html">Messages</a>
   </nav>
 
 <script type="module">
@@ -242,6 +242,12 @@
   const historyList   = document.getElementById("historyList");
   const historyCount  = document.getElementById("historyCount");
   const alertHistory  = document.getElementById("alertHistory");
+
+  const dashboardLink = document.getElementById("dashboardLink");
+  const navDashboard  = document.getElementById("navDashboard");
+  const navPlanning   = document.getElementById("navPlanning");
+  const navHomes      = document.getElementById("navHomes");
+  const navMessages   = document.getElementById("navMessages");
 
   function showAlert(el, msg, ok=false){
     if(!el) return;
@@ -268,6 +274,7 @@
       .replaceAll('"',"&quot;")
       .replaceAll("'","&#039;");
   }
+
   function fmt(ts){
     try{
       const d = ts?.toDate ? ts.toDate() : (ts?.seconds ? new Date(ts.seconds*1000) : new Date(ts || Date.now()));
@@ -275,21 +282,66 @@
       const mm = String(d.getMonth()+1).padStart(2,"0");
       const yyyy = d.getFullYear();
       return `${dd}/${mm}/${yyyy}`;
-    }catch{ return "—"; }
+    }catch{
+      return "—";
+    }
   }
+
   function money(v){
     const n = Number(v);
     if(!Number.isFinite(n)) return "—";
     return new Intl.NumberFormat("fr-FR", { style:"currency", currency:"EUR" }).format(n);
   }
-  function statusPill(s){
-    const v = String(s || "").toUpperCase().trim();
-    if(v === "ISSUED") return `<span class="status ok">émise</span>`;
-    if(v === "PAID") return `<span class="status ok">payée</span>`;
-    if(v === "CANCELLED") return `<span class="status bad">annulée</span>`;
-    if(v === "DRAFT") return `<span class="status">brouillon</span>`;
-    return v ? `<span class="status">${esc(v.toLowerCase())}</span>` : `<span class="status">—</span>`;
+
+  function getParam(name){
+    return (new URLSearchParams(location.search).get(name) || "").trim();
   }
+
+  function getToken(){
+    return getParam("token");
+  }
+
+  function withToken(url){
+    const token = getToken();
+    if(!token) return url;
+    const sep = url.includes("?") ? "&" : "?";
+    return `${url}${sep}token=${encodeURIComponent(token)}`;
+  }
+
+  function statusPillForDoc(d){
+    const type = String(d.type || "").toUpperCase().trim();
+
+    if(type === "INVOICE"){
+      const v = String(d.invoiceStatus || d.commercialStatus || "").toUpperCase().trim();
+      if(v === "ISSUED") return `<span class="status ok">émise</span>`;
+      if(v === "SENT") return `<span class="status">envoyée</span>`;
+      if(v === "PAID") return `<span class="status ok">payée</span>`;
+      if(v === "CANCELLED") return `<span class="status bad">annulée</span>`;
+      if(v === "DRAFT") return `<span class="status">brouillon</span>`;
+      return `<span class="status">${esc(v || "—").toLowerCase()}</span>`;
+    }
+
+    if(type === "QUOTE"){
+      const v = String(d.quoteStatus || d.commercialStatus || "").toUpperCase().trim();
+      if(v === "SIGNED" || v === "ACCEPTED") return `<span class="status ok">accepté</span>`;
+      if(v === "SENT") return `<span class="status">envoyé</span>`;
+      if(v === "DRAFT") return `<span class="status">brouillon</span>`;
+      if(v === "CANCELLED" || v === "REFUSED") return `<span class="status bad">refusé</span>`;
+      return `<span class="status">${esc(v || "—").toLowerCase()}</span>`;
+    }
+
+    if(type === "CREDIT"){
+      const v = String(d.creditStatus || d.commercialStatus || "").toUpperCase().trim();
+      if(v === "ISSUED") return `<span class="status ok">émis</span>`;
+      if(v === "SENT") return `<span class="status">envoyé</span>`;
+      if(v === "CANCELLED") return `<span class="status bad">annulé</span>`;
+      if(v === "DRAFT") return `<span class="status">brouillon</span>`;
+      return `<span class="status">${esc(v || "—").toLowerCase()}</span>`;
+    }
+
+    return `<span class="status">—</span>`;
+  }
+
   function docTypeLabel(t){
     const v = String(t||"").toUpperCase().trim();
     if(v === "QUOTE") return "Devis";
@@ -297,14 +349,13 @@
     if(v === "CREDIT") return "Avoir";
     return "Document";
   }
-  function getParam(name){
-    return (new URLSearchParams(location.search).get(name) || "").trim();
-  }
+
   function buildProfileUrl(){
-    const token = getParam("token");
-    return token
-      ? `profil-proprietaire.html?self=1&token=${encodeURIComponent(token)}`
-      : `profil-proprietaire.html?self=1`;
+    return withToken("profil-proprietaire.html?self=1");
+  }
+
+  function buildOwnerUrl(base){
+    return withToken(base);
   }
 
   let unsubSales = null;
@@ -328,10 +379,16 @@
   function buildOpenHrefFromSales(d){
     const id = String(d.id || "").trim();
     if(!id) return "";
+
     const type = String(d.type || "").toUpperCase().trim();
-    if(type === "QUOTE") return `devis-apercu.html?docId=${encodeURIComponent(id)}&owner=1`;
-    if(type === "CREDIT") return `avoir-apercu.html?docId=${encodeURIComponent(id)}&owner=1`;
-    return `facture-apercu.html?docId=${encodeURIComponent(id)}&owner=1`;
+
+    if(type === "QUOTE"){
+      return buildOwnerUrl(`devis-apercu.html?docId=${encodeURIComponent(id)}&owner=1`);
+    }
+    if(type === "CREDIT"){
+      return buildOwnerUrl(`avoir-apercu.html?docId=${encodeURIComponent(id)}&owner=1`);
+    }
+    return buildOwnerUrl(`facture-apercu.html?docId=${encodeURIComponent(id)}&owner=1`);
   }
 
   function renderSalesRow(d){
@@ -343,13 +400,9 @@
 
     const home = esc(d.homeName || d.home || "—");
     const total = money(d.totalTTC);
-    const when = fmt(d.createdAt || d.updatedAt);
+    const when = fmt(d.createdAt || d.updatedAt || d.creditIssuedAt || d.invoiceIssuedAt || d.quoteIssuedAt);
     const openHref = buildOpenHrefFromSales(d);
-
-    const isInvoice = String(d.type || "").toUpperCase().trim() === "INVOICE";
-    const status = isInvoice
-      ? statusPill(d.invoiceStatus || d.commercialStatus || "")
-      : `<span class="status">${esc(String(d.quoteStatus || d.commercialStatus || "—").toLowerCase())}</span>`;
+    const status = statusPillForDoc(d);
 
     const el = document.createElement("div");
     el.className = "item";
@@ -388,14 +441,14 @@
     unsubSales = onSnapshot(qs, (snap)=>{
       const items = snap.docs.map(d => ({ id:d.id, ...(d.data()||{}) }));
 
-      historyCount.textContent = String(items.length);
+      historyCount.textContent = `${items.length} document${items.length > 1 ? "s" : ""}`;
       historyList.innerHTML = "";
 
       if(!items.length){
         historyList.innerHTML = `
           <div class="item">
             <div class="meta"><span>Aucun document</span><span>—</span></div>
-            <p class="msg">Aucun devis/facture/avoir publié pour le moment.</p>
+            <p class="msg">Aucun devis, facture ou avoir publié pour le moment.</p>
           </div>
         `;
       }else{
@@ -413,16 +466,13 @@
       if(low.includes("index")){
         showAlert(
           alertHistory,
-          "⛔ Index Firestore manquant.\n" +
-          "Crée l’index composite: salesDocuments (ownerUid ASC, ownerVisible ASC, createdAt DESC).\n" +
-          "Puis recharge.",
+          "⛔ Index Firestore manquant.\nCrée l’index composite : salesDocuments (ownerUid ASC, ownerVisible ASC, createdAt DESC).\nPuis recharge.",
           false
         );
       }else if(low.includes("permission")){
         showAlert(
           alertHistory,
-          "⛔ Permission refusée sur salesDocuments.\n" +
-          "Rule attendue: read owner autorisé si ownerUid == auth.uid ET ownerVisible == true.",
+          "⛔ Permission refusée sur salesDocuments.\nRule attendue : lecture owner autorisée si ownerUid == auth.uid ET ownerVisible == true.",
           false
         );
       }else{
@@ -431,10 +481,19 @@
     });
   }
 
+  function wireOwnerLinks(){
+    dashboardLink.href = buildOwnerUrl("owner-dashboard.html");
+    navDashboard.href  = buildOwnerUrl("owner-dashboard.html");
+    navPlanning.href   = buildOwnerUrl("owner-planning.html");
+    navHomes.href      = buildOwnerUrl("owner-homes.html");
+    navMessages.href   = buildOwnerUrl("owner-messages.html");
+  }
+
   onAuthStateChanged(auth, async (user)=>{
+    wireOwnerLinks();
+
     if(!user){
-      const tok = getParam("token");
-      location.href = "login.html?role=proprietaire" + (tok ? ("&token=" + encodeURIComponent(tok)) : "");
+      location.href = buildOwnerUrl("login.html?role=proprietaire");
       return;
     }
 
