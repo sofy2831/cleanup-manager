@@ -1,4 +1,4 @@
-<!-- docs/facture-nouv.html (CORRIGÉ COMPLET — adresse client hydratée + HT/TVA/TTC + preview draft compatible facture-apercu + redo après avoir) -->
+<!-- docs/facture-nouv.html (CORRIGÉ COMPLET — brouillon persistant + adresse client hydratée + HT/TVA/TTC + preview draft compatible facture-apercu + redo après avoir) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -496,6 +496,8 @@
       collection, query, where, getDocs, limit
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
+    const REDO_DRAFT_KEY = "invoiceRedoDraft";
+
     const alertBox = document.getElementById("alertBox");
     const recapKv = document.getElementById("recapKv");
     const statusBadge = document.getElementById("statusBadge");
@@ -540,6 +542,11 @@
     const suggestLine   = document.getElementById("suggestLine");
     const suggestText   = document.getElementById("suggestText");
     const linesList     = document.getElementById("linesList");
+
+    let currentUser = null;
+    let profileData = null;
+    let sourceDocData = null;
+    let newDocData = null;
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -615,6 +622,47 @@
       if(x === "PAID") return "PAYÉE";
       if(x === "CANCELLED") return "ANNULÉE";
       return x;
+    }
+
+    function saveRedoDraftToSession(){
+      if(!newDocData) return;
+
+      const payload = {
+        ...newDocData,
+        invoiceNotes: String(invoiceNotesEl.value || "").trim(),
+        invoicePaymentMode: String(payModeSel.value || "VIREMENT").toUpperCase(),
+        invoicePaymentTerm: String(payTermSel.value || "RECEPTION").toUpperCase(),
+        invoicePenaltyMode: String(penaltyModeSel.value || "B2C").toUpperCase(),
+        invoicePenaltyText: String(penaltyTextEl.value || "").trim(),
+        invoiceShowCancellation: !!showCancelChk.checked,
+        businessSnapshot: buildBusinessSnapshotFromProfile(),
+        _draftType: "REDO_INVOICE"
+      };
+
+      try{
+        sessionStorage.setItem(REDO_DRAFT_KEY, JSON.stringify(payload));
+      }catch(e){
+        console.warn("saveRedoDraftToSession failed:", e?.message || e);
+      }
+    }
+
+    function loadRedoDraftFromSession(){
+      try{
+        const raw = sessionStorage.getItem(REDO_DRAFT_KEY);
+        if(!raw) return null;
+        const parsed = JSON.parse(raw);
+        if(!parsed || typeof parsed !== "object") return null;
+        if(parsed._draftType !== "REDO_INVOICE") return null;
+        return parsed;
+      }catch(e){
+        return null;
+      }
+    }
+
+    function clearRedoDraftFromSession(){
+      try{
+        sessionStorage.removeItem(REDO_DRAFT_KEY);
+      }catch(e){}
     }
 
     async function ensureInvoiceNumber(uid, year){
@@ -1079,6 +1127,7 @@
           recalcDraft();
           renderLines();
           renderRecap();
+          saveRedoDraftToSession();
         });
       });
     }
@@ -1206,11 +1255,6 @@
       const snap = await getDoc(ref);
       profileData = snap.exists() ? (snap.data() || {}) : {};
     }
-
-    let currentUser = null;
-    let profileData = null;
-    let sourceDocData = null;
-    let newDocData = null;
 
     async function loadSourceInvoice(fromDocId){
       const r = doc(db,"salesDocuments", fromDocId);
@@ -1461,6 +1505,7 @@
       recalcDraft();
       renderRecap();
       resetLineBuilder();
+      saveRedoDraftToSession();
       showAlert("✅ Ligne ajoutée.", true);
     });
 
@@ -1478,6 +1523,7 @@
 
       recalcDraft();
 
+      saveRedoDraftToSession();
       sessionStorage.setItem("invoiceDraftPreview", JSON.stringify(newDocData));
       location.href = `facture-apercu.html?draft=1`;
     });
@@ -1519,6 +1565,9 @@
         const created = await addDoc(collection(db,"salesDocuments"), payload);
         newDocData.id = created.id;
 
+        clearRedoDraftFromSession();
+        sessionStorage.removeItem("invoiceDraftPreview");
+
         showAlert("✅ Nouvelle facture créée (émise).", true);
         renderRecap();
       }catch(err){
@@ -1529,14 +1578,46 @@
       }
     });
 
-    payTermSel.addEventListener("change", ()=>{ try{ renderConditions(); }catch(e){} });
-    payModeSel.addEventListener("change", ()=>{ try{ renderConditions(); }catch(e){} });
+    payTermSel.addEventListener("change", ()=>{
+      try{
+        renderConditions();
+        saveRedoDraftToSession();
+      }catch(e){}
+    });
+
+    payModeSel.addEventListener("change", ()=>{
+      try{
+        renderConditions();
+        saveRedoDraftToSession();
+      }catch(e){}
+    });
+
     penaltyModeSel.addEventListener("change", ()=>{
       penaltyTextEl.value = getPenaltyTemplate(String(penaltyModeSel.value || "B2C"));
-      try{ renderPenalty(); }catch(e){}
+      try{
+        renderPenalty();
+        saveRedoDraftToSession();
+      }catch(e){}
     });
-    penaltyTextEl.addEventListener("input", ()=>{ try{ renderPenalty(); }catch(e){} });
-    showCancelChk.addEventListener("change", ()=>{ try{ renderConditions(); }catch(e){} });
+
+    penaltyTextEl.addEventListener("input", ()=>{
+      try{
+        renderPenalty();
+        saveRedoDraftToSession();
+      }catch(e){}
+    });
+
+    showCancelChk.addEventListener("change", ()=>{
+      try{
+        renderConditions();
+        saveRedoDraftToSession();
+      }catch(e){}
+    });
+
+    invoiceNotesEl.addEventListener("input", ()=>{
+      saveRedoDraftToSession();
+    });
+
     productSelect.addEventListener("change", refreshSuggest);
 
     backLink.href = "factures-liste.html";
@@ -1557,7 +1638,13 @@
         await loadSourceInvoice(fromDocId);
         const creditDoc = await loadCreditDoc(fromAvoirId);
 
-        buildNewDraftFromSource(sourceDocData, creditDoc);
+        const savedDraft = loadRedoDraftFromSession();
+
+        if(savedDraft){
+          newDocData = savedDraft;
+        }else{
+          buildNewDraftFromSource(sourceDocData, creditDoc);
+        }
 
         buildProductSelect();
         refreshSuggest();
@@ -1565,7 +1652,17 @@
 
         if(!String(penaltyTextEl.value||"").trim()){
           penaltyTextEl.value = String(newDocData.invoicePenaltyText||"").trim() || getPenaltyTemplate(newDocData.invoicePenaltyMode);
+        }else{
+          penaltyTextEl.value = String(newDocData.invoicePenaltyText || penaltyTextEl.value || "").trim();
         }
+
+        invoiceNotesEl.value = String(newDocData.invoiceNotes || "").trim();
+        payModeSel.value = String(newDocData.invoicePaymentMode || "VIREMENT").toUpperCase();
+        payTermSel.value = String(newDocData.invoicePaymentTerm || "RECEPTION").toUpperCase();
+        penaltyModeSel.value = String(newDocData.invoicePenaltyMode || "B2C").toUpperCase();
+        showCancelChk.checked = !!newDocData.invoiceShowCancellation;
+
+        recalcDraft();
 
         lockUI(false);
         renderRecap();
@@ -1577,4 +1674,4 @@
     });
   </script>
 </body>
-  </html>
+</html>
