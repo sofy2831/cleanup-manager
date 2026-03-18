@@ -1,4 +1,4 @@
-<!-- docs/facture-nouv.html (FINAL — redo facture après avoir, lignes = modèle devis.html, source doc = fromDocId + fromAvoirId) -->
+<!-- docs/facture-nouv.html (CORRIGÉ COMPLET — adresse client hydratée + HT/TVA/TTC + preview draft compatible facture-apercu + redo après avoir) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -136,9 +136,9 @@
       margin-top:10px; background:#fff; border-radius:14px;
       border:1px solid rgba(122,92,255,0.18);
       box-shadow:0 3px 10px rgba(0,0,0,.06);
-      padding:10px 12px; display:flex; flex-direction:column; gap:6px; font-weight:1000;
+      padding:10px 12px; display:flex; flex-direction:column; gap:6px; font-weight:1000; font-size:14px;
     }
-    .totals .r{ display:flex; justify-content:space-between; gap:10px; }
+    .totals .r{ display:flex; justify-content:space-between; gap:10px; font-size:14px; font-weight:1000; }
     .mutedLine{ font-size:12px; color:#666; font-weight:900; }
 
     label{
@@ -212,7 +212,6 @@
     .headLines{ margin-top:6px; font-size:12.5px; color:#222; font-weight:850; line-height:1.35; }
     .headLines .mut{ color:#666; font-weight:900; }
 
-    /* ===== LIGNES (mode devis.html) ===== */
     .inline{ display:flex; gap:10px; flex-wrap:wrap; }
     .inline > div{ flex:1; min-width:160px; }
 
@@ -332,7 +331,6 @@
           <span class="small">nouvelles prestations</span>
         </div>
 
-        <!-- Builder lignes (comme devis.html) -->
         <div>
           <label for="productSelect">Prestation</label>
           <select id="productSelect" class="select">
@@ -493,9 +491,11 @@
   <script type="module">
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-    import { doc, getDoc, addDoc, serverTimestamp, runTransaction, collection } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import {
+      doc, getDoc, addDoc, serverTimestamp, runTransaction,
+      collection, query, where, getDocs, limit
+    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
-    /* ===== UI ===== */
     const alertBox = document.getElementById("alertBox");
     const recapKv = document.getElementById("recapKv");
     const statusBadge = document.getElementById("statusBadge");
@@ -528,7 +528,6 @@
     const showCancelChk  = document.getElementById("showCancelChk");
     const backLink = document.getElementById("backLink");
 
-    /* ===== LIGNES ===== */
     const productSelect = document.getElementById("productSelect");
     const otherNameWrap = document.getElementById("otherNameWrap");
     const otherNameEl   = document.getElementById("otherName");
@@ -542,7 +541,6 @@
     const suggestText   = document.getElementById("suggestText");
     const linesList     = document.getElementById("linesList");
 
-    /* ===== Helpers ===== */
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
       alertBox.classList.toggle("ok", !!ok);
@@ -570,6 +568,8 @@
       const p = new URLSearchParams(location.search);
       return (p.get(name) || "").trim();
     }
+    function round2(n){ return Math.round((Number(n) || 0) * 100) / 100; }
+
     function todayIso(){
       const d = new Date();
       const yyyy = d.getFullYear();
@@ -604,19 +604,7 @@
     function getPenaltyTemplate(mode){
       const m = String(mode||"").toUpperCase();
       if(m === "B2B") return "Pénalités de retard : 3 fois le taux d’intérêt légal en vigueur + indemnité forfaitaire de recouvrement de 40 €.";
-      if(m === "B2C") return "Pénalités de retard : 3 fois le taux d’intérêt légal en vigueur.";
-      return "";
-    }
-    function computeTotals(lines, tvaEnabled, tvaRate){
-      let ht = 0;
-      for(const l of (Array.isArray(lines) ? lines : [])){
-        const qty = Number(l?.qty)||0;
-        const up  = Number(l?.unitPrice)||0;
-        ht += qty * up;
-      }
-      const tva = tvaEnabled ? (ht * (Number(tvaRate)||0)) : 0;
-      const ttc = ht + tva;
-      return { ht, tva, ttc };
+      return "Pénalités de retard : 3 fois le taux d’intérêt légal en vigueur.";
     }
     function invoiceStatusLabel(s){
       const x = String(s||"").toUpperCase().trim();
@@ -628,6 +616,7 @@
       if(x === "CANCELLED") return "ANNULÉE";
       return x;
     }
+
     async function ensureInvoiceNumber(uid, year){
       const counterId = `${uid}_${year}`;
       const counterRef = doc(db, "counters", counterId);
@@ -643,79 +632,68 @@
         return n;
       });
 
-      const padded = String(next).padStart(4,"0");
-      return `FA${year}-${padded}`;
+      return `FA${year}-${String(next).padStart(4,"0")}`;
     }
 
-    /* ========= Produits (suggestions) ========= */
     const PRODUCT_TEMPLATES = [
-      { key:"MENAGE_STANDARD", label:"Ménage standard (inter-séjour)", category:"Ménage", suggested:"Ex. 45€ (studio/1ch) • 60€ (2ch) • 75€ (3ch) • 90€ (4ch)", unit:"unité" },
-      { key:"MENAGE_INTERMEDIAIRE", label:"Ménage intermédiaire (long séjour)", category:"Ménage", suggested:"Ex. +15€ supplément Long séjour", unit:"supplément" },
-      { key:"BACK_TO_BACK", label:"Back-to-back (ménage en urgence)", category:"Ménage", suggested:"Ex. +20€ supplément Urgence", unit:"supplément" },
-      { key:"REMISE_EN_ETAT", label:"Remise en état (logement non conforme)", category:"Ménage", suggested:"Ex. +25€ supplément Non conforme", unit:"supplément" },
+      { key:"MENAGE_STANDARD", label:"Ménage standard (inter-séjour)", category:"Ménage", suggested:"Ex. 45€ (studio/1ch) • 60€ (2ch) • 75€ (3ch) • 90€ (4ch)", unit:"unité", lineType:"SERVICE" },
+      { key:"MENAGE_INTERMEDIAIRE", label:"Ménage intermédiaire (long séjour)", category:"Ménage", suggested:"Ex. +15€ supplément Long séjour", unit:"supplément", lineType:"SERVICE" },
+      { key:"BACK_TO_BACK", label:"Back-to-back (ménage en urgence)", category:"Ménage", suggested:"Ex. +20€ supplément Urgence", unit:"supplément", lineType:"SERVICE" },
+      { key:"REMISE_EN_ETAT", label:"Remise en état (logement non conforme)", category:"Ménage", suggested:"Ex. +25€ supplément Non conforme", unit:"supplément", lineType:"SERVICE" },
 
-      { key:"RECHANGE_LINGE", label:"Rechange linge (rotation complète)", category:"Linge", suggested:"Ex. 15€ par passage Rotation", unit:"passage" },
-      { key:"LAVAGE_SECHAGE", label:"Collecte + lavage + séchage", category:"Linge", suggested:"Ex. 25€ par rotation", unit:"unité" },
-      { key:"BLANCHISSERIE", label:"Dépose / reprise blanchisserie", category:"Linge", suggested:"Ex. 20€ par rotation", unit:"unité" },
+      { key:"RECHANGE_LINGE", label:"Rechange linge (rotation complète)", category:"Linge", suggested:"Ex. 15€ par passage Rotation", unit:"passage", lineType:"SERVICE" },
+      { key:"LAVAGE_SECHAGE", label:"Collecte + lavage + séchage", category:"Linge", suggested:"Ex. 25€ par rotation", unit:"unité", lineType:"SERVICE" },
+      { key:"BLANCHISSERIE", label:"Dépose / reprise blanchisserie", category:"Linge", suggested:"Ex. 20€ par rotation", unit:"unité", lineType:"SERVICE" },
 
-      { key:"CHECKIN_AUTONOME", label:"Check-in autonome (boîte à clés)", category:"Check-in/out", suggested:"Ex. 0€ inclus", unit:"passage" },
-      { key:"CHECKIN_PHYSIQUE", label:"Check-in physique", category:"Check-in/out", suggested:"Ex. 20€ par passage", unit:"passage" },
-      { key:"CHECKOUT", label:"Check-out", category:"Check-in/out", suggested:"Ex. 15€ par passage", unit:"passage" },
-      { key:"GESTION_CLES", label:"Gestion clés / badges", category:"Check-in/out", suggested:"Ex. 10€ par intervention", unit:"unité" },
-      { key:"RECUP_CLES", label:"Récupération clés après sortie", category:"Check-in/out", suggested:"Ex. 10€ par passage", unit:"passage" },
+      { key:"CHECKIN_AUTONOME", label:"Check-in autonome (boîte à clés)", category:"Check-in/out", suggested:"Ex. 0€ inclus", unit:"passage", lineType:"SERVICE" },
+      { key:"CHECKIN_PHYSIQUE", label:"Check-in physique", category:"Check-in/out", suggested:"Ex. 20€ par passage", unit:"passage", lineType:"SERVICE" },
+      { key:"CHECKOUT", label:"Check-out", category:"Check-in/out", suggested:"Ex. 15€ par passage", unit:"passage", lineType:"SERVICE" },
+      { key:"GESTION_CLES", label:"Gestion clés / badges", category:"Check-in/out", suggested:"Ex. 10€ par intervention", unit:"unité", lineType:"SERVICE" },
+      { key:"RECUP_CLES", label:"Récupération clés après sortie", category:"Check-in/out", suggested:"Ex. 10€ par passage", unit:"passage", lineType:"SERVICE" },
 
-      { key:"PETITE_MAINTENANCE", label:"Petite maintenance (ampoule, joint…)", category:"Maintenance", suggested:"Ex. 15€ par intervention", unit:"unité" },
-      { key:"URGENCE", label:"Intervention d’urgence (fuite, serrure)", category:"Maintenance", suggested:"Ex. 40€ par intervention", unit:"unité" },
-      { key:"COORD_ARTISANS", label:"Coordination artisans", category:"Maintenance", suggested:"Ex. 30€ par coordination (hors coût artisan)", unit:"unité" },
+      { key:"PETITE_MAINTENANCE", label:"Petite maintenance (ampoule, joint…)", category:"Maintenance", suggested:"Ex. 15€ par intervention", unit:"unité", lineType:"SERVICE" },
+      { key:"URGENCE", label:"Intervention d’urgence (fuite, serrure)", category:"Maintenance", suggested:"Ex. 40€ par intervention", unit:"unité", lineType:"SERVICE" },
+      { key:"COORD_ARTISANS", label:"Coordination artisans", category:"Maintenance", suggested:"Ex. 30€ par coordination (hors coût artisan)", unit:"unité", lineType:"SERVICE" },
 
-      { key:"MESSAGES", label:"Réponses messages voyageurs", category:"Messages voyageurs", suggested:"Ex. 19€/logement/mois (20 mess) + 1,20€/mess supp", unit:"mois" },
+      { key:"MESSAGES", label:"Réponses messages voyageurs", category:"Messages voyageurs", suggested:"Ex. 19€/logement/mois (20 mess) + 1,20€/mess supp", unit:"mois", lineType:"SERVICE" },
 
-      { key:"KIT_ESSENTIEL", label:"Kit essentiel", category:"Kits & consommables", suggested:"Ex. 5€ par kit", unit:"kit" },
-      { key:"KIT_CUISINE", label:"Kit cuisine", category:"Kits & consommables", suggested:"Ex. 7€ par kit", unit:"kit" },
-      { key:"KIT_BAIN", label:"Kit bain", category:"Kits & consommables", suggested:"Ex. 4€ par kit", unit:"kit" },
-      { key:"KIT_SEJOUR_2", label:"Kit séjour (Pack 2 pers)", category:"Kits & consommables", suggested:"Ex. 14€ par kit", unit:"kit" },
-      { key:"KIT_SEJOUR_4", label:"Kit séjour (Pack 4 pers)", category:"Kits & consommables", suggested:"Ex. 28€ par kit", unit:"kit" },
-      { key:"KIT_SEJOUR_6", label:"Kit séjour (Pack 6 pers)", category:"Kits & consommables", suggested:"Ex. 42€ par kit", unit:"kit" },
-      { key:"KIT_SEJOUR_8", label:"Kit séjour (Pack 8 pers)", category:"Kits & consommables", suggested:"Ex. 56€ par kit", unit:"kit" },
-      { key:"REASSORT", label:"Réassort produit unitaire (papier, café…)", category:"Kits & consommables", suggested:"Ex. 1,20€ par unité", unit:"unité" },
+      { key:"KIT_ESSENTIEL", label:"Kit essentiel", category:"Kits & consommables", suggested:"Ex. 5€ par kit", unit:"kit", lineType:"PRODUCT" },
+      { key:"KIT_CUISINE", label:"Kit cuisine", category:"Kits & consommables", suggested:"Ex. 7€ par kit", unit:"kit", lineType:"PRODUCT" },
+      { key:"KIT_BAIN", label:"Kit bain", category:"Kits & consommables", suggested:"Ex. 4€ par kit", unit:"kit", lineType:"PRODUCT" },
+      { key:"KIT_SEJOUR_2", label:"Kit séjour (Pack 2 pers)", category:"Kits & consommables", suggested:"Ex. 14€ par kit", unit:"kit", lineType:"PRODUCT" },
+      { key:"KIT_SEJOUR_4", label:"Kit séjour (Pack 4 pers)", category:"Kits & consommables", suggested:"Ex. 28€ par kit", unit:"kit", lineType:"PRODUCT" },
+      { key:"KIT_SEJOUR_6", label:"Kit séjour (Pack 6 pers)", category:"Kits & consommables", suggested:"Ex. 42€ par kit", unit:"kit", lineType:"PRODUCT" },
+      { key:"KIT_SEJOUR_8", label:"Kit séjour (Pack 8 pers)", category:"Kits & consommables", suggested:"Ex. 56€ par kit", unit:"kit", lineType:"PRODUCT" },
+      { key:"REASSORT", label:"Réassort produit unitaire (papier, café…)", category:"Kits & consommables", suggested:"Ex. 1,20€ par unité", unit:"unité", lineType:"PRODUCT" },
 
-      { key:"__OTHER__", label:"Autre (texte libre)", category:"Autre", suggested:"", unit:"unité" }
+      { key:"__OTHER__", label:"Autre (texte libre)", category:"Autre", suggested:"", unit:"unité", lineType:"SERVICE" }
     ];
 
     function getTemplateByKey(key){
-      return (Array.isArray(PRODUCT_TEMPLATES) ? PRODUCT_TEMPLATES : [])
-        .find(p => String(p.key||"").trim() === String(key||"").trim()) || null;
+      return PRODUCT_TEMPLATES.find(p => String(p.key||"").trim() === String(key||"").trim()) || null;
     }
 
     function buildProductSelect(){
-      const templates = Array.isArray(PRODUCT_TEMPLATES) ? PRODUCT_TEMPLATES : [];
       const byCat = new Map();
-      for(const p of templates){
+      for(const p of PRODUCT_TEMPLATES){
         const cat = p.category || "Autre";
         if(!byCat.has(cat)) byCat.set(cat, []);
         byCat.get(cat).push(p);
       }
 
-      const catOrder = ["Ménage","Linge","Check-in/out","Maintenance","Messages voyageurs","Kits & consommables","Essentiel","Autre"];
+      const catOrder = ["Ménage","Linge","Check-in/out","Maintenance","Messages voyageurs","Kits & consommables","Autre"];
       const cats = Array.from(byCat.keys()).sort((a,b)=>{
-        const ia = catOrder.indexOf(a); const ib = catOrder.indexOf(b);
+        const ia = catOrder.indexOf(a), ib = catOrder.indexOf(b);
         if(ia === -1 && ib === -1) return a.localeCompare(b);
         if(ia === -1) return 1;
         if(ib === -1) return -1;
         return ia - ib;
       });
 
-      const optGroups = cats.map(cat=>{
-        const opts = (byCat.get(cat) || []).map(p=>{
-          const key = String(p.key||"").trim();
-          const label = String(p.label||"").trim();
-          return `<option value="${esc(key)}">${esc(label)}</option>`;
-        }).join("");
+      productSelect.innerHTML = `<option value="">— Choisir —</option>` + cats.map(cat=>{
+        const opts = (byCat.get(cat)||[]).map(p=>`<option value="${esc(p.key)}">${esc(p.label)}</option>`).join("");
         return `<optgroup label="${esc(cat)}">${opts}</optgroup>`;
       }).join("");
-
-      const otherOpt = `<option value="__OTHER__">Autre… (saisie manuelle)</option>`;
-      productSelect.innerHTML = `<option value="">— Choisir —</option>` + optGroups + otherOpt;
     }
 
     function refreshSuggest(){
@@ -731,7 +709,10 @@
       otherNameEl.value = "";
 
       const t = getTemplateByKey(key);
-      if(!t){ suggestLine.style.display = "none"; return; }
+      if(!t){
+        suggestLine.style.display = "none";
+        return;
+      }
 
       if(t.suggested){
         suggestText.textContent = t.suggested;
@@ -740,74 +721,243 @@
         suggestLine.style.display = "none";
       }
 
-      // pré-sélection unité conseillée
-      if(t.unit){
-        unitEl.value = t.unit;
-      }
+      if(t.unit) unitEl.value = t.unit;
     }
-    productSelect.addEventListener("change", refreshSuggest);
 
-    function validateLineInputs(){
-      const key = (productSelect.value || "").trim();
-      if(!key) return { ok:false, msg:"Choisis une prestation." };
+    function extractAddr(obj){
+      const o = obj || {};
+      const a = (o.address && typeof o.address === "object") ? o.address : null;
+      const ba = (o.billingAddress && typeof o.billingAddress === "object") ? o.billingAddress : null;
 
-      let label = "";
-      if(key === "__OTHER__"){
-        label = (otherNameEl.value || "").trim();
-        if(!label) return { ok:false, msg:"Renseigne le nom du produit (Autre)." };
-      }else{
-        const t = getTemplateByKey(key);
-        label = (t?.label || "").trim();
-        if(!label) return { ok:false, msg:"Prestation invalide." };
-      }
+      const street =
+        String(o.address1 || o.street || o.addr1 || o.line1 || "").trim() ||
+        (typeof o.address === "string" ? String(o.address).trim() : "") ||
+        String(a?.street || a?.line1 || a?.address1 || a?.addr1 || "").trim() ||
+        String(ba?.street || ba?.line1 || ba?.address1 || "").trim();
 
-      const qty = Number(qtyEl.value);
-      if(!(qty > 0)) return { ok:false, msg:"Quantité invalide." };
+      const address2 =
+        String(o.address2 || o.addr2 || o.line2 || "").trim() ||
+        String(a?.address2 || a?.line2 || a?.addr2 || "").trim() ||
+        String(ba?.address2 || ba?.line2 || "").trim();
 
-      const unit = (unitEl.value || "").trim() || "unité";
+      const zip =
+        String(o.zip || o.postalCode || o.cp || "").trim() ||
+        String(a?.zip || a?.postalCode || a?.cp || "").trim() ||
+        String(ba?.zip || ba?.postalCode || "").trim();
 
-      const unitPrice = Number(unitPriceEl.value);
-      if(!(unitPrice >= 0)) return { ok:false, msg:"Prix unitaire invalide." };
+      const city =
+        String(o.city || o.town || o.locality || "").trim() ||
+        String(a?.city || a?.town || a?.locality || "").trim() ||
+        String(ba?.city || ba?.town || "").trim();
 
-      const note = (lineNoteEl.value || "").trim();
-      const clientNote = (lineClientNoteEl.value || "").trim();
-      const tpl = (key && key !== "__OTHER__") ? getTemplateByKey(key) : null;
-      const suggested = (tpl?.suggested || "");
+      const country =
+        String(o.country || "").trim() ||
+        String(a?.country || "").trim() ||
+        String(ba?.country || "").trim() ||
+        "FR";
+
+      return { street, address2, zip, city, country };
+    }
+
+    async function lookupOwnerByEmailInOwners(conciergerieUid, emailLower){
+      if(!emailLower) return null;
+
+      const qO = query(
+        collection(db,"owners"),
+        where("conciergerieUid", "==", String(conciergerieUid)),
+        where("emailLower", "==", emailLower),
+        where("isActive", "==", true),
+        limit(1)
+      );
+
+      const snap = await getDocs(qO);
+      if(snap.empty) return null;
+
+      const doc0 = snap.docs[0];
+      const o = doc0.data() || {};
+      const addr = extractAddr(o);
 
       return {
-        ok:true,
-        line: {
-          label,
-          ref: key === "__OTHER__" ? "" : key,
-          qty,
-          unit,
-          unitPrice,
-          note,
-          clientNote,
-          suggestedPrice: suggested
-        }
+        docId: doc0.id,
+        email: normalizeEmail(o.email || emailLower),
+        fullname: String(o.fullname || o.displayName || o.name || "").trim(),
+        address1: addr.street,
+        address2: addr.address2,
+        zip: addr.zip,
+        city: addr.city,
+        country: addr.country,
+        phone: String(o.phone || o.tel || o.mobile || "").trim(),
       };
     }
 
-    function resetLineBuilder(){
-      productSelect.value = "";
-      otherNameWrap.style.display = "none";
-      otherNameEl.value = "";
-      qtyEl.value = "1";
-      unitEl.value = "unité";
-      unitPriceEl.value = "";
-      lineNoteEl.value = "";
-      lineClientNoteEl.value = "";
-      suggestLine.style.display = "none";
+    async function loadOwnerFromOwnersOrNull(conciergerieUid, d){
+      const ownerDocId =
+        String(d?.ownerDocId || "").trim() ||
+        String(d?.clientOwnerDocId || "").trim();
+
+      if(ownerDocId){
+        try{
+          const snap = await getDoc(doc(db,"owners", ownerDocId));
+          if(snap.exists()){
+            const o = snap.data() || {};
+            if(String(o.conciergerieUid||"") === String(conciergerieUid)){
+              const addr = extractAddr(o);
+              return {
+                docId: snap.id,
+                email: normalizeEmail(o.email || ""),
+                fullname: String(o.fullname || o.displayName || o.name || "").trim(),
+                address1: addr.street,
+                address2: addr.address2,
+                zip: addr.zip,
+                city: addr.city,
+                country: addr.country,
+                phone: String(o.phone || o.tel || o.mobile || "").trim(),
+              };
+            }
+          }
+        }catch(e){}
+      }
+
+      const emailLower = normalizeEmail(d?.clientEmail || d?.ownerEmail || "");
+      if(emailLower){
+        try{ return await lookupOwnerByEmailInOwners(conciergerieUid, emailLower); }
+        catch(e){ return null; }
+      }
+
+      return null;
     }
 
-    /* ===== State ===== */
-    let currentUser = null;
-    let profileData = null;
-    let sourceDocData = null; // facture origine
-    let newDocData = null;    // nouvelle facture (redo)
+    async function loadHomeOwnerSnapshotOrNull(d){
+      const hid = String(d?.homeId || d?.homeDocId || "").trim();
+      if(!hid) return null;
 
-    /* ===== Header société/client ===== */
+      try{
+        const snap = await getDoc(doc(db,"homes", hid));
+        if(!snap.exists()) return null;
+        const h = snap.data() || {};
+
+        const ownerName = String(h.ownerName || h.ownerFullname || h.ownerDisplayName || h.owner || "").trim();
+        const ownerPhone = String(h.ownerPhone || h.ownerTel || h.phone || "").trim();
+        const ownerEmail = normalizeEmail(h.ownerEmail || h.ownerAccountEmail || h.email || "");
+        const addr = extractAddr(h.owner || h);
+
+        return {
+          fullname: ownerName,
+          email: ownerEmail,
+          phone: ownerPhone,
+          address1: addr.street,
+          address2: addr.address2,
+          zip: addr.zip,
+          city: addr.city,
+          country: addr.country
+        };
+      }catch(e){
+        return null;
+      }
+    }
+
+    function docSnapshotClient(d){
+      const sName = String(d?.clientName || d?.clientCompany || d?.clientFullName || "").trim();
+      const sEmail = normalizeEmail(d?.clientEmail || "");
+      const sPhone = String(d?.clientPhone || "").trim();
+      const sA1 = String(d?.clientAddress1 || d?.clientAddress || "").trim();
+      const sA2 = String(d?.clientAddress2 || "").trim();
+      const sZip = String(d?.clientZip || "").trim();
+      const sCity = String(d?.clientCity || "").trim();
+      const sCountry = String(d?.clientCountry || "FR").trim();
+
+      const eName = String(d?.ownerName || "").trim();
+      const eEmail = normalizeEmail(d?.ownerEmail || "");
+      const ePhone = String(d?.ownerPhone || "").trim();
+      const eA1 = String(d?.ownerAddress1 || "").trim();
+      const eA2 = String(d?.ownerAddress2 || "").trim();
+      const eZip = String(d?.ownerZip || "").trim();
+      const eCity = String(d?.ownerCity || "").trim();
+      const eCountry = String(d?.ownerCountry || "FR").trim();
+
+      return {
+        fullname: sName || eName,
+        email: sEmail || eEmail,
+        phone: sPhone || ePhone,
+        address1: sA1 || eA1,
+        address2: sA2 || eA2,
+        zip: sZip || eZip,
+        city: sCity || eCity,
+        country: sCountry || eCountry
+      };
+    }
+
+    async function resolveClientSnapshot(conciergerieUid, d){
+      const owners = await loadOwnerFromOwnersOrNull(conciergerieUid, d);
+      const homeSnap = await loadHomeOwnerSnapshotOrNull(d);
+      const snap = docSnapshotClient(d);
+
+      return {
+        clientOwnerDocId: owners?.docId || String(d?.clientOwnerDocId || d?.ownerDocId || "").trim() || null,
+        name: String(owners?.fullname || snap.fullname || homeSnap?.fullname || "").trim(),
+        email: String(owners?.email || snap.email || homeSnap?.email || "").trim(),
+        phone: String(owners?.phone || snap.phone || homeSnap?.phone || "").trim(),
+        address1: String(owners?.address1 || snap.address1 || homeSnap?.address1 || "").trim(),
+        address2: String(owners?.address2 || snap.address2 || homeSnap?.address2 || "").trim(),
+        zip: String(owners?.zip || snap.zip || homeSnap?.zip || "").trim(),
+        city: String(owners?.city || snap.city || homeSnap?.city || "").trim(),
+        country: String(owners?.country || snap.country || homeSnap?.country || "FR").trim()
+      };
+    }
+
+    function getVatProfile(){
+      const bp = (profileData?.businessProfile || {});
+      const enabled = !!bp?.vat?.enabled;
+      return {
+        enabled,
+        serviceRate: enabled ? 0.20 : 0,
+        productRate: enabled ? 0.10 : 0
+      };
+    }
+
+    function getVatRate(lineType, vatSnapshot){
+      const lt = String(lineType || "SERVICE").trim().toUpperCase();
+      if(!vatSnapshot?.enabled) return 0;
+      if(lt === "PRODUCT") return Number(vatSnapshot.productRate || 0.10);
+      return Number(vatSnapshot.serviceRate || 0.20);
+    }
+
+    function computeLine(raw, vatSnapshot){
+      const qty = Number(raw?.qty || 0);
+      const unitPrice = Number(raw?.unitPrice || 0);
+      const lineType = String(raw?.lineType || "SERVICE").trim().toUpperCase();
+      const vatRate = getVatRate(lineType, vatSnapshot);
+      const totalHT = round2(qty * unitPrice);
+      const totalTVA = round2(totalHT * vatRate);
+      const totalTTC = round2(totalHT + totalTVA);
+
+      return {
+        ...raw,
+        qty,
+        unitPrice,
+        lineType,
+        vatRate,
+        totalHT,
+        totalTVA,
+        totalTTC
+      };
+    }
+
+    function computeDocumentTotals(lines, vatSnapshot){
+      const computedLines = (Array.isArray(lines) ? lines : []).map(l => computeLine(l, vatSnapshot));
+      const totalHT = round2(computedLines.reduce((s,l)=> s + Number(l.totalHT || 0), 0));
+      const totalTVA = round2(computedLines.reduce((s,l)=> s + Number(l.totalTVA || 0), 0));
+      const totalTTC = round2(computedLines.reduce((s,l)=> s + Number(l.totalTTC || 0), 0));
+
+      return {
+        lines: computedLines,
+        totalHT,
+        totalTVA,
+        totalTTC,
+        totals: { ht: totalHT, tva: totalTVA, ttc: totalTTC }
+      };
+    }
+
     function applyLogoFromProfile(profile){
       const bp = (profile?.businessProfile || {});
       const url = String(bp.logoUrl || "").trim();
@@ -819,6 +969,7 @@
         bizLogoImg.style.display="none"; bizLogoFallback.style.display="block";
       }
     }
+
     function renderBusinessHeader(){
       const bp = (profileData?.businessProfile || {});
       const cName = String(bp.companyName || "Conciergerie").trim();
@@ -844,6 +995,7 @@
 
       applyLogoFromProfile(profileData);
     }
+
     function renderClientHeader(d){
       const name = String(d?.clientName || "—").trim();
       const a1 = String(d?.clientAddress1 || "").trim();
@@ -872,7 +1024,6 @@
       return { label:"—" };
     }
 
-    /* ===== Lignes render ===== */
     function renderLines(){
       linesList.innerHTML = "";
 
@@ -891,16 +1042,12 @@
         return;
       }
 
-      const bp = (profileData?.businessProfile || {});
-      const tvaEnabled = !!bp.vat?.enabled;
-      const tvaRate = Number.isFinite(Number(bp.vat?.rate)) ? Number(bp.vat.rate) : 0;
-
       lines.forEach((l, idx)=>{
         const qty = Number(l?.qty)||0;
         const up = Number(l?.unitPrice)||0;
-        const ht = qty * up;
-        const tva = tvaEnabled ? (ht * tvaRate) : 0;
-        const ttc = ht + tva;
+        const ht = Number(l?.totalHT || 0);
+        const tva = Number(l?.totalTVA || 0);
+        const ttc = Number(l?.totalTTC || 0);
 
         const div = document.createElement("div");
         div.className = "line-item";
@@ -909,8 +1056,10 @@
             <div class="li-title">${esc(l.label || "Ligne")}</div>
             <div class="li-sub">
               <b>${esc(String(qty))}</b> ${esc(l.unit || "unité")}
-              • ${esc(money(up))} / ${esc(l.unit || "unité")}
-              • total <b>${esc(money(ttc))}</b>
+              • PU HT <b>${esc(money(up))}</b>
+              • HT <b>${esc(money(ht))}</b>
+              • TVA <b>${esc(money(tva))}</b>
+              • TTC <b>${esc(money(ttc))}</b>
             </div>
             ${l.clientNote ? `<div class="li-note client"><b>Note client :</b> ${esc(l.clientNote)}</div>` : ``}
             ${l.note ? `<div class="li-note"><b>Interne :</b> ${esc(l.note)}</div>` : ``}
@@ -927,47 +1076,49 @@
         btn.addEventListener("click", ()=>{
           const i = Number(btn.getAttribute("data-del"));
           newDocData.lines.splice(i, 1);
+          recalcDraft();
           renderLines();
-          refreshTotalsUI();
+          renderRecap();
         });
       });
     }
 
+    function recalcDraft(){
+      const vatSnapshot = newDocData?.vatSnapshot || getVatProfile();
+      const computed = computeDocumentTotals(newDocData?.lines || [], vatSnapshot);
+      newDocData.lines = computed.lines;
+      newDocData.totalHT = computed.totalHT;
+      newDocData.totalTVA = computed.totalTVA;
+      newDocData.totalTTC = computed.totalTTC;
+      newDocData.totals = computed.totals;
+    }
+
     function refreshTotalsUI(){
-      const bp = (profileData?.businessProfile || {});
-      const tvaEnabled = !!bp.vat?.enabled;
-      const tvaRate = Number.isFinite(Number(bp.vat?.rate)) ? Number(bp.vat.rate) : 0;
-
-      const lines = Array.isArray(newDocData?.lines) ? newDocData.lines : [];
-      const totals = computeTotals(lines, tvaEnabled, tvaRate);
-
-      newDocData.totalHT  = Number(totals.ht)||0;
-      newDocData.totalTVA = Number(totals.tva)||0;
-      newDocData.totalTTC = Number(totals.ttc)||0;
-
       const html = [];
-      html.push(`<div class="r"><span>Total facture (TTC)</span><span>${esc(money(totals.ttc))}</span></div>`);
+      html.push(`<div class="r"><span>Total HT</span><span>${esc(money(newDocData.totalHT || 0))}</span></div>`);
+      html.push(`<div class="r"><span>Total TVA</span><span>${esc(money(newDocData.totalTVA || 0))}</span></div>`);
+      html.push(`<div class="r"><span>Total TTC</span><span>${esc(money(newDocData.totalTTC || 0))}</span></div>`);
 
-      if(tvaEnabled){
-        html.push(`<div class="r"><span class="mutedLine">HT ${esc(money(totals.ht))} • TVA ${Math.round(tvaRate*100)}% ${esc(money(totals.tva))}</span><span class="mutedLine">${esc(lines.length)} ligne${lines.length>1?"s":""}</span></div>`);
+      if(newDocData?.vatSnapshot?.enabled){
+        html.push(`<div class="mutedLine">TVA activée • services 20% • produits 10% • ${esc(String((newDocData.lines || []).length))} ligne(s)</div>`);
       }else{
-        const ex = String(bp?.tvaExemptionText || "TVA non applicable (art. 293B CGI)").trim();
-        html.push(`<div class="r"><span class="mutedLine">${esc(ex)}</span><span class="mutedLine">${esc(lines.length)} ligne${lines.length>1?"s":""}</span></div>`);
+        const ex = String(profileData?.businessProfile?.tvaExemptionText || "TVA non applicable (art. 293B CGI)").trim();
+        html.push(`<div class="mutedLine">${esc(ex)} • ${esc(String((newDocData.lines || []).length))} ligne(s)</div>`);
       }
 
       totalsBox.innerHTML = html.join("");
     }
 
-    /* ===== Paiement / pénalités / conditions / banque ===== */
     function renderPaymentControls(){
       const d = newDocData || {};
       const hasInvoice = !!String(d.invoiceNumber || "").trim();
       payModeSel.disabled = hasInvoice;
       payTermSel.disabled = hasInvoice;
 
-      if(!payModeSel.value) payModeSel.value = String(d.invoicePaymentMode || "VIREMENT").toUpperCase();
-      if(!payTermSel.value) payTermSel.value = String(d.invoicePaymentTerm || "RECEPTION").toUpperCase();
+      payModeSel.value = String(d.invoicePaymentMode || "VIREMENT").toUpperCase();
+      payTermSel.value = String(d.invoicePaymentTerm || "RECEPTION").toUpperCase();
     }
+
     function renderPenalty(){
       const d = newDocData || {};
       const hasInvoice = !!String(d.invoiceNumber || "").trim();
@@ -982,6 +1133,7 @@
       }
       penaltyKv.innerHTML = `<div class="line">${esc(String(penaltyTextEl.value || "").trim() || "—")}</div>`;
     }
+
     function renderConditions(){
       const d = newDocData || {};
       const bp = (profileData?.businessProfile || {});
@@ -999,21 +1151,23 @@
       }
       conditionsKv.innerHTML = lines.join("");
     }
+
     function renderBank(){
       const bp = (profileData?.businessProfile || {});
       const bank = (bp.bank || {});
-      const name = String(bank.name || "").trim();
+      const bankName = String(bank.bankName || bank.name || "").trim();
+      const holder = String(bank.holder || "").trim();
       const iban = String(bank.iban || "").trim();
       const bic  = String(bank.bic  || "").trim();
 
       const lines = [];
-      if(name) lines.push(`<div class="line"><b>Banque</b> : ${esc(name)}</div>`);
+      if(holder) lines.push(`<div class="line"><b>Titulaire</b> : ${esc(holder)}</div>`);
+      if(bankName) lines.push(`<div class="line"><b>Banque</b> : ${esc(bankName)}</div>`);
       if(iban) lines.push(`<div class="line"><b>IBAN</b> : ${esc(iban)}</div>`);
       if(bic)  lines.push(`<div class="line"><b>BIC</b> : ${esc(bic)}</div>`);
       bankKv.innerHTML = lines.length ? lines.join("") : `<div class="line">—</div>`;
     }
 
-    /* ===== Recap render ===== */
     function renderRecap(){
       const d = newDocData || sourceDocData || {};
       const period = getStayPeriod(d);
@@ -1030,13 +1184,12 @@
       if(newDocData?.fromCreditNumber) recap.push(`<div class="line"><b>Avoir</b> : ${esc(newDocData.fromCreditNumber)}</div>`);
       recapKv.innerHTML = recap.join("");
 
-      const invNum = String(newDocData.invoiceNumber || "").trim();
+      const invNum = String(newDocData?.invoiceNumber || "").trim();
       statusBadge.textContent = invNum ? invoiceStatusLabel(newDocData.invoiceStatus || "ISSUED") : "BROUILLON";
       docBannerInner.textContent = `FACTURE N° ${invNum || "—"}`;
 
       renderBusinessHeader();
-      renderClientHeader(newDocData);
-
+      renderClientHeader(newDocData || {});
       renderLines();
       refreshTotalsUI();
       renderPaymentControls();
@@ -1048,20 +1201,41 @@
       previewBtn.disabled = false;
     }
 
-    /* ===== Loaders ===== */
     async function loadProfile(uid){
       const ref = doc(db, "users", uid);
       const snap = await getDoc(ref);
       profileData = snap.exists() ? (snap.data() || {}) : {};
     }
+
+    let currentUser = null;
+    let profileData = null;
+    let sourceDocData = null;
+    let newDocData = null;
+
     async function loadSourceInvoice(fromDocId){
       const r = doc(db,"salesDocuments", fromDocId);
       const s = await getDoc(r);
       if(!s.exists()) throw new Error("Facture d’origine introuvable (fromDocId).");
       const d = { id:s.id, ...(s.data()||{}) };
       if(String(d.conciergerieUid||"") !== String(currentUser.uid)) throw new Error("Accès refusé (facture d’une autre conciergerie).");
-      sourceDocData = d;
+
+      const resolved = await resolveClientSnapshot(currentUser.uid, d);
+
+      sourceDocData = {
+        ...d,
+        clientOwnerDocId: d.clientOwnerDocId || resolved.clientOwnerDocId || null,
+        ownerDocId: d.ownerDocId || resolved.clientOwnerDocId || d.ownerDocId || null,
+        clientName: String(d.clientName || "").trim() ? d.clientName : (resolved.name || ""),
+        clientEmail: String(d.clientEmail || "").trim() ? d.clientEmail : (resolved.email || ""),
+        clientPhone: String(d.clientPhone || "").trim() ? d.clientPhone : (resolved.phone || ""),
+        clientAddress1: String(d.clientAddress1 || "").trim() ? d.clientAddress1 : (resolved.address1 || ""),
+        clientAddress2: String(d.clientAddress2 || "").trim() ? d.clientAddress2 : (resolved.address2 || ""),
+        clientZip: String(d.clientZip || "").trim() ? d.clientZip : (resolved.zip || ""),
+        clientCity: String(d.clientCity || "").trim() ? d.clientCity : (resolved.city || ""),
+        clientCountry: String(d.clientCountry || "").trim() ? d.clientCountry : (resolved.country || "FR")
+      };
     }
+
     async function loadCreditDoc(fromCreditDocId){
       const r = doc(db,"salesDocuments", fromCreditDocId);
       const s = await getDoc(r);
@@ -1090,11 +1264,14 @@
         },
         vat: {
           enabled: !!bp.vat?.enabled,
-          rate: Number.isFinite(Number(bp.vat?.rate)) ? Number(bp.vat.rate) : 0
+          serviceRate: !!bp.vat?.enabled ? 0.20 : 0,
+          productRate: !!bp.vat?.enabled ? 0.10 : 0
         },
         tvaExemptionText: String(bp.tvaExemptionText || "").trim(),
         bank: {
-          name: String(bp.bank?.name || "").trim(),
+          bankName: String(bp.bank?.bankName || bp.bank?.name || "").trim(),
+          name: String(bp.bank?.name || bp.bank?.bankName || "").trim(),
+          holder: String(bp.bank?.holder || "").trim(),
           iban: String(bp.bank?.iban || "").trim(),
           bic:  String(bp.bank?.bic  || "").trim()
         },
@@ -1109,6 +1286,7 @@
     function buildNewDraftFromSource(sourceInvoice, creditDoc){
       const src = sourceInvoice || {};
       const cred = creditDoc || {};
+      const vatSnapshot = getVatProfile();
 
       newDocData = {
         conciergerieUid: String(currentUser.uid),
@@ -1134,6 +1312,9 @@
         departureDateKey: src.departureDateKey || "",
 
         clientOwnerDocId: src.clientOwnerDocId || null,
+        ownerDocId: src.ownerDocId || src.clientOwnerDocId || null,
+        ownerUid: src.ownerUid || null,
+
         clientName: src.clientName || "",
         clientEmail: normalizeEmail(src.clientEmail || ""),
         clientPhone: src.clientPhone || "",
@@ -1143,6 +1324,15 @@
         clientCity: src.clientCity || "",
         clientCountry: src.clientCountry || "FR",
         clientType: src.clientType || "",
+
+        ownerName: src.ownerName || src.clientName || "",
+        ownerEmail: normalizeEmail(src.ownerEmail || src.clientEmail || ""),
+        ownerPhone: src.ownerPhone || src.clientPhone || "",
+        ownerAddress1: src.ownerAddress1 || src.clientAddress1 || "",
+        ownerAddress2: src.ownerAddress2 || src.clientAddress2 || "",
+        ownerZip: src.ownerZip || src.clientZip || "",
+        ownerCity: src.ownerCity || src.clientCity || "",
+        ownerCountry: src.ownerCountry || src.clientCountry || "FR",
 
         invoiceNumber: "",
         invoiceStatus: "DRAFT",
@@ -1154,10 +1344,15 @@
         invoicePenaltyText: String(src.invoicePenaltyText || "").trim(),
         invoiceShowCancellation: (typeof src.invoiceShowCancellation === "boolean") ? src.invoiceShowCancellation : true,
 
+        vatEnabled: !!vatSnapshot.enabled,
+        vatSnapshot,
         lines: [],
-        totalHT: 0, totalTVA: 0, totalTTC: 0,
+        totalHT: 0,
+        totalTVA: 0,
+        totalTTC: 0,
+        totals: { ht:0, tva:0, ttc:0 },
 
-        businessSnapshot: null,
+        businessSnapshot: buildBusinessSnapshotFromProfile(),
 
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -1165,7 +1360,7 @@
       };
 
       invoiceNotesEl.value = "";
-      showCancelChk.checked = true;
+      showCancelChk.checked = newDocData.invoiceShowCancellation;
     }
 
     function lockUI(locked){
@@ -1194,7 +1389,63 @@
       });
     }
 
-    /* ===== add line ===== */
+    function validateLineInputs(){
+      const key = (productSelect.value || "").trim();
+      if(!key) return { ok:false, msg:"Choisis une prestation." };
+
+      let label = "";
+      let lineType = "SERVICE";
+      if(key === "__OTHER__"){
+        label = (otherNameEl.value || "").trim();
+        if(!label) return { ok:false, msg:"Renseigne le nom du produit (Autre)." };
+      }else{
+        const t = getTemplateByKey(key);
+        label = (t?.label || "").trim();
+        lineType = String(t?.lineType || "SERVICE").toUpperCase();
+        if(!label) return { ok:false, msg:"Prestation invalide." };
+      }
+
+      const qty = Number(qtyEl.value);
+      if(!(qty > 0)) return { ok:false, msg:"Quantité invalide." };
+
+      const unit = (unitEl.value || "").trim() || "unité";
+
+      const unitPrice = Number(unitPriceEl.value);
+      if(!(unitPrice >= 0)) return { ok:false, msg:"Prix unitaire invalide." };
+
+      const note = (lineNoteEl.value || "").trim();
+      const clientNote = (lineClientNoteEl.value || "").trim();
+      const tpl = (key && key !== "__OTHER__") ? getTemplateByKey(key) : null;
+      const suggested = (tpl?.suggested || "");
+
+      return {
+        ok:true,
+        line: {
+          label,
+          ref: key === "__OTHER__" ? "" : key,
+          qty,
+          unit,
+          unitPrice,
+          note,
+          clientNote,
+          suggestedPrice: suggested,
+          lineType
+        }
+      };
+    }
+
+    function resetLineBuilder(){
+      productSelect.value = "";
+      otherNameWrap.style.display = "none";
+      otherNameEl.value = "";
+      qtyEl.value = "1";
+      unitEl.value = "unité";
+      unitPriceEl.value = "";
+      lineNoteEl.value = "";
+      lineClientNoteEl.value = "";
+      suggestLine.style.display = "none";
+    }
+
     addLineBtn.addEventListener("click", ()=>{
       hideAlert();
       if(!newDocData) return;
@@ -1207,30 +1458,27 @@
       if(!Array.isArray(newDocData.lines)) newDocData.lines = [];
       newDocData.lines.push(v.line);
 
-      showAlert("✅ Ligne ajoutée.", true);
-      renderLines();
-      refreshTotalsUI();
+      recalcDraft();
+      renderRecap();
       resetLineBuilder();
+      showAlert("✅ Ligne ajoutée.", true);
     });
 
-    /* ===== Preview / Save ===== */
     previewBtn.addEventListener("click", ()=>{
       if(!newDocData) return;
 
-      const draft = {
-        ...newDocData,
-        invoiceNotes: String(invoiceNotesEl.value || "").trim(),
-        invoicePaymentMode: String(payModeSel.value || "VIREMENT").toUpperCase(),
-        invoicePaymentTerm: String(payTermSel.value || "RECEPTION").toUpperCase(),
-        invoiceIssuedDate: String(newDocData.invoiceIssuedDate || todayIso()).trim(),
-        invoicePenaltyMode: String(penaltyModeSel.value || "B2C").toUpperCase(),
-        invoicePenaltyText: String(penaltyTextEl.value || "").trim(),
-        invoiceShowCancellation: !!showCancelChk.checked,
-        lines: Array.isArray(newDocData.lines) ? newDocData.lines : [],
-        businessSnapshot: buildBusinessSnapshotFromProfile()
-      };
+      newDocData.invoiceNotes = String(invoiceNotesEl.value || "").trim();
+      newDocData.invoicePaymentMode = String(payModeSel.value || "VIREMENT").toUpperCase();
+      newDocData.invoicePaymentTerm = String(payTermSel.value || "RECEPTION").toUpperCase();
+      newDocData.invoiceIssuedDate = String(newDocData.invoiceIssuedDate || todayIso()).trim();
+      newDocData.invoicePenaltyMode = String(penaltyModeSel.value || "B2C").toUpperCase();
+      newDocData.invoicePenaltyText = String(penaltyTextEl.value || "").trim();
+      newDocData.invoiceShowCancellation = !!showCancelChk.checked;
+      newDocData.businessSnapshot = buildBusinessSnapshotFromProfile();
 
-      sessionStorage.setItem("invoiceDraftPreview", JSON.stringify(draft));
+      recalcDraft();
+
+      sessionStorage.setItem("invoiceDraftPreview", JSON.stringify(newDocData));
       location.href = `facture-apercu.html?draft=1`;
     });
 
@@ -1250,7 +1498,7 @@
         newDocData.invoiceNumber = invoiceNumber;
         newDocData.invoiceStatus = "ISSUED";
         newDocData.invoiceIssuedAt = serverTimestamp();
-        newDocData.invoiceIssuedDate = todayIso();
+        newDocData.invoiceIssuedDate = String(newDocData.invoiceIssuedDate || todayIso()).trim() || todayIso();
         newDocData.invoiceIssuedBy = currentUser.uid;
 
         newDocData.invoiceNotes = String(invoiceNotesEl.value || "").trim();
@@ -1260,15 +1508,15 @@
         newDocData.invoicePenaltyText = String(penaltyTextEl.value || "").trim();
         newDocData.invoiceShowCancellation = !!showCancelChk.checked;
 
-        refreshTotalsUI();
-
         newDocData.businessSnapshot = buildBusinessSnapshotFromProfile();
+        recalcDraft();
 
         newDocData.updatedAt = serverTimestamp();
         newDocData.commercialStatus = "FACTURE_EMISE";
         newDocData.commercialUpdatedAt = serverTimestamp();
 
-        const created = await addDoc(collection(db,"salesDocuments"), newDocData);
+        const payload = { ...newDocData };
+        const created = await addDoc(collection(db,"salesDocuments"), payload);
         newDocData.id = created.id;
 
         showAlert("✅ Nouvelle facture créée (émise).", true);
@@ -1281,22 +1529,19 @@
       }
     });
 
-    /* ===== UI events ===== */
     payTermSel.addEventListener("change", ()=>{ try{ renderConditions(); }catch(e){} });
     payModeSel.addEventListener("change", ()=>{ try{ renderConditions(); }catch(e){} });
     penaltyModeSel.addEventListener("change", ()=>{
-      const mode = String(penaltyModeSel.value || "B2C").toUpperCase();
-      penaltyTextEl.value = getPenaltyTemplate(mode);
+      penaltyTextEl.value = getPenaltyTemplate(String(penaltyModeSel.value || "B2C"));
       try{ renderPenalty(); }catch(e){}
     });
     penaltyTextEl.addEventListener("input", ()=>{ try{ renderPenalty(); }catch(e){} });
     showCancelChk.addEventListener("change", ()=>{ try{ renderConditions(); }catch(e){} });
+    productSelect.addEventListener("change", refreshSuggest);
 
-    /* ===== Back link ===== */
     backLink.href = "factures-liste.html";
     backLink.textContent = "← Retour";
 
-    /* ===== Boot ===== */
     onAuthStateChanged(auth, async (user)=>{
       if(!user){ location.href="login.html?role=conciergerie"; return; }
       currentUser = user;
@@ -1319,17 +1564,17 @@
         resetLineBuilder();
 
         if(!String(penaltyTextEl.value||"").trim()){
-          penaltyTextEl.value = String(newDocData.invoicePenaltyText||"").trim() || getPenaltyTemplate(penaltyModeSel.value);
+          penaltyTextEl.value = String(newDocData.invoicePenaltyText||"").trim() || getPenaltyTemplate(newDocData.invoicePenaltyMode);
         }
-        showCancelChk.checked = true;
 
         lockUI(false);
         renderRecap();
       }catch(e){
+        console.error(e);
         showAlert("⛔ " + (e?.message || "Erreur chargement"), false);
         lockUI(true);
       }
     });
   </script>
 </body>
-</html>
+  </html>
