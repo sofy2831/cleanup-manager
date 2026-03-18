@@ -1,4 +1,4 @@
-<!-- docs/devis.html (FINAL — TVA par ligne SERVICE 20% / PRODUCT 10% + snapshot document + rattachement owner/client existant) -->
+<!-- docs/devis.html (CORRIGÉ COMPLET — businessSnapshot + clientSnapshot uniformisés + compatibilité anciens docs) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -633,8 +633,11 @@
     let quoteData = null;
     let docId = "";
     let lines = [];
+
     let selectedOwnerDocId = "";
     let selectedOwnerUid = "";
+    let selectedClientPhone = "";
+    let selectedClientCountry = "FR";
 
     function showAlert(msg, ok=false){
       alertBox.style.display = "block";
@@ -667,13 +670,78 @@
       return Math.round((Number(n) || 0) * 100) / 100;
     }
 
+    function todayDdmmyyyy(){
+      const d = new Date();
+      const dd = String(d.getDate()).padStart(2,"0");
+      const mm = String(d.getMonth()+1).padStart(2,"0");
+      const yy = d.getFullYear();
+      return `${dd}/${mm}/${yy}`;
+    }
+    function addDaysLabel(ddmmyyyy, days){
+      const [dd,mm,yy] = String(ddmmyyyy).split("/").map(x=>parseInt(x,10));
+      const d = new Date(yy, (mm||1)-1, dd||1);
+      d.setDate(d.getDate() + (Number(days)||0));
+      return String(d.getDate()).padStart(2,"0") + "/" + String(d.getMonth()+1).padStart(2,"0") + "/" + d.getFullYear();
+    }
+    function termToDays(term){
+      if(term === "RECEPTION") return 0;
+      if(term === "8J") return 8;
+      if(term === "15J") return 15;
+      if(term === "30J") return 30;
+      if(term === "45J") return 45;
+      return 0;
+    }
+    function dueLabel(term){
+      if(term === "RECEPTION") return "À réception";
+      if(term === "8J") return "8 jours";
+      if(term === "15J") return "15 jours";
+      if(term === "30J") return "30 jours";
+      if(term === "45J") return "45 jours";
+      return term || "—";
+    }
+
+    function getSelectedPayMode(){
+      const el = document.querySelector('input[name="payMode"]:checked');
+      return el ? el.value : "";
+    }
+    function setPayMode(mode){
+      const m = String(mode||"").toUpperCase();
+      payModeVIR.checked = (m === "VIREMENT");
+      payModeESP.checked = (m === "ESPECES");
+      payModeCHQ.checked = (m === "CHEQUE");
+    }
+
+    function getPenaltyTemplate(mode){
+      if(mode === "B2B"){
+        return "Pénalités de retard : 3 fois le taux d’intérêt légal en vigueur + indemnité forfaitaire de recouvrement de 40 € .";
+      }
+      if(mode === "B2C"){
+        return "Pénalités de retard : 3 fois le taux d’intérêt légal en vigueur .";
+      }
+      return "";
+    }
+    function getSelectedPenaltyMode(){
+      if(penB2BEl.checked) return "B2B";
+      if(penB2CEl.checked) return "B2C";
+      return "";
+    }
+    function syncPenaltyText(){
+      const mode = getSelectedPenaltyMode() || "B2C";
+      penaltyTextEl.value = getPenaltyTemplate(mode);
+    }
+    penB2BEl.addEventListener("change", syncPenaltyText);
+    penB2CEl.addEventListener("change", syncPenaltyText);
+
     function extractAddressParts(src){
       const a = src?.address || {};
+      const ba = src?.billingAddress || {};
 
       const address1 =
         String(
           a.address1 ??
           a.street ??
+          ba.address1 ??
+          ba.street ??
           src?.clientAddress1 ??
           src?.address1 ??
           src?.street ??
@@ -683,6 +751,7 @@
       const address2 =
         String(
           a.address2 ??
+          ba.address2 ??
           src?.clientAddress2 ??
           src?.address2 ??
           ""
@@ -693,6 +762,8 @@
           a.zip ??
           a.postalCode ??
           a.postcode ??
+          ba.zip ??
+          ba.postalCode ??
           src?.clientZip ??
           src?.zip ??
           src?.postalCode ??
@@ -703,6 +774,7 @@
       const city =
         String(
           a.city ??
+          ba.city ??
           src?.clientCity ??
           src?.city ??
           ""
@@ -741,6 +813,8 @@
       clientCityInput.value = "";
       selectedOwnerDocId = "";
       selectedOwnerUid = "";
+      selectedClientPhone = "";
+      selectedClientCountry = "FR";
     }
 
     function fillClientFromOwner(owner){
@@ -768,6 +842,8 @@
 
       selectedOwnerDocId = String(owner?.id || "").trim();
       selectedOwnerUid = String(owner?.ownerUid || owner?.userUid || "").trim();
+      selectedClientPhone = String(owner?.phone || owner?.tel || owner?.mobile || "").trim();
+      selectedClientCountry = String(owner?.country || "FR").trim() || "FR";
     }
 
     async function searchOwners(term){
@@ -830,12 +906,13 @@
           emailLower: String(item.emailLower || "").trim(),
           email: String(item.clientEmail || item.email || "").trim(),
           ownerUid: String(item.ownerUid || item.userUid || "").trim(),
+          phone: String(item.phone || item.tel || item.mobile || "").trim(),
+          country: String(item.country || "FR").trim(),
           address: item.address || null,
           address1: String(item.address1 || "").trim(),
           address2: String(item.address2 || "").trim(),
           zip: String(item.zip || item.postalCode || item.postcode || "").trim(),
-          city: String(item.city || "").trim(),
-          country: String(item.country || "").trim()
+          city: String(item.city || "").trim()
         }));
       }catch(e){
         console.error(e);
@@ -902,67 +979,6 @@
       clearClient();
       showAlert("✅ Bloc client réinitialisé (nouveau client).", true);
     });
-
-    function todayDdmmyyyy(){
-      const d = new Date();
-      const dd = String(d.getDate()).padStart(2,"0");
-      const mm = String(d.getMonth()+1).padStart(2,"0");
-      const yy = d.getFullYear();
-      return `${dd}/${mm}/${yy}`;
-    }
-    function addDaysLabel(ddmmyyyy, days){
-      const [dd,mm,yy] = String(ddmmyyyy).split("/").map(x=>parseInt(x,10));
-      const d = new Date(yy, (mm||1)-1, dd||1);
-      d.setDate(d.getDate() + (Number(days)||0));
-      return String(d.getDate()).padStart(2,"0") + "/" + String(d.getMonth()+1).padStart(2,"0") + "/" + d.getFullYear();
-    }
-    function termToDays(term){
-      if(term === "RECEPTION") return 0;
-      if(term === "8J") return 8;
-      if(term === "15J") return 15;
-      if(term === "30J") return 30;
-      if(term === "45J") return 45;
-      return 0;
-    }
-    function dueLabel(term){
-      if(term === "RECEPTION") return "À réception";
-      if(term === "8J") return "8 jours";
-      if(term === "15J") return "15 jours";
-      if(term === "30J") return "30 jours";
-      if(term === "45J") return "45 jours";
-      return term || "—";
-    }
-    function getSelectedPayMode(){
-      const el = document.querySelector('input[name="payMode"]:checked');
-      return el ? el.value : "";
-    }
-    function setPayMode(mode){
-      const m = String(mode||"").toUpperCase();
-      payModeVIR.checked = (m === "VIREMENT");
-      payModeESP.checked = (m === "ESPECES");
-      payModeCHQ.checked = (m === "CHEQUE");
-    }
-
-    function getPenaltyTemplate(mode){
-      if(mode === "B2B"){
-        return "Pénalités de retard : 3 fois le taux d’intérêt légal en vigueur + indemnité forfaitaire de recouvrement de 40 € .";
-      }
-      if(mode === "B2C"){
-        return "Pénalités de retard : 3 fois le taux d’intérêt légal en vigueur .";
-      }
-      return "";
-    }
-    function getSelectedPenaltyMode(){
-      if(penB2BEl.checked) return "B2B";
-      if(penB2CEl.checked) return "B2C";
-      return "";
-    }
-    function syncPenaltyText(){
-      const mode = getSelectedPenaltyMode() || "B2C";
-      penaltyTextEl.value = getPenaltyTemplate(mode);
-    }
-    penB2BEl.addEventListener("change", syncPenaltyText);
-    penB2CEl.addEventListener("change", syncPenaltyText);
 
     function getVatSnapshotFromProfile(){
       const bp = (profileData?.businessProfile || {});
@@ -1094,22 +1110,25 @@
       profileData = snap.exists() ? (snap.data() || {}) : {};
     }
 
-    function applyLogoFromProfile(profile){
-      const bp = (profile?.businessProfile || {});
-      const url = String(bp.logoUrl || "").trim();
-
-      if(url){
-        logoImg.src = url; logoImg.style.display = "block"; logoFallback.style.display = "none";
-        bizLogoImg.src = url; bizLogoImg.style.display = "block"; bizLogoFallback.style.display = "none";
+    function applyLogoFromUrl(url){
+      const safeUrl = String(url || "").trim();
+      if(safeUrl){
+        logoImg.src = safeUrl; logoImg.style.display = "block"; logoFallback.style.display = "none";
+        bizLogoImg.src = safeUrl; bizLogoImg.style.display = "block"; bizLogoFallback.style.display = "none";
       }else{
         logoImg.style.display = "none"; logoFallback.style.display = "block";
         bizLogoImg.style.display = "none"; bizLogoFallback.style.display = "block";
       }
     }
 
-    function renderBank(){
+    function applyLogoFromProfile(profile){
+      const bp = (profile?.businessProfile || {});
+      applyLogoFromUrl(String(bp.logoUrl || "").trim());
+    }
+
+    function renderBank(sourceBank = null){
       const bp = (profileData?.businessProfile || {});
-      const bank = (bp.bank || {});
+      const bank = sourceBank || (bp.bank || {});
       const bankName = String(bank.bankName || bank.name || "").trim();
       const holder   = String(bank.holder || "").trim();
       const iban     = String(bank.iban || "").trim();
@@ -1124,53 +1143,86 @@
       bankKv.innerHTML = rows.length ? rows.join("") : `<div class="line">—</div>`;
     }
 
+    function getNormalizedBusinessSnapshot(){
+      const docBs = (quoteData?.businessSnapshot && typeof quoteData.businessSnapshot === "object")
+        ? quoteData.businessSnapshot
+        : null;
+
+      const bp = (profileData?.businessProfile || {});
+      const source = docBs || bp;
+
+      const companyName = String(source.companyName || "Conciergerie").trim();
+      const logoUrl = String(source.logoUrl || "").trim();
+
+      const street = String(source.address?.street || "").trim();
+      const zip = String(source.address?.zip || "").trim();
+      const city = String(source.address?.city || "").trim();
+
+      const siret = String(source.registration?.siret || "").trim();
+      const ape = String(source.registration?.ape || "").trim();
+
+      const billingEmail = String(
+        source.billingEmail ||
+        source.contact?.email ||
+        bp.billingEmail ||
+        bp.contact?.email ||
+        profileData?.email ||
+        ""
+      ).trim();
+
+      const phone = String(
+        source.phone ||
+        source.contact?.phone ||
+        bp.phone ||
+        bp.contact?.phone ||
+        ""
+      ).trim();
+
+      const bank = source.bank || bp.bank || {};
+
+      return {
+        companyName,
+        logoUrl,
+        address: { street, zip, city },
+        registration: { siret, ape },
+        billingEmail,
+        phone,
+        bank: {
+          bankName: String(bank.bankName || bank.name || "").trim(),
+          name: String(bank.name || bank.bankName || "").trim(),
+          holder: String(bank.holder || "").trim(),
+          iban: String(bank.iban || "").trim(),
+          bic: String(bank.bic || "").trim()
+        }
+      };
+    }
+
     function renderBusinessHeader(){
-      const docBs = quoteData?.businessSnapshot || null;
-      const bp = docBs || (profileData?.businessProfile || {});
+      const bs = getNormalizedBusinessSnapshot();
 
-      const cName = String(bp.companyName || "Conciergerie").trim();
-      const street = String(bp.address?.street || "").trim();
-      const zip = String(bp.address?.zip || "").trim();
-      const city = String(bp.address?.city || "").trim();
-      const siret = String(bp.registration?.siret || "").trim();
-      const ape = String(bp.registration?.ape || "").trim();
-      const mail = String(bp.contact?.email || bp.email || "").trim();
-      const phone = String(bp.contact?.phone || bp.phone || "").trim();
-
-      bizNameEl.textContent = cName || "—";
-      pageTitleEl.textContent = cName || "Conciergerie";
-      document.title = `${cName || "Conciergerie"} – Devis`;
+      bizNameEl.textContent = bs.companyName || "—";
+      pageTitleEl.textContent = bs.companyName || "Conciergerie";
+      document.title = `${bs.companyName || "Conciergerie"} – Devis`;
 
       const linesHtml = [];
-      if(street) linesHtml.push(esc(street));
-      if(zip || city) linesHtml.push(esc([zip, city].filter(Boolean).join(" ")));
-      const legal = [siret ? `SIRET ${siret}` : "", ape ? `APE ${ape}` : ""].filter(Boolean).join(" • ");
+      if(bs.address.street) linesHtml.push(esc(bs.address.street));
+      if(bs.address.zip || bs.address.city) linesHtml.push(esc([bs.address.zip, bs.address.city].filter(Boolean).join(" ")));
+
+      const legal = [bs.registration.siret ? `SIRET ${bs.registration.siret}` : "", bs.registration.ape ? `APE ${bs.registration.ape}` : ""]
+        .filter(Boolean).join(" • ");
       if(legal) linesHtml.push(`<span class="mut">${esc(legal)}</span>`);
-      const contact = [mail ? mail : "", phone ? phone : ""].filter(Boolean).join(" • ");
+
+      const contact = [bs.billingEmail, bs.phone].filter(Boolean).join(" • ");
       if(contact) linesHtml.push(`<span class="mut">${esc(contact)}</span>`);
 
       bizLinesEl.innerHTML = linesHtml.length
         ? linesHtml.map(x => `<div class="bizLine">${x}</div>`).join("")
         : "—";
 
-      if(docBs?.logoUrl){
-        logoImg.src = docBs.logoUrl; logoImg.style.display = "block"; logoFallback.style.display = "none";
-        bizLogoImg.src = docBs.logoUrl; bizLogoImg.style.display = "block"; bizLogoFallback.style.display = "none";
-      }else{
-        applyLogoFromProfile(profileData);
-      }
+      if(bs.logoUrl) applyLogoFromUrl(bs.logoUrl);
+      else applyLogoFromProfile(profileData);
 
-      const bankSource = docBs?.bank || null;
-      if(bankSource){
-        const rows = [];
-        if(bankSource.holder) rows.push(`<div class="line"><b>Titulaire</b> : ${esc(bankSource.holder)}</div>`);
-        if(bankSource.bankName) rows.push(`<div class="line"><b>Banque</b> : ${esc(bankSource.bankName)}</div>`);
-        if(bankSource.iban) rows.push(`<div class="line"><b>IBAN</b> : ${esc(bankSource.iban)}</div>`);
-        if(bankSource.bic) rows.push(`<div class="line"><b>BIC</b> : ${esc(bankSource.bic)}</div>`);
-        bankKv.innerHTML = rows.length ? rows.join("") : `<div class="line">—</div>`;
-      }else{
-        renderBank();
-      }
+      renderBank(bs.bank);
     }
 
     function buildBusinessSnapshotFromProfile(){
@@ -1185,6 +1237,7 @@
       const bank = (bp.bank || {});
       const bankSnap = {
         bankName: String(bank.bankName || bank.name || "").trim(),
+        name: String(bank.name || bank.bankName || "").trim(),
         holder: String(bank.holder || "").trim(),
         iban: String(bank.iban || "").trim(),
         bic: String(bank.bic || "").trim()
@@ -1194,62 +1247,33 @@
 
       return {
         companyName: String(bp.companyName || "Conciergerie").trim(),
+        billingEmail: String(bp.billingEmail || bp.contact?.email || profileData?.email || "").trim(),
+        phone: String(bp.phone || bp.contact?.phone || "").trim(),
         logoUrl: String(bp.logoUrl || "").trim(),
+        snapAtMs: Date.now(),
         address: {
           street: String(bp.address?.street || "").trim(),
           zip: String(bp.address?.zip || "").trim(),
-          city: String(bp.address?.city || "").trim(),
+          city: String(bp.address?.city || "").trim()
         },
         registration: {
           siret: String(bp.registration?.siret || "").trim(),
-          ape: String(bp.registration?.ape || "").trim(),
+          ape: String(bp.registration?.ape || "").trim()
         },
-        contact: {
-          email: String(bp.contact?.email || bp.email || "").trim(),
-          phone: String(bp.contact?.phone || bp.phone || "").trim(),
-        },
-        bank: bankSnap,
         vat: {
           enabled: !!vatSnapshot.enabled,
           serviceRate: Number(vatSnapshot.serviceRate || 0),
           productRate: Number(vatSnapshot.productRate || 0)
         },
         tvaExemptionText: !vatSnapshot.enabled ? getTvaExemptionText() : "",
+        bank: bankSnap,
         conditions: {
           cancellationPercent: Number.isFinite(Number(bp.conditions?.cancellationPercent))
             ? Number(bp.conditions.cancellationPercent)
             : 30
         },
-        signatureName,
-        snapAtMs: Date.now()
+        signatureName
       };
-    }
-
-    async function ensureQuoteNumber(uid, year){
-      const counterId = `${uid}_${year}`;
-      const counterRef = doc(db, "counters", counterId);
-
-      const next = await runTransaction(db, async (tx)=>{
-        const snap = await tx.get(counterRef);
-        if(!snap.exists()){
-          tx.set(counterRef, { quoteSeq: 0, invoiceSeq: 0, creditSeq: 0 });
-        }
-        const c = snap.exists() ? (snap.data() || {}) : { quoteSeq: 0 };
-        const n = (Number(c.quoteSeq)||0) + 1;
-        tx.set(counterRef, { ...c, quoteSeq: n }, { merge:true });
-        return n;
-      });
-
-      const padded = String(next).padStart(4,"0");
-      return `D${year}-${padded}`;
-    }
-
-    function lockUI(locked){
-      saveBtn.disabled = !!locked;
-      previewBtn.disabled = !!locked;
-      addLineBtn.disabled = !!locked;
-      pickOwnerBtn.disabled = !!locked;
-      clearClientBtn.disabled = !!locked;
     }
 
     function readClientInputs(){
@@ -1259,34 +1283,70 @@
         clientAddress1: (clientAddress1Input.value || "").trim(),
         clientAddress2: (clientAddress2Input.value || "").trim(),
         clientZip: (clientZipInput.value || "").trim(),
-        clientCity: (clientCityInput.value || "").trim(),
+        clientCity: (clientCityInput.value || "").trim()
+      };
+    }
+
+    function buildClientSnapshotFromState(){
+      const client = readClientInputs();
+
+      const fallbackPhone = String(
+        quoteData?.clientSnapshot?.phone ||
+        quoteData?.clientPhone ||
+        quoteData?.ownerPhone ||
+        ""
+      ).trim();
+
+      const fallbackCountry = String(
+        quoteData?.clientSnapshot?.country ||
+        quoteData?.clientCountry ||
+        quoteData?.ownerCountry ||
+        "FR"
+      ).trim() || "FR";
+
+      return {
+        ownerDocId: String(selectedOwnerDocId || quoteData?.clientSnapshot?.ownerDocId || quoteData?.ownerDocId || "").trim(),
+        ownerUid: String(selectedOwnerUid || quoteData?.clientSnapshot?.ownerUid || quoteData?.ownerUid || "").trim(),
+        name: client.clientDisplayName,
+        email: client.clientEmail,
+        phone: String(selectedClientPhone || fallbackPhone).trim(),
+        address1: client.clientAddress1,
+        address2: client.clientAddress2,
+        zip: client.clientZip,
+        city: client.clientCity,
+        country: String(selectedClientCountry || fallbackCountry).trim() || "FR"
       };
     }
 
     function renderClientInputsFromDoc(d){
-      const { address1, address2, zip, city } = extractAddressParts(d);
+      const cs = (d?.clientSnapshot && typeof d.clientSnapshot === "object") ? d.clientSnapshot : null;
 
-      clientDisplayNameInput.value = String(
-        d.clientDisplayName ||
-        d.clientName ||
-        d.displayName ||
-        d.fullname ||
-        ""
-      ).trim();
+      const source = {
+        clientDisplayName: cs?.name || d.clientDisplayName || d.clientName || d.displayName || d.fullname || "",
+        clientEmail: cs?.email || d.clientEmail || d.email || "",
+        clientAddress1: cs?.address1 || d.clientAddress1 || d.ownerAddress1 || "",
+        clientAddress2: cs?.address2 || d.clientAddress2 || d.ownerAddress2 || "",
+        clientZip: cs?.zip || d.clientZip || d.ownerZip || "",
+        clientCity: cs?.city || d.clientCity || d.ownerCity || "",
+        clientCountry: cs?.country || d.clientCountry || d.ownerCountry || "FR",
+        clientPhone: cs?.phone || d.clientPhone || d.ownerPhone || "",
+        clientOwnerDocId: cs?.ownerDocId || d.clientOwnerDocId || d.ownerDocId || "",
+        ownerUid: cs?.ownerUid || d.ownerUid || ""
+      };
 
-      clientEmailInput.value = String(
-        d.clientEmail ||
-        d.email ||
-        ""
-      ).trim();
+      const { address1, address2, zip, city } = extractAddressParts(source);
 
+      clientDisplayNameInput.value = String(source.clientDisplayName || "").trim();
+      clientEmailInput.value = String(source.clientEmail || "").trim();
       clientAddress1Input.value = address1;
       clientAddress2Input.value = address2;
       clientZipInput.value = zip;
       clientCityInput.value = city;
 
-      selectedOwnerDocId = String(d.clientOwnerDocId || d.ownerDocId || "").trim();
-      selectedOwnerUid = String(d.ownerUid || d.clientOwnerUid || "").trim();
+      selectedOwnerDocId = String(source.clientOwnerDocId || "").trim();
+      selectedOwnerUid = String(source.ownerUid || "").trim();
+      selectedClientPhone = String(source.clientPhone || "").trim();
+      selectedClientCountry = String(source.clientCountry || "FR").trim() || "FR";
     }
 
     function getTemplateByKey(key){
@@ -1540,6 +1600,33 @@
     paymentTermEl.addEventListener("change", renderConditions);
     offerValidityDaysEl.addEventListener("input", renderConditions);
 
+    async function ensureQuoteNumber(uid, year){
+      const counterId = `${uid}_${year}`;
+      const counterRef = doc(db, "counters", counterId);
+
+      const next = await runTransaction(db, async (tx)=>{
+        const snap = await tx.get(counterRef);
+        if(!snap.exists()){
+          tx.set(counterRef, { quoteSeq: 0, invoiceSeq: 0, creditSeq: 0 });
+        }
+        const c = snap.exists() ? (snap.data() || {}) : { quoteSeq: 0 };
+        const n = (Number(c.quoteSeq)||0) + 1;
+        tx.set(counterRef, { ...c, quoteSeq: n }, { merge:true });
+        return n;
+      });
+
+      const padded = String(next).padStart(4,"0");
+      return `D${year}-${padded}`;
+    }
+
+    function lockUI(locked){
+      saveBtn.disabled = !!locked;
+      previewBtn.disabled = !!locked;
+      addLineBtn.disabled = !!locked;
+      pickOwnerBtn.disabled = !!locked;
+      clearClientBtn.disabled = !!locked;
+    }
+
     async function loadQuoteById(){
       if(!docId) return;
       quoteRef = doc(db, "salesDocuments", docId);
@@ -1596,6 +1683,7 @@
         throw new Error("Client : nom + email obligatoires (création devis).");
       }
 
+      const clientSnapshot = buildClientSnapshotFromState();
       const vatSnapshot = getVatSnapshotFromProfile();
       const computed = computeDocument(lines, vatSnapshot.enabled, vatSnapshot);
 
@@ -1616,17 +1704,30 @@
         quoteStatus: "DRAFT",
         commercialStatus: "DEVIS",
 
-        clientDisplayName: client.clientDisplayName,
-        clientName: client.clientDisplayName,
-        clientEmail: client.clientEmail,
-        clientAddress1: client.clientAddress1,
-        clientAddress2: client.clientAddress2,
-        clientZip: client.clientZip,
-        clientCity: client.clientCity,
+        clientSnapshot,
 
-        clientOwnerDocId: selectedOwnerDocId || "",
-        ownerDocId: selectedOwnerDocId || "",
-        ownerUid: selectedOwnerUid || "",
+        clientDisplayName: clientSnapshot.name,
+        clientName: clientSnapshot.name,
+        clientEmail: clientSnapshot.email,
+        clientPhone: clientSnapshot.phone,
+        clientAddress1: clientSnapshot.address1,
+        clientAddress2: clientSnapshot.address2,
+        clientZip: clientSnapshot.zip,
+        clientCity: clientSnapshot.city,
+        clientCountry: clientSnapshot.country,
+
+        clientOwnerDocId: clientSnapshot.ownerDocId || "",
+        ownerDocId: clientSnapshot.ownerDocId || "",
+        ownerUid: clientSnapshot.ownerUid || "",
+
+        ownerName: clientSnapshot.name,
+        ownerEmail: clientSnapshot.email,
+        ownerPhone: clientSnapshot.phone,
+        ownerAddress1: clientSnapshot.address1,
+        ownerAddress2: clientSnapshot.address2,
+        ownerZip: clientSnapshot.zip,
+        ownerCity: clientSnapshot.city,
+        ownerCountry: clientSnapshot.country,
 
         vatEnabled: !!vatSnapshot.enabled,
         vatSnapshot,
@@ -1703,23 +1804,37 @@
 
       const vatSnapshot = existingVatSnapshot || getVatSnapshotFromProfile();
       const computed = computeDocument(lines, !!vatSnapshot.enabled, vatSnapshot);
+      const clientSnapshot = buildClientSnapshotFromState();
 
       const patch = {
         businessSnapshot: existingIsListable
           ? (quoteData?.businessSnapshot || buildBusinessSnapshotFromProfile())
           : buildBusinessSnapshotFromProfile(),
 
-        clientDisplayName: client.clientDisplayName,
-        clientName: client.clientDisplayName,
-        clientEmail: client.clientEmail,
-        clientAddress1: client.clientAddress1,
-        clientAddress2: client.clientAddress2,
-        clientZip: client.clientZip,
-        clientCity: client.clientCity,
+        clientSnapshot,
 
-        clientOwnerDocId: selectedOwnerDocId || "",
-        ownerDocId: selectedOwnerDocId || "",
-        ownerUid: selectedOwnerUid || quoteData?.ownerUid || "",
+        clientDisplayName: clientSnapshot.name,
+        clientName: clientSnapshot.name,
+        clientEmail: clientSnapshot.email,
+        clientPhone: clientSnapshot.phone,
+        clientAddress1: clientSnapshot.address1,
+        clientAddress2: clientSnapshot.address2,
+        clientZip: clientSnapshot.zip,
+        clientCity: clientSnapshot.city,
+        clientCountry: clientSnapshot.country,
+
+        clientOwnerDocId: clientSnapshot.ownerDocId || "",
+        ownerDocId: clientSnapshot.ownerDocId || "",
+        ownerUid: clientSnapshot.ownerUid || quoteData?.ownerUid || "",
+
+        ownerName: clientSnapshot.name,
+        ownerEmail: clientSnapshot.email,
+        ownerPhone: clientSnapshot.phone,
+        ownerAddress1: clientSnapshot.address1,
+        ownerAddress2: clientSnapshot.address2,
+        ownerZip: clientSnapshot.zip,
+        ownerCity: clientSnapshot.city,
+        ownerCountry: clientSnapshot.country,
 
         vatEnabled: !!vatSnapshot.enabled,
         vatSnapshot,
@@ -1774,7 +1889,6 @@
     }
 
     function buildDraftPreviewObject(){
-      const client = readClientInputs();
       const existingIsListable = !!quoteData?.listable;
       const bs = existingIsListable
         ? (quoteData?.businessSnapshot || buildBusinessSnapshotFromProfile())
@@ -1789,6 +1903,7 @@
         : getVatSnapshotFromProfile();
 
       const computed = computeDocument(lines, !!vatSnapshot.enabled, vatSnapshot);
+      const clientSnapshot = buildClientSnapshotFromState();
 
       return {
         conciergerieUid: currentUser.uid,
@@ -1800,17 +1915,30 @@
         quoteNumber: String(quoteData?.quoteNumber || "").trim(),
         quoteStatus: String(quoteData?.quoteStatus || "DRAFT").trim(),
 
-        clientDisplayName: client.clientDisplayName,
-        clientName: client.clientDisplayName,
-        clientEmail: client.clientEmail,
-        clientAddress1: client.clientAddress1,
-        clientAddress2: client.clientAddress2,
-        clientZip: client.clientZip,
-        clientCity: client.clientCity,
+        clientSnapshot,
 
-        clientOwnerDocId: selectedOwnerDocId || "",
-        ownerDocId: selectedOwnerDocId || "",
-        ownerUid: selectedOwnerUid || quoteData?.ownerUid || "",
+        clientDisplayName: clientSnapshot.name,
+        clientName: clientSnapshot.name,
+        clientEmail: clientSnapshot.email,
+        clientPhone: clientSnapshot.phone,
+        clientAddress1: clientSnapshot.address1,
+        clientAddress2: clientSnapshot.address2,
+        clientZip: clientSnapshot.zip,
+        clientCity: clientSnapshot.city,
+        clientCountry: clientSnapshot.country,
+
+        clientOwnerDocId: clientSnapshot.ownerDocId || "",
+        ownerDocId: clientSnapshot.ownerDocId || "",
+        ownerUid: clientSnapshot.ownerUid || quoteData?.ownerUid || "",
+
+        ownerName: clientSnapshot.name,
+        ownerEmail: clientSnapshot.email,
+        ownerPhone: clientSnapshot.phone,
+        ownerAddress1: clientSnapshot.address1,
+        ownerAddress2: clientSnapshot.address2,
+        ownerZip: clientSnapshot.zip,
+        ownerCity: clientSnapshot.city,
+        ownerCountry: clientSnapshot.country,
 
         vatEnabled: !!vatSnapshot.enabled,
         vatSnapshot,
@@ -1926,12 +2054,13 @@
         if(docId){
           await loadQuoteById();
         }else{
+          const profileVat = getVatSnapshotFromProfile();
           quoteData = {
             quoteStatus: "DRAFT",
             quoteNumber: "",
             listable: false,
-            vatSnapshot: getVatSnapshotFromProfile(),
-            vatEnabled: !!getVatSnapshotFromProfile().enabled
+            vatSnapshot: profileVat,
+            vatEnabled: !!profileVat.enabled
           };
           renderRecap();
           renderLines();
