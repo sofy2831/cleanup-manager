@@ -1,4 +1,4 @@
-<!-- docs/avoir-apercu.html (CORRIGÉ COMPLET — société/logo/footer robustes + mobile cards + TVA sur une ligne + owner=1 + draft=1 conciergerie only) -->
+<!-- docs/avoir-apercu.html (CORRIGÉ COMPLET — owner sécurisé + draft=1 conciergerie only + fallback société/logo/footer/client + mobile cards) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -636,10 +636,6 @@
       return (p.get(name) || "").trim();
     }
 
-    function isOwnerMode(){
-      return getParam("owner") === "1";
-    }
-
     function ddmmyyyy(d){
       const dd = String(d.getDate()).padStart(2,"0");
       const mm = String(d.getMonth()+1).padStart(2,"0");
@@ -719,30 +715,37 @@
           creditBS.companyName ||
           invBS.companyName ||
           bp.companyName ||
+          credit?.businessName ||
+          invoice?.businessName ||
           "Conciergerie",
 
         logoUrl:
           creditBS.logoUrl ||
           invBS.logoUrl ||
           bp.logoUrl ||
+          credit?.businessLogoUrl ||
+          invoice?.businessLogoUrl ||
           "",
 
         address: {
           street:
             creditBS.address?.street ||
             invBS.address?.street ||
+            credit?.businessAddressStreet ||
             invoice?.businessAddressStreet ||
             bp.address?.street ||
             "",
           zip:
             creditBS.address?.zip ||
             invBS.address?.zip ||
+            credit?.businessAddressZip ||
             invoice?.businessAddressZip ||
             bp.address?.zip ||
             "",
           city:
             creditBS.address?.city ||
             invBS.address?.city ||
+            credit?.businessAddressCity ||
             invoice?.businessAddressCity ||
             bp.address?.city ||
             ""
@@ -752,12 +755,14 @@
           siret:
             creditBS.registration?.siret ||
             invBS.registration?.siret ||
+            credit?.businessSiret ||
             invoice?.businessSiret ||
             bp.registration?.siret ||
             "",
           ape:
             creditBS.registration?.ape ||
             invBS.registration?.ape ||
+            credit?.businessApe ||
             invoice?.businessApe ||
             bp.registration?.ape ||
             ""
@@ -766,6 +771,7 @@
         billingEmail:
           creditBS.billingEmail ||
           invBS.billingEmail ||
+          credit?.businessEmail ||
           invoice?.businessEmail ||
           bp.billingEmail ||
           profile?.email ||
@@ -776,9 +782,18 @@
           creditBS.contact?.phone ||
           invBS.phone ||
           invBS.contact?.phone ||
+          credit?.businessPhone ||
           invoice?.businessPhone ||
           bp.phone ||
-          ""
+          "",
+
+        tvaExemptionText:
+          creditBS.tvaExemptionText ||
+          invBS.tvaExemptionText ||
+          credit?.tvaExemptionText ||
+          invoice?.tvaExemptionText ||
+          bp.tvaExemptionText ||
+          "TVA non applicable (art. 293 B du CGI)"
       };
     }
 
@@ -974,12 +989,11 @@
       if(Number(totals.tva) > 0){
         tvaLineEl.textContent = `HT ${money(-totals.ht)} • TVA ${money(-totals.tva)}`;
       }else{
-        const ex = String(
+        tvaLineEl.textContent = String(
           invoice?.tvaExemptionText ||
           businessLike?.tvaExemptionText ||
           "TVA non applicable (art. 293 B du CGI)"
         ).trim();
-        tvaLineEl.textContent = ex;
       }
     }
 
@@ -1000,17 +1014,16 @@
 
     function loginRedirectUrl(){
       const token = getParam("token");
-      const base = isOwnerMode() ? "login.html?role=proprietaire" : "login.html?role=conciergerie";
+      const base = isOwnerView ? "login.html?role=proprietaire" : "login.html?role=conciergerie";
       return token ? (base + "&token=" + encodeURIComponent(token)) : base;
     }
 
-    function loadDraftFromSession(expectedId){
+    function loadDraftFromSession(){
       try{
         const raw = sessionStorage.getItem("creditDraftPreview");
         if(!raw) return null;
         const draft = JSON.parse(raw);
         if(!draft || typeof draft !== "object") return null;
-        if(expectedId && draft.id && String(draft.id) !== String(expectedId)) return null;
         return draft;
       }catch(e){
         return null;
@@ -1018,7 +1031,7 @@
     }
 
     onAuthStateChanged(auth, async (user)=>{
-      isOwnerView = isOwnerMode();
+      isOwnerView = getParam("owner") === "1";
       isDraftView = getParam("draft") === "1";
       backLink.href = isOwnerView ? "owner-facturation.html" : "factures-liste.html";
 
@@ -1031,12 +1044,6 @@
       currentDocId = docId || "";
 
       try{
-        if(!docId){
-          showError("docId manquant.");
-          paper.style.display = "none";
-          return;
-        }
-
         if(isOwnerView && isDraftView){
           showError("Accès refusé sur un brouillon.");
           paper.style.display = "none";
@@ -1044,12 +1051,12 @@
         }
 
         if(isDraftView && !isOwnerView){
-          const draft = loadDraftFromSession(docId);
+          const draft = loadDraftFromSession();
           if(draft && draft._invoice){
             const profileSnap = await getDoc(doc(db, "users", user.uid));
             const profile = profileSnap.exists() ? (profileSnap.data() || {}) : {};
 
-            creditDoc = { id: docId, ...draft };
+            creditDoc = { id: docId || "DRAFT", ...draft };
             invDoc = { ...(draft._invoice || {}) };
 
             const businessLike = applyBusinessSnapshot(creditDoc, invDoc, profile);
@@ -1062,9 +1069,17 @@
             renderHomeAndPeriod(invDoc);
             renderReason(creditDoc);
             renderLines(invDoc, businessLike);
-            backLink.href = `avoir.html?fromDocId=${encodeURIComponent(invDoc.id || "")}`;
+
+            const invId = String(invDoc.id || "").trim();
+            backLink.href = invId ? `avoir.html?fromDocId=${encodeURIComponent(invId)}` : "factures-liste.html";
             return;
           }
+        }
+
+        if(!docId){
+          showError("docId manquant.");
+          paper.style.display = "none";
+          return;
         }
 
         const creditSnap = await getDoc(doc(db, "salesDocuments", docId));
