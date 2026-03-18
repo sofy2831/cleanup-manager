@@ -1,4 +1,4 @@
-<!-- docs/facture-nouv.html (CORRIGÉ COMPLET — brouillon persistant + adresse client hydratée + HT/TVA/TTC + preview draft compatible facture-apercu + redo après avoir) -->
+<!-- docs/facture-nouv.html (CORRIGÉ COMPLET — businessSnapshot + clientSnapshot uniformisés + brouillon persistant + preview draft compatible facture-apercu + redo après avoir) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -139,7 +139,7 @@
       padding:10px 12px; display:flex; flex-direction:column; gap:6px; font-weight:1000; font-size:14px;
     }
     .totals .r{ display:flex; justify-content:space-between; gap:10px; font-size:14px; font-weight:1000; }
-    .mutedLine{ font-size:12px; color:#666; font-weight:900; }
+    .mutedLine{ font-size:12px; color:#666; font-weight:900; line-height:1.35; }
 
     label{
       display:block; font-size:12px; font-weight:1000; color:#333;
@@ -633,9 +633,10 @@
         invoicePaymentMode: String(payModeSel.value || "VIREMENT").toUpperCase(),
         invoicePaymentTerm: String(payTermSel.value || "RECEPTION").toUpperCase(),
         invoicePenaltyMode: String(penaltyModeSel.value || "B2C").toUpperCase(),
-        invoicePenaltyText: String(penaltyTextEl.value || "").trim(),
+        invoicePenaltyText: String(penaltyTextEl.value || ""),
         invoiceShowCancellation: !!showCancelChk.checked,
-        businessSnapshot: buildBusinessSnapshotFromProfile(),
+        businessSnapshot: newDocData.businessSnapshot || buildBusinessSnapshotFromProfile(),
+        clientSnapshot: newDocData.clientSnapshot || buildClientSnapshotFromSource(newDocData),
         _draftType: "REDO_INVOICE"
       };
 
@@ -814,7 +815,6 @@
         collection(db,"owners"),
         where("conciergerieUid", "==", String(conciergerieUid)),
         where("emailLower", "==", emailLower),
-        where("isActive", "==", true),
         limit(1)
       );
 
@@ -827,6 +827,7 @@
 
       return {
         docId: doc0.id,
+        ownerUid: String(o.ownerUid || o.userUid || "").trim(),
         email: normalizeEmail(o.email || emailLower),
         fullname: String(o.fullname || o.displayName || o.name || "").trim(),
         address1: addr.street,
@@ -839,7 +840,9 @@
     }
 
     async function loadOwnerFromOwnersOrNull(conciergerieUid, d){
+      const cs = d?.clientSnapshot || {};
       const ownerDocId =
+        String(cs?.ownerDocId || "").trim() ||
         String(d?.ownerDocId || "").trim() ||
         String(d?.clientOwnerDocId || "").trim();
 
@@ -852,6 +855,7 @@
               const addr = extractAddr(o);
               return {
                 docId: snap.id,
+                ownerUid: String(o.ownerUid || o.userUid || "").trim(),
                 email: normalizeEmail(o.email || ""),
                 fullname: String(o.fullname || o.displayName || o.name || "").trim(),
                 address1: addr.street,
@@ -866,7 +870,13 @@
         }catch(e){}
       }
 
-      const emailLower = normalizeEmail(d?.clientEmail || d?.ownerEmail || "");
+      const emailLower = normalizeEmail(
+        cs?.email ||
+        d?.clientEmail ||
+        d?.ownerEmail ||
+        ""
+      );
+
       if(emailLower){
         try{ return await lookupOwnerByEmailInOwners(conciergerieUid, emailLower); }
         catch(e){ return null; }
@@ -904,15 +914,167 @@
       }
     }
 
+    function getNormalizedBusinessSnapshotFromSource(sourceDoc){
+      const docBs = (sourceDoc?.businessSnapshot && typeof sourceDoc.businessSnapshot === "object")
+        ? sourceDoc.businessSnapshot
+        : null;
+
+      const bp = (profileData?.businessProfile || {});
+      const source = docBs || bp;
+
+      const companyName = String(source.companyName || "Conciergerie").trim();
+      const logoUrl = String(source.logoUrl || "").trim();
+
+      const street = String(source.address?.street || "").trim();
+      const zip = String(source.address?.zip || "").trim();
+      const city = String(source.address?.city || "").trim();
+
+      const siret = String(source.registration?.siret || "").trim();
+      const ape = String(source.registration?.ape || "").trim();
+
+      const billingEmail = String(
+        source.billingEmail ||
+        source.contact?.email ||
+        bp.billingEmail ||
+        profileData?.email ||
+        ""
+      ).trim();
+
+      const phone = String(
+        source.phone ||
+        source.contact?.phone ||
+        bp.phone ||
+        ""
+      ).trim();
+
+      const bank = source.bank || bp.bank || {};
+
+      return {
+        companyName,
+        logoUrl,
+        address: { street, zip, city },
+        registration: { siret, ape },
+        billingEmail,
+        phone,
+        bank: {
+          bankName: String(bank.bankName || bank.name || "").trim(),
+          name: String(bank.name || bank.bankName || "").trim(),
+          holder: String(bank.holder || "").trim(),
+          iban: String(bank.iban || "").trim(),
+          bic: String(bank.bic || "").trim()
+        },
+        tvaExemptionText: String(source.tvaExemptionText || bp.tvaExemptionText || "").trim(),
+        conditions: {
+          cancellationPercent: Number.isFinite(Number(source?.conditions?.cancellationPercent))
+            ? Number(source.conditions.cancellationPercent)
+            : (
+                Number.isFinite(Number(bp?.conditions?.cancellationPercent))
+                  ? Number(bp.conditions.cancellationPercent)
+                  : 30
+              )
+        }
+      };
+    }
+
+    function getNormalizedClientSnapshotFromSource(sourceDoc){
+      const cs = (sourceDoc?.clientSnapshot && typeof sourceDoc.clientSnapshot === "object")
+        ? sourceDoc.clientSnapshot
+        : null;
+
+      const source = {
+        name:
+          cs?.name ||
+          sourceDoc?.clientName ||
+          sourceDoc?.clientDisplayName ||
+          sourceDoc?.ownerName ||
+          "",
+        email:
+          cs?.email ||
+          sourceDoc?.clientEmail ||
+          sourceDoc?.ownerEmail ||
+          "",
+        phone:
+          cs?.phone ||
+          sourceDoc?.clientPhone ||
+          sourceDoc?.ownerPhone ||
+          "",
+        address1:
+          cs?.address1 ||
+          sourceDoc?.clientAddress1 ||
+          sourceDoc?.ownerAddress1 ||
+          "",
+        address2:
+          cs?.address2 ||
+          sourceDoc?.clientAddress2 ||
+          sourceDoc?.ownerAddress2 ||
+          "",
+        zip:
+          cs?.zip ||
+          sourceDoc?.clientZip ||
+          sourceDoc?.ownerZip ||
+          "",
+        city:
+          cs?.city ||
+          sourceDoc?.clientCity ||
+          sourceDoc?.ownerCity ||
+          "",
+        country:
+          cs?.country ||
+          sourceDoc?.clientCountry ||
+          sourceDoc?.ownerCountry ||
+          "FR",
+        ownerDocId:
+          cs?.ownerDocId ||
+          sourceDoc?.clientOwnerDocId ||
+          sourceDoc?.ownerDocId ||
+          "",
+        ownerUid:
+          cs?.ownerUid ||
+          sourceDoc?.ownerUid ||
+          ""
+      };
+
+      return {
+        ownerDocId: String(source.ownerDocId || "").trim(),
+        ownerUid: String(source.ownerUid || "").trim(),
+        name: String(source.name || "").trim(),
+        email: normalizeEmail(source.email || ""),
+        phone: String(source.phone || "").trim(),
+        address1: String(source.address1 || "").trim(),
+        address2: String(source.address2 || "").trim(),
+        zip: String(source.zip || "").trim(),
+        city: String(source.city || "").trim(),
+        country: String(source.country || "FR").trim() || "FR"
+      };
+    }
+
+    function buildClientSnapshotFromSource(sourceDoc){
+      const cs = getNormalizedClientSnapshotFromSource(sourceDoc);
+      return {
+        ownerDocId: cs.ownerDocId,
+        ownerUid: cs.ownerUid,
+        name: cs.name,
+        email: cs.email,
+        phone: cs.phone,
+        address1: cs.address1,
+        address2: cs.address2,
+        zip: cs.zip,
+        city: cs.city,
+        country: cs.country
+      };
+    }
+
     function docSnapshotClient(d){
-      const sName = String(d?.clientName || d?.clientCompany || d?.clientFullName || "").trim();
-      const sEmail = normalizeEmail(d?.clientEmail || "");
-      const sPhone = String(d?.clientPhone || "").trim();
-      const sA1 = String(d?.clientAddress1 || d?.clientAddress || "").trim();
-      const sA2 = String(d?.clientAddress2 || "").trim();
-      const sZip = String(d?.clientZip || "").trim();
-      const sCity = String(d?.clientCity || "").trim();
-      const sCountry = String(d?.clientCountry || "FR").trim();
+      const cs = (d?.clientSnapshot && typeof d.clientSnapshot === "object") ? d.clientSnapshot : null;
+
+      const sName = String(cs?.name || d?.clientName || d?.clientCompany || d?.clientFullName || "").trim();
+      const sEmail = normalizeEmail(cs?.email || d?.clientEmail || "");
+      const sPhone = String(cs?.phone || d?.clientPhone || "").trim();
+      const sA1 = String(cs?.address1 || d?.clientAddress1 || d?.clientAddress || "").trim();
+      const sA2 = String(cs?.address2 || d?.clientAddress2 || "").trim();
+      const sZip = String(cs?.zip || d?.clientZip || "").trim();
+      const sCity = String(cs?.city || d?.clientCity || "").trim();
+      const sCountry = String(cs?.country || d?.clientCountry || "FR").trim();
 
       const eName = String(d?.ownerName || "").trim();
       const eEmail = normalizeEmail(d?.ownerEmail || "");
@@ -941,7 +1103,8 @@
       const snap = docSnapshotClient(d);
 
       return {
-        clientOwnerDocId: owners?.docId || String(d?.clientOwnerDocId || d?.ownerDocId || "").trim() || null,
+        clientOwnerDocId: owners?.docId || String(d?.clientSnapshot?.ownerDocId || d?.clientOwnerDocId || d?.ownerDocId || "").trim() || null,
+        ownerUid: owners?.ownerUid || String(d?.clientSnapshot?.ownerUid || d?.ownerUid || "").trim() || "",
         name: String(owners?.fullname || snap.fullname || homeSnap?.fullname || "").trim(),
         email: String(owners?.email || snap.email || homeSnap?.email || "").trim(),
         phone: String(owners?.phone || snap.phone || homeSnap?.phone || "").trim(),
@@ -1006,12 +1169,11 @@
       };
     }
 
-    function applyLogoFromProfile(profile){
-      const bp = (profile?.businessProfile || {});
-      const url = String(bp.logoUrl || "").trim();
-      if(url){
-        logoImg.src = url; logoImg.style.display="block"; logoFallback.style.display="none";
-        bizLogoImg.src = url; bizLogoImg.style.display="block"; bizLogoFallback.style.display="none";
+    function applyLogoFromUrl(url){
+      const safeUrl = String(url || "").trim();
+      if(safeUrl){
+        logoImg.src = safeUrl; logoImg.style.display="block"; logoFallback.style.display="none";
+        bizLogoImg.src = safeUrl; bizLogoImg.style.display="block"; bizLogoFallback.style.display="none";
       }else{
         logoImg.style.display="none"; logoFallback.style.display="block";
         bizLogoImg.style.display="none"; bizLogoFallback.style.display="block";
@@ -1019,46 +1181,32 @@
     }
 
     function renderBusinessHeader(){
-      const bp = (profileData?.businessProfile || {});
-      const cName = String(bp.companyName || "Conciergerie").trim();
-      const street = String(bp.address?.street || "").trim();
-      const zip = String(bp.address?.zip || "").trim();
-      const city = String(bp.address?.city || "").trim();
-      const siret = String(bp.registration?.siret || "").trim();
-      const ape = String(bp.registration?.ape || "").trim();
-      const mail = String(bp.billingEmail || profileData?.email || "").trim();
-      const phone = String(bp.phone || "").trim();
-
-      appTitle.textContent = cName || "Conciergerie";
-      bizNameEl.textContent = cName || "—";
+      const bs = getNormalizedBusinessSnapshotFromSource(newDocData || sourceDocData || {});
+      appTitle.textContent = bs.companyName || "Conciergerie";
+      document.title = `${bs.companyName || "Conciergerie"} – Nouvelle facture`;
+      bizNameEl.textContent = bs.companyName || "—";
 
       const lines = [];
-      if(street) lines.push(esc(street));
-      if(zip || city) lines.push(esc([zip, city].filter(Boolean).join(" ")));
-      const legal = [siret ? `SIRET ${siret}` : "", ape ? `APE ${ape}` : ""].filter(Boolean).join(" • ");
+      if(bs.address.street) lines.push(esc(bs.address.street));
+      if(bs.address.zip || bs.address.city) lines.push(esc([bs.address.zip, bs.address.city].filter(Boolean).join(" ")));
+      const legal = [bs.registration.siret ? `SIRET ${bs.registration.siret}` : "", bs.registration.ape ? `APE ${bs.registration.ape}` : ""].filter(Boolean).join(" • ");
       if(legal) lines.push(`<span class="mut">${esc(legal)}</span>`);
-      const contact = [mail || "", phone || ""].filter(Boolean).join(" • ");
+      const contact = [bs.billingEmail || "", bs.phone || ""].filter(Boolean).join(" • ");
       if(contact) lines.push(`<span class="mut">${esc(contact)}</span>`);
       bizLinesEl.innerHTML = lines.length ? lines.join("<br>") : "—";
 
-      applyLogoFromProfile(profileData);
+      applyLogoFromUrl(bs.logoUrl);
     }
 
     function renderClientHeader(d){
-      const name = String(d?.clientName || "—").trim();
-      const a1 = String(d?.clientAddress1 || "").trim();
-      const a2 = String(d?.clientAddress2 || "").trim();
-      const zip = String(d?.clientZip || "").trim();
-      const city = String(d?.clientCity || "").trim();
-      clientNameEl.textContent = name || "—";
+      const cs = getNormalizedClientSnapshotFromSource(d || {});
+      clientNameEl.textContent = cs.name || "—";
 
       const lines = [];
-      if(a1) lines.push(esc(a1));
-      if(a2) lines.push(esc(a2));
-      if(zip || city) lines.push(esc([zip, city].filter(Boolean).join(" ")));
-      const mail = String(d?.clientEmail || "").trim();
-      const tel  = String(d?.clientPhone || "").trim();
-      const contact = [mail, tel].filter(Boolean).join(" • ");
+      if(cs.address1) lines.push(esc(cs.address1));
+      if(cs.address2) lines.push(esc(cs.address2));
+      if(cs.zip || cs.city) lines.push(esc([cs.zip, cs.city].filter(Boolean).join(" ")));
+      const contact = [cs.email, cs.phone].filter(Boolean).join(" • ");
       if(contact) lines.push(`<span class="mut">${esc(contact)}</span>`);
       clientLinesEl.innerHTML = lines.length ? lines.join("<br>") : `<span class="mut">Adresse manquante</span>`;
     }
@@ -1151,7 +1299,7 @@
       if(newDocData?.vatSnapshot?.enabled){
         html.push(`<div class="mutedLine">TVA activée • services 20% • produits 10% • ${esc(String((newDocData.lines || []).length))} ligne(s)</div>`);
       }else{
-        const ex = String(profileData?.businessProfile?.tvaExemptionText || "TVA non applicable (art. 293B CGI)").trim();
+        const ex = String(getNormalizedBusinessSnapshotFromSource(newDocData).tvaExemptionText || "TVA non applicable (art. 293B CGI)").trim();
         html.push(`<div class="mutedLine">${esc(ex)} • ${esc(String((newDocData.lines || []).length))} ligne(s)</div>`);
       }
 
@@ -1185,35 +1333,31 @@
 
     function renderConditions(){
       const d = newDocData || {};
-      const bp = (profileData?.businessProfile || {});
+      const bs = getNormalizedBusinessSnapshotFromSource(newDocData);
       const term = String(payTermSel?.value || d?.invoicePaymentTerm || "RECEPTION").toUpperCase();
       const issued = String(d?.invoiceIssuedDate || todayIso()).trim();
       const dueDate = addDaysLabel(issued, termToDays(term));
-      const cancelPct = Number.isFinite(Number(bp?.conditions?.cancellationPercent))
-        ? Number(bp.conditions.cancellationPercent)
+      const cancelPct = Number.isFinite(Number(bs?.conditions?.cancellationPercent))
+        ? Number(bs.conditions.cancellationPercent)
         : 30;
 
       const lines = [];
       lines.push(`<div class="line"><b>Échéance de paiement</b> : ${esc(dueDate)} (${esc(dueLabel(term))})</div>`);
       if(!!showCancelChk.checked){
-        lines.push(`<div class="line"><b>Annulation</b> : ${esc(cancelPct)} % du montant en cas d’annulation moins de 48 h avant l’intervention</div>`);
+        lines.push(`<div class="line"><b>Annulation</b> : ${esc(cancelPct)} % du montant peuvent être retenus selon conditions</div>`);
       }
       conditionsKv.innerHTML = lines.join("");
     }
 
     function renderBank(){
-      const bp = (profileData?.businessProfile || {});
-      const bank = (bp.bank || {});
-      const bankName = String(bank.bankName || bank.name || "").trim();
-      const holder = String(bank.holder || "").trim();
-      const iban = String(bank.iban || "").trim();
-      const bic  = String(bank.bic  || "").trim();
+      const bs = getNormalizedBusinessSnapshotFromSource(newDocData || sourceDocData || {});
+      const bank = bs.bank || {};
 
       const lines = [];
-      if(holder) lines.push(`<div class="line"><b>Titulaire</b> : ${esc(holder)}</div>`);
-      if(bankName) lines.push(`<div class="line"><b>Banque</b> : ${esc(bankName)}</div>`);
-      if(iban) lines.push(`<div class="line"><b>IBAN</b> : ${esc(iban)}</div>`);
-      if(bic)  lines.push(`<div class="line"><b>BIC</b> : ${esc(bic)}</div>`);
+      if(bank.holder) lines.push(`<div class="line"><b>Titulaire</b> : ${esc(bank.holder)}</div>`);
+      if(bank.bankName || bank.name) lines.push(`<div class="line"><b>Banque</b> : ${esc(bank.bankName || bank.name)}</div>`);
+      if(bank.iban) lines.push(`<div class="line"><b>IBAN</b> : ${esc(bank.iban)}</div>`);
+      if(bank.bic)  lines.push(`<div class="line"><b>BIC</b> : ${esc(bank.bic)}</div>`);
       bankKv.innerHTML = lines.length ? lines.join("") : `<div class="line">—</div>`;
     }
 
@@ -1264,19 +1408,35 @@
       if(String(d.conciergerieUid||"") !== String(currentUser.uid)) throw new Error("Accès refusé (facture d’une autre conciergerie).");
 
       const resolved = await resolveClientSnapshot(currentUser.uid, d);
+      const sourceClientSnapshot = d?.clientSnapshot && typeof d.clientSnapshot === "object"
+        ? d.clientSnapshot
+        : {
+            ownerDocId: String(resolved.clientOwnerDocId || d.clientOwnerDocId || d.ownerDocId || "").trim(),
+            ownerUid: String(resolved.ownerUid || d.ownerUid || "").trim(),
+            name: String(d.clientName || resolved.name || "").trim(),
+            email: normalizeEmail(d.clientEmail || resolved.email || ""),
+            phone: String(d.clientPhone || resolved.phone || "").trim(),
+            address1: String(d.clientAddress1 || resolved.address1 || "").trim(),
+            address2: String(d.clientAddress2 || resolved.address2 || "").trim(),
+            zip: String(d.clientZip || resolved.zip || "").trim(),
+            city: String(d.clientCity || resolved.city || "").trim(),
+            country: String(d.clientCountry || resolved.country || "FR").trim() || "FR"
+          };
 
       sourceDocData = {
         ...d,
-        clientOwnerDocId: d.clientOwnerDocId || resolved.clientOwnerDocId || null,
-        ownerDocId: d.ownerDocId || resolved.clientOwnerDocId || d.ownerDocId || null,
-        clientName: String(d.clientName || "").trim() ? d.clientName : (resolved.name || ""),
-        clientEmail: String(d.clientEmail || "").trim() ? d.clientEmail : (resolved.email || ""),
-        clientPhone: String(d.clientPhone || "").trim() ? d.clientPhone : (resolved.phone || ""),
-        clientAddress1: String(d.clientAddress1 || "").trim() ? d.clientAddress1 : (resolved.address1 || ""),
-        clientAddress2: String(d.clientAddress2 || "").trim() ? d.clientAddress2 : (resolved.address2 || ""),
-        clientZip: String(d.clientZip || "").trim() ? d.clientZip : (resolved.zip || ""),
-        clientCity: String(d.clientCity || "").trim() ? d.clientCity : (resolved.city || ""),
-        clientCountry: String(d.clientCountry || "").trim() ? d.clientCountry : (resolved.country || "FR")
+        clientSnapshot: sourceClientSnapshot,
+        clientOwnerDocId: d.clientOwnerDocId || sourceClientSnapshot.ownerDocId || null,
+        ownerDocId: d.ownerDocId || sourceClientSnapshot.ownerDocId || null,
+        ownerUid: d.ownerUid || sourceClientSnapshot.ownerUid || null,
+        clientName: d.clientName || sourceClientSnapshot.name || "",
+        clientEmail: d.clientEmail || sourceClientSnapshot.email || "",
+        clientPhone: d.clientPhone || sourceClientSnapshot.phone || "",
+        clientAddress1: d.clientAddress1 || sourceClientSnapshot.address1 || "",
+        clientAddress2: d.clientAddress2 || sourceClientSnapshot.address2 || "",
+        clientZip: d.clientZip || sourceClientSnapshot.zip || "",
+        clientCity: d.clientCity || sourceClientSnapshot.city || "",
+        clientCountry: d.clientCountry || sourceClientSnapshot.country || "FR"
       };
     }
 
@@ -1331,6 +1491,7 @@
       const src = sourceInvoice || {};
       const cred = creditDoc || {};
       const vatSnapshot = getVatProfile();
+      const sourceClientSnapshot = buildClientSnapshotFromSource(src);
 
       newDocData = {
         conciergerieUid: String(currentUser.uid),
@@ -1355,28 +1516,31 @@
         arrivalDateKey: src.arrivalDateKey || "",
         departureDateKey: src.departureDateKey || "",
 
-        clientOwnerDocId: src.clientOwnerDocId || null,
-        ownerDocId: src.ownerDocId || src.clientOwnerDocId || null,
-        ownerUid: src.ownerUid || null,
+        clientSnapshot: sourceClientSnapshot,
+        businessSnapshot: buildBusinessSnapshotFromProfile(),
 
-        clientName: src.clientName || "",
-        clientEmail: normalizeEmail(src.clientEmail || ""),
-        clientPhone: src.clientPhone || "",
-        clientAddress1: src.clientAddress1 || "",
-        clientAddress2: src.clientAddress2 || "",
-        clientZip: src.clientZip || "",
-        clientCity: src.clientCity || "",
-        clientCountry: src.clientCountry || "FR",
+        clientOwnerDocId: sourceClientSnapshot.ownerDocId || null,
+        ownerDocId: sourceClientSnapshot.ownerDocId || null,
+        ownerUid: sourceClientSnapshot.ownerUid || null,
+
+        clientName: sourceClientSnapshot.name || "",
+        clientEmail: sourceClientSnapshot.email || "",
+        clientPhone: sourceClientSnapshot.phone || "",
+        clientAddress1: sourceClientSnapshot.address1 || "",
+        clientAddress2: sourceClientSnapshot.address2 || "",
+        clientZip: sourceClientSnapshot.zip || "",
+        clientCity: sourceClientSnapshot.city || "",
+        clientCountry: sourceClientSnapshot.country || "FR",
         clientType: src.clientType || "",
 
-        ownerName: src.ownerName || src.clientName || "",
-        ownerEmail: normalizeEmail(src.ownerEmail || src.clientEmail || ""),
-        ownerPhone: src.ownerPhone || src.clientPhone || "",
-        ownerAddress1: src.ownerAddress1 || src.clientAddress1 || "",
-        ownerAddress2: src.ownerAddress2 || src.clientAddress2 || "",
-        ownerZip: src.ownerZip || src.clientZip || "",
-        ownerCity: src.ownerCity || src.clientCity || "",
-        ownerCountry: src.ownerCountry || src.clientCountry || "FR",
+        ownerName: src.ownerName || sourceClientSnapshot.name || "",
+        ownerEmail: normalizeEmail(src.ownerEmail || sourceClientSnapshot.email || ""),
+        ownerPhone: src.ownerPhone || sourceClientSnapshot.phone || "",
+        ownerAddress1: src.ownerAddress1 || sourceClientSnapshot.address1 || "",
+        ownerAddress2: src.ownerAddress2 || sourceClientSnapshot.address2 || "",
+        ownerZip: src.ownerZip || sourceClientSnapshot.zip || "",
+        ownerCity: src.ownerCity || sourceClientSnapshot.city || "",
+        ownerCountry: src.ownerCountry || sourceClientSnapshot.country || "FR",
 
         invoiceNumber: "",
         invoiceStatus: "DRAFT",
@@ -1395,8 +1559,6 @@
         totalTVA: 0,
         totalTTC: 0,
         totals: { ht:0, tva:0, ttc:0 },
-
-        businessSnapshot: buildBusinessSnapshotFromProfile(),
 
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -1519,7 +1681,8 @@
       newDocData.invoicePenaltyMode = String(penaltyModeSel.value || "B2C").toUpperCase();
       newDocData.invoicePenaltyText = String(penaltyTextEl.value || "").trim();
       newDocData.invoiceShowCancellation = !!showCancelChk.checked;
-      newDocData.businessSnapshot = buildBusinessSnapshotFromProfile();
+      newDocData.businessSnapshot = newDocData.businessSnapshot || buildBusinessSnapshotFromProfile();
+      newDocData.clientSnapshot = newDocData.clientSnapshot || buildClientSnapshotFromSource(newDocData);
 
       recalcDraft();
 
@@ -1554,7 +1717,22 @@
         newDocData.invoicePenaltyText = String(penaltyTextEl.value || "").trim();
         newDocData.invoiceShowCancellation = !!showCancelChk.checked;
 
-        newDocData.businessSnapshot = buildBusinessSnapshotFromProfile();
+        newDocData.businessSnapshot = newDocData.businessSnapshot || buildBusinessSnapshotFromProfile();
+        newDocData.clientSnapshot = newDocData.clientSnapshot || buildClientSnapshotFromSource(newDocData);
+
+        newDocData.clientOwnerDocId = newDocData.clientSnapshot.ownerDocId || newDocData.clientOwnerDocId || null;
+        newDocData.ownerDocId = newDocData.clientSnapshot.ownerDocId || newDocData.ownerDocId || null;
+        newDocData.ownerUid = newDocData.clientSnapshot.ownerUid || newDocData.ownerUid || null;
+
+        newDocData.clientName = newDocData.clientSnapshot.name || newDocData.clientName || "";
+        newDocData.clientEmail = newDocData.clientSnapshot.email || newDocData.clientEmail || "";
+        newDocData.clientPhone = newDocData.clientSnapshot.phone || newDocData.clientPhone || "";
+        newDocData.clientAddress1 = newDocData.clientSnapshot.address1 || newDocData.clientAddress1 || "";
+        newDocData.clientAddress2 = newDocData.clientSnapshot.address2 || newDocData.clientAddress2 || "";
+        newDocData.clientZip = newDocData.clientSnapshot.zip || newDocData.clientZip || "";
+        newDocData.clientCity = newDocData.clientSnapshot.city || newDocData.clientCity || "";
+        newDocData.clientCountry = newDocData.clientSnapshot.country || newDocData.clientCountry || "FR";
+
         recalcDraft();
 
         newDocData.updatedAt = serverTimestamp();
@@ -1642,6 +1820,8 @@
 
         if(savedDraft){
           newDocData = savedDraft;
+          if(!newDocData.businessSnapshot) newDocData.businessSnapshot = buildBusinessSnapshotFromProfile();
+          if(!newDocData.clientSnapshot) newDocData.clientSnapshot = buildClientSnapshotFromSource(newDocData);
         }else{
           buildNewDraftFromSource(sourceDocData, creditDoc);
         }
