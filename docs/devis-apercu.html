@@ -1,4 +1,4 @@
-<!-- docs/devis-apercu.html (FINAL — HT / TVA / TTC par ligne + totaux HT/TVA/TTC + owner=1 support + security ownerUid+ownerVisible + forbid owner on draft=1) -->
+<!-- docs/devis-apercu.html (CORRIGÉ COMPLET — owner sécurisé + fallback société/logo/footer + client fallback owner + draft owner refusé) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -87,7 +87,6 @@
 
     .brand{ min-width:0; }
     .brand .name{ font-size:18px; font-weight:800; line-height:1.15; }
-    .brand .sub{ display:none; }
 
     .metaRight{
       text-align:right;
@@ -105,7 +104,6 @@
       font-size:14px;
       letter-spacing:.2px;
     }
-    .docMeta{ display:none; }
 
     .grid2{
       margin-top:12px;
@@ -199,26 +197,26 @@
       gap:10px;
       align-items:center;
     }
-   .totalRow .lbl{
-  font-size:14px;
-  font-weight:700;
-  color:#111;
-  line-height:1.2;
-}
-.totalRow .amt{
-  font-size:14px;
-  font-weight:700;
-  color:#111;
-  line-height:1.2;
-}
-.totalRow.ttc .lbl{
-  font-size:14px;
-  font-weight:700;
-}
-.totalRow.ttc .amt{
-  font-size:14px;
-  font-weight:800;
-}
+    .totalRow .lbl{
+      font-size:14px;
+      font-weight:700;
+      color:#111;
+      line-height:1.2;
+    }
+    .totalRow .amt{
+      font-size:14px;
+      font-weight:700;
+      color:#111;
+      line-height:1.2;
+    }
+    .totalRow.ttc .lbl{
+      font-size:14px;
+      font-weight:700;
+    }
+    .totalRow.ttc .amt{
+      font-size:14px;
+      font-weight:800;
+    }
     .totalSub{
       margin-top:6px;
       font-size:11.5px;
@@ -340,19 +338,6 @@
       td.col-qty{
         font-size:11px;
       }
-
-      .totalRow .lbl{
-        font-size:14px;
-      }
-      .totalRow .amt{
-        font-size:14px;
-      }
-      .totalRow.ttc .lbl{
-        font-size:14px;
-      }
-      .totalRow.ttc .amt{
-        font-size:14px;
-      }
     }
 
     @media print{
@@ -423,7 +408,6 @@
           </div>
           <div class="brand">
             <div class="name" id="bizName">Conciergerie</div>
-            <div class="sub"></div>
           </div>
         </div>
 
@@ -529,15 +513,8 @@
     const alertBox = document.getElementById("alertBox");
     const backBtn = document.getElementById("backBtn");
     const printBtn = document.getElementById("printBtn");
+    const paper = document.getElementById("paper");
 
-    backBtn.addEventListener("click", () => {
-  if (history.length > 1) {
-    history.back();
-  } else {
-    window.location.href = "devis-liste.html";
-  }
-});
-    
     const logoImg = document.getElementById("logoImg");
     const logoFallback = document.getElementById("logoFallback");
 
@@ -596,12 +573,9 @@
 
     function fmtDateInputLike(value){
       if(!value) return "—";
-
       if (typeof value === "string" && /^\d{2}\/\d{2}\/\d{4}$/.test(value)) return value;
-
-      const d = new Date(value);
+      const d = value?.toDate ? value.toDate() : new Date(value);
       if (Number.isNaN(d.getTime())) return "—";
-
       const dd = String(d.getDate()).padStart(2,"0");
       const mm = String(d.getMonth()+1).padStart(2,"0");
       const yy = d.getFullYear();
@@ -609,8 +583,9 @@
     }
 
     function addDaysLabelFromDate(dateValue, days){
-      const d = dateValue ? new Date(dateValue) : new Date();
-      if (Number.isNaN(d.getTime())) return "—";
+      const d0 = dateValue?.toDate ? dateValue.toDate() : new Date(dateValue || Date.now());
+      if (Number.isNaN(d0.getTime())) return "—";
+      const d = new Date(d0.getTime());
       d.setDate(d.getDate() + (Number(days) || 0));
       const dd = String(d.getDate()).padStart(2,"0");
       const mm = String(d.getMonth()+1).padStart(2,"0");
@@ -628,48 +603,118 @@
     }
 
     function getIssuedDateLabel(d){
-      const raw =
-        d?.createdAt?.toDate?.() ||
+      return fmtDateInputLike(
+        d?.quoteIssuedDate ||
         d?.createdAt ||
-        d?.quoteUpdatedAt?.toDate?.() ||
-        d?.quoteUpdatedAt ||
-        null;
-      return fmtDateInputLike(raw);
+        d?.updatedAt ||
+        null
+      );
     }
 
     function getValidityDateLabel(d){
       const offerDays = Math.max(0, parseInt(d?.quoteOfferValidityDays || "30", 10) || 30);
       const base =
-        d?.createdAt?.toDate?.() ||
+        d?.quoteIssuedDate ||
         d?.createdAt ||
-        d?.quoteUpdatedAt?.toDate?.() ||
-        d?.quoteUpdatedAt ||
+        d?.updatedAt ||
         new Date();
       return addDaysLabelFromDate(base, offerDays);
     }
 
-    function getBusinessSnapshot(d){
-      return d?.businessSnapshot || {};
+    function getBusinessSource(d){
+      const bs = (d?.businessSnapshot && typeof d.businessSnapshot === "object") ? d.businessSnapshot : {};
+      return {
+        companyName: String(bs.companyName || d?.businessName || d?.companyName || "Conciergerie").trim(),
+        logoUrl: String(bs.logoUrl || d?.businessLogoUrl || "").trim(),
+        street: String(bs.address?.street || d?.businessAddressStreet || d?.businessAddress1 || "").trim(),
+        zip: String(bs.address?.zip || d?.businessAddressZip || "").trim(),
+        city: String(bs.address?.city || d?.businessAddressCity || "").trim(),
+        siret: String(bs.registration?.siret || d?.businessSiret || "").trim(),
+        ape: String(bs.registration?.ape || d?.businessApe || "").trim(),
+        email: String(bs.billingEmail || bs.contact?.email || d?.businessEmail || "").trim(),
+        phone: String(bs.phone || bs.contact?.phone || d?.businessPhone || "").trim(),
+        signatureName: String(bs.signatureName || bs.companyName || d?.businessName || "Conciergerie").trim(),
+        tvaExemptionText: String(bs.tvaExemptionText || d?.tvaExemptionText || "").trim()
+      };
     }
 
     function getVatSnapshot(d){
-      return d?.vatSnapshot || { enabled:false, serviceRate:0, productRate:0 };
+      const bs = d?.businessSnapshot || {};
+      const vat = bs?.vat || {};
+      return {
+        enabled: d?.vatSnapshot?.enabled === true || vat.enabled === true || Number(d?.totalTVA || 0) > 0,
+        serviceRate: Number.isFinite(Number(d?.vatSnapshot?.serviceRate)) ? Number(d.vatSnapshot.serviceRate) : (Number.isFinite(Number(vat?.serviceRate)) ? Number(vat.serviceRate) : 0.20),
+        productRate: Number.isFinite(Number(d?.vatSnapshot?.productRate)) ? Number(d.vatSnapshot.productRate) : (Number.isFinite(Number(vat?.productRate)) ? Number(vat.productRate) : 0.10)
+      };
+    }
+
+    function getClientSource(d){
+      return {
+        name: String(d?.clientDisplayName || d?.clientName || d?.ownerName || "").trim(),
+        address1: String(d?.clientAddress1 || d?.ownerAddress1 || d?.clientAddress || "").trim(),
+        address2: String(d?.clientAddress2 || d?.ownerAddress2 || "").trim(),
+        zip: String(d?.clientZip || d?.ownerZip || "").trim(),
+        city: String(d?.clientCity || d?.ownerCity || "").trim(),
+        email: String(d?.clientEmail || d?.ownerEmail || "").trim(),
+        phone: String(d?.clientPhone || d?.ownerPhone || "").trim()
+      };
+    }
+
+    function getLineTotalHT(l){
+      if(Number.isFinite(Number(l?.totalHT))) return Number(l.totalHT);
+      return Number(l?.qty || 0) * Number(l?.unitPrice || 0);
+    }
+
+    function getLineTotalTVA(l){
+      if(Number.isFinite(Number(l?.totalTVA))) return Number(l.totalTVA);
+      return 0;
+    }
+
+    function getLineTotalTTC(l){
+      if(Number.isFinite(Number(l?.totalTTC))) return Number(l.totalTTC);
+      return getLineTotalHT(l) + getLineTotalTVA(l);
+    }
+
+    function getStoredTotals(d){
+      const lines = Array.isArray(d?.lines) ? d.lines : [];
+
+      if(
+        Number.isFinite(Number(d?.totalHT)) &&
+        Number.isFinite(Number(d?.totalTVA)) &&
+        Number.isFinite(Number(d?.totalTTC))
+      ){
+        return {
+          totalHT: Number(d.totalHT),
+          totalTVA: Number(d.totalTVA),
+          totalTTC: Number(d.totalTTC)
+        };
+      }
+
+      let totalHT = 0, totalTVA = 0, totalTTC = 0;
+      for(const l of lines){
+        totalHT += getLineTotalHT(l);
+        totalTVA += getLineTotalTVA(l);
+        totalTTC += getLineTotalTTC(l);
+      }
+      return { totalHT, totalTVA, totalTTC };
+    }
+
+    function bsOrProfileExemption(d){
+      return String(getBusinessSource(d).tvaExemptionText || "TVA non applicable – art. 293 B du CGI").trim();
     }
 
     function renderHeader(d){
-      const bs = getBusinessSnapshot(d);
-      const companyName = String(bs.companyName || "Conciergerie").trim();
+      const biz = getBusinessSource(d);
 
-      bizName.textContent = companyName || "Conciergerie";
+      bizName.textContent = biz.companyName || "Conciergerie";
       issuedAtLabel.textContent = getIssuedDateLabel(d);
       validUntilLabel.textContent = getValidityDateLabel(d);
 
       const qn = String(d?.quoteNumber || "").trim();
       docTitle.textContent = qn ? `DEVIS N° ${qn}` : "DEVIS N° —";
 
-      const logoUrl = String(bs.logoUrl || "").trim();
-      if(logoUrl){
-        logoImg.src = logoUrl;
+      if(biz.logoUrl){
+        logoImg.src = biz.logoUrl;
         logoImg.style.display = "block";
         logoFallback.style.display = "none";
       }else{
@@ -679,25 +724,18 @@
     }
 
     function renderBusinessBlock(d){
-      const bs = getBusinessSnapshot(d);
+      const biz = getBusinessSource(d);
       const rows = [];
 
-      const companyName = String(bs.companyName || "").trim();
-      const street = String(bs.address?.street || "").trim();
-      const zip = String(bs.address?.zip || "").trim();
-      const city = String(bs.address?.city || "").trim();
-      const siret = String(bs.registration?.siret || "").trim();
-      const ape = String(bs.registration?.ape || "").trim();
-      const phone = String(bs.contact?.phone || "").trim();
-
-      if(companyName) rows.push(`<div>${esc(companyName)}</div>`);
-      if(street) rows.push(`<div>${esc(street)}</div>`);
-      if(zip || city) rows.push(`<div>${esc([zip, city].filter(Boolean).join(" "))}</div>`);
+      if(biz.companyName) rows.push(`<div>${esc(biz.companyName)}</div>`);
+      if(biz.street) rows.push(`<div>${esc(biz.street)}</div>`);
+      if(biz.zip || biz.city) rows.push(`<div>${esc([biz.zip, biz.city].filter(Boolean).join(" "))}</div>`);
 
       const legalBits = [];
-      if(siret) legalBits.push(`SIRET ${esc(siret)}`);
-      if(ape) legalBits.push(`APE ${esc(ape)}`);
-      if(phone) legalBits.push(esc(phone));
+      if(biz.siret) legalBits.push(`SIRET ${esc(biz.siret)}`);
+      if(biz.ape) legalBits.push(`APE ${esc(biz.ape)}`);
+      if(biz.email) legalBits.push(esc(biz.email));
+      if(biz.phone) legalBits.push(esc(biz.phone));
 
       if(legalBits.length){
         rows.push(`<div class="mut">${legalBits.join(" • ")}</div>`);
@@ -707,25 +745,20 @@
     }
 
     function renderClientBlock(d){
+      const c = getClientSource(d);
       const rows = [];
 
-      const name = String(d?.clientDisplayName || d?.clientName || "").trim();
-      const address1 = String(d?.clientAddress1 || "").trim();
-      const address2 = String(d?.clientAddress2 || "").trim();
-      const zip = String(d?.clientZip || "").trim();
-      const city = String(d?.clientCity || "").trim();
-      const email = String(d?.clientEmail || "").trim();
+      if(c.name) rows.push(`<div>${esc(c.name)}</div>`);
+      if(c.address1) rows.push(`<div>${esc(c.address1)}</div>`);
+      if(c.address2) rows.push(`<div>${esc(c.address2)}</div>`);
 
-      if(name) rows.push(`<div>${esc(name)}</div>`);
-      if(address1) rows.push(`<div>${esc(address1)}</div>`);
-      if(address2) rows.push(`<div>${esc(address2)}</div>`);
+      const cityLine = [c.zip, c.city].filter(Boolean).join(" ");
+      if(cityLine) rows.push(`<div>${esc(cityLine)}</div>`);
 
-      const lastLine = [zip, city].filter(Boolean).join(" ");
-      if(lastLine || email){
-        rows.push(`<div>${esc(lastLine)}${lastLine && email ? " • " : ""}${esc(email)}</div>`);
-      }else if(email){
-        rows.push(`<div>${esc(email)}</div>`);
-      }
+      const contactBits = [];
+      if(c.email) contactBits.push(esc(c.email));
+      if(c.phone) contactBits.push(esc(c.phone));
+      if(contactBits.length) rows.push(`<div class="mut">${contactBits.join(" • ")}</div>`);
 
       clientBlock.innerHTML = rows.join("") || "—";
     }
@@ -748,13 +781,12 @@
         const qty = Number(l?.qty || 0);
         const unit = String(l?.unit || "unité").trim();
         const unitPrice = Number(l?.unitPrice || 0);
-        const totalHT = Number(l?.totalHT || 0);
-        const totalTVA = Number(l?.totalTVA || 0);
-        const totalTTC = Number(l?.totalTTC || 0);
+        const totalHT = getLineTotalHT(l);
+        const totalTVA = getLineTotalTVA(l);
+        const totalTTC = getLineTotalTTC(l);
         const vatRate = Math.round((Number(l?.vatRate || 0)) * 100);
 
-        let tvaLabel = vat.enabled ? `${vatRate}% • ${money(totalTVA)}` : "—";
-        if(!vat.enabled) tvaLabel = "0% • 0,00 €";
+        let tvaLabel = vat.enabled ? `${vatRate}% • ${money(totalTVA)}` : "0% • 0,00 €";
 
         return `
           <tr>
@@ -770,14 +802,12 @@
     }
 
     function renderTotals(d){
-      const totalHT = Number(d?.totalHT || 0);
-      const totalTVA = Number(d?.totalTVA || 0);
-      const totalTTC = Number(d?.totalTTC || 0);
+      const total = getStoredTotals(d);
       const vat = getVatSnapshot(d);
 
-      totalHtLabel.textContent = money(totalHT);
-      totalTvaLabel.textContent = money(totalTVA);
-      totalTtcLabel.textContent = money(totalTTC);
+      totalHtLabel.textContent = money(total.totalHT);
+      totalTvaLabel.textContent = money(total.totalTVA);
+      totalTtcLabel.textContent = money(total.totalTTC);
 
       if(vat.enabled){
         const lines = Array.isArray(d?.lines) ? d.lines : [];
@@ -789,18 +819,14 @@
           .filter(l => String(l?.lineType || "").toUpperCase() === "PRODUCT")
           .reduce((s,l) => s + (Number(l?.totalTVA || 0)), 0);
 
-        totalSubLabel.textContent = `TVA totale ${money(totalTVA)} • services ${money(serviceTVA)} • produits ${money(productTVA)}`;
+        totalSubLabel.textContent = `TVA totale ${money(total.totalTVA)} • services ${money(serviceTVA)} • produits ${money(productTVA)}`;
       }else{
-        totalSubLabel.textContent = String(bsOrProfileExemption(d) || "TVA non applicable – art. 293 B du CGI");
+        totalSubLabel.textContent = bsOrProfileExemption(d);
       }
     }
 
-    function bsOrProfileExemption(d){
-      return String(d?.businessSnapshot?.tvaExemptionText || "").trim();
-    }
-
     function renderPayment(d){
-      const bs = getBusinessSnapshot(d);
+      const bs = d?.businessSnapshot || {};
       const bank = bs?.bank || {};
 
       const rows = [];
@@ -809,13 +835,11 @@
 
       if(String(d?.quotePaymentMode || "").toUpperCase() === "VIREMENT"){
         const bankBits = [];
-        if(bank.bankName) bankBits.push(esc(bank.bankName));
+        const bankName = String(bank.bankName || bank.name || "").trim();
+        if(bankName) bankBits.push(esc(bankName));
         if(bank.iban) bankBits.push(`IBAN ${esc(bank.iban)}`);
         if(bank.bic) bankBits.push(`BIC ${esc(bank.bic)}`);
-
-        if(bankBits.length){
-          rows.push(`<div>Virement : ${bankBits.join(" • ")}</div>`);
-        }
+        if(bankBits.length) rows.push(`<div>Virement : ${bankBits.join(" • ")}</div>`);
       }
 
       paymentBlock.innerHTML = rows.join("") || "—";
@@ -834,7 +858,7 @@
       if(vat.enabled){
         rows.push(`<div><b>TVA</b> : services ${Math.round((Number(vat.serviceRate || 0))*100)}% • produits ${Math.round((Number(vat.productRate || 0))*100)}%</div>`);
       }else{
-        rows.push(`<div>${esc(bsOrProfileExemption(d) || "TVA non applicable – art. 293 B du CGI")}</div>`);
+        rows.push(`<div>${esc(bsOrProfileExemption(d))}</div>`);
       }
 
       conditionsBlock.innerHTML = rows.join("") || "—";
@@ -845,25 +869,25 @@
     }
 
     function renderSignatures(d){
-      const signatureName = String(d?.businessSnapshot?.signatureName || d?.businessSnapshot?.companyName || "Conciergerie").trim();
-      bizSignatureText.textContent = signatureName || "Conciergerie";
+      const biz = getBusinessSource(d);
+      bizSignatureText.textContent = biz.signatureName || "Conciergerie";
 
-      const clientName = String(d?.clientDisplayName || d?.clientName || "Client").trim();
+      const clientName0 = String(d?.clientDisplayName || d?.clientName || "Client").trim();
       const st = String(d?.quoteStatus || "").toUpperCase();
 
       if(isOwnerView){
         if(st === "ACCEPTED"){
-          clientSignatureText.textContent = `${clientName} — Accepté`;
+          clientSignatureText.textContent = `${clientName0} — Accepté`;
           clientSignatureText.className = "sigText ok";
         }else if(st === "DECLINED"){
-          clientSignatureText.textContent = `${clientName} — Refusé`;
+          clientSignatureText.textContent = `${clientName0} — Refusé`;
           clientSignatureText.className = "sigText no";
         }else{
-          clientSignatureText.textContent = clientName;
+          clientSignatureText.textContent = clientName0;
           clientSignatureText.className = "sigText";
         }
       }else{
-        clientSignatureText.textContent = clientName;
+        clientSignatureText.textContent = clientName0;
         clientSignatureText.className = "sigText";
       }
 
@@ -881,18 +905,14 @@
     }
 
     function renderFooter(d){
-      const bs = getBusinessSnapshot(d);
+      const biz = getBusinessSource(d);
       const parts = [];
 
-      const companyName = String(bs.companyName || "").trim();
-      const mail = String(bs.contact?.email || "").trim();
-      const phone = String(bs.contact?.phone || "").trim();
-      const siret = String(bs.registration?.siret || "").trim();
-
-      if(companyName) parts.push(companyName);
-      if(siret) parts.push(`SIRET ${siret}`);
-      if(mail) parts.push(mail);
-      if(phone) parts.push(phone);
+      if(biz.companyName) parts.push(biz.companyName);
+      if(biz.street) parts.push(biz.street);
+      if(biz.zip || biz.city) parts.push([biz.zip, biz.city].filter(Boolean).join(" "));
+      if(biz.siret || biz.ape) parts.push([biz.siret ? `SIRET ${biz.siret}` : "", biz.ape ? `APE ${biz.ape}` : ""].filter(Boolean).join(" • "));
+      if(biz.email || biz.phone) parts.push([biz.email, biz.phone].filter(Boolean).join(" • "));
 
       footerBlock.textContent = parts.join(" • ") || "Devis édité par CleanUp Manager";
     }
@@ -944,7 +964,25 @@
       }
     });
 
+    backBtn.addEventListener("click", () => {
+      if(isOwnerView){
+        window.location.href = "owner-facturation.html";
+        return;
+      }
+      if (history.length > 1) {
+        history.back();
+      } else {
+        window.location.href = "devis-liste.html";
+      }
+    });
+
     printBtn.addEventListener("click", ()=> window.print());
+
+    function loginRedirectUrl(){
+      const token = getParam("token");
+      const base = isOwnerView ? "login.html?role=proprietaire" : "login.html?role=conciergerie";
+      return token ? `${base}&token=${encodeURIComponent(token)}` : base;
+    }
 
     onAuthStateChanged(auth, async (user)=>{
       currentUser = user || null;
@@ -962,25 +1000,41 @@
 
         if(isOwnerView && isDraftView){
           showAlert("Accès refusé sur un brouillon.");
-          document.getElementById("paper").style.display = "none";
+          paper.style.display = "none";
           return;
         }
 
         if(isOwnerView){
-          backBtn.style.display = "none";
-          if(String(currentDoc?.ownerVisible || "").toLowerCase() !== "true" && currentDoc?.ownerVisible !== true){
-            showAlert("Ce devis n’est pas accessible au propriétaire.");
-            document.getElementById("paper").style.display = "none";
+          if(!currentUser){
+            location.href = loginRedirectUrl();
             return;
           }
+
+          const ownerUid = String(currentDoc?.ownerUid || "").trim();
+          if(!ownerUid){
+            showAlert("Accès refusé : ownerUid manquant.");
+            paper.style.display = "none";
+            return;
+          }
+          if(ownerUid !== String(currentUser.uid)){
+            showAlert("Accès refusé.");
+            paper.style.display = "none";
+            return;
+          }
+          if(currentDoc?.ownerVisible !== true){
+            showAlert("Ce devis n’est pas accessible au propriétaire.");
+            paper.style.display = "none";
+            return;
+          }
+          backBtn.style.display = "none";
         }else{
           if(!currentUser){
-            location.href = "login.html?role=conciergerie";
+            location.href = loginRedirectUrl();
             return;
           }
           if(currentDoc?.conciergerieUid && currentDoc.conciergerieUid !== currentUser.uid){
             showAlert("Accès refusé.");
-            document.getElementById("paper").style.display = "none";
+            paper.style.display = "none";
             return;
           }
         }
