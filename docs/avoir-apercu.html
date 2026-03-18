@@ -1,4 +1,4 @@
-<!-- docs/avoir-apercu.html (CORRIGÉ COMPLET — owner sécurisé + draft=1 conciergerie only + fallback société/logo/footer/client + mobile cards) -->
+<!-- docs/avoir-apercu.html (CORRIGÉ COMPLET — priorité businessSnapshot/clientSnapshot + draft=1 conciergerie only + owner sécurisé + compat anciens docs + mobile cards) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -657,6 +657,22 @@
       return "—";
     }
 
+    function getNormalizedClientSource(d){
+      const cs = (d?.clientSnapshot && typeof d.clientSnapshot === "object") ? d.clientSnapshot : null;
+      return {
+        ownerDocId: String(cs?.ownerDocId || d?.clientOwnerDocId || d?.ownerDocId || "").trim(),
+        ownerUid: String(cs?.ownerUid || d?.ownerUid || "").trim(),
+        name: String(cs?.name || d?.clientName || d?.ownerName || "").trim(),
+        email: normalizeEmail(cs?.email || d?.clientEmail || d?.ownerEmail || ""),
+        phone: String(cs?.phone || d?.clientPhone || d?.ownerPhone || "").trim(),
+        address1: String(cs?.address1 || d?.clientAddress1 || d?.ownerAddress1 || d?.clientAddress || "").trim(),
+        address2: String(cs?.address2 || d?.clientAddress2 || d?.ownerAddress2 || "").trim(),
+        zip: String(cs?.zip || d?.clientZip || d?.ownerZip || "").trim(),
+        city: String(cs?.city || d?.clientCity || d?.ownerCity || "").trim(),
+        country: String(cs?.country || d?.clientCountry || d?.ownerCountry || "FR").trim()
+      };
+    }
+
     function getLineStoredHT(l){
       const qty = Number(l?.qty) || 0;
       const pu = Number(l?.unitPrice) || 0;
@@ -674,28 +690,29 @@
       return getLineStoredHT(l) + getLineStoredTVA(l);
     }
 
-    function getInvoiceTotalsStored(inv){
-      if(inv?.totals && typeof inv.totals === "object"){
+    function getDocumentTotalsStored(docLike){
+      const totals = (docLike?.totals && typeof docLike.totals === "object") ? docLike.totals : null;
+      if(totals){
         return {
-          ht: Number(inv.totals.ht || 0),
-          tva: Number(inv.totals.tva || 0),
-          ttc: Number(inv.totals.ttc || 0)
+          ht: Number(totals.ht || docLike?.totalHT || 0),
+          tva: Number(totals.tva || docLike?.totalTVA || 0),
+          ttc: Number(totals.ttc || docLike?.totalTTC || 0)
         };
       }
 
       if(
-        Number.isFinite(Number(inv?.totalHT)) ||
-        Number.isFinite(Number(inv?.totalTVA)) ||
-        Number.isFinite(Number(inv?.totalTTC))
+        Number.isFinite(Number(docLike?.totalHT)) ||
+        Number.isFinite(Number(docLike?.totalTVA)) ||
+        Number.isFinite(Number(docLike?.totalTTC))
       ){
         return {
-          ht: Number(inv?.totalHT || 0),
-          tva: Number(inv?.totalTVA || 0),
-          ttc: Number(inv?.totalTTC || 0)
+          ht: Number(docLike?.totalHT || 0),
+          tva: Number(docLike?.totalTVA || 0),
+          ttc: Number(docLike?.totalTTC || 0)
         };
       }
 
-      const lines = Array.isArray(inv?.lines) ? inv.lines : [];
+      const lines = Array.isArray(docLike?.lines) ? docLike.lines : [];
       let ht = 0, tva = 0, ttc = 0;
       for(const l of lines){
         ht += getLineStoredHT(l);
@@ -703,6 +720,18 @@
         ttc += getLineStoredTTC(l);
       }
       return { ht, tva, ttc };
+    }
+
+    function getVatContext(docLike){
+      const bs = (docLike?.businessSnapshot && typeof docLike.businessSnapshot === "object") ? docLike.businessSnapshot : {};
+      const vat = docLike?.vatSnapshot || bs?.vat || {};
+      const totals = getDocumentTotalsStored(docLike);
+
+      return {
+        enabled: !!vat?.enabled || Number(totals.tva || 0) > 0,
+        serviceRate: Number.isFinite(Number(vat?.serviceRate)) ? Number(vat.serviceRate) : 0.20,
+        productRate: Number.isFinite(Number(vat?.productRate)) ? Number(vat.productRate) : 0.10
+      };
     }
 
     function buildBusinessMerged(credit, invoice, profile){
@@ -770,7 +799,9 @@
 
         billingEmail:
           creditBS.billingEmail ||
+          creditBS.contact?.email ||
           invBS.billingEmail ||
+          invBS.contact?.email ||
           credit?.businessEmail ||
           invoice?.businessEmail ||
           bp.billingEmail ||
@@ -849,23 +880,12 @@
       return src;
     }
 
-    function getClientSnapshotFromDoc(d){
-      return {
-        name: String(d?.clientName || d?.ownerName || "").trim(),
-        email: normalizeEmail(d?.clientEmail || d?.ownerEmail || ""),
-        phone: String(d?.clientPhone || d?.ownerPhone || "").trim(),
-        address1: String(d?.clientAddress1 || d?.ownerAddress1 || d?.clientAddress || "").trim(),
-        address2: String(d?.clientAddress2 || d?.ownerAddress2 || "").trim(),
-        zip: String(d?.clientZip || d?.ownerZip || "").trim(),
-        city: String(d?.clientCity || d?.ownerCity || "").trim(),
-        country: String(d?.clientCountry || d?.ownerCountry || "FR").trim()
-      };
-    }
-
     function mergeClientSnapshots(primary, secondary){
       const a = primary || {};
       const b = secondary || {};
       return {
+        ownerDocId: String(a.ownerDocId || b.ownerDocId || "").trim(),
+        ownerUid: String(a.ownerUid || b.ownerUid || "").trim(),
         name: String(a.name || b.name || "").trim(),
         email: String(a.email || b.email || "").trim(),
         phone: String(a.phone || b.phone || "").trim(),
@@ -931,13 +951,16 @@
       reasonLine.textContent = r || "—";
     }
 
-    function renderLines(invoice, businessLike){
-      const arr = Array.isArray(invoice?.lines) ? invoice.lines : [];
+    function renderLines(credit, invoice, businessLike){
+      const arr = Array.isArray(credit?.lines) && credit.lines.length
+        ? credit.lines
+        : (Array.isArray(invoice?.lines) ? invoice.lines : []);
+
       linesBody.innerHTML = "";
       linesCards.innerHTML = "";
 
-      const totals = getInvoiceTotalsStored(invoice);
-      const hasTVA = Number(totals.tva || 0) > 0;
+      const totals = getDocumentTotalsStored(credit);
+      const vat = getVatContext(credit);
 
       if(!arr.length){
         const tr = document.createElement("tr");
@@ -952,7 +975,7 @@
           const total = getLineStoredTTC(l);
           const label = String(l?.label || "Prestation").trim();
           const ratePct = Math.round((Number(l?.vatRate || 0)) * 100);
-          const tvaLabel = hasTVA ? `${ratePct}% • ${money(-tva)}` : "0% • 0,00 €";
+          const tvaLabel = vat.enabled ? `${ratePct}% • ${money(-tva)}` : "0% • 0,00 €";
 
           const tr = document.createElement("tr");
           tr.innerHTML = `
@@ -990,7 +1013,8 @@
         tvaLineEl.textContent = `HT ${money(-totals.ht)} • TVA ${money(-totals.tva)}`;
       }else{
         tvaLineEl.textContent = String(
-          invoice?.tvaExemptionText ||
+          credit?.businessSnapshot?.tvaExemptionText ||
+          invoice?.businessSnapshot?.tvaExemptionText ||
           businessLike?.tvaExemptionText ||
           "TVA non applicable (art. 293 B du CGI)"
         ).trim();
@@ -1060,15 +1084,15 @@
             invDoc = { ...(draft._invoice || {}) };
 
             const businessLike = applyBusinessSnapshot(creditDoc, invDoc, profile);
-            const creditClient = getClientSnapshotFromDoc(creditDoc);
-            const invClient = getClientSnapshotFromDoc(invDoc);
+            const creditClient = getNormalizedClientSource(creditDoc);
+            const invClient = getNormalizedClientSource(invDoc);
             const mergedClient = mergeClientSnapshots(creditClient, invClient);
 
             renderClientHeader(mergedClient);
             renderHeader(creditDoc, invDoc);
             renderHomeAndPeriod(invDoc);
             renderReason(creditDoc);
-            renderLines(invDoc, businessLike);
+            renderLines(creditDoc, invDoc, businessLike);
 
             const invId = String(invDoc.id || "").trim();
             backLink.href = invId ? `avoir.html?fromDocId=${encodeURIComponent(invId)}` : "factures-liste.html";
@@ -1100,14 +1124,19 @@
         currentCreditNumber = String(creditDoc.creditNumber || "").trim();
 
         if(isOwnerView){
-          const ouid = String(creditDoc.ownerUid || "").trim();
-          if(!ouid){
+          const ownerUid = String(
+            creditDoc?.clientSnapshot?.ownerUid ||
+            creditDoc?.ownerUid ||
+            ""
+          ).trim();
+
+          if(!ownerUid){
             showError("Accès refusé : ownerUid manquant sur ce document.");
             paper.style.display = "none";
             backLink.href = "owner-facturation.html";
             return;
           }
-          if(ouid !== String(user.uid)){
+          if(ownerUid !== String(user.uid)){
             showError("Accès refusé.");
             paper.style.display = "none";
             backLink.href = "owner-facturation.html";
@@ -1160,15 +1189,15 @@
         }
 
         const businessLike = applyBusinessSnapshot(creditDoc, invDoc, profile);
-        const creditClient = getClientSnapshotFromDoc(creditDoc);
-        const invClient = getClientSnapshotFromDoc(invDoc);
+        const creditClient = getNormalizedClientSource(creditDoc);
+        const invClient = getNormalizedClientSource(invDoc);
         const mergedClient = mergeClientSnapshots(creditClient, invClient);
 
         renderClientHeader(mergedClient);
         renderHeader(creditDoc, invDoc);
         renderHomeAndPeriod(invDoc);
         renderReason(creditDoc);
-        renderLines(invDoc, businessLike);
+        renderLines(creditDoc, invDoc, businessLike);
 
         if(
           !String(businessLike.companyName || "").trim() &&
