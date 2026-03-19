@@ -1,4 +1,3 @@
-<!-- docs/owner-dashboard.html (FIXED — no stuck loading, logout always works, rules-compatible) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -249,7 +248,6 @@
     return u.pathname + "?" + u.searchParams.toString();
   }
 
-  // propage token (si présent)
   profileBtn.href = withToken("profil-proprietaire.html?self=1");
   homesLink.href = withToken("owner-homes.html");
   planningLink.href = withToken("owner-planning.html");
@@ -262,43 +260,66 @@
   navMessages.href = withToken("owner-messages.html");
 
   let unsubThreads = null;
-  let unsubBilling = null;
+  let unsubSalesDocs = null;
+  let unsubOwnerStatements = null;
 
   let gotThreadsOnce = false;
-  let gotBillingOnce = false;
+  let gotSalesDocsOnce = false;
+  let gotOwnerStatementsOnce = false;
+
   let lastUnreadMsg = 0;
-  let lastBillingCount = 0;
+  let lastSalesDocsCount = 0;
+  let lastOwnerStatementsCount = 0;
 
   function setCount(el, n){
-    const v = Number(n||0);
+    const v = Number(n || 0);
     if(v > 0){
-      el.style.display="inline-flex";
-      el.textContent=String(v);
+      el.style.display = "inline-flex";
+      el.textContent = String(v);
     }else{
-      el.style.display="none";
-      el.textContent="0";
+      el.style.display = "none";
+      el.textContent = "0";
     }
   }
 
-  function refreshBadges(){
-    setCount(countMsg, lastUnreadMsg);
-    setCount(countBill, lastBillingCount);
+  function totalBillingCount(){
+    return Number(lastSalesDocsCount || 0) + Number(lastOwnerStatementsCount || 0);
+  }
 
-    if(!(gotThreadsOnce && gotBillingOnce)){
+  function refreshBadges(){
+    const billingTotal = totalBillingCount();
+
+    setCount(countMsg, lastUnreadMsg);
+    setCount(countBill, billingTotal);
+
+    if(!(gotThreadsOnce && gotSalesDocsOnce && gotOwnerStatementsOnce)){
       alertsLine.textContent = "Chargement…";
       return;
     }
 
     alertsLine.textContent =
-      `💬 Messages non lus : ${Number(lastUnreadMsg||0)}\n` +
-      `🧾 Documents : ${Number(lastBillingCount||0)}`;
+      `💬 Messages non lus : ${Number(lastUnreadMsg || 0)}\n` +
+      `🧾 Documents : ${billingTotal}`;
   }
 
-  function stopThreads(){ try{ if(unsubThreads) unsubThreads(); }catch(_){}
+  function stopThreads(){
+    try{ if(unsubThreads) unsubThreads(); }catch(_){}
     unsubThreads = null;
   }
-  function stopBilling(){ try{ if(unsubBilling) unsubBilling(); }catch(_){}
-    unsubBilling = null;
+
+  function stopSalesDocs(){
+    try{ if(unsubSalesDocs) unsubSalesDocs(); }catch(_){}
+    unsubSalesDocs = null;
+  }
+
+  function stopOwnerStatements(){
+    try{ if(unsubOwnerStatements) unsubOwnerStatements(); }catch(_){}
+    unsubOwnerStatements = null;
+  }
+
+  function stopBilling(){
+    stopSalesDocs();
+    stopOwnerStatements();
   }
 
   function hardRequireOwnerLinked(userDoc){
@@ -312,9 +333,9 @@
     gotThreadsOnce = false;
 
     const qThreads = query(
-      collection(db,"threads"),
-      where("ownerUid","==", String(ownerUid)),
-      where("conciergerieUid","==", String(conciergerieUid))
+      collection(db, "threads"),
+      where("ownerUid", "==", String(ownerUid)),
+      where("conciergerieUid", "==", String(conciergerieUid))
     );
 
     unsubThreads = onSnapshot(qThreads, (snap)=>{
@@ -329,37 +350,60 @@
     }, (err)=>{
       console.warn("threads unread listener:", err?.code, err?.message || err);
       lastUnreadMsg = 0;
-      gotThreadsOnce = true;        // ✅ ne pas rester bloqué
+      gotThreadsOnce = true;
       refreshBadges();
     });
   }
 
   function startBillingBadge(ownerUid, conciergerieUid){
     stopBilling();
-    gotBillingOnce = false;
 
-    const qb = query(
-      collection(db,"salesDocuments"),
-      where("ownerUid","==", String(ownerUid)),
-      where("conciergerieUid","==", String(conciergerieUid)),
-      where("ownerVisible","==", true)
+    gotSalesDocsOnce = false;
+    gotOwnerStatementsOnce = false;
+
+    lastSalesDocsCount = 0;
+    lastOwnerStatementsCount = 0;
+
+    const qSalesDocs = query(
+      collection(db, "salesDocuments"),
+      where("ownerUid", "==", String(ownerUid)),
+      where("conciergerieUid", "==", String(conciergerieUid)),
+      where("ownerVisible", "==", true)
     );
 
-    unsubBilling = onSnapshot(qb, (snap)=>{
-      lastBillingCount = snap.size || 0;
-      gotBillingOnce = true;
+    unsubSalesDocs = onSnapshot(qSalesDocs, (snap)=>{
+      lastSalesDocsCount = snap.size || 0;
+      gotSalesDocsOnce = true;
       refreshBadges();
     }, (err)=>{
-      console.warn("billing badge listener:", err?.code, err?.message || err);
-      lastBillingCount = 0;
-      gotBillingOnce = true;        // ✅ ne pas rester bloqué
+      console.warn("salesDocuments badge listener:", err?.code, err?.message || err);
+      lastSalesDocsCount = 0;
+      gotSalesDocsOnce = true;
+      refreshBadges();
+    });
+
+    const qOwnerStatements = query(
+      collection(db, "ownerStatements"),
+      where("ownerUid", "==", String(ownerUid)),
+      where("conciergerieUid", "==", String(conciergerieUid)),
+      where("ownerVisible", "==", true)
+    );
+
+    unsubOwnerStatements = onSnapshot(qOwnerStatements, (snap)=>{
+      lastOwnerStatementsCount = snap.size || 0;
+      gotOwnerStatementsOnce = true;
+      refreshBadges();
+    }, (err)=>{
+      console.warn("ownerStatements badge listener:", err?.code, err?.message || err);
+      lastOwnerStatementsCount = 0;
+      gotOwnerStatementsOnce = true;
       refreshBadges();
     });
   }
 
-  // ✅ logout robuste (et toujours attaché)
   document.getElementById("logoutBtn").addEventListener("click", async ()=>{
-    stopThreads(); stopBilling();
+    stopThreads();
+    stopBilling();
     try{ await signOut(auth); }catch(e){ console.warn("signOut:", e?.message || e); }
     try{ localStorage.removeItem("cm_auth"); }catch(_){}
     location.replace(withToken("login.html?role=proprietaire"));
@@ -367,7 +411,6 @@
 
   refreshBadges();
 
-  // BOOT
   onAuthStateChanged(auth, async (user)=>{
     if(!user){
       location.replace(withToken("login.html?role=proprietaire"));
@@ -375,19 +418,21 @@
     }
 
     try{
-      const us = await getDoc(doc(db,"users", user.uid));
-      const ud = us.exists()? (us.data()||{}) : {};
+      const us = await getDoc(doc(db, "users", user.uid));
+      const ud = us.exists() ? (us.data() || {}) : {};
 
       const role = String(ud.role || "").toLowerCase().trim();
       if(role !== "proprietaire"){
-        stopThreads(); stopBilling();
+        stopThreads();
+        stopBilling();
         location.replace(withToken("login.html?role=proprietaire"));
         return;
       }
 
       const link = hardRequireOwnerLinked(ud);
       if(!link.ok){
-        stopThreads(); stopBilling();
+        stopThreads();
+        stopBilling();
         location.replace(withToken("profil-proprietaire.html?self=1"));
         return;
       }
@@ -404,15 +449,16 @@
       refreshBadges();
     }catch(e){
       console.error(e);
-      // ✅ au lieu de rester figé
       gotThreadsOnce = true;
-      gotBillingOnce = true;
+      gotSalesDocsOnce = true;
+      gotOwnerStatementsOnce = true;
       alertsLine.textContent = "⛔ Erreur dashboard (users/rules). Va sur Mon profil puis Enregistrer.";
     }
   });
 
   window.addEventListener("beforeunload", ()=>{
-    stopThreads(); stopBilling();
+    stopThreads();
+    stopBilling();
   });
 </script>
 </body>
