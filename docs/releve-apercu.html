@@ -8,22 +8,75 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
 
 <style>
-body{font-family:Inter;margin:0;background:#F8F4FF}
-.wrap{max-width:900px;margin:auto;padding:12px}
-.paper{background:#fff;border-radius:16px;padding:16px}
-.topbar{display:flex;justify-content:space-between;margin-bottom:10px}
-.pill{padding:8px 12px;border-radius:999px;border:2px solid #7A5CFF;background:#fff;font-weight:700}
-.header{display:flex;justify-content:space-between;align-items:center}
-.logo{width:50px;height:50px;border-radius:12px;border:1px solid #ccc;overflow:hidden}
+:root{
+  --violet:#7A5CFF;
+  --bg:#F8F4FF;
+}
+*{box-sizing:border-box;font-family:Inter}
+body{margin:0;background:var(--bg)}
+
+.wrap{max-width:980px;margin:auto;padding:12px}
+
+.topbar{
+  position:sticky;top:0;background:#fff;padding:10px;
+  display:flex;justify-content:space-between;z-index:10
+}
+.pill{
+  padding:10px 14px;border-radius:999px;
+  border:2px solid var(--violet);
+  background:#fff;font-weight:700;cursor:pointer
+}
+
+.paper{
+  background:#fff;border-radius:16px;padding:16px;
+  box-shadow:0 10px 25px rgba(0,0,0,.08)
+}
+
+.header{
+  display:flex;justify-content:space-between;align-items:center
+}
+
+.logo{
+  width:50px;height:50px;border-radius:12px;
+  border:1px solid #ddd;overflow:hidden
+}
 .logo img{width:100%;height:100%;object-fit:cover}
-.title{text-align:center;font-weight:800;margin-top:10px}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
-.box{border:1px solid #eee;border-radius:12px;padding:10px}
-table{width:100%;margin-top:10px;border-collapse:collapse}
-td,th{padding:8px;border-bottom:1px solid #eee;font-size:13px}
+
+.title{
+  text-align:center;font-weight:800;margin-top:10px
+}
+
+.grid{
+  display:grid;gap:10px;margin-top:10px
+}
+@media(min-width:700px){
+  .grid{grid-template-columns:1fr 1fr}
+}
+
+.box{
+  border:1px solid #eee;border-radius:12px;padding:10px
+}
+
+table{
+  width:100%;border-collapse:collapse;margin-top:12px
+}
+th,td{
+  padding:8px;border-bottom:1px solid #eee;font-size:13px
+}
 .right{text-align:right}
-.total{margin-top:10px}
-.footer{text-align:center;font-size:11px;margin-top:12px;color:#666}
+
+.total{
+  margin-top:12px;font-size:14px
+}
+
+.footer{
+  text-align:center;margin-top:14px;font-size:11px;color:#666
+}
+
+.alert{
+  display:none;margin-top:10px;padding:10px;
+  border-left:4px solid red;background:#fff
+}
 </style>
 </head>
 
@@ -32,10 +85,12 @@ td,th{padding:8px;border-bottom:1px solid #eee;font-size:13px}
 
 <div class="topbar">
 <button class="pill" id="backBtn">← Retour</button>
-<button class="pill" onclick="window.print()">Imprimer</button>
+<button class="pill" id="printBtn">Imprimer</button>
 </div>
 
-<div class="paper">
+<div id="alertBox" class="alert"></div>
+
+<div class="paper" id="paper">
 
 <div class="header">
 <div style="display:flex;gap:10px;align-items:center">
@@ -48,7 +103,7 @@ td,th{padding:8px;border-bottom:1px solid #eee;font-size:13px}
 <div id="periodLabel"></div>
 </div>
 
-<div class="title">RELEVÉ</div>
+<div class="title">RELEVÉ DE FACTURATION</div>
 
 <div class="grid">
 <div class="box">
@@ -69,7 +124,7 @@ td,th{padding:8px;border-bottom:1px solid #eee;font-size:13px}
 <th>Type</th>
 <th>Document</th>
 <th>Bien</th>
-<th class="right">Montant</th>
+<th class="right">Montant TTC</th>
 </tr>
 </thead>
 <tbody id="tbody"></tbody>
@@ -79,7 +134,9 @@ td,th{padding:8px;border-bottom:1px solid #eee;font-size:13px}
 <div>Total factures : <b id="inv"></b></div>
 <div>Total avoirs : <b id="cred"></b></div>
 <div>Net : <b id="net"></b></div>
+
 <hr>
+
 <div>Réglé : <b id="paid"></b></div>
 <div>Reste dû : <b id="due"></b></div>
 <div>Dernier règlement : <b id="last"></b></div>
@@ -99,77 +156,102 @@ const qs = new URLSearchParams(location.search);
 const id = qs.get("statementId");
 const isOwner = qs.get("owner")==="1";
 
-const bizName = document.getElementById("bizName");
-const logoImg = document.getElementById("logoImg");
-const ownerBlock = document.getElementById("ownerBlock");
-const periodBlock = document.getElementById("periodBlock");
-const tbody = document.getElementById("tbody");
+const alertBox = document.getElementById("alertBox");
+const paper = document.getElementById("paper");
 
-const inv = document.getElementById("inv");
-const cred = document.getElementById("cred");
-const net = document.getElementById("net");
-const paid = document.getElementById("paid");
-const due = document.getElementById("due");
-const last = document.getElementById("last");
+function showAlert(msg){
+  alertBox.style.display="block";
+  alertBox.textContent=msg;
+  paper.style.display="none";
+}
 
-function €(n){return (n||0).toLocaleString("fr-FR")+" €"}
+function €(n){
+  return (Number(n||0)).toLocaleString("fr-FR",{minimumFractionDigits:2})+" €";
+}
 
 async function loadConciergerie(uid){
+  if(!uid) return;
   const s = await getDoc(doc(db,"users",uid));
   if(!s.exists()) return;
+
   const d = s.data();
-  bizName.textContent = d?.businessProfile?.companyName || "Conciergerie";
+
+  document.getElementById("bizName").textContent =
+    d?.businessProfile?.companyName || "Conciergerie";
+
   if(d?.businessProfile?.logoUrl){
-    logoImg.src = d.businessProfile.logoUrl;
+    document.getElementById("logoImg").src =
+      d.businessProfile.logoUrl;
   }
 }
 
 onAuthStateChanged(auth, async (user)=>{
-  if(!user) return location.href="login.html";
+  if(!user){
+    location.href="login.html?role=proprietaire";
+    return;
+  }
+
+  if(!id){
+    showAlert("Relevé manquant");
+    return;
+  }
 
   const snap = await getDoc(doc(db,"ownerStatements",id));
-  if(!snap.exists()) return alert("Introuvable");
+  if(!snap.exists()){
+    showAlert("Relevé introuvable");
+    return;
+  }
 
   const d = snap.data();
 
   if(isOwner){
-    if(d.ownerUid !== user.uid) return alert("Accès refusé");
-    if(d.ownerVisible !== true) return alert("Non visible");
+    if(d.ownerUid !== user.uid){
+      showAlert("Accès refusé");
+      return;
+    }
+    if(d.ownerVisible !== true){
+      showAlert("Non accessible");
+      return;
+    }
   }
 
   await loadConciergerie(d.conciergerieUid);
 
-  ownerBlock.textContent = d.ownerName || "";
-  periodBlock.textContent = d.periodKey;
+  document.getElementById("ownerBlock").textContent = d.ownerName || "";
+  document.getElementById("periodBlock").textContent = d.periodKey || "";
 
-  inv.textContent = €(d.totals?.invoicesTTC);
-  cred.textContent = €(d.totals?.creditsTTC);
-  net.textContent = €(d.totals?.netTTC);
+  document.getElementById("inv").textContent = €(d.totals?.invoicesTTC);
+  document.getElementById("cred").textContent = €(d.totals?.creditsTTC);
+  document.getElementById("net").textContent = €(d.totals?.netTTC);
 
-  paid.textContent = €(d.paymentSummary?.paidTTC);
-  due.textContent = €(d.paymentSummary?.dueTTC);
+  document.getElementById("paid").textContent = €(d.paymentSummary?.paidTTC);
+  document.getElementById("due").textContent = €(d.paymentSummary?.dueTTC);
 
-  if(d.paymentSummary?.lastPaymentDate?.toDate){
-    last.textContent = d.paymentSummary.lastPaymentDate.toDate().toLocaleDateString("fr-FR");
-  }else{
-    last.textContent = "—";
-  }
+  const last = d.paymentSummary?.lastPaymentDate;
+  document.getElementById("last").textContent =
+    last?.toDate ? last.toDate().toLocaleDateString("fr-FR") : "—";
 
-  tbody.innerHTML = (d.items||[]).map(i=>`
-    <tr>
-      <td>${i.dateKey}</td>
-      <td>${i.kind}</td>
-      <td>${i.number}</td>
-      <td>${i.homeName||""}</td>
-      <td class="right">${€(i.totalTTC)}</td>
-    </tr>
-  `).join("");
+  document.getElementById("tbody").innerHTML =
+    (d.items||[]).map(i=>`
+      <tr>
+        <td>${i.dateKey||""}</td>
+        <td>${i.kind||""}</td>
+        <td>${i.number||""}</td>
+        <td>${i.homeName||""}</td>
+        <td class="right">${€(i.totalTTC)}</td>
+      </tr>
+    `).join("");
 
-  document.getElementById("footer").textContent = bizName.textContent;
+  document.getElementById("footer").textContent =
+    document.getElementById("bizName").textContent;
 });
 
 document.getElementById("backBtn").onclick = ()=>{
   location.href="owner-facturation.html";
+};
+
+document.getElementById("printBtn").onclick = ()=>{
+  window.print();
 };
 </script>
 
