@@ -391,6 +391,7 @@
         <a class="btn" id="backBtn" href="factures-liste.html">← Retour</a>
         <div class="topbarActions">
           <button class="btn" id="emailBtn" type="button">Préparer email</button>
+          <button class="btn" id="shareBtn" type="button">Partager</button>
           <button class="btn" id="publishBtn" type="button">Publier propriétaire</button>
           <button class="btn primary" id="printBtn" type="button">Imprimer</button>
         </div>
@@ -501,6 +502,7 @@
     const printBtn = document.getElementById("printBtn");
     const publishBtn = document.getElementById("publishBtn");
     const emailBtn = document.getElementById("emailBtn");
+    const shareBtn = document.getElementById("shareBtn");
 
     let currentUser = null;
     let companyName = "Conciergerie";
@@ -572,6 +574,25 @@
 
     function buildMailto(toEmail, subject, body){
       return `mailto:${encodeURIComponent(toEmail || "")}?subject=${encodeURIComponent(subject || "")}&body=${encodeURIComponent(body || "")}`;
+    }
+
+    async function copyToClipboard(text){
+      try{
+        await navigator.clipboard.writeText(String(text||""));
+        return true;
+      }catch{
+        try{
+          const ta = document.createElement("textarea");
+          ta.value = String(text||"");
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand("copy");
+          document.body.removeChild(ta);
+          return true;
+        }catch{
+          return false;
+        }
+      }
     }
 
     async function loadProfile(uid){
@@ -979,6 +1000,25 @@
       }
     }
 
+    function buildShareText(){
+      if(!draft) return "";
+
+      return [
+        `Relevé de factures ${draft.periodKey}`,
+        `${owner?.name || "Propriétaire"}`,
+        `${draft.startKey} → ${draft.endKey}`,
+        "",
+        `Factures TTC : ${fmtMoney(draft.totals.invoicesTTC)}`,
+        `Avoirs TTC : ${fmtMoney(draft.totals.creditsTTC)}`,
+        `Net TTC : ${fmtMoney(draft.totals.netTTC)}`,
+        `Montant réglé : ${fmtMoney(draft.paymentSummary?.paidTTC || 0)}`,
+        `Reste dû : ${fmtMoney(draft.paymentSummary?.dueTTC || 0)}`,
+        `Dernier règlement : ${fmtDateFR(draft.paymentSummary?.lastPaymentDate)}`,
+        "",
+        `${companyName}`
+      ].join("\n");
+    }
+
     function openEmailDraft(){
       if(!draft) return showAlert("Aucun relevé.");
       if(!owner?.email) return showAlert("Email propriétaire manquant.");
@@ -1003,9 +1043,34 @@
       window.location.href = buildMailto(owner.email, subject, body);
     }
 
+    async function shareDraft(){
+      if(!draft) return showAlert("Aucun relevé.");
+
+      const title = `Relevé de factures ${draft.periodKey}`;
+      const text = buildShareText();
+
+      if(navigator.share){
+        try{
+          await navigator.share({
+            title,
+            text
+          });
+        }catch(e){
+          if(String(e?.name || "") !== "AbortError"){
+            showAlert("⛔ Partage impossible.", false);
+          }
+        }
+        return;
+      }
+
+      const ok = await copyToClipboard(text);
+      showAlert(ok ? "✅ Texte copié. Partage non disponible sur ce navigateur." : "⛔ Partage indisponible.", !!ok);
+    }
+
     printBtn.addEventListener("click", ()=> window.print());
     publishBtn.addEventListener("click", publishStatement);
     emailBtn.addEventListener("click", openEmailDraft);
+    shareBtn.addEventListener("click", shareDraft);
 
     onAuthStateChanged(auth, async (user)=>{
       if(!user){
