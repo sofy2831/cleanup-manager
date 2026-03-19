@@ -538,87 +538,85 @@ function isDateInPeriod(dateKey, startKey, endKey){
 }
 
     function normalizeItemFromDoc(d){
-      const type = String(d.type || "").toUpperCase().trim();
-      const isInv = type === "INVOICE";
-      const kind = isInv ? "INVOICE" : "CREDIT";
-      const number = String(isInv ? d.invoiceNumber : d.creditNumber).trim();
-      const status = String(isInv ? d.invoiceStatus : d.creditStatus).toUpperCase().trim() || "MISSING";
-      const totalTTC = Number.isFinite(Number(d.totalTTC)) ? Number(d.totalTTC) : 0;
+  const type = String(d.type || "").toUpperCase().trim();
+  const isInv = type === "INVOICE";
+  const kind = isInv ? "INVOICE" : "CREDIT";
+  const number = String(isInv ? d.invoiceNumber : d.creditNumber).trim();
+  const status = String(isInv ? d.invoiceStatus : d.creditStatus).toUpperCase().trim() || "MISSING";
+  const totalTTC = Number.isFinite(Number(d.totalTTC)) ? Number(d.totalTTC) : 0;
+  const dateKey = getDocDateKeySafe(d);
 
-      return {
-        kind,
-        salesDocId: String(d.id || "").trim(),
-        number,
-        dateKey: String(d.docDateKey || "").trim(),
-        homeName: String(d.homeName || "").trim(),
-        clientName: String(d.clientName || d.ownerName || "").trim(),
-        totalTTC: absMoney(totalTTC),
-        status
-      };
-    }
+  return {
+    kind,
+    salesDocId: String(d.id || "").trim(),
+    number,
+    dateKey,
+    homeName: String(d.homeName || "").trim(),
+    clientName: String(d.clientName || d.ownerName || "").trim(),
+    totalTTC: absMoney(totalTTC),
+    status
+  };
+}
+async function buildDraft(){
+  if(!month) throw new Error("Mois manquant.");
+  if(!ownerUid) throw new Error("ownerUid manquant.");
+  if(!ownerDocId) throw new Error("ownerDocId manquant.");
 
-    async function buildDraft(){
-      if(!month) throw new Error("Mois manquant.");
-      if(!ownerUid) throw new Error("ownerUid manquant.");
-      if(!ownerDocId) throw new Error("ownerDocId manquant.");
+  const { startKey, endKey } = monthRange(month);
+  oPeriod.textContent = `${startKey} → ${endKey}`;
+  pageSubtitle.textContent = `${owner?.name || "Propriétaire"} • ${startKey} → ${endKey}`;
+  editionDate.textContent = new Date().toLocaleDateString("fr-FR");
 
-      const { startKey, endKey } = monthRange(month);
-      oPeriod.textContent = `${startKey} → ${endKey}`;
-      pageSubtitle.textContent = `${owner?.name || "Propriétaire"} • ${startKey} → ${endKey}`;
-      editionDate.textContent = new Date().toLocaleDateString("fr-FR");
+  let inv = [], cred = [];
+  try{
+    [inv, cred] = await Promise.all([
+      queryDocsByType(currentUser.uid, "INVOICE"),
+      queryDocsByType(currentUser.uid, "CREDIT")
+    ]);
+  }catch(e){
+    throw new Error("Erreur chargement salesDocuments.");
+  }
 
-      let inv = [], cred = [];
-      try{
-        [inv, cred] = await Promise.all([
-          queryDocsForMonth(currentUser.uid, "INVOICE", startKey, endKey),
-          queryDocsForMonth(currentUser.uid, "CREDIT", startKey, endKey)
-        ]);
-      }catch(e){
-        throw new Error("Erreur requête salesDocuments. Vérifie l’index sur docDateKey.");
-      }
+  inv = inv
+    .filter(x => isOwnerMatch(x, ownerUid, ownerDocId))
+    .filter(x => !!String(x.invoiceNumber || "").trim())
+    .filter(x => isDateInPeriod(getDocDateKeySafe(x), startKey, endKey));
 
-      inv = inv.filter(x =>
-        String(x.ownerUid || "").trim() === ownerUid ||
-        String(x.clientOwnerDocId || x.ownerDocId || "").trim() === ownerDocId
-      );
-      cred = cred.filter(x =>
-        String(x.ownerUid || "").trim() === ownerUid ||
-        String(x.clientOwnerDocId || x.ownerDocId || "").trim() === ownerDocId
-      );
+  cred = cred
+    .filter(x => isOwnerMatch(x, ownerUid, ownerDocId))
+    .filter(x => !!String(x.creditNumber || "").trim())
+    .filter(x => isDateInPeriod(getDocDateKeySafe(x), startKey, endKey));
 
-      inv = inv.filter(x => !!String(x.invoiceNumber || "").trim());
-      cred = cred.filter(x => !!String(x.creditNumber || "").trim());
+  const items = [
+    ...inv.map(normalizeItemFromDoc),
+    ...cred.map(normalizeItemFromDoc)
+  ].sort((a,b)=> String(a.dateKey).localeCompare(String(b.dateKey)));
 
-      const items = [
-        ...inv.map(normalizeItemFromDoc),
-        ...cred.map(normalizeItemFromDoc)
-      ].sort((a,b)=> String(a.dateKey).localeCompare(String(b.dateKey)));
+  const invoicesTTC = items.filter(i=>i.kind==="INVOICE").reduce((s,i)=> s + absMoney(i.totalTTC), 0);
+  const creditsTTC  = items.filter(i=>i.kind==="CREDIT").reduce((s,i)=> s + absMoney(i.totalTTC), 0);
+  const netTTC = invoicesTTC - creditsTTC;
 
-      const invoicesTTC = items.filter(i=>i.kind==="INVOICE").reduce((s,i)=> s + absMoney(i.totalTTC), 0);
-      const creditsTTC  = items.filter(i=>i.kind==="CREDIT").reduce((s,i)=> s + absMoney(i.totalTTC), 0);
-      const netTTC = invoicesTTC - creditsTTC;
+  draft = {
+    conciergerieUid: currentUser.uid,
+    ownerUid,
+    ownerDocId,
+    ownerName: owner?.name || "",
+    ownerEmail: owner?.email || "",
+    periodKey: month,
+    startKey,
+    endKey,
+    items,
+    totals: { invoicesTTC, creditsTTC, netTTC }
+  };
 
-      draft = {
-        conciergerieUid: currentUser.uid,
-        ownerUid,
-        ownerDocId,
-        ownerName: owner?.name || "",
-        ownerEmail: owner?.email || "",
-        periodKey: month,
-        startKey,
-        endKey,
-        items,
-        totals: { invoicesTTC, creditsTTC, netTTC }
-      };
+  const stId = statementId(draft.conciergerieUid, draft.ownerUid, draft.periodKey);
+  const stSnap = await getDoc(doc(db,"ownerStatements", stId));
+  alreadyPublished = stSnap.exists() && (stSnap.data()?.ownerVisible === true || !!stSnap.data()?.publishedAt);
 
-      const stId = statementId(draft.conciergerieUid, draft.ownerUid, draft.periodKey);
-      const stSnap = await getDoc(doc(db,"ownerStatements", stId));
-      alreadyPublished = stSnap.exists() && (stSnap.data()?.ownerVisible === true || !!stSnap.data()?.publishedAt);
-
-      refreshPublishState();
-      renderDraft();
-    }
-
+  refreshPublishState();
+  renderDraft();
+}
+    
     function refreshPublishState(){
       if(alreadyPublished){
         publishStatePill.textContent = "publié";
