@@ -108,6 +108,14 @@
       line-height:1.15;
       word-break:break-word;
     }
+    .brand .addr{
+      margin-top:4px;
+      font-size:12.5px;
+      color:#444;
+      line-height:1.35;
+      word-break:break-word;
+      font-weight:500;
+    }
 
     .metaRight{
       text-align:right;
@@ -354,6 +362,7 @@
           </div>
           <div class="brand">
             <div class="name" id="bizName">Conciergerie</div>
+            <div class="addr" id="bizAddressTop">—</div>
           </div>
         </div>
 
@@ -445,6 +454,7 @@
     const logoFallback = document.getElementById("logoFallback");
 
     const bizName = document.getElementById("bizName");
+    const bizAddressTop = document.getElementById("bizAddressTop");
     const publishedAtLabel = document.getElementById("publishedAtLabel");
     const periodTopLabel = document.getElementById("periodTopLabel");
     const bizBlock = document.getElementById("bizBlock");
@@ -532,35 +542,139 @@
       return { id:snap.id, ...(snap.data() || {}) };
     }
 
-    async function loadBusinessProfile(uid){
-      if(!uid) return null;
+    function pickFirst(...vals){
+      for(const v of vals){
+        if(typeof v === "string" && v.trim()) return v.trim();
+      }
+      return "";
+    }
+
+    function normalizeBusinessFromSnapshot(docData){
+      const snap = docData?.businessSnapshot || docData?.businessProfileSnapshot || {};
+
+      const addressObj =
+        snap?.address ||
+        snap?.companyAddress ||
+        snap?.billingAddress ||
+        {};
+
+      const street = pickFirst(
+        addressObj?.street,
+        addressObj?.address1,
+        addressObj?.line1,
+        snap?.street,
+        snap?.address1
+      );
+
+      const zip = pickFirst(
+        addressObj?.zip,
+        addressObj?.postalCode,
+        snap?.zip,
+        snap?.postalCode
+      );
+
+      const city = pickFirst(
+        addressObj?.city,
+        snap?.city
+      );
+
+      const companyName = pickFirst(
+        snap?.companyName,
+        snap?.name,
+        docData?.companyName
+      ) || "Conciergerie";
+
+      const logoUrl = pickFirst(
+        snap?.logoUrl,
+        snap?.companyLogoUrl,
+        snap?.logo,
+        snap?.photoUrl
+      );
+
+      const email = pickFirst(
+        snap?.billingEmail,
+        snap?.email,
+        snap?.contact?.email
+      );
+
+      const phone = pickFirst(
+        snap?.phone,
+        snap?.contact?.phone
+      );
+
+      const siret = pickFirst(
+        snap?.siret,
+        snap?.registration?.siret
+      );
+
+      const ape = pickFirst(
+        snap?.ape,
+        snap?.registration?.ape
+      );
+
+      return {
+        companyName,
+        logoUrl,
+        street,
+        zip,
+        city,
+        email,
+        phone,
+        siret,
+        ape
+      };
+    }
+
+    async function loadBusinessProfile(uid, docData){
+      const snapBiz = normalizeBusinessFromSnapshot(docData);
+
+      const hasEnoughSnapshotData =
+        snapBiz.companyName !== "Conciergerie" ||
+        snapBiz.logoUrl ||
+        snapBiz.street ||
+        snapBiz.zip ||
+        snapBiz.city ||
+        snapBiz.email ||
+        snapBiz.phone ||
+        snapBiz.siret ||
+        snapBiz.ape;
+
+      if(hasEnoughSnapshotData){
+        return snapBiz;
+      }
+
+      if(!uid) return snapBiz;
 
       try{
         const snap = await getDoc(doc(db, "users", uid));
-        if(!snap.exists()) return null;
+        if(!snap.exists()) return snapBiz;
 
         const d = snap.data() || {};
         const bp = d.businessProfile || {};
+        const addr = bp.address || {};
 
         return {
-          companyName: String(bp.companyName || "Conciergerie").trim() || "Conciergerie",
-          logoUrl: String(bp.logoUrl || "").trim(),
-          street: String(bp.address?.street || "").trim(),
-          zip: String(bp.address?.zip || "").trim(),
-          city: String(bp.address?.city || "").trim(),
-          email: String(bp.billingEmail || bp.contact?.email || "").trim(),
-          phone: String(bp.phone || bp.contact?.phone || "").trim(),
-          siret: String(bp.registration?.siret || "").trim(),
-          ape: String(bp.registration?.ape || "").trim()
+          companyName: pickFirst(bp.companyName, d.companyName, snapBiz.companyName) || "Conciergerie",
+          logoUrl: pickFirst(bp.logoUrl, bp.companyLogoUrl, bp.logo, d.logoUrl, snapBiz.logoUrl),
+          street: pickFirst(addr.street, addr.address1, addr.line1, bp.street, snapBiz.street),
+          zip: pickFirst(addr.zip, addr.postalCode, bp.zip, snapBiz.zip),
+          city: pickFirst(addr.city, bp.city, snapBiz.city),
+          email: pickFirst(bp.billingEmail, bp.contact?.email, bp.email, snapBiz.email),
+          phone: pickFirst(bp.phone, bp.contact?.phone, snapBiz.phone),
+          siret: pickFirst(bp.registration?.siret, bp.siret, snapBiz.siret),
+          ape: pickFirst(bp.registration?.ape, bp.ape, snapBiz.ape)
         };
       }catch(e){
         console.warn("Erreur profil conciergerie", e);
-        return null;
+        return snapBiz;
       }
     }
 
     function renderHeader(docData, biz){
       bizName.textContent = biz?.companyName || "Conciergerie";
+
+      const topAddress = [biz?.street, [biz?.zip, biz?.city].filter(Boolean).join(" ")].filter(Boolean).join(" • ");
+      bizAddressTop.textContent = topAddress || " ";
 
       publishedAtLabel.textContent = fmtDate(
         docData?.publishedAt ||
@@ -575,6 +689,11 @@
         logoImg.src = biz.logoUrl;
         logoImg.style.display = "block";
         logoFallback.style.display = "none";
+
+        logoImg.onerror = () => {
+          logoImg.style.display = "none";
+          logoFallback.style.display = "inline";
+        };
       }else{
         logoImg.style.display = "none";
         logoFallback.style.display = "inline";
@@ -783,7 +902,8 @@
         }
 
         const biz = await loadBusinessProfile(
-          String(currentDoc?.conciergerieUid || "").trim()
+          String(currentDoc?.conciergerieUid || "").trim(),
+          currentDoc
         );
 
         renderAll(currentDoc, biz);
