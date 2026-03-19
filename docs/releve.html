@@ -469,19 +469,73 @@
       oEmail.textContent = owner.email || "—";
     }
 
-    async function queryDocsForMonth(uid, type, startKey, endKey){
-      const qx = query(
-        collection(db,"salesDocuments"),
-        where("conciergerieUid","==", uid),
-        where("type","==", type),
-        where("docDateKey", ">=", startKey),
-        where("docDateKey", "<=", endKey),
-        orderBy("docDateKey","asc"),
-        limit(2000)
-      );
-      const snap = await getDocs(qx);
-      return snap.docs.map(s => ({ id:s.id, ...(s.data()||{}) }));
-    }
+    async function queryDocsByType(uid, type){
+  const qx = query(
+    collection(db,"salesDocuments"),
+    where("conciergerieUid","==", uid),
+    where("type","==", type),
+    limit(2000)
+  );
+  const snap = await getDocs(qx);
+  return snap.docs.map(s => ({ id:s.id, ...(s.data()||{}) }));
+}
+
+function tsToDate(x){
+  try{
+    if(!x) return null;
+    if(x?.toDate?.()) return x.toDate();
+    const d = new Date(x);
+    return isNaN(d.getTime()) ? null : d;
+  }catch{
+    return null;
+  }
+}
+
+function toDateKeyFromDate(d){
+  if(!(d instanceof Date) || isNaN(d.getTime())) return "";
+  const y = d.getFullYear();
+  const m = String(d.getMonth()+1).padStart(2,"0");
+  const day = String(d.getDate()).padStart(2,"0");
+  return `${y}-${m}-${day}`;
+}
+
+function getDocDateKeySafe(d){
+  const direct = String(
+    d.docDateKey ||
+    d.invoiceDateKey ||
+    d.creditDateKey ||
+    ""
+  ).trim();
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(direct)) return direct;
+
+  const c1 = tsToDate(d.createdAt);
+  if(c1) return toDateKeyFromDate(c1);
+
+  const c2 = Number(d.createdAtMs);
+  if(Number.isFinite(c2) && c2 > 0){
+    return toDateKeyFromDate(new Date(c2));
+  }
+
+  const c3 = Number(d.snapAtMs);
+  if(Number.isFinite(c3) && c3 > 0){
+    return toDateKeyFromDate(new Date(c3));
+  }
+
+  return "";
+}
+
+function isOwnerMatch(docData, ownerUid, ownerDocId){
+  return (
+    String(docData.ownerUid || "").trim() === String(ownerUid || "").trim()
+    || String(docData.clientOwnerDocId || docData.ownerDocId || "").trim() === String(ownerDocId || "").trim()
+  );
+}
+
+function isDateInPeriod(dateKey, startKey, endKey){
+  if(!dateKey) return false;
+  return dateKey >= startKey && dateKey <= endKey;
+}
 
     function normalizeItemFromDoc(d){
       const type = String(d.type || "").toUpperCase().trim();
