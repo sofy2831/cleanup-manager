@@ -442,6 +442,18 @@
             <div class="t">Net TTC</div>
             <div class="v" id="netTTC">—</div>
           </div>
+          <div class="tBox">
+            <div class="t">Montant réglé</div>
+            <div class="v" id="paidTTC">—</div>
+          </div>
+          <div class="tBox">
+            <div class="t">Reste dû</div>
+            <div class="v" id="dueTTC">—</div>
+          </div>
+          <div class="tBox">
+            <div class="t">Dernier règlement</div>
+            <div class="v" id="lastPaymentDate">—</div>
+          </div>
         </div>
 
         <div id="tableWrap"></div>
@@ -481,6 +493,9 @@
     const invTTC = document.getElementById("invTTC");
     const credTTC = document.getElementById("credTTC");
     const netTTC = document.getElementById("netTTC");
+    const paidTTC = document.getElementById("paidTTC");
+    const dueTTC = document.getElementById("dueTTC");
+    const lastPaymentDate = document.getElementById("lastPaymentDate");
     const tableWrap = document.getElementById("tableWrap");
 
     const printBtn = document.getElementById("printBtn");
@@ -517,6 +532,19 @@
       const n = Number(v);
       if(!Number.isFinite(n)) return "—";
       return n.toLocaleString("fr-FR",{minimumFractionDigits:2, maximumFractionDigits:2}) + " €";
+    }
+
+    function fmtDateFR(x){
+      if(!x) return "—";
+      try{
+        if(x?.toDate?.()) return x.toDate().toLocaleDateString("fr-FR");
+        if(x instanceof Date && !isNaN(x.getTime())) return x.toLocaleDateString("fr-FR");
+        const d = new Date(x);
+        if(!isNaN(d.getTime())) return d.toLocaleDateString("fr-FR");
+        return "—";
+      }catch{
+        return "—";
+      }
     }
 
     function pad2(n){ return String(n).padStart(2,"0"); }
@@ -696,6 +724,56 @@
       };
     }
 
+    async function loadPaymentsSummaryForInvoices(invoiceDocs){
+      let paid = 0;
+      let latestDate = null;
+
+      for(const invoiceDoc of invoiceDocs){
+        const docId = String(invoiceDoc.id || "").trim();
+        if(!docId) continue;
+
+        try{
+          const snap = await getDocs(collection(db, "salesDocuments", docId, "payments"));
+
+          if(!snap.empty){
+            for(const p of snap.docs){
+              const d = p.data() || {};
+
+              const amount = Number(d.montantRegle || 0);
+              if(Number.isFinite(amount)) paid += amount;
+
+              const rawDate = d.dateReglement || d.createdAt || null;
+              const realDate = rawDate?.toDate?.()
+                ? rawDate.toDate()
+                : (rawDate ? new Date(rawDate) : null);
+
+              if(realDate instanceof Date && !isNaN(realDate.getTime())){
+                if(!latestDate || realDate > latestDate) latestDate = realDate;
+              }
+            }
+          }else{
+            const fallbackPaid = Number(invoiceDoc.paidAmount || 0);
+            if(Number.isFinite(fallbackPaid) && fallbackPaid > 0){
+              paid += fallbackPaid;
+            }
+          }
+
+        }catch(e){
+          console.warn("Lecture payments impossible pour", docId, e?.message || e);
+
+          const fallbackPaid = Number(invoiceDoc.paidAmount || 0);
+          if(Number.isFinite(fallbackPaid) && fallbackPaid > 0){
+            paid += fallbackPaid;
+          }
+        }
+      }
+
+      return {
+        paidTTC: paid,
+        lastPaymentDate: latestDate
+      };
+    }
+
     async function buildDraft(){
       if(!month) throw new Error("Mois manquant.");
       if(!ownerUid) throw new Error("ownerUid manquant.");
@@ -735,6 +813,10 @@
       const creditsTTC  = items.filter(i=>i.kind==="CREDIT").reduce((s,i)=> s + absMoney(i.totalTTC), 0);
       const netTTC = invoicesTTC - creditsTTC;
 
+      const paymentsSummary = await loadPaymentsSummaryForInvoices(inv);
+      const paidTTCValue = Number(paymentsSummary.paidTTC || 0);
+      const dueTTCValue = netTTC - paidTTCValue;
+
       draft = {
         conciergerieUid: currentUser.uid,
         ownerUid,
@@ -745,7 +827,12 @@
         startKey,
         endKey,
         items,
-        totals: { invoicesTTC, creditsTTC, netTTC }
+        totals: { invoicesTTC, creditsTTC, netTTC },
+        paymentSummary: {
+          paidTTC: paidTTCValue,
+          dueTTC: dueTTCValue,
+          lastPaymentDate: paymentsSummary.lastPaymentDate
+        }
       };
 
       const stId = statementId(draft.conciergerieUid, draft.ownerUid, draft.periodKey);
@@ -773,6 +860,9 @@
         invTTC.textContent = fmtMoney(0);
         credTTC.textContent = fmtMoney(0);
         netTTC.textContent = fmtMoney(0);
+        paidTTC.textContent = fmtMoney(0);
+        dueTTC.textContent = fmtMoney(0);
+        lastPaymentDate.textContent = "—";
         tableWrap.innerHTML = `<div class="empty">Aucune facture ni aucun avoir sur cette période pour ce propriétaire.</div>`;
         return;
       }
@@ -780,6 +870,9 @@
       invTTC.textContent = fmtMoney(draft.totals.invoicesTTC);
       credTTC.textContent = fmtMoney(draft.totals.creditsTTC);
       netTTC.textContent = fmtMoney(draft.totals.netTTC);
+      paidTTC.textContent = fmtMoney(draft.paymentSummary?.paidTTC || 0);
+      dueTTC.textContent = fmtMoney(draft.paymentSummary?.dueTTC || 0);
+      lastPaymentDate.textContent = fmtDateFR(draft.paymentSummary?.lastPaymentDate);
 
       tableWrap.innerHTML = `
         <div class="tableScroll">
@@ -843,6 +936,11 @@
           currency: "EUR",
           items: draft.items,
           totals: draft.totals,
+          paymentSummary: draft.paymentSummary || {
+            paidTTC: 0,
+            dueTTC: draft.totals?.netTTC || 0,
+            lastPaymentDate: null
+          },
           note: `Relevé de factures ${draft.periodKey}`,
           ownerVisible: true,
           publishedAt: serverTimestamp(),
@@ -860,6 +958,11 @@
           statementId: stId,
           periodKey: draft.periodKey,
           totals: draft.totals,
+          paymentSummary: draft.paymentSummary || {
+            paidTTC: 0,
+            dueTTC: draft.totals?.netTTC || 0,
+            lastPaymentDate: null
+          },
           note: `Relevé de factures ${draft.periodKey}`,
           updatedAt: serverTimestamp(),
           createdAt: serverTimestamp()
@@ -889,6 +992,9 @@
         `Factures TTC : ${fmtMoney(draft.totals.invoicesTTC)}`,
         `Avoirs TTC : ${fmtMoney(draft.totals.creditsTTC)}`,
         `Net TTC : ${fmtMoney(draft.totals.netTTC)}`,
+        `Montant réglé : ${fmtMoney(draft.paymentSummary?.paidTTC || 0)}`,
+        `Reste dû : ${fmtMoney(draft.paymentSummary?.dueTTC || 0)}`,
+        `Dernier règlement : ${fmtDateFR(draft.paymentSummary?.lastPaymentDate)}`,
         "",
         "Cordialement,",
         companyName
