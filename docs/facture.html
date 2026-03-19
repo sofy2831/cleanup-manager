@@ -1,4 +1,4 @@
-<!-- docs/facture.html (FINAL — salesDocuments only ; docId canon ; fallback eventId => migrate propre depuis interventions ; client+lignes+totaux cohérents) -->
+<!-- docs/facture.html (CORRIGÉ COMPLET — businessSnapshot + clientSnapshot uniformisés + compat anciens docs + migration event->salesDocuments figée) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -173,13 +173,31 @@
     }
 
     .totals{
-      margin-top:10px; background:#fff; border-radius:14px;
+      margin-top:10px;
+      background:#fff;
+      border-radius:14px;
       border:1px solid rgba(122,92,255,0.18);
       box-shadow:0 3px 10px rgba(0,0,0,.06);
-      padding:10px 12px; display:flex; flex-direction:column; gap:6px; font-weight:1000;
+      padding:10px 12px;
+      display:flex;
+      flex-direction:column;
+      gap:6px;
+      font-weight:1000;
+      font-size:14px;
     }
-    .totals .r{ display:flex; justify-content:space-between; gap:10px; }
-    .mutedLine{ font-size:12px; color:#666; font-weight:900; }
+    .totals .r{
+      display:flex;
+      justify-content:space-between;
+      gap:10px;
+      font-size:14px;
+      font-weight:1000;
+    }
+    .mutedLine{
+      font-size:12px;
+      color:#666;
+      font-weight:900;
+      line-height:1.35;
+    }
 
     label{
       display:block; font-size:12px; font-weight:1000; color:#333;
@@ -546,6 +564,7 @@
       return (p.get(name) || "").trim();
     }
     function normalizeEmail(s){ return (s||"").toString().trim().toLowerCase(); }
+    function round2(n){ return Math.round((Number(n) || 0) * 100) / 100; }
 
     function buildBackLink(){
       const p = new URLSearchParams(location.search);
@@ -588,57 +607,6 @@
       }catch(_){ return null; }
     }
 
-    function getClientType(d){
-      const ct = String(d?.clientType || "").toUpperCase().trim();
-      if(ct === "PRO") return "PRO";
-      if(ct === "PARTICULIER") return "PARTICULIER";
-      if(d?.isPro === true) return "PRO";
-      if(String(d?.clientSiret || "").trim()) return "PRO";
-      if(String(d?.clientCompanyName || "").trim()) return "PRO";
-      return "PARTICULIER";
-    }
-
-    function computeTotals(lines, tvaEnabled, tvaRate){
-      let ht = 0;
-      for(const l of (Array.isArray(lines) ? lines : [])){
-        const qty = Number(l?.qty)||0;
-        const up  = Number(l?.unitPrice)||0;
-        ht += qty * up;
-      }
-      const tva = tvaEnabled ? (ht * (Number(tvaRate)||0)) : 0;
-      const ttc = ht + tva;
-      return { ht, tva, ttc };
-    }
-
-    function invoiceStatusLabel(s){
-      const x = String(s||"").toUpperCase().trim();
-      if(!x) return "—";
-      if(x === "DRAFT") return "BROUILLON";
-      if(x === "ISSUED") return "ÉMISE";
-      if(x === "SENT") return "ENVOYÉE";
-      if(x === "PAID") return "PAYÉE";
-      if(x === "CANCELLED") return "ANNULÉE";
-      return x;
-    }
-
-    function dueLabel(term){
-      const t = String(term||"").toUpperCase();
-      if(t === "RECEPTION") return "À réception";
-      if(t === "8J") return "8 jours";
-      if(t === "15J") return "15 jours";
-      if(t === "30J") return "30 jours";
-      if(t === "45J") return "45 jours";
-      return term || "—";
-    }
-    function termToDays(term){
-      const t = String(term||"").toUpperCase();
-      if(t === "RECEPTION") return 0;
-      if(t === "8J") return 8;
-      if(t === "15J") return 15;
-      if(t === "30J") return 30;
-      if(t === "45J") return 45;
-      return 0;
-    }
     function todayIso(){
       const d = new Date();
       const yyyy = d.getFullYear();
@@ -652,15 +620,44 @@
       d.setDate(d.getDate() + (Number(days)||0));
       return String(d.getDate()).padStart(2,"0") + "/" + String(d.getMonth()+1).padStart(2,"0") + "/" + d.getFullYear();
     }
+    function termToDays(term){
+      const t = String(term||"").toUpperCase();
+      if(t === "RECEPTION") return 0;
+      if(t === "8J") return 8;
+      if(t === "15J") return 15;
+      if(t === "30J") return 30;
+      if(t === "45J") return 45;
+      return 0;
+    }
+    function dueLabel(term){
+      const t = String(term||"").toUpperCase();
+      if(t === "RECEPTION") return "À réception";
+      if(t === "8J") return "8 jours";
+      if(t === "15J") return "15 jours";
+      if(t === "30J") return "30 jours";
+      if(t === "45J") return "45 jours";
+      return term || "—";
+    }
 
-    function pickDate(v){ const s = String(v||"").trim(); return s || ""; }
-    function getStayPeriod(d){
-      const a = pickDate(d?.arrivalDateKey || d?.arrivalDate || d?.checkinDate || d?.arrival);
-      const b = pickDate(d?.departureDateKey || d?.departureDate || d?.checkoutDate || d?.departure);
-      if(a && b) return { from:a, to:b, label:`Du ${a} au ${b}` };
-      if(a && !b) return { from:a, to:"", label:`À partir du ${a}` };
-      if(!a && b) return { from:"", to:b, label:`Jusqu’au ${b}` };
-      return { from:"", to:"", label:"—" };
+    function invoiceStatusLabel(s){
+      const x = String(s||"").toUpperCase().trim();
+      if(!x) return "—";
+      if(x === "DRAFT") return "BROUILLON";
+      if(x === "ISSUED") return "ÉMISE";
+      if(x === "SENT") return "ENVOYÉE";
+      if(x === "PAID") return "PAYÉE";
+      if(x === "CANCELLED") return "ANNULÉE";
+      return x;
+    }
+
+    function getClientType(d){
+      const ct = String(d?.clientType || "").toUpperCase().trim();
+      if(ct === "PRO") return "PRO";
+      if(ct === "PARTICULIER") return "PARTICULIER";
+      if(d?.isPro === true) return "PRO";
+      if(String(d?.clientSiret || "").trim()) return "PRO";
+      if(String(d?.clientCompanyName || "").trim()) return "PRO";
+      return "PARTICULIER";
     }
 
     function getPenaltyTemplate(mode){
@@ -689,21 +686,114 @@
       return `FA${year}-${padded}`;
     }
 
-    function applyLogoFromProfile(profile){
-      const bp = (profile?.businessProfile || {});
-      const url = String(bp.logoUrl || "").trim();
+    function getVatSnapshotFromProfile(){
+      const bp = (profileData?.businessProfile || {});
+      const enabled = !!bp.vat?.enabled;
+      return {
+        enabled,
+        serviceRate: enabled ? 0.20 : 0,
+        productRate: enabled ? 0.10 : 0
+      };
+    }
 
-      if(url){
-        logoImg.src = url; logoImg.style.display = "block"; logoFallback.style.display = "none";
-      }else{
-        logoImg.style.display = "none"; logoFallback.style.display = "block";
+    function getDocumentVatContext(){
+      const snap = docData?.vatSnapshot;
+      if(snap && typeof snap === "object"){
+        return {
+          vatEnabled: !!snap.enabled,
+          vatSnapshot: {
+            enabled: !!snap.enabled,
+            serviceRate: Number(snap.serviceRate || 0),
+            productRate: Number(snap.productRate || 0)
+          }
+        };
       }
 
-      if(url){
-        bizLogoImg.src = url; bizLogoImg.style.display = "block"; bizLogoFallback.style.display = "none";
-      }else{
-        bizLogoImg.style.display = "none"; bizLogoFallback.style.display = "block";
+      const fromProfile = getVatSnapshotFromProfile();
+      return {
+        vatEnabled: !!fromProfile.enabled,
+        vatSnapshot: fromProfile
+      };
+    }
+
+    function getVatRate(lineType, vatEnabled, vatSnapshot){
+      if(!vatEnabled) return 0;
+      const lt = String(lineType || "SERVICE").trim().toUpperCase();
+      if(lt === "PRODUCT") return Number(vatSnapshot?.productRate ?? 0.10);
+      return Number(vatSnapshot?.serviceRate ?? 0.20);
+    }
+
+    function inferLineType(raw){
+      const lineType = String(raw?.lineType || "").trim().toUpperCase();
+      if(lineType === "SERVICE" || lineType === "PRODUCT") return lineType;
+
+      const category = String(raw?.category || "").toLowerCase();
+      const label = String(raw?.label || raw?.name || "").toLowerCase();
+
+      if(
+        category.includes("kit") ||
+        category.includes("consommable") ||
+        label.includes("kit") ||
+        label.includes("café") ||
+        label.includes("the") ||
+        label.includes("thé") ||
+        label.includes("shampoing") ||
+        label.includes("gel douche") ||
+        label.includes("savon")
+      ){
+        return "PRODUCT";
       }
+
+      return "SERVICE";
+    }
+
+    function computeLine(raw, vatEnabled, vatSnapshot){
+      const qty = Number(raw?.qty) || 0;
+      const unitPrice = Number(raw?.unitPrice) || 0;
+      const lineType = inferLineType(raw);
+      const vatRate = getVatRate(lineType, vatEnabled, vatSnapshot);
+      const totalHT = round2(qty * unitPrice);
+      const totalTVA = round2(totalHT * vatRate);
+      const totalTTC = round2(totalHT + totalTVA);
+
+      return {
+        ...raw,
+        label: String(raw?.label || raw?.name || "Ligne").trim(),
+        qty,
+        unit: String(raw?.unit || "unité").trim() || "unité",
+        unitPrice,
+        lineType,
+        vatRate,
+        totalHT,
+        totalTVA,
+        totalTTC
+      };
+    }
+
+    function computeDocument(lines, vatEnabled, vatSnapshot){
+      const computedLines = (Array.isArray(lines) ? lines : []).map(l => computeLine(l, vatEnabled, vatSnapshot));
+
+      let ht = 0;
+      let tva = 0;
+      let ttc = 0;
+
+      for(const l of computedLines){
+        ht += Number(l.totalHT) || 0;
+        tva += Number(l.totalTVA) || 0;
+        ttc += Number(l.totalTTC) || 0;
+      }
+
+      ht = round2(ht);
+      tva = round2(tva);
+      ttc = round2(ttc);
+
+      return {
+        lines: computedLines,
+        totalHT: ht,
+        totalTVA: tva,
+        totalTTC: ttc,
+        totals: { ht, tva, ttc }
+      };
     }
 
     function extractAddr(obj){
@@ -741,6 +831,217 @@
       return { street, address2, zip, city, country };
     }
 
+    async function loadProfile(uid){
+      const ref = doc(db, "users", uid);
+      const snap = await getDoc(ref);
+      profileData = snap.exists() ? (snap.data() || {}) : {};
+    }
+
+    function applyLogoFromUrl(url){
+      const safeUrl = String(url || "").trim();
+      if(safeUrl){
+        logoImg.src = safeUrl; logoImg.style.display = "block"; logoFallback.style.display = "none";
+        bizLogoImg.src = safeUrl; bizLogoImg.style.display = "block"; bizLogoFallback.style.display = "none";
+      }else{
+        logoImg.style.display = "none"; logoFallback.style.display = "block";
+        bizLogoImg.style.display = "none"; bizLogoFallback.style.display = "block";
+      }
+    }
+
+    function getNormalizedBusinessSnapshot(){
+      const docBs = (docData?.businessSnapshot && typeof docData.businessSnapshot === "object")
+        ? docData.businessSnapshot
+        : null;
+
+      const bp = (profileData?.businessProfile || {});
+      const source = docBs || bp;
+
+      const companyName = String(source.companyName || "Conciergerie").trim();
+      const logoUrl = String(source.logoUrl || "").trim();
+
+      const street = String(source.address?.street || "").trim();
+      const zip = String(source.address?.zip || "").trim();
+      const city = String(source.address?.city || "").trim();
+
+      const siret = String(source.registration?.siret || "").trim();
+      const ape = String(source.registration?.ape || "").trim();
+
+      const billingEmail = String(
+        source.billingEmail ||
+        source.contact?.email ||
+        bp.billingEmail ||
+        bp.contact?.email ||
+        profileData?.email ||
+        ""
+      ).trim();
+
+      const phone = String(
+        source.phone ||
+        source.contact?.phone ||
+        bp.phone ||
+        bp.contact?.phone ||
+        ""
+      ).trim();
+
+      const bank = source.bank || bp.bank || {};
+
+      return {
+        companyName,
+        logoUrl,
+        address: { street, zip, city },
+        registration: { siret, ape },
+        billingEmail,
+        phone,
+        bank: {
+          bankName: String(bank.bankName || bank.name || "").trim(),
+          name: String(bank.name || bank.bankName || "").trim(),
+          holder: String(bank.holder || "").trim(),
+          iban: String(bank.iban || "").trim(),
+          bic: String(bank.bic || "").trim()
+        },
+        tvaExemptionText: String(source.tvaExemptionText || bp.tvaExemptionText || "").trim(),
+        conditions: {
+          cancellationPercent: Number.isFinite(Number(source?.conditions?.cancellationPercent))
+            ? Number(source.conditions.cancellationPercent)
+            : (
+                Number.isFinite(Number(bp?.conditions?.cancellationPercent))
+                  ? Number(bp.conditions.cancellationPercent)
+                  : 30
+              )
+        }
+      };
+    }
+
+    function buildBusinessSnapshotFromProfile(){
+      const bp = (profileData?.businessProfile || {});
+      const vatSnapshot = getVatSnapshotFromProfile();
+      const bank = (bp.bank || {});
+
+      return {
+        companyName: String(bp.companyName || "Conciergerie").trim(),
+        billingEmail: String(bp.billingEmail || bp.contact?.email || profileData?.email || "").trim(),
+        phone: String(bp.phone || bp.contact?.phone || "").trim(),
+        logoUrl: String(bp.logoUrl || "").trim(),
+        snapAtMs: Date.now(),
+        address: {
+          street: String(bp.address?.street || "").trim(),
+          zip: String(bp.address?.zip || "").trim(),
+          city: String(bp.address?.city || "").trim()
+        },
+        registration: {
+          siret: String(bp.registration?.siret || "").trim(),
+          ape: String(bp.registration?.ape || "").trim()
+        },
+        vat: {
+          enabled: !!vatSnapshot.enabled,
+          serviceRate: Number(vatSnapshot.serviceRate || 0),
+          productRate: Number(vatSnapshot.productRate || 0)
+        },
+        tvaExemptionText: !vatSnapshot.enabled
+          ? String(bp?.tvaExemptionText || "TVA non applicable – art. 293 B du CGI").trim()
+          : "",
+        bank: {
+          bankName: String(bank.bankName || bank.name || "").trim(),
+          name: String(bank.name || bank.bankName || "").trim(),
+          holder: String(bank.holder || "").trim(),
+          iban: String(bank.iban || "").trim(),
+          bic: String(bank.bic || "").trim()
+        },
+        conditions: {
+          cancellationPercent: Number.isFinite(Number(bp?.conditions?.cancellationPercent))
+            ? Number(bp.conditions.cancellationPercent)
+            : 30
+        }
+      };
+    }
+
+    function getNormalizedClientSnapshot(){
+      const cs = (docData?.clientSnapshot && typeof docData.clientSnapshot === "object")
+        ? docData.clientSnapshot
+        : null;
+
+      const source = {
+        name:
+          cs?.name ||
+          docData?.clientName ||
+          docData?.clientDisplayName ||
+          docData?.ownerName ||
+          "",
+        email:
+          cs?.email ||
+          docData?.clientEmail ||
+          docData?.ownerEmail ||
+          "",
+        phone:
+          cs?.phone ||
+          docData?.clientPhone ||
+          docData?.ownerPhone ||
+          "",
+        address1:
+          cs?.address1 ||
+          docData?.clientAddress1 ||
+          docData?.ownerAddress1 ||
+          "",
+        address2:
+          cs?.address2 ||
+          docData?.clientAddress2 ||
+          docData?.ownerAddress2 ||
+          "",
+        zip:
+          cs?.zip ||
+          docData?.clientZip ||
+          docData?.ownerZip ||
+          "",
+        city:
+          cs?.city ||
+          docData?.clientCity ||
+          docData?.ownerCity ||
+          "",
+        country:
+          cs?.country ||
+          docData?.clientCountry ||
+          docData?.ownerCountry ||
+          "FR",
+        ownerDocId:
+          cs?.ownerDocId ||
+          docData?.clientOwnerDocId ||
+          docData?.ownerDocId ||
+          "",
+        ownerUid:
+          cs?.ownerUid ||
+          docData?.ownerUid ||
+          ""
+      };
+
+      return {
+        ownerDocId: String(source.ownerDocId || "").trim(),
+        ownerUid: String(source.ownerUid || "").trim(),
+        name: String(source.name || "").trim(),
+        email: normalizeEmail(source.email || ""),
+        phone: String(source.phone || "").trim(),
+        address1: String(source.address1 || "").trim(),
+        address2: String(source.address2 || "").trim(),
+        zip: String(source.zip || "").trim(),
+        city: String(source.city || "").trim(),
+        country: String(source.country || "FR").trim() || "FR"
+      };
+    }
+
+    function buildClientSnapshotFromResolved(resolved){
+      return {
+        ownerDocId: String(resolved?.clientOwnerDocId || resolved?.ownerDocId || "").trim(),
+        ownerUid: String(docData?.clientSnapshot?.ownerUid || docData?.ownerUid || "").trim(),
+        name: String(resolved?.name || "").trim(),
+        email: normalizeEmail(resolved?.email || ""),
+        phone: String(resolved?.phone || "").trim(),
+        address1: String(resolved?.address1 || "").trim(),
+        address2: String(resolved?.address2 || "").trim(),
+        zip: String(resolved?.zip || "").trim(),
+        city: String(resolved?.city || "").trim(),
+        country: String(resolved?.country || "FR").trim() || "FR"
+      };
+    }
+
     async function lookupOwnerByEmailInOwners(conciergerieUid, emailLower){
       if(!emailLower) return null;
 
@@ -748,7 +1049,6 @@
         collection(db,"owners"),
         where("conciergerieUid", "==", String(conciergerieUid)),
         where("emailLower", "==", emailLower),
-        where("isActive", "==", true),
         limit(1)
       );
 
@@ -761,6 +1061,7 @@
 
       return {
         docId: doc0.id,
+        ownerUid: String(o.ownerUid || o.userUid || "").trim(),
         email: normalizeEmail(o.email || emailLower),
         fullname: (o.fullname || o.displayName || o.name || "").trim(),
         address1: addr.street,
@@ -773,8 +1074,9 @@
     }
 
     async function loadOwnerFromOwnersOrNull(conciergerieUid, d){
+      const cs = d?.clientSnapshot || {};
       const ownerDocId =
-        String(d?.ownerUid || "").trim() ||
+        String(cs?.ownerDocId || "").trim() ||
         String(d?.ownerDocId || "").trim() ||
         String(d?.clientOwnerDocId || "").trim();
 
@@ -787,6 +1089,7 @@
               const addr = extractAddr(o);
               return {
                 docId: snap.id,
+                ownerUid: String(o.ownerUid || o.userUid || "").trim(),
                 email: normalizeEmail(o.email || ""),
                 fullname: (o.fullname || o.displayName || o.name || "").trim(),
                 address1: addr.street,
@@ -801,7 +1104,13 @@
         }catch(e){}
       }
 
-      const emailLower = normalizeEmail(d?.clientEmail || d?.ownerEmail || "");
+      const emailLower = normalizeEmail(
+        cs?.email ||
+        d?.clientEmail ||
+        d?.ownerEmail ||
+        ""
+      );
+
       if(emailLower){
         try{ return await lookupOwnerByEmailInOwners(conciergerieUid, emailLower); }
         catch(e){ return null; }
@@ -841,14 +1150,16 @@
     }
 
     function docSnapshotClient(d){
-      const sName = String(d?.clientName || d?.clientCompany || d?.clientFullName || "").trim();
-      const sEmail = normalizeEmail(d?.clientEmail || "");
-      const sPhone = String(d?.clientPhone || "").trim();
-      const sA1 = String(d?.clientAddress1 || d?.clientAddress || "").trim();
-      const sA2 = String(d?.clientAddress2 || "").trim();
-      const sZip = String(d?.clientZip || "").trim();
-      const sCity = String(d?.clientCity || "").trim();
-      const sCountry = String(d?.clientCountry || "FR").trim();
+      const cs = (d?.clientSnapshot && typeof d.clientSnapshot === "object") ? d.clientSnapshot : null;
+
+      const sName = String(cs?.name || d?.clientName || d?.clientDisplayName || d?.clientCompany || d?.clientFullName || "").trim();
+      const sEmail = normalizeEmail(cs?.email || d?.clientEmail || "");
+      const sPhone = String(cs?.phone || d?.clientPhone || "").trim();
+      const sA1 = String(cs?.address1 || d?.clientAddress1 || d?.clientAddress || "").trim();
+      const sA2 = String(cs?.address2 || d?.clientAddress2 || "").trim();
+      const sZip = String(cs?.zip || d?.clientZip || "").trim();
+      const sCity = String(cs?.city || d?.clientCity || "").trim();
+      const sCountry = String(cs?.country || d?.clientCountry || "FR").trim();
 
       const eName = String(d?.ownerName || "").trim();
       const eEmail = normalizeEmail(d?.ownerEmail || "");
@@ -887,7 +1198,8 @@
       const country = (owners?.country || snap.country || homeSnap?.country || "FR").trim();
 
       return {
-        clientOwnerDocId: owners?.docId || String(d?.clientOwnerDocId || d?.ownerDocId || "").trim() || null,
+        clientOwnerDocId: owners?.docId || String(d?.clientSnapshot?.ownerDocId || d?.clientOwnerDocId || d?.ownerDocId || "").trim() || "",
+        ownerUid: owners?.ownerUid || String(d?.clientSnapshot?.ownerUid || d?.ownerUid || "").trim() || "",
         name, email, phone, address1, address2, zip, city, country
       };
     }
@@ -895,145 +1207,186 @@
     async function hydrateClientSnapshotInMemoryIfMissing(){
       if(!currentUser?.uid || !docData) return;
 
-      const hasName = !!String(docData.clientName || "").trim();
-      const hasEmail = !!String(docData.clientEmail || "").trim();
-      const hasAddr =
-        !!String(docData.clientAddress1 || "").trim() ||
-        !!String(docData.clientZip || "").trim() ||
-        !!String(docData.clientCity || "").trim();
+      const cs = getNormalizedClientSnapshot();
+      const hasName = !!cs.name;
+      const hasEmail = !!cs.email;
+      const hasAddr = !!cs.address1 || !!cs.zip || !!cs.city;
 
-      if(hasName && hasEmail && hasAddr) return;
+      if(hasName && hasEmail && hasAddr && docData?.clientSnapshot) return;
 
       try{
         const resolved = await resolveClientSnapshot(currentUser.uid, docData);
+        const merged = {
+          ownerDocId: cs.ownerDocId || resolved.clientOwnerDocId || "",
+          ownerUid: cs.ownerUid || resolved.ownerUid || "",
+          name: cs.name || resolved.name || "",
+          email: cs.email || resolved.email || "",
+          phone: cs.phone || resolved.phone || "",
+          address1: cs.address1 || resolved.address1 || "",
+          address2: cs.address2 || resolved.address2 || "",
+          zip: cs.zip || resolved.zip || "",
+          city: cs.city || resolved.city || "",
+          country: cs.country || resolved.country || "FR"
+        };
+
         docData = {
           ...docData,
-          clientOwnerDocId: docData.clientOwnerDocId || resolved.clientOwnerDocId || null,
-          clientName: String(docData.clientName || "").trim() ? docData.clientName : (resolved.name || ""),
-          clientEmail: String(docData.clientEmail || "").trim() ? docData.clientEmail : (resolved.email || ""),
-          clientPhone: String(docData.clientPhone || "").trim() ? docData.clientPhone : (resolved.phone || ""),
-          clientAddress1: String(docData.clientAddress1 || "").trim() ? docData.clientAddress1 : (resolved.address1 || ""),
-          clientAddress2: String(docData.clientAddress2 || "").trim() ? docData.clientAddress2 : (resolved.address2 || ""),
-          clientZip: String(docData.clientZip || "").trim() ? docData.clientZip : (resolved.zip || ""),
-          clientCity: String(docData.clientCity || "").trim() ? docData.clientCity : (resolved.city || ""),
-          clientCountry: String(docData.clientCountry || "").trim() ? docData.clientCountry : (resolved.country || "FR")
+          clientSnapshot: merged,
+
+          clientOwnerDocId: docData.clientOwnerDocId || merged.ownerDocId || "",
+          ownerDocId: docData.ownerDocId || merged.ownerDocId || "",
+          ownerUid: docData.ownerUid || merged.ownerUid || "",
+
+          clientName: docData.clientName || merged.name || "",
+          clientEmail: docData.clientEmail || merged.email || "",
+          clientPhone: docData.clientPhone || merged.phone || "",
+          clientAddress1: docData.clientAddress1 || merged.address1 || "",
+          clientAddress2: docData.clientAddress2 || merged.address2 || "",
+          clientZip: docData.clientZip || merged.zip || "",
+          clientCity: docData.clientCity || merged.city || "",
+          clientCountry: docData.clientCountry || merged.country || "FR"
         };
       }catch(e){}
     }
 
     function renderBusinessHeader(){
-      const bp = (profileData?.businessProfile || {});
-      const cName = String(bp.companyName || "Conciergerie").trim();
+      const bs = getNormalizedBusinessSnapshot();
 
-      const street = String(bp.address?.street || "").trim();
-      const zip = String(bp.address?.zip || "").trim();
-      const city = String(bp.address?.city || "").trim();
-
-      const siret = String(bp.registration?.siret || "").trim();
-      const ape = String(bp.registration?.ape || "").trim();
-
-      const mail = String(bp.billingEmail || profileData?.email || "").trim();
-      const phone = String(bp.phone || "").trim();
-
-      appTitle.textContent = cName || "Conciergerie";
-      bizNameEl.textContent = cName || "—";
+      appTitle.textContent = bs.companyName || "Conciergerie";
+      document.title = `${bs.companyName || "Conciergerie"} – Facture`;
+      bizNameEl.textContent = bs.companyName || "—";
 
       const lines = [];
-      if(street) lines.push(esc(street));
-      if(zip || city) lines.push(esc([zip, city].filter(Boolean).join(" ")));
+      if(bs.address.street) lines.push(esc(bs.address.street));
+      if(bs.address.zip || bs.address.city) lines.push(esc([bs.address.zip, bs.address.city].filter(Boolean).join(" ")));
 
-      const legal = [siret ? `SIRET ${siret}` : "", ape ? `APE ${ape}` : ""].filter(Boolean).join(" • ");
+      const legal = [bs.registration.siret ? `SIRET ${bs.registration.siret}` : "", bs.registration.ape ? `APE ${bs.registration.ape}` : ""].filter(Boolean).join(" • ");
       if(legal) lines.push(`<span class="mut">${esc(legal)}</span>`);
 
-      const contact = [mail ? mail : "", phone ? phone : ""].filter(Boolean).join(" • ");
+      const contact = [bs.billingEmail || "", bs.phone || ""].filter(Boolean).join(" • ");
       if(contact) lines.push(`<span class="mut">${esc(contact)}</span>`);
 
       bizLinesEl.innerHTML = lines.length ? lines.join("<br>") : "—";
-      applyLogoFromProfile(profileData);
+      applyLogoFromUrl(bs.logoUrl);
     }
 
     function renderClientHeader(){
-      const d = docData || {};
-      const name = String(d.clientName || "—").trim();
-
-      const a1 = String(d.clientAddress1 || "").trim();
-      const a2 = String(d.clientAddress2 || "").trim();
-      const zip = String(d.clientZip || "").trim();
-      const city = String(d.clientCity || "").trim();
-
-      clientNameEl.textContent = name || "—";
+      const cs = getNormalizedClientSnapshot();
+      clientNameEl.textContent = cs.name || "—";
 
       const lines = [];
-      if(a1) lines.push(esc(a1));
-      if(a2) lines.push(esc(a2));
-      if(zip || city) lines.push(esc([zip, city].filter(Boolean).join(" ")));
+      if(cs.address1) lines.push(esc(cs.address1));
+      if(cs.address2) lines.push(esc(cs.address2));
+      if(cs.zip || cs.city) lines.push(esc([cs.zip, cs.city].filter(Boolean).join(" ")));
 
-      const mail = String(d.clientEmail || "").trim();
-      const tel  = String(d.clientPhone || "").trim();
-      const contact = [mail, tel].filter(Boolean).join(" • ");
+      const contact = [cs.email, cs.phone].filter(Boolean).join(" • ");
       if(contact) lines.push(`<span class="mut">${esc(contact)}</span>`);
 
       clientLinesEl.innerHTML = lines.length ? lines.join("<br>") : `<span class="mut">Adresse manquante</span>`;
     }
 
-    function renderLinesAndTotals(){
+    function renderBank(){
+      const bs = getNormalizedBusinessSnapshot();
+      const bank = bs.bank || {};
+
+      const lines = [];
+      if(bank.holder) lines.push(`<div class="line"><b>Titulaire</b> : ${esc(bank.holder)}</div>`);
+      if(bank.bankName || bank.name) lines.push(`<div class="line"><b>Banque</b> : ${esc(bank.bankName || bank.name)}</div>`);
+      if(bank.iban) lines.push(`<div class="line"><b>IBAN</b> : ${esc(bank.iban)}</div>`);
+      if(bank.bic)  lines.push(`<div class="line"><b>BIC</b> : ${esc(bank.bic)}</div>`);
+      bankKv.innerHTML = lines.length ? lines.join("") : `<div class="line">—</div>`;
+    }
+
+    function pickDate(v){ const s = String(v||"").trim(); return s || ""; }
+    function getStayPeriod(d){
+      const a = pickDate(d?.arrivalDateKey || d?.arrivalDate || d?.checkinDate || d?.arrival);
+      const b = pickDate(d?.departureDateKey || d?.departureDate || d?.checkoutDate || d?.departure);
+      if(a && b) return { from:a, to:b, label:`Du ${a} au ${b}` };
+      if(a && !b) return { from:a, to:"", label:`À partir du ${a}` };
+      if(!a && b) return { from:"", to:b, label:`Jusqu’au ${b}` };
+      return { from:"", to:"", label:"—" };
+    }
+
+    function renderRecapBlockOnly(){
       const d = docData || {};
-      const bp = (profileData?.businessProfile || {});
+      const period = getStayPeriod(d);
 
-      const tvaEnabled = !!bp.vat?.enabled;
-      const tvaRate = Number.isFinite(Number(bp.vat?.rate)) ? Number(bp.vat.rate) : 0;
+      const homeAddr = String(d.homeAddress || "").trim();
+      const homeZip  = String(d.homeZip || d.zip || d.postalCode || "").trim();
+      const homeCity = String(d.homeCity || "").trim();
+      const homeAddrFull = [homeAddr, [homeZip, homeCity].filter(Boolean).join(" ")].filter(Boolean).join(" • ");
 
-      thTVA.style.display = tvaEnabled ? "" : "none";
+      const recap = [];
+      if(homeAddrFull) recap.push(`<div class="line"><b>Adresse logement</b> : ${esc(homeAddrFull)}</div>`);
+      recap.push(`<div class="line"><b>Période</b> : ${esc(period.label)}</div>`);
+      recapKv.innerHTML = recap.join("");
+
+      const invNum = String(d.invoiceNumber || "").trim();
+      const hasInvoice = !!invNum;
+
+      const rawStatus = String(d.invoiceStatus || "").toUpperCase().trim();
+      const statusForUi = (hasInvoice && (!rawStatus || rawStatus === "DRAFT")) ? "ISSUED" : (rawStatus || "");
+      statusBadge.textContent = hasInvoice ? invoiceStatusLabel(statusForUi) : "BROUILLON";
+
+      docBannerInner.textContent = `FACTURE N° ${invNum || "—"}`;
+    }
+
+    function renderLinesAndTotals(){
+      const { vatEnabled, vatSnapshot } = getDocumentVatContext();
+
+      thTVA.style.display = vatEnabled ? "" : "none";
       linesTbody.innerHTML = "";
       linesCards.innerHTML = "";
 
-      const lines = Array.isArray(d.lines) ? d.lines : [];
+      const computed = computeDocument(docData?.lines || [], vatEnabled, vatSnapshot);
 
-      for(const l of lines){
-        const label = l?.label || "Ligne";
-        const qty = Number(l?.qty)||0;
-        const unit = l?.unit || "unité";
-        const up = Number(l?.unitPrice)||0;
-
-        const lineHT = qty * up;
-        const lineTVA = tvaEnabled ? (lineHT * tvaRate) : 0;
-        const lineTotal = lineHT + lineTVA;
+      for(const l of computed.lines){
+        const ratePct = Math.round((Number(l.vatRate) || 0) * 100);
 
         const tr = document.createElement("tr");
         tr.innerHTML = `
-          <td class="designation">${esc(label)}</td>
-          <td class="num">${esc(qty)}</td>
-          <td>${esc(unit)}</td>
-          <td class="num">${esc(fmtMoney(up))}</td>
-          <td class="num" style="${tvaEnabled ? "" : "display:none;"}">${tvaEnabled ? esc(fmtMoney(lineTVA)) : ""}</td>
-          <td class="num">${esc(fmtMoney(lineTotal))}</td>
+          <td class="designation">${esc(l.label || "Ligne")}</td>
+          <td class="num">${esc(l.qty)}</td>
+          <td>${esc(l.unit || "unité")}</td>
+          <td class="num">${esc(fmtMoney(l.unitPrice))}</td>
+          <td class="num" style="${vatEnabled ? "" : "display:none;"}">${vatEnabled ? `${esc(ratePct)}% • ${esc(fmtMoney(l.totalTVA))}` : ""}</td>
+          <td class="num">${esc(fmtMoney(l.totalTTC))}</td>
         `;
         linesTbody.appendChild(tr);
 
         const card = document.createElement("div");
         card.className = "lineCard";
         card.innerHTML = `
-          <div class="t">${esc(label)}</div>
+          <div class="t">${esc(l.label || "Ligne")}</div>
           <div class="g">
-            <div><b>Qté</b> : ${esc(qty)}</div>
-            <div><b>Unité</b> : ${esc(unit)}</div>
-            <div><b>PU HT</b> : ${esc(fmtMoney(up))}</div>
-            <div><b>Total TTC</b> : ${esc(fmtMoney(lineTotal))}</div>
+            <div><b>Qté</b> : ${esc(l.qty)}</div>
+            <div><b>Unité</b> : ${esc(l.unit || "unité")}</div>
+            <div><b>PU HT</b> : ${esc(fmtMoney(l.unitPrice))}</div>
+            <div><b>Total TTC</b> : ${esc(fmtMoney(l.totalTTC))}</div>
+            ${vatEnabled ? `<div><b>TVA</b> : ${esc(ratePct)}% • ${esc(fmtMoney(l.totalTVA))}</div>` : ``}
+            <div><b>Type</b> : ${esc(l.lineType || "SERVICE")}</div>
           </div>
         `;
         linesCards.appendChild(card);
       }
 
-      const totals = computeTotals(lines, tvaEnabled, tvaRate);
-
       const html = [];
-      if(tvaEnabled){
-        html.push(`<div class="r"><span>Total HT</span><span>${esc(fmtMoney(totals.ht))}</span></div>`);
-        html.push(`<div class="r"><span>TVA (${Math.round(tvaRate*100)}%)</span><span>${esc(fmtMoney(totals.tva))}</span></div>`);
-        html.push(`<div class="r"><span>Total TTC</span><span>${esc(fmtMoney(totals.ttc))}</span></div>`);
+      if(vatEnabled){
+        const serviceTVA = computed.lines
+          .filter(l => String(l.lineType || "").toUpperCase() === "SERVICE")
+          .reduce((s,l)=> s + (Number(l.totalTVA)||0), 0);
+
+        const productTVA = computed.lines
+          .filter(l => String(l.lineType || "").toUpperCase() === "PRODUCT")
+          .reduce((s,l)=> s + (Number(l.totalTVA)||0), 0);
+
+        html.push(`<div class="r"><span>Total HT</span><span>${esc(fmtMoney(computed.totalHT))}</span></div>`);
+        html.push(`<div class="r"><span>Total TVA</span><span>${esc(fmtMoney(computed.totalTVA))}</span></div>`);
+        html.push(`<div class="r"><span>Total TTC</span><span>${esc(fmtMoney(computed.totalTTC))}</span></div>`);
+        html.push(`<div class="mutedLine">TVA totale ${esc(fmtMoney(computed.totalTVA))} • services ${esc(fmtMoney(serviceTVA))} • produits ${esc(fmtMoney(productTVA))}</div>`);
       }else{
-        html.push(`<div class="r"><span>Total TTC</span><span>${esc(fmtMoney(totals.ttc))}</span></div>`);
-        const ex = String(bp?.tvaExemptionText || "TVA non applicable (art. 293B CGI)").trim();
+        html.push(`<div class="r"><span>Total TTC</span><span>${esc(fmtMoney(computed.totalTTC))}</span></div>`);
+        const ex = String(getNormalizedBusinessSnapshot().tvaExemptionText || "TVA non applicable (art. 293B CGI)").trim();
         if(ex) html.push(`<div class="mutedLine">${esc(ex)}</div>`);
       }
       totalsBox.innerHTML = html.join("");
@@ -1078,14 +1431,14 @@
 
     function renderConditions(){
       const d = docData || {};
-      const bp = (profileData?.businessProfile || {});
+      const bs = getNormalizedBusinessSnapshot();
 
       const term = String(payTermSel?.value || d?.invoicePaymentTerm || "RECEPTION").toUpperCase();
       const issued = String(d?.invoiceIssuedDate || todayIso()).trim();
       const dueDate = addDaysLabel(issued, termToDays(term));
 
-      const cancelPct = Number.isFinite(Number(bp?.conditions?.cancellationPercent))
-        ? Number(bp.conditions.cancellationPercent)
+      const cancelPct = Number.isFinite(Number(bs?.conditions?.cancellationPercent))
+        ? Number(bs.conditions.cancellationPercent)
         : 30;
 
       const quoteRef = String(d?.quoteNumber || "").trim();
@@ -1096,49 +1449,14 @@
 
       const showCancel = !!showCancelChk.checked;
       if(showCancel){
-        lines.push(`<div class="line"><b>Annulation</b> : ${esc(cancelPct)} % du montant en cas d’annulation moins de 48 h avant l’intervention</div>`);
+        lines.push(`<div class="line"><b>Annulation</b> : ${esc(cancelPct)} % du montant peuvent être retenus selon conditions</div>`);
       }
 
       conditionsKv.innerHTML = lines.join("");
     }
 
-    function renderBank(){
-      const bp = (profileData?.businessProfile || {});
-      const bank = (bp.bank || {});
-      const name = String(bank.name || "").trim();
-      const iban = String(bank.iban || "").trim();
-      const bic  = String(bank.bic  || "").trim();
-
-      const lines = [];
-      if(name) lines.push(`<div class="line"><b>Banque</b> : ${esc(name)}</div>`);
-      if(iban) lines.push(`<div class="line"><b>IBAN</b> : ${esc(iban)}</div>`);
-      if(bic)  lines.push(`<div class="line"><b>BIC</b> : ${esc(bic)}</div>`);
-      bankKv.innerHTML = lines.length ? lines.join("") : `<div class="line">—</div>`;
-    }
-
     function renderRecap(){
       const d = docData || {};
-      const period = getStayPeriod(d);
-
-      const homeAddr = (d.homeAddress || "").trim();
-      const homeZip  = (d.homeZip || d.zip || d.postalCode || "").toString().trim();
-      const homeCity = (d.homeCity || "").trim();
-      const homeAddrFull = [homeAddr, [homeZip, homeCity].filter(Boolean).join(" ")].filter(Boolean).join(" • ");
-
-      const recap = [];
-      if(homeAddrFull) recap.push(`<div class="line"><b>Adresse logement</b> : ${esc(homeAddrFull)}</div>`);
-      recap.push(`<div class="line"><b>Période</b> : ${esc(period.label)}</div>`);
-      recapKv.innerHTML = recap.join("");
-
-      const invNum = String(d.invoiceNumber || "").trim();
-      const hasInvoice = !!invNum;
-
-      const rawStatus = String(d.invoiceStatus || "").toUpperCase().trim();
-      const statusForUi = (hasInvoice && (!rawStatus || rawStatus === "DRAFT")) ? "ISSUED" : (rawStatus || "");
-      statusBadge.textContent = hasInvoice ? invoiceStatusLabel(statusForUi) : "BROUILLON";
-
-      docBannerInner.textContent = `FACTURE N° ${invNum || "—"}`;
-
       invoiceNotesEl.value = String(d.invoiceNotes || "");
 
       const ui = loadUiState();
@@ -1151,6 +1469,7 @@
       penaltyTextEl.value = "";
       penaltyTouched = false;
 
+      renderRecapBlockOnly();
       renderBusinessHeader();
       renderClientHeader();
       renderLinesAndTotals();
@@ -1161,12 +1480,6 @@
 
       saveBtn.disabled = !docRef;
       previewBtn.disabled = !docRef;
-    }
-
-    async function loadProfile(uid){
-      const ref = doc(db, "users", uid);
-      const snap = await getDoc(ref);
-      profileData = snap.exists() ? (snap.data() || {}) : {};
     }
 
     function interventionLabelFromKey(key, rawLabel=""){
@@ -1209,7 +1522,7 @@
       }];
     }
 
-    function flattenInvoiceLinesFromEvent(eventDoc){
+    function flattenInvoiceLinesFromEvent(eventDoc, vatEnabled, vatSnapshot){
       const interventions = normalizeInterventions(eventDoc);
       const out = [];
 
@@ -1228,21 +1541,34 @@
           if(!label) continue;
           if(!(qty > 0)) continue;
 
-          out.push({
+          out.push(computeLine({
             label,
             qty,
             unit,
             unitPrice,
             category,
             note,
+            lineType: inferLineType(raw),
             interventionKey: String(iv.key || "").trim(),
             interventionLabel: interventionLabelFromKey(iv.key, iv.title),
             interventionDateKey: String(iv.dateKey || "").trim()
-          });
+          }, vatEnabled, vatSnapshot));
         }
       }
 
       return out;
+    }
+
+    function findLinkedInvoiceIdFromEvent(e){
+      const keys = [
+        "invoiceDocId",
+        "linkedInvoiceDocId","invoiceSalesDocId","linkedSalesDocId","salesDocId","linkedInvoiceId"
+      ];
+      for(const k of keys){
+        const v = String(e?.[k] || "").trim();
+        if(v) return v;
+      }
+      return "";
     }
 
     const docId = getParam("docId");
@@ -1262,20 +1588,83 @@
       await loadProfile(currentUser.uid);
 
       try{
-        const lines = Array.isArray(docData.lines) ? docData.lines : [];
-        const hasLines = lines.length > 0;
-        const totalsZero = (Number(docData.totalTTC)||0) === 0 && (Number(docData.totalHT)||0) === 0;
-        if(hasLines && totalsZero){
-          const bp = (profileData?.businessProfile || {});
-          const tvaEnabled = !!bp.vat?.enabled;
-          const tvaRate = Number.isFinite(Number(bp.vat?.rate)) ? Number(bp.vat.rate) : 0;
-          const totals = computeTotals(lines, tvaEnabled, tvaRate);
-          await updateDoc(docRef, {
-            totalHT: Number(totals.ht)||0,
-            totalTVA: Number(totals.tva)||0,
-            totalTTC: Number(totals.ttc)||0,
+        const existingVatSnapshot = docData?.vatSnapshot && typeof docData.vatSnapshot === "object"
+          ? {
+              enabled: !!docData.vatSnapshot.enabled,
+              serviceRate: Number(docData.vatSnapshot.serviceRate || 0),
+              productRate: Number(docData.vatSnapshot.productRate || 0)
+            }
+          : null;
+
+        const vatSnapshot = existingVatSnapshot || getVatSnapshotFromProfile();
+        const computed = computeDocument(docData?.lines || [], !!vatSnapshot.enabled, vatSnapshot);
+
+        const needsPatch =
+          !docData?.vatSnapshot ||
+          !docData?.businessSnapshot ||
+          !docData?.clientSnapshot ||
+          JSON.stringify((docData?.lines || []).map(l => ({
+            lineType: String(l?.lineType || ""),
+            vatRate: Number(l?.vatRate || 0),
+            totalHT: Number(l?.totalHT || 0),
+            totalTVA: Number(l?.totalTVA || 0),
+            totalTTC: Number(l?.totalTTC || 0)
+          }))) !== JSON.stringify(computed.lines.map(l => ({
+            lineType: String(l?.lineType || ""),
+            vatRate: Number(l?.vatRate || 0),
+            totalHT: Number(l?.totalHT || 0),
+            totalTVA: Number(l?.totalTVA || 0),
+            totalTTC: Number(l?.totalTTC || 0)
+          }))) ||
+          round2(Number(docData?.totalHT || 0)) !== round2(computed.totalHT) ||
+          round2(Number(docData?.totalTVA || 0)) !== round2(computed.totalTVA) ||
+          round2(Number(docData?.totalTTC || 0)) !== round2(computed.totalTTC);
+
+        if(needsPatch){
+          const resolved = await resolveClientSnapshot(currentUser.uid, docData);
+          const clientSnapshot = docData?.clientSnapshot && typeof docData.clientSnapshot === "object"
+            ? docData.clientSnapshot
+            : buildClientSnapshotFromResolved(resolved);
+
+          const patch = {
+            vatEnabled: !!vatSnapshot.enabled,
+            vatSnapshot,
+            lines: computed.lines.map(l => ({
+              ...l,
+              lineType: String(l.lineType || "SERVICE").trim().toUpperCase(),
+              vatRate: Number(l.vatRate || 0),
+              totalHT: Number(l.totalHT || 0),
+              totalTVA: Number(l.totalTVA || 0),
+              totalTTC: Number(l.totalTTC || 0)
+            })),
+            totalHT: Number(computed.totalHT) || 0,
+            totalTVA: Number(computed.totalTVA) || 0,
+            totalTTC: Number(computed.totalTTC) || 0,
+            totals: computed.totals,
             updatedAt: serverTimestamp()
-          });
+          };
+
+          if(!docData?.businessSnapshot){
+            patch.businessSnapshot = buildBusinessSnapshotFromProfile();
+          }
+
+          if(!docData?.clientSnapshot){
+            patch.clientSnapshot = clientSnapshot;
+            patch.clientOwnerDocId = clientSnapshot.ownerDocId || "";
+            patch.ownerDocId = docData?.ownerDocId || clientSnapshot.ownerDocId || "";
+            patch.ownerUid = docData?.ownerUid || clientSnapshot.ownerUid || "";
+
+            patch.clientName = docData?.clientName || clientSnapshot.name || "";
+            patch.clientEmail = docData?.clientEmail || clientSnapshot.email || "";
+            patch.clientPhone = docData?.clientPhone || clientSnapshot.phone || "";
+            patch.clientAddress1 = docData?.clientAddress1 || clientSnapshot.address1 || "";
+            patch.clientAddress2 = docData?.clientAddress2 || clientSnapshot.address2 || "";
+            patch.clientZip = docData?.clientZip || clientSnapshot.zip || "";
+            patch.clientCity = docData?.clientCity || clientSnapshot.city || "";
+            patch.clientCountry = docData?.clientCountry || clientSnapshot.country || "FR";
+          }
+
+          await updateDoc(docRef, patch);
           const snap2 = await getDoc(docRef);
           docData = { id: snap2.id, ...(snap2.data()||{}) };
         }
@@ -1285,36 +1674,23 @@
       renderRecap();
     }
 
-    function findLinkedInvoiceIdFromEvent(e){
-      const keys = [
-        "invoiceDocId",
-        "linkedInvoiceDocId","invoiceSalesDocId","linkedSalesDocId","salesDocId","linkedInvoiceId"
-      ];
-      for(const k of keys){
-        const v = String(e?.[k] || "").trim();
-        if(v) return v;
-      }
-      return "";
-    }
-
     async function migrateEventToSalesInvoice(evId, evData){
       await loadProfile(currentUser.uid);
 
       const resolved = await resolveClientSnapshot(currentUser.uid, evData);
+      const clientSnapshot = buildClientSnapshotFromResolved(resolved);
+      const businessSnapshot = buildBusinessSnapshotFromProfile();
 
       const payMode = String(evData?.invoicePaymentMode || "VIREMENT").toUpperCase();
       const payTerm = String(evData?.invoicePaymentTerm || "RECEPTION").toUpperCase();
 
-      const lines = flattenInvoiceLinesFromEvent(evData);
+      const vatSnapshot = getVatSnapshotFromProfile();
+      const lines = flattenInvoiceLinesFromEvent(evData, !!vatSnapshot.enabled, vatSnapshot);
       if(!lines.length){
         throw new Error("Aucune ligne exploitable trouvée dans les interventions.");
       }
 
-      const bp = (profileData?.businessProfile || {});
-      const tvaEnabled = !!bp.vat?.enabled;
-      const tvaRate = Number.isFinite(Number(bp.vat?.rate)) ? Number(bp.vat.rate) : 0;
-      const totals = computeTotals(lines, tvaEnabled, tvaRate);
-
+      const computed = computeDocument(lines, !!vatSnapshot.enabled, vatSnapshot);
       const inferredClientType = getClientType(evData);
       const defaultPenaltyMode = (inferredClientType === "PRO") ? "B2B" : "B2C";
 
@@ -1330,6 +1706,9 @@
         sourceKind: "EVENT",
         sourceEventId: String(evId),
 
+        businessSnapshot,
+        clientSnapshot,
+
         homeId: String(evData?.homeId || "").trim() || null,
         homeName: String(evData?.homeName || "").trim() || "",
         homeAddress: String(evData?.homeAddress || "").trim() || "",
@@ -1342,25 +1721,28 @@
         commercialStatus: "FACTURE",
         commercialUpdatedAt: serverTimestamp(),
 
-        clientOwnerDocId: resolved.clientOwnerDocId || null,
-        clientName: resolved.name || String(evData?.ownerName || "").trim() || "",
-        clientEmail: resolved.email || normalizeEmail(evData?.ownerEmail || ""),
-        clientPhone: resolved.phone || String(evData?.ownerPhone || "").trim() || "",
-        clientAddress1: resolved.address1 || String(evData?.ownerAddress1 || "").trim() || "",
-        clientAddress2: resolved.address2 || String(evData?.ownerAddress2 || "").trim() || "",
-        clientZip: resolved.zip || String(evData?.ownerZip || "").trim() || "",
-        clientCity: resolved.city || String(evData?.ownerCity || "").trim() || "",
-        clientCountry: resolved.country || String(evData?.ownerCountry || "FR").trim() || "FR",
+        clientOwnerDocId: clientSnapshot.ownerDocId || "",
+        ownerDocId: clientSnapshot.ownerDocId || "",
+        ownerUid: clientSnapshot.ownerUid || "",
+
+        clientName: clientSnapshot.name,
+        clientEmail: clientSnapshot.email,
+        clientPhone: clientSnapshot.phone,
+        clientAddress1: clientSnapshot.address1,
+        clientAddress2: clientSnapshot.address2,
+        clientZip: clientSnapshot.zip,
+        clientCity: clientSnapshot.city,
+        clientCountry: clientSnapshot.country,
         clientType: inferredClientType,
 
-        ownerName: String(evData?.ownerName || "").trim() || "",
-        ownerEmail: normalizeEmail(evData?.ownerEmail || ""),
-        ownerPhone: String(evData?.ownerPhone || "").trim() || "",
-        ownerAddress1: String(evData?.ownerAddress1 || "").trim() || "",
-        ownerAddress2: String(evData?.ownerAddress2 || "").trim() || "",
-        ownerZip: String(evData?.ownerZip || "").trim() || "",
-        ownerCity: String(evData?.ownerCity || "").trim() || "",
-        ownerCountry: String(evData?.ownerCountry || "FR").trim() || "FR",
+        ownerName: String(evData?.ownerName || "").trim() || clientSnapshot.name || "",
+        ownerEmail: normalizeEmail(evData?.ownerEmail || "") || clientSnapshot.email || "",
+        ownerPhone: String(evData?.ownerPhone || "").trim() || clientSnapshot.phone || "",
+        ownerAddress1: String(evData?.ownerAddress1 || "").trim() || clientSnapshot.address1 || "",
+        ownerAddress2: String(evData?.ownerAddress2 || "").trim() || clientSnapshot.address2 || "",
+        ownerZip: String(evData?.ownerZip || "").trim() || clientSnapshot.zip || "",
+        ownerCity: String(evData?.ownerCity || "").trim() || clientSnapshot.city || "",
+        ownerCountry: String(evData?.ownerCountry || "FR").trim() || clientSnapshot.country || "FR",
 
         invoiceNumber: String(evData?.invoiceNumber || "").trim() || "",
         invoiceStatus: String(evData?.invoiceStatus || "DRAFT").toUpperCase().trim() || "DRAFT",
@@ -1373,10 +1755,13 @@
         invoicePenaltyText: "",
         invoiceShowCancellation: true,
 
-        lines,
-        totalHT: Number(totals.ht) || 0,
-        totalTVA: Number(totals.tva) || 0,
-        totalTTC: Number(totals.ttc) || 0
+        vatEnabled: !!vatSnapshot.enabled,
+        vatSnapshot,
+        lines: computed.lines,
+        totalHT: Number(computed.totalHT) || 0,
+        totalTVA: Number(computed.totalTVA) || 0,
+        totalTTC: Number(computed.totalTTC) || 0,
+        totals: computed.totals
       };
 
       const created = await addDoc(collection(db, "salesDocuments"), payload);
@@ -1472,6 +1857,8 @@
 
       const draft = {
         ...docData,
+        businessSnapshot: docData?.businessSnapshot || buildBusinessSnapshotFromProfile(),
+        clientSnapshot: docData?.clientSnapshot || getNormalizedClientSnapshot(),
         invoicePaymentMode: String(payModeSel.value || "VIREMENT").toUpperCase(),
         invoicePaymentTerm: String(payTermSel.value || "RECEPTION").toUpperCase(),
         invoiceIssuedDate: String(docData.invoiceIssuedDate || todayIso()).trim(),
@@ -1493,40 +1880,34 @@
         const year = new Date().getFullYear();
         let invoiceNumber = String(docData?.invoiceNumber || "").trim();
 
-        let clientPatch = {};
-        const missingAddr =
-          !String(docData?.clientAddress1 || "").trim() &&
-          !String(docData?.clientZip || "").trim() &&
-          !String(docData?.clientCity || "").trim();
+        const resolved = await resolveClientSnapshot(currentUser.uid, docData);
+        const resolvedClientSnapshot = buildClientSnapshotFromResolved(resolved);
 
-        const missingName = !String(docData?.clientName || "").trim();
-        const missingEmail = !String(docData?.clientEmail || "").trim();
+        const existingBusinessSnapshot = invoiceNumber && docData?.businessSnapshot
+          ? docData.businessSnapshot
+          : null;
 
-        if(missingAddr || missingName || missingEmail){
-          const resolved = await resolveClientSnapshot(currentUser.uid, docData);
-          clientPatch = {
-            clientOwnerDocId: resolved.clientOwnerDocId || docData.clientOwnerDocId || null,
-            clientName: resolved.name || docData.clientName || "",
-            clientEmail: resolved.email || docData.clientEmail || "",
-            clientPhone: resolved.phone || docData.clientPhone || "",
-            clientAddress1: resolved.address1 || docData.clientAddress1 || "",
-            clientAddress2: resolved.address2 || docData.clientAddress2 || "",
-            clientZip: resolved.zip || docData.clientZip || "",
-            clientCity: resolved.city || docData.clientCity || "",
-            clientCountry: resolved.country || docData.clientCountry || "FR"
-          };
-        }
+        const existingVatSnapshot = invoiceNumber && docData?.vatSnapshot
+          ? {
+              enabled: !!docData.vatSnapshot.enabled,
+              serviceRate: Number(docData.vatSnapshot.serviceRate || 0),
+              productRate: Number(docData.vatSnapshot.productRate || 0)
+            }
+          : null;
 
-        const bp = (profileData?.businessProfile || {});
-        const tvaEnabled = !!bp.vat?.enabled;
-        const tvaRate = Number.isFinite(Number(bp.vat?.rate)) ? Number(bp.vat.rate) : 0;
+        const existingClientSnapshot = invoiceNumber && docData?.clientSnapshot
+          ? docData.clientSnapshot
+          : null;
 
-        const lines = Array.isArray(docData?.lines) ? docData.lines : [];
-        if(!lines.length){
+        const businessSnapshot = existingBusinessSnapshot || docData?.businessSnapshot || buildBusinessSnapshotFromProfile();
+        const vatSnapshot = existingVatSnapshot || getVatSnapshotFromProfile();
+        const clientSnapshot = existingClientSnapshot || resolvedClientSnapshot;
+
+        const computed = computeDocument(docData?.lines || [], !!vatSnapshot.enabled, vatSnapshot);
+
+        if(!computed.lines.length){
           throw new Error("Aucune ligne de facture.");
         }
-
-        const totals = computeTotals(lines, tvaEnabled, tvaRate);
 
         const patch = {
           invoiceNotes: (invoiceNotesEl.value || "").trim(),
@@ -1541,11 +1922,36 @@
 
           invoiceShowCancellation: !!showCancelChk.checked,
 
-          totalHT: Number(totals.ht) || 0,
-          totalTVA: Number(totals.tva) || 0,
-          totalTTC: Number(totals.ttc) || 0,
+          businessSnapshot,
+          clientSnapshot,
 
-          ...clientPatch
+          clientOwnerDocId: clientSnapshot.ownerDocId || "",
+          ownerDocId: clientSnapshot.ownerDocId || docData?.ownerDocId || "",
+          ownerUid: clientSnapshot.ownerUid || docData?.ownerUid || "",
+
+          clientName: clientSnapshot.name,
+          clientEmail: clientSnapshot.email,
+          clientPhone: clientSnapshot.phone,
+          clientAddress1: clientSnapshot.address1,
+          clientAddress2: clientSnapshot.address2,
+          clientZip: clientSnapshot.zip,
+          clientCity: clientSnapshot.city,
+          clientCountry: clientSnapshot.country,
+
+          vatEnabled: !!vatSnapshot.enabled,
+          vatSnapshot,
+          lines: computed.lines.map(l => ({
+            ...l,
+            lineType: String(l.lineType || "SERVICE").trim().toUpperCase(),
+            vatRate: Number(l.vatRate || 0),
+            totalHT: Number(l.totalHT || 0),
+            totalTVA: Number(l.totalTVA || 0),
+            totalTTC: Number(l.totalTTC || 0)
+          })),
+          totalHT: Number(computed.totalHT) || 0,
+          totalTVA: Number(computed.totalTVA) || 0,
+          totalTTC: Number(computed.totalTTC) || 0,
+          totals: computed.totals
         };
 
         if(!String(docData?.clientType || "").trim()){
@@ -1641,4 +2047,3 @@
   </script>
 </body>
 </html>
-

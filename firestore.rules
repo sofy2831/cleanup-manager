@@ -1,13 +1,10 @@
 rules_version = '2';
 
 service cloud.firestore {
-
   match /databases/{database}/documents {
 
     // =========================================================
-
     // Helpers (auth)
-
     // =========================================================
 
     function signedIn() { return request.auth != null; }
@@ -15,772 +12,518 @@ service cloud.firestore {
     function myUid() { return signedIn() ? request.auth.uid : ""; }
 
     function myEmailLower() {
-
       return signedIn() && (request.auth.token.email is string)
-
         ? request.auth.token.email.lower()
-
         : "";
-
     }
 
     // =========================================================
-
     // Allowlist (DEV/BYPASS comptes)
-
     // =========================================================
 
     function isDevEmail() {
-
       return signedIn() && myEmailLower() == "s.dumas974@gmail.com";
-
     }
 
     function isStaffTesterEmail() {
-
       return signedIn() && myEmailLower() == "mathildeconciergerie45@gmail.com";
-
     }
 
     // Dev bypass total (pour SON PROPRE DOC user, et pour conciergerie data via uid)
-
     function devBypass() { return isDevEmail(); }
 
     // Staff bypass abonnement (mais pas cross-tenant)
-
     function staffBypass() { return isStaffTesterEmail(); }
 
     // =========================================================
-
     // Helpers (users/{uid} -> owner identity)
-
     // =========================================================
 
     function myUserDoc() {
-
       return signedIn()
-
         ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data
-
         : null;
-
     }
 
     function myOwnerDocId() {
-
       let u = myUserDoc();
-
       return (u != null && (u.ownerDocId is string)) ? u.ownerDocId : "";
-
     }
 
     function myConciergerieUid() {
-
       let u = myUserDoc();
-
       return (u != null && (u.conciergerieUid is string)) ? u.conciergerieUid : "";
-
     }
 
     // owner "tenant-safe" par docId + conciergerieUid (source de vérité users/{uid})
-
     function isOwnerByDocId(data) {
-
       return signedIn()
-
         && (myOwnerDocId() != "")
-
         && (myConciergerieUid() != "")
-
         && (data.ownerDocId is string) && data.ownerDocId == myOwnerDocId()
-
         && (data.conciergerieUid is string) && data.conciergerieUid == myConciergerieUid();
-
     }
 
     // =========================================================
-
     // Helpers (tokens agent)
-
     // =========================================================
 
     function tokenDoc(tokenId) {
-
       return get(/databases/$(database)/documents/dayTokens/$(tokenId)).data;
-
     }
 
     function tokenIsActiveById(tokenId) {
-
       let t = tokenDoc(tokenId);
-
       return (t.active == true) && (
-
         ((t.expiresAt is timestamp) && request.time < t.expiresAt)
-
         || ((t.expiresAtMs is int) && request.time.toMillis() < t.expiresAtMs)
-
       );
-
     }
 
     function tokenIsActiveResource() {
-
       return (resource.data.active == true) && (
-
         ((resource.data.expiresAt is timestamp) && request.time < resource.data.expiresAt)
-
         || ((resource.data.expiresAtMs is int) && request.time.toMillis() < resource.data.expiresAtMs)
-
       );
-
     }
 
     function tokenMatchesEvent(tokenId, eventId) {
-
       let t = tokenDoc(tokenId);
-
       return (
-
         (t.prestationId is string && t.prestationId == eventId)
-
         || (t.eventId is string && t.eventId == eventId)
-
       );
-
     }
 
     function tokenAllowsMission(tokenId, missionId) {
-
       let t = tokenDoc(tokenId);
-
       return (t.missionTypes is list) && t.missionTypes.hasAny([missionId]);
-
     }
 
     // =========================================================
-
     // Helpers (owner access planning via homes)
-
     // - compat: homes.ownerUid == auth.uid
-
     // - canon: homes.ownerDocId + homes.conciergerieUid match users/{uid}
-
     // =========================================================
 
     function homeBelongsToOwner(homeId) {
-
       return signedIn()
-
         && (homeId is string)
-
         && (
-
           (
-
             (get(/databases/$(database)/documents/homes/$(homeId)).data.ownerUid is string)
-
             && get(/databases/$(database)/documents/homes/$(homeId)).data.ownerUid == myUid()
-
           )
-
           || isOwnerByDocId(get(/databases/$(database)/documents/homes/$(homeId)).data)
-
         );
-
     }
 
     // =========================================================
-
-// USERS  ✅ PATCH SÉCURITÉ (role + abonnement) — FIX SIGNUP
-
-// =========================================================
-
-match /users/{uid} {
-
-  function safeRole(r) {
-
-    return (r is string) && r.lower() in ["conciergerie","proprietaire","owner"];
-
-  }
-
-  function subscriptionKeys() {
-
-    return [
-
-      "plan",
-
-      "subscriptionStatus",
-
-      "subscriptionSource",
-
-      "subscribedAt",
-
-      "maxHomes",
-
-      "billingReady"
-
-    ];
-
-  }
-
-  function coreUserKeys() {
-
-    return [
-
-      "uid",
-
-      "role",
-
-      "email",
-
-      "emailLower",
-
-      "displayName",
-
-      "phone",
-
-      "contact",
-
-      "createdAt",
-
-      "updatedAt",
-
-      // owner link (propriétaire)
-
-      "ownerDocId",
-
-      "conciergerieUid",
-
-      "ownerName",
-
-      "ownerEmail",
-
-      "ownerPhone",
-
-   
-"fullname",
-      "address1",
-      "address2",
-      "zip",
-      "city",
-      "country",
-      "siret",
-      "vat",
-      "notes",
-
-      // champs éventuels
-
-      "meta",
-
-      "note",
-
-      "timezone",
-
-      // abonnement
-
-      "plan",
-
-      "subscriptionStatus",
-
-      "subscriptionSource",
-
-      "subscribedAt",
-
-      "maxHomes",
-
-      "billingReady",
-      
-      "businessProfile",
-
-      // (optionnel) si tu l'utilises ailleurs
-
-      "homesCountActive"
-
-    ];
-
-  }
-
-  function changesSubscription() {
-
-    return request.resource.data.diff(resource.data).changedKeys().hasAny(subscriptionKeys());
-
-  }
-
-  function canWriteSubscriptionForSelf() {
-
-    return signedIn()
-
-      && myUid() == uid
-
-      && (devBypass() || staffBypass());
-
-  }
-
-  // ✅ self create (signup conciergerie + owner invité)
-  allow create: if request.auth != null
-    && request.auth.uid == uid
-    && ("role" in request.resource.data)
-    && safeRole(request.resource.data.role)
-    && (!("uid" in request.resource.data) || request.resource.data.uid == uid)
-
-    && (
-      // cas normal : pas d'auto-activation
-      !(
-        ("subscriptionStatus" in request.resource.data)
-        && (request.resource.data.subscriptionStatus is string)
-        && request.resource.data.subscriptionStatus.lower() == "active"
-      )
-
-      // allowlist DEV / staff
-      || canWriteSubscriptionForSelf()
-
-      // ✅ cas propriétaire invité : autorisé à être créé en actif
-      || (
-        (request.resource.data.role is string)
-        && request.resource.data.role.lower() in ["proprietaire","owner"]
-
-        && (request.resource.data.subscriptionStatus is string)
-        && request.resource.data.subscriptionStatus.lower() == "active"
-
-        && (request.resource.data.plan is string)
-        && request.resource.data.plan == "owner-free"
-
-        && (request.resource.data.ownerDocId is string)
-        && request.resource.data.ownerDocId != ""
-
-        && (request.resource.data.conciergerieUid is string)
-        && request.resource.data.conciergerieUid != ""
-      )
-    );
-
-  // self read/get
-
-  allow get, read: if signedIn() && myUid() == uid;
-
-  // conciergerie reads owner users attached to her
-
-  allow read: if signedIn()
-
-    && (resource.data.role is string) && resource.data.role == "proprietaire"
-
-    && (resource.data.conciergerieUid is string) && resource.data.conciergerieUid == myUid();
-
-  // self update
-
-  allow update: if signedIn() && myUid() == uid
-
-    && (
-
-      // DEV: libre sur SON doc
-
-      devBypass()
-
-      ||
-
-      (
-
-        // 1) keys limitées
-
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(coreUserKeys())
-
-        // 2) role safe
-
-        && (
-
-          !("role" in request.resource.data)
-
-          || safeRole(request.resource.data.role)
-
-        )
-
-        // 3) pas de changement de role (sauf DEV)
-
-        && (
-
-          !("role" in request.resource.data)
-
-          || request.resource.data.role == resource.data.role
-
-        )
-
-        // 4) abonnement modifiable uniquement allowlist
-
-        && (
-
-          !changesSubscription()
-
-          || canWriteSubscriptionForSelf()
-
-        )
-
-      )
-
-    );
-
-  allow delete: if false;
-
-}
-
+    // USERS  ✅ PATCH SÉCURITÉ (role + abonnement) — FIX SIGNUP
     // =========================================================
 
-    // INVITES
+    match /users/{uid} {
 
+      function safeRole(r) {
+        return (r is string) && r.lower() in ["conciergerie","proprietaire","owner"];
+      }
+
+      function subscriptionKeys() {
+        return [
+          "plan",
+          "subscriptionStatus",
+          "subscriptionSource",
+          "subscribedAt",
+          "maxHomes",
+          "billingReady"
+        ];
+      }
+
+      function coreUserKeys() {
+        return [
+          "uid",
+          "role",
+          "email",
+          "emailLower",
+          "displayName",
+          "phone",
+          "contact",
+          "createdAt",
+          "updatedAt",
+          // owner link (propriétaire)
+          "ownerDocId",
+          "conciergerieUid",
+          "ownerName",
+          "ownerEmail",
+          "ownerPhone",
+          "fullname",
+          "address1",
+          "address2",
+          "zip",
+          "city",
+          "country",
+          "siret",
+          "vat",
+          "notes",
+          // champs éventuels
+          "meta",
+          "note",
+          "timezone",
+          // abonnement
+          "plan",
+          "subscriptionStatus",
+          "subscriptionSource",
+          "subscribedAt",
+          "maxHomes",
+          "billingReady",
+          "businessProfile",
+          // (optionnel) si tu l'utilises ailleurs
+          "homesCountActive"
+        ];
+      }
+
+      function changesSubscription() {
+        return request.resource.data.diff(resource.data).changedKeys().hasAny(subscriptionKeys());
+      }
+
+      function canWriteSubscriptionForSelf() {
+        return signedIn()
+          && myUid() == uid
+          && (devBypass() || staffBypass());
+      }
+
+      // ✅ self create (signup conciergerie + owner invité)
+      allow create: if request.auth != null
+        && request.auth.uid == uid
+        && ("role" in request.resource.data)
+        && safeRole(request.resource.data.role)
+        && (!("uid" in request.resource.data) || request.resource.data.uid == uid)
+        && (
+          // cas normal : pas d'auto-activation
+          !(
+            ("subscriptionStatus" in request.resource.data)
+            && (request.resource.data.subscriptionStatus is string)
+            && request.resource.data.subscriptionStatus.lower() == "active"
+          )
+
+          // allowlist DEV / staff
+          || canWriteSubscriptionForSelf()
+
+          // ✅ cas propriétaire invité : autorisé à être créé en actif
+          || (
+            (request.resource.data.role is string)
+            && request.resource.data.role.lower() in ["proprietaire","owner"]
+            && (request.resource.data.subscriptionStatus is string)
+            && request.resource.data.subscriptionStatus.lower() == "active"
+            && (request.resource.data.plan is string)
+            && request.resource.data.plan == "owner-free"
+            && (request.resource.data.ownerDocId is string)
+            && request.resource.data.ownerDocId != ""
+            && (request.resource.data.conciergerieUid is string)
+            && request.resource.data.conciergerieUid != ""
+          )
+        );
+
+      // self read/get
+      allow get, read: if signedIn() && myUid() == uid;
+
+      // conciergerie reads owner users attached to her
+      allow read: if signedIn()
+        && (resource.data.role is string) && resource.data.role == "proprietaire"
+        && (resource.data.conciergerieUid is string) && resource.data.conciergerieUid == myUid();
+
+      // self update
+      allow update: if signedIn() && myUid() == uid
+        && (
+          // DEV: libre sur SON doc
+          devBypass()
+          ||
+          (
+            // 1) keys limitées
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(coreUserKeys())
+            // 2) role safe
+            && (
+              !("role" in request.resource.data)
+              || safeRole(request.resource.data.role)
+            )
+            // 3) pas de changement de role (sauf DEV)
+            && (
+              !("role" in request.resource.data)
+              || request.resource.data.role == resource.data.role
+            )
+            // 4) abonnement modifiable uniquement allowlist
+            && (
+              !changesSubscription()
+              || canWriteSubscriptionForSelf()
+            )
+          )
+        );
+
+      allow delete: if false;
+    }
+
+    // =========================================================
+    // INVITES
     // =========================================================
 
     match /invites/{token} {
-
       allow get: if true;
-
       allow list: if false;
 
       allow create: if signedIn()
-
         && (request.resource.data.conciergerieUid is string)
-
         && request.resource.data.conciergerieUid == myUid()
-
         && (request.resource.data.status is string)
-
         && request.resource.data.status == "pending";
 
       allow update: if
-
         (signedIn() && (resource.data.conciergerieUid is string) && resource.data.conciergerieUid == myUid())
-
         ||
-
         (signedIn()
-
           && (request.resource.data.status is string) && request.resource.data.status == "accepted"
-
           && (request.resource.data.usedOwnerUid is string) && request.resource.data.usedOwnerUid == myUid()
-
           && (resource.data.email is string) && resource.data.email.lower() == myEmailLower()
-
         );
 
       allow delete: if signedIn()
-
         && (resource.data.conciergerieUid is string)
-
         && resource.data.conciergerieUid == myUid();
-
     }
 
     // =========================================================
-
     // OWNERS
-
     // =========================================================
 
     match /owners/{ownerDocId} {
-
       allow read: if signedIn() && (
-
         ((resource.data.conciergerieUid is string) && resource.data.conciergerieUid == myUid())
-
         || ((resource.data.ownerUid is string) && resource.data.ownerUid == myUid())
-
       );
 
       allow create: if signedIn()
-
         && (request.resource.data.conciergerieUid is string)
-
         && request.resource.data.conciergerieUid == myUid();
+
+      allow update: if signedIn() && (
+        (
+          (resource.data.conciergerieUid is string) && resource.data.conciergerieUid == myUid()
+          && (request.resource.data.conciergerieUid is string)
+          && request.resource.data.conciergerieUid == resource.data.conciergerieUid
+        )
+        ||
+        (
+          (resource.data.status is string) && resource.data.status == "INVITED"
+          && (resource.data.emailLower is string) && resource.data.emailLower == myEmailLower()
+          && (resource.data.inviteToken is string)
+          && (request.resource.data.inviteToken is string) && request.resource.data.inviteToken == resource.data.inviteToken
+          && (request.resource.data.conciergerieUid is string) && request.resource.data.conciergerieUid == resource.data.conciergerieUid
+          && (request.resource.data.ownerDocId is string) && request.resource.data.ownerDocId == resource.data.ownerDocId
+          && (request.resource.data.ownerUid is string) && request.resource.data.ownerUid == myUid()
+        )
+        ||
+        (
+          (resource.data.ownerUid is string) && resource.data.ownerUid == myUid()
+          && (request.resource.data.conciergerieUid is string) && request.resource.data.conciergerieUid == resource.data.conciergerieUid
+          && (request.resource.data.ownerUid is string) && request.resource.data.ownerUid == resource.data.ownerUid
+        )
+      );
+
+      allow delete: if false;
+    }
+
+    // =========================================================
+    // CLIENTS
+    // =========================================================
+
+    match /clients/{clientId} {
+      allow read: if signedIn() && (
+        ((resource.data.conciergerieUid is string) && resource.data.conciergerieUid == myUid())
+        || ((resource.data.ownerUid is string) && resource.data.ownerUid == myUid())
+      );
+
+      allow create, update: if signedIn()
+        && (request.resource.data.conciergerieUid is string)
+        && request.resource.data.conciergerieUid == myUid();
+
+      allow update: if signedIn()
+        && (resource.data.type is string) && resource.data.type == "OWNER"
+        && (resource.data.ownerDocId is string)
+        && clientId == ("c_owner_" + resource.data.ownerDocId)
+        && (resource.data.emailLower is string) && resource.data.emailLower == myEmailLower()
+        && (request.resource.data.ownerUid is string) && request.resource.data.ownerUid == myUid()
+        && (request.resource.data.conciergerieUid is string) && request.resource.data.conciergerieUid == resource.data.conciergerieUid
+        && (request.resource.data.ownerDocId is string) && request.resource.data.ownerDocId == resource.data.ownerDocId;
+
+      allow delete: if false;
+      allow list: if false;
+    }
+
+    // =========================================================
+    // HOMES  ✅ ownerUid OU ownerDocId/conciergerieUid + quota maxHomes
+    // =========================================================
+
+    match /homes/{homeId} {
+
+      allow read: if signedIn() && (
+        (
+          (resource.data.conciergerieUid is string) &&
+          resource.data.conciergerieUid == myUid()
+        )
+        ||
+        (
+          (resource.data.ownerUid is string) &&
+          resource.data.ownerUid == myUid()
+        )
+        ||
+        isOwnerByDocId(resource.data)
+        ||
+        (
+          (resource.data.pendingOwnerEmail is string) &&
+          resource.data.pendingOwnerEmail == myEmailLower()
+        )
+      );
+
+      allow create: if signedIn()
+        && (request.resource.data.conciergerieUid is string)
+        && request.resource.data.conciergerieUid == myUid()
+
+        && exists(/databases/$(database)/documents/users/$(myUid()))
+        && (get(/databases/$(database)/documents/users/$(myUid())).data.maxHomes is int)
+        && (get(/databases/$(database)/documents/users/$(myUid())).data.homesCountActive is int)
+        && get(/databases/$(database)/documents/users/$(myUid())).data.homesCountActive
+           < get(/databases/$(database)/documents/users/$(myUid())).data.maxHomes
+
+        && (request.resource.data.status is string)
+        && request.resource.data.status == "active"
+
+        && (request.resource.data.ownerDocId is string)
+        && (request.resource.data.ownerUid is string)
+        && (request.resource.data.ownerLinkStatus is string)
+        && (
+          request.resource.data.ownerLinkStatus == "NONE" ||
+          request.resource.data.ownerLinkStatus == "INVITED" ||
+          request.resource.data.ownerLinkStatus == "LINKED" ||
+          request.resource.data.ownerLinkStatus == "LINKED_NOAUTH"
+        )
+
+        && (request.resource.data.pendingOwnerEmail is string)
+        && (request.resource.data.pendingInviteToken is string);
 
       allow update: if signedIn() && (
 
         (
-
-          (resource.data.conciergerieUid is string) && resource.data.conciergerieUid == myUid()
+          (resource.data.conciergerieUid is string) &&
+          resource.data.conciergerieUid == myUid()
 
           && (request.resource.data.conciergerieUid is string)
-
           && request.resource.data.conciergerieUid == resource.data.conciergerieUid
 
+          && (request.resource.data.ownerLinkStatus is string)
+          && (
+            request.resource.data.ownerLinkStatus == "NONE" ||
+            request.resource.data.ownerLinkStatus == "INVITED" ||
+            request.resource.data.ownerLinkStatus == "LINKED" ||
+            request.resource.data.ownerLinkStatus == "LINKED_NOAUTH"
+          )
+
+          && (
+            !(
+              (resource.data.status is string) &&
+              resource.data.status == "archived" &&
+              (request.resource.data.status is string) &&
+              request.resource.data.status == "active"
+            )
+            ||
+            (
+              exists(/databases/$(database)/documents/users/$(myUid()))
+              && (get(/databases/$(database)/documents/users/$(myUid())).data.maxHomes is int)
+              && (get(/databases/$(database)/documents/users/$(myUid())).data.homesCountActive is int)
+              && get(/databases/$(database)/documents/users/$(myUid())).data.homesCountActive
+                 < get(/databases/$(database)/documents/users/$(myUid())).data.maxHomes
+            )
+          )
         )
 
         ||
 
         (
+          (resource.data.ownerLinkStatus is string) &&
+          resource.data.ownerLinkStatus == "INVITED"
 
-          (resource.data.status is string) && resource.data.status == "INVITED"
+          && (resource.data.pendingOwnerEmail is string)
+          && resource.data.pendingOwnerEmail == myEmailLower()
 
-          && (resource.data.emailLower is string) && resource.data.emailLower == myEmailLower()
+          && (resource.data.pendingInviteToken is string)
+          && resource.data.pendingInviteToken.size() > 0
 
-          && (resource.data.inviteToken is string)
+          && (request.resource.data.conciergerieUid is string)
+          && request.resource.data.conciergerieUid == resource.data.conciergerieUid
 
-          && (request.resource.data.inviteToken is string) && request.resource.data.inviteToken == resource.data.inviteToken
+          && (request.resource.data.ownerUid is string)
+          && request.resource.data.ownerUid == myUid()
 
-          && (request.resource.data.conciergerieUid is string) && request.resource.data.conciergerieUid == resource.data.conciergerieUid
+          && (request.resource.data.ownerDocId is string)
+          && request.resource.data.ownerDocId != ""
 
-          && (request.resource.data.ownerDocId is string) && request.resource.data.ownerDocId == resource.data.ownerDocId
+          && (request.resource.data.ownerLinkStatus is string)
+          && request.resource.data.ownerLinkStatus == "LINKED"
 
-          && (request.resource.data.ownerUid is string) && request.resource.data.ownerUid == myUid()
+          && (request.resource.data.pendingOwnerEmail is string)
+          && request.resource.data.pendingOwnerEmail == ""
 
+          && (request.resource.data.pendingInviteToken is string)
+          && request.resource.data.pendingInviteToken == ""
         )
-
-        ||
-
-        (
-
-          (resource.data.ownerUid is string) && resource.data.ownerUid == myUid()
-
-          && (request.resource.data.conciergerieUid is string) && request.resource.data.conciergerieUid == resource.data.conciergerieUid
-
-          && (request.resource.data.ownerUid is string) && request.resource.data.ownerUid == resource.data.ownerUid
-
-        )
-
       );
 
-      allow delete: if false;
-
+      allow delete: if signedIn()
+        && (resource.data.conciergerieUid is string)
+        && resource.data.conciergerieUid == myUid();
     }
 
     // =========================================================
-
-    // CLIENTS
-
-    // =========================================================
-
-    match /clients/{clientId} {
-
-      allow read: if signedIn() && (
-
-        ((resource.data.conciergerieUid is string) && resource.data.conciergerieUid == myUid())
-
-        || ((resource.data.ownerUid is string) && resource.data.ownerUid == myUid())
-
-      );
-
-      allow create, update: if signedIn()
-
-        && (request.resource.data.conciergerieUid is string)
-
-        && request.resource.data.conciergerieUid == myUid();
-
-      allow update: if signedIn()
-
-        && (resource.data.type is string) && resource.data.type == "OWNER"
-
-        && (resource.data.ownerDocId is string)
-
-        && clientId == ("c_owner_" + resource.data.ownerDocId)
-
-        && (resource.data.emailLower is string) && resource.data.emailLower == myEmailLower()
-
-        && (request.resource.data.ownerUid is string) && request.resource.data.ownerUid == myUid()
-
-        && (request.resource.data.conciergerieUid is string) && request.resource.data.conciergerieUid == resource.data.conciergerieUid
-
-        && (request.resource.data.ownerDocId is string) && request.resource.data.ownerDocId == resource.data.ownerDocId;
-
-      allow delete: if false;
-
-      allow list: if false;
-
-    }
-
-
-    // =========================================================
-
-    // HOMES  ✅ ownerUid OU ownerDocId/conciergerieUid + quota maxHomes
-
-    // =========================================================
-match /homes/{homeId} {
-
-  allow read: if signedIn() && (
-    (
-      (resource.data.conciergerieUid is string) &&
-      resource.data.conciergerieUid == myUid()
-    )
-    ||
-    (
-      (resource.data.ownerUid is string) &&
-      resource.data.ownerUid == myUid()
-    )
-    ||
-    isOwnerByDocId(resource.data)
-    ||
-    (
-      (resource.data.pendingOwnerEmail is string) &&
-      resource.data.pendingOwnerEmail == myEmailLower()
-    )
-  );
-
-  allow create: if signedIn()
-    && (request.resource.data.conciergerieUid is string)
-    && request.resource.data.conciergerieUid == myUid()
-
-    && exists(/databases/$(database)/documents/users/$(myUid()))
-    && (get(/databases/$(database)/documents/users/$(myUid())).data.maxHomes is int)
-    && (get(/databases/$(database)/documents/users/$(myUid())).data.homesCountActive is int)
-    && get(/databases/$(database)/documents/users/$(myUid())).data.homesCountActive
-       < get(/databases/$(database)/documents/users/$(myUid())).data.maxHomes
-
-    && (request.resource.data.status is string)
-    && request.resource.data.status == "active"
-
-    && (request.resource.data.ownerDocId is string)
-    && (request.resource.data.ownerUid is string)
-    && (request.resource.data.ownerLinkStatus is string)
-    && (
-      request.resource.data.ownerLinkStatus == "NONE" ||
-      request.resource.data.ownerLinkStatus == "INVITED" ||
-      request.resource.data.ownerLinkStatus == "LINKED" ||
-      request.resource.data.ownerLinkStatus == "LINKED_NOAUTH"
-    )
-
-    && (request.resource.data.pendingOwnerEmail is string)
-    && (request.resource.data.pendingInviteToken is string);
-
-  allow update: if signedIn() && (
-
-    (
-      (resource.data.conciergerieUid is string) &&
-      resource.data.conciergerieUid == myUid()
-
-      && (request.resource.data.conciergerieUid is string)
-      && request.resource.data.conciergerieUid == resource.data.conciergerieUid
-
-      && (request.resource.data.ownerLinkStatus is string)
-      && (
-        request.resource.data.ownerLinkStatus == "NONE" ||
-        request.resource.data.ownerLinkStatus == "INVITED" ||
-        request.resource.data.ownerLinkStatus == "LINKED" ||
-        request.resource.data.ownerLinkStatus == "LINKED_NOAUTH"
-      )
-
-      && (
-        !(
-          (resource.data.status is string) &&
-          resource.data.status == "archived" &&
-          (request.resource.data.status is string) &&
-          request.resource.data.status == "active"
-        )
-        ||
-        (
-          exists(/databases/$(database)/documents/users/$(myUid()))
-          && (get(/databases/$(database)/documents/users/$(myUid())).data.maxHomes is int)
-          && (get(/databases/$(database)/documents/users/$(myUid())).data.homesCountActive is int)
-          && get(/databases/$(database)/documents/users/$(myUid())).data.homesCountActive
-             < get(/databases/$(database)/documents/users/$(myUid())).data.maxHomes
-        )
-      )
-    )
-
-    ||
-
-    (
-      (resource.data.ownerLinkStatus is string) &&
-      resource.data.ownerLinkStatus == "INVITED"
-
-      && (resource.data.pendingOwnerEmail is string)
-      && resource.data.pendingOwnerEmail == myEmailLower()
-
-      && (resource.data.pendingInviteToken is string)
-      && resource.data.pendingInviteToken.size() > 0
-
-      && (request.resource.data.conciergerieUid is string)
-      && request.resource.data.conciergerieUid == resource.data.conciergerieUid
-
-      && (request.resource.data.ownerUid is string)
-      && request.resource.data.ownerUid == myUid()
-
-      && (request.resource.data.ownerDocId is string)
-      && request.resource.data.ownerDocId != ""
-
-      && (request.resource.data.ownerLinkStatus is string)
-      && request.resource.data.ownerLinkStatus == "LINKED"
-
-      && (request.resource.data.pendingOwnerEmail is string)
-      && request.resource.data.pendingOwnerEmail == ""
-
-      && (request.resource.data.pendingInviteToken is string)
-      && request.resource.data.pendingInviteToken == ""
-    )
-  );
-
-  allow delete: if signedIn()
-    && (resource.data.conciergerieUid is string)
-    && resource.data.conciergerieUid == myUid();
-
-}
-    // =========================================================
-
     // THREADS + messages ✅ ownerUid OU ownerDocId/conciergerieUid
-
     // =========================================================
 
     match /threads/{threadId} {
 
       function isThreadParticipant(data) {
-
         return signedIn() && (
-
           ((data.conciergerieUid is string) && data.conciergerieUid == myUid())
-
           || ((data.ownerUid is string) && data.ownerUid == myUid())
-
           || isOwnerByDocId(data)
-
         );
-
       }
 
       function allowedThreadUpdateKeys() {
-
         return [
-
           "lastAt","lastText",
-
           "unreadForConciergerie","unreadForOwner",
-
           "closed",
-
           "updatedAt"
-
         ];
-
       }
 
       function threadCreateHasCoreFields() {
-
         return (request.resource.data.conciergerieUid is string) && request.resource.data.conciergerieUid != ""
-
           && (request.resource.data.ownerDocId is string) && request.resource.data.ownerDocId != "";
-
       }
 
       allow get, list: if isThreadParticipant(resource.data);
 
       allow create: if signedIn()
-
         && threadCreateHasCoreFields()
-
         && (
-
           (request.resource.data.conciergerieUid == myUid())
-
           ||
-
           ((request.resource.data.ownerUid is string) && request.resource.data.ownerUid == myUid())
-
         );
 
       allow update: if signedIn()
-
         && isThreadParticipant(resource.data)
-
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(allowedThreadUpdateKeys())
-
         && request.resource.data.conciergerieUid == resource.data.conciergerieUid
-
         && request.resource.data.ownerDocId == resource.data.ownerDocId
-
         && request.resource.data.ownerUid == resource.data.ownerUid;
 
       allow delete: if false;
@@ -788,458 +531,339 @@ match /homes/{homeId} {
       match /messages/{messageId} {
 
         function parentThread() {
-
           return get(/databases/$(database)/documents/threads/$(threadId)).data;
-
         }
 
         function photosOk(p) {
-
           return p is list
-
             && p.size() <= 15
-
             && p.all(x,
-
               x is map
-
               && x.keys().hasOnly(["url","path","name","sizeBytes","createdAtMs"])
-
               && (x.url is string || x.url == null)
-
               && (x.path is string || x.path == null)
-
               && (x.name is string || x.name == null)
-
               && (x.sizeBytes is int)
-
               && (x.createdAtMs is int)
-
             );
-
         }
 
         allow get, list: if isThreadParticipant(parentThread());
 
         allow create: if signedIn()
-
           && isThreadParticipant(parentThread())
-
           && (request.resource.data.senderUid is string)
-
           && request.resource.data.senderUid == myUid()
-
           && (request.resource.data.senderRole in ["CONCIERGERIE","PROPRIETAIRE"])
-
           && (
-
             (
-
               (request.resource.data.at is timestamp)
-
               && (request.resource.data.text is string)
-
               && request.resource.data.text.size() > 0
-
               && request.resource.data.keys().hasOnly(["text","at","senderRole","senderUid"])
-
             )
-
             ||
-
             (
-
               (request.resource.data.kind in ["text","photos"])
-
               && (request.resource.data.createdAt is timestamp)
-
               && (
-
                 (request.resource.data.kind == "text"
-
                   && (request.resource.data.text is string)
-
                   && request.resource.data.text.size() > 0
-
                 )
-
                 ||
-
                 (request.resource.data.kind == "photos"
-
                   && ("photos" in request.resource.data)
-
                   && photosOk(request.resource.data.photos)
-
                   && (!("text" in request.resource.data) || request.resource.data.text == null || request.resource.data.text is string)
-
                 )
-
               )
-
             )
-
           );
 
         allow update, delete: if false;
-
       }
-
     }
 
     // =========================================================
-
     // EVENTS + subcollection missions ✅ planning owner via homes (ownerUid OU ownerDocId)
-
     // =========================================================
 
     match /events/{eventId} {
 
       allow create: if signedIn()
-
         && (request.resource.data.conciergerieUid is string)
-
         && request.resource.data.conciergerieUid == myUid();
 
       allow read: if signedIn() && (
-
         ((resource.data.conciergerieUid is string) && resource.data.conciergerieUid == myUid())
-
         || ((resource.data.ownerUid is string) && resource.data.ownerUid == myUid())
-
         || ((resource.data.homeId is string) && homeBelongsToOwner(resource.data.homeId))
-
       );
 
       allow update, delete: if signedIn()
-
         && (resource.data.conciergerieUid is string)
-
         && resource.data.conciergerieUid == myUid();
 
       // token-only update (agent)
-
       allow update: if
-
         ("dayToken" in resource.data)
-
         && (resource.data.dayToken is string)
-
         && resource.data.dayToken.size() > 0
-
         && tokenIsActiveById(resource.data.dayToken)
-
         && tokenMatchesEvent(resource.data.dayToken, eventId)
-
         && request.resource.data.diff(resource.data).changedKeys().hasOnly([
-
           "opStatus","updatedAt","proofPhotosTotal","proofPhotosAtMs","proofToken"
-
         ]);
 
       match /missions/{missionId} {
 
         function isConciergerieOfEvent() {
-
           return signedIn()
-
             && (get(/databases/$(database)/documents/events/$(eventId)).data.conciergerieUid is string)
-
             && get(/databases/$(database)/documents/events/$(eventId)).data.conciergerieUid == myUid();
-
         }
 
         function missionTokenFromResource() {
-
           return (resource.data.dayToken is string) ? resource.data.dayToken : "";
-
         }
 
         allow get, list: if isConciergerieOfEvent();
-
         allow create, update: if isConciergerieOfEvent();
-
         allow delete: if false;
 
         allow get: if
-
           missionId == "PHOTOS"
-
           && missionTokenFromResource().size() > 0
-
           && tokenIsActiveById(missionTokenFromResource())
-
           && tokenMatchesEvent(missionTokenFromResource(), eventId);
 
         allow get: if
-
           missionId != "PHOTOS"
-
           && missionTokenFromResource().size() > 0
-
           && tokenIsActiveById(missionTokenFromResource())
-
           && tokenMatchesEvent(missionTokenFromResource(), eventId)
-
           && tokenAllowsMission(missionTokenFromResource(), missionId);
 
         allow update: if
-
           missionId != "PHOTOS"
-
           && missionTokenFromResource().size() > 0
-
           && tokenIsActiveById(missionTokenFromResource())
-
           && tokenMatchesEvent(missionTokenFromResource(), eventId)
-
           && tokenAllowsMission(missionTokenFromResource(), missionId)
-
           && resource.data.locked != true;
 
         allow create: if
-
           missionId == "PHOTOS"
-
           && (request.resource.data.dayToken is string)
-
           && request.resource.data.dayToken.size() > 0
-
           && tokenIsActiveById(request.resource.data.dayToken)
-
           && tokenMatchesEvent(request.resource.data.dayToken, eventId);
 
         allow update: if
-
           missionId == "PHOTOS"
-
           && missionTokenFromResource().size() > 0
-
           && tokenIsActiveById(missionTokenFromResource())
-
           && tokenMatchesEvent(missionTokenFromResource(), eventId)
-
           && request.resource.data.dayToken == resource.data.dayToken;
-
       }
-
     }
 
     // =========================
-
     // iCal events (icalEvents) — users.role = source de vérité
-
     // =========================
 
     match /icalEvents/{eventId} {
 
       function userDoc() {
-
         return signedIn()
-
           ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data
-
           : null;
-
       }
 
       function myRole() {
-
         let u = userDoc();
-
         return (u != null && (u.role is string)) ? u.role.lower() : "";
-
       }
 
       function isStaffOrAdmin() { return myRole() in ["admin","staff"]; }
-
       function isConciergerie() { return myRole() == "conciergerie"; }
-
       function isOwner() { return myRole() in ["proprietaire","owner"]; }
 
       function src(data) {
-
         return (data != null && (data.source is string)) ? data.source.lower() : "";
-
       }
 
       function isManual(data) { return src(data) == "manual"; }
 
       function isMineConciergerie(data) {
-
         return signedIn()
-
           && (data.conciergerieUid is string)
-
           && data.conciergerieUid == request.auth.uid;
-
       }
 
       function isMineOwner(data) {
-
         return signedIn()
-
           && (data.ownerUid is string)
-
           && data.ownerUid == request.auth.uid;
-
       }
 
       // READ:
-
       allow get, list: if signedIn() && (
-
         isStaffOrAdmin()
-
         || (isConciergerie() && isMineConciergerie(resource.data))
-
         || (isOwner() && isMineOwner(resource.data))
-
       );
 
       // CREATE:
-
       allow create: if signedIn() && (
-
         isStaffOrAdmin()
-
         || (
-
           isConciergerie()
-
           && (request.resource.data.conciergerieUid is string)
-
           && request.resource.data.conciergerieUid == request.auth.uid
-
           && src(request.resource.data) in ["manual","import","ical","ics"]
-
         )
-
       );
 
       // UPDATE:
-
       allow update: if signedIn() && (
-
         isStaffOrAdmin()
-
         || (
-
           isConciergerie()
-
           && isMineConciergerie(resource.data)
-
           && isManual(resource.data)
-
           && (request.resource.data.conciergerieUid is string)
-
           && request.resource.data.conciergerieUid == resource.data.conciergerieUid
-
           && src(request.resource.data) == src(resource.data)
-
         )
-
       );
 
       // DELETE:
-
       allow delete: if signedIn() && (
-
         isStaffOrAdmin()
-
         || (
-
           isConciergerie()
-
           && isMineConciergerie(resource.data)
-
           && isManual(resource.data)
-
         )
-
       );
-
     }
 
     // =========================================================
-
     // SALESDOCUMENTS (+ payments)
-
     // =========================================================
 
     match /salesDocuments/{docId} {
 
       function isConciergerieDoc(data) {
-
         return signedIn()
-
           && (data.conciergerieUid is string)
-
           && data.conciergerieUid == myUid();
-
       }
 
       function isOwnerPublishedDoc(data) {
-
         return signedIn()
-
           && (data.ownerUid is string)
-
           && data.ownerUid == myUid()
-
           && (data.ownerVisible == true);
-
       }
 
       allow get, list: if isConciergerieDoc(resource.data) || isOwnerPublishedDoc(resource.data);
 
       allow create: if signedIn()
-
         && (request.resource.data.conciergerieUid is string)
-
         && request.resource.data.conciergerieUid == myUid();
 
       allow update, delete: if signedIn()
-
         && (resource.data.conciergerieUid is string)
-
         && resource.data.conciergerieUid == myUid()
-
         && (request.resource.data.conciergerieUid is string)
-
-        && request.resource.data.conciergerieUid == resource.data.conciergerieUid;
+        && request.resource.data.conciergerieUid == resource.data.conciergerieUid
+        && (
+          !("ownerUid" in resource.data) ||
+          !("ownerUid" in request.resource.data) ||
+          request.resource.data.ownerUid == resource.data.ownerUid
+        )
+        && (
+          !("ownerDocId" in resource.data) ||
+          !("ownerDocId" in request.resource.data) ||
+          request.resource.data.ownerDocId == resource.data.ownerDocId
+        )
+        && (
+          !("clientOwnerDocId" in resource.data) ||
+          !("clientOwnerDocId" in request.resource.data) ||
+          request.resource.data.clientOwnerDocId == resource.data.clientOwnerDocId
+        );
 
       match /payments/{paymentId} {
 
         function parent() {
-
           return get(/databases/$(database)/documents/salesDocuments/$(docId)).data;
-
         }
 
         allow get, list: if signedIn() && (
-
           (parent().conciergerieUid is string && parent().conciergerieUid == myUid())
-
           || (parent().ownerUid is string && parent().ownerUid == myUid() && parent().ownerVisible == true)
-
         );
 
         allow create: if signedIn()
-
           && (parent().conciergerieUid is string)
-
           && parent().conciergerieUid == myUid();
 
         allow update, delete: if false;
-
       }
-
     }
 
-// =========================================================
+    // =========================================================
+    // REQUESTS
+    // =========================================================
+
+    match /requests/{requestId} {
+
+      function isConciergerieRequest(data) {
+        return signedIn()
+          && (data.conciergerieUid is string)
+          && data.conciergerieUid == myUid();
+      }
+
+      function isOwnerRequest(data) {
+        return signedIn()
+          && (data.ownerUid is string)
+          && data.ownerUid == myUid();
+      }
+
+      allow get, list: if isConciergerieRequest(resource.data) || isOwnerRequest(resource.data);
+
+      allow create: if signedIn()
+        && (request.resource.data.conciergerieUid is string)
+        && request.resource.data.conciergerieUid == myUid()
+        && (request.resource.data.ownerUid is string)
+        && request.resource.data.ownerUid != ""
+        && (request.resource.data.ownerDocId is string)
+        && request.resource.data.ownerDocId != ""
+        && (request.resource.data.type is string)
+        && request.resource.data.type in ["billing", "billing_statement"];
+
+      allow update: if signedIn()
+        && (resource.data.conciergerieUid is string)
+        && resource.data.conciergerieUid == myUid()
+        && (request.resource.data.conciergerieUid is string)
+        && request.resource.data.conciergerieUid == resource.data.conciergerieUid
+        && (request.resource.data.ownerUid is string)
+        && request.resource.data.ownerUid == resource.data.ownerUid
+        && (request.resource.data.ownerDocId is string)
+        && request.resource.data.ownerDocId == resource.data.ownerDocId
+        && (request.resource.data.type is string)
+        && request.resource.data.type == resource.data.type;
+
+      allow delete: if false;
+    }
+
+    // =========================================================
     // STATS CONCIERGERIE
     // =========================================================
+
     match /statsConciergerie/{uid} {
 
       allow read: if signedIn() && (
@@ -1256,9 +880,10 @@ match /homes/{homeId} {
       allow delete: if false;
     }
 
-        // =========================================================
+    // =========================================================
     // DAY TOKENS
     // =========================================================
+
     match /dayTokens/{tokenId} {
 
       // création par la conciergerie
@@ -1288,11 +913,12 @@ match /homes/{homeId} {
       allow delete: if false;
     }
 
-        // =========================================================
+    // =========================================================
     // MISSION QUEUE
     // 1 doc = 1 mission en attente de validation
     // docId conseillé : {eventId}_{missionId}
     // =========================================================
+
     match /missionQueue/{queueId} {
 
       // lecture / liste par la conciergerie propriétaire
@@ -1353,51 +979,89 @@ match /homes/{homeId} {
         && (resource.data.conciergerieUid is string)
         && resource.data.conciergerieUid == myUid();
     }
-// =========================================================
 
+    // =========================================================
     // COUNTERS
-
     // =========================================================
 
     match /counters/{counterId} {
 
       allow get, read: if signedIn()
-
         && (
-
           counterId.matches('^' + myUid() + '_[0-9]{4}$')
-
           || devBypass()
-
         );
 
       allow create, update: if signedIn()
-
         && (
-
           counterId.matches('^' + myUid() + '_[0-9]{4}$')
-
           || devBypass()
-
         );
 
       allow delete: if false;
-
       allow list: if false;
-
     }
+    
+// =========================================================
+    // OWNERSTATEMENT
     // =========================================================
 
-    // DEFAULT DENY
+  match /ownerStatements/{statementId} {
 
+  function isConciergerieStatement(data) {
+    return signedIn()
+      && (data.conciergerieUid is string)
+      && data.conciergerieUid == myUid();
+  }
+
+  function isOwnerStatement(data) {
+    return signedIn()
+      && (data.ownerUid is string)
+      && data.ownerUid == myUid()
+      && data.ownerVisible == true;
+  }
+
+  function canGetOwnStatementDoc() {
+    return signedIn()
+      && statementId.matches('^st_' + myUid() + '_.*$');
+  }
+
+  allow get: if canGetOwnStatementDoc()
+    || isConciergerieStatement(resource.data)
+    || isOwnerStatement(resource.data);
+
+  allow list: if isConciergerieStatement(resource.data) || isOwnerStatement(resource.data);
+
+  allow create: if signedIn()
+    && (request.resource.data.conciergerieUid is string)
+    && request.resource.data.conciergerieUid == myUid()
+    && (request.resource.data.ownerUid is string)
+    && request.resource.data.ownerUid != ""
+    && (request.resource.data.ownerDocId is string)
+    && request.resource.data.ownerDocId != ""
+    && (request.resource.data.type is string)
+    && request.resource.data.type == "OWNER_STATEMENT";
+
+  allow update: if signedIn()
+    && (resource.data.conciergerieUid is string)
+    && resource.data.conciergerieUid == myUid()
+    && (request.resource.data.conciergerieUid is string)
+    && request.resource.data.conciergerieUid == resource.data.conciergerieUid
+    && (request.resource.data.ownerUid is string)
+    && request.resource.data.ownerUid == resource.data.ownerUid
+    && (request.resource.data.ownerDocId is string)
+    && request.resource.data.ownerDocId == resource.data.ownerDocId
+    && (request.resource.data.type is string)
+    && request.resource.data.type == resource.data.type;
+
+  allow delete: if false;
+}
+    // =========================================================
+    // DEFAULT DENY
     // =========================================================
 
     match /{document=**} {
-
       allow read, write: if false;
-
     }
-
   }
-
 }
