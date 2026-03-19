@@ -1,4 +1,4 @@
-<!-- docs/factures-liste.html (CORRIGÉ COMPLET — draft=>Facture, bouton Partager, relevé de factures, factures+avoirs conservés) -->
+<!-- docs/factures-liste.html (COMPLET — relevé mensuel via vraie page releve.html + envoi/publication owner + factures+avoirs conservés) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -313,8 +313,7 @@
     }
     .kv div:nth-child(odd){ color:#666; font-weight:900; }
 
-
-.textBlock{
+    .textBlock{
       white-space:pre-wrap;
       background:rgba(248,244,255,.55);
       border:1px solid rgba(122,92,255,0.18);
@@ -747,7 +746,6 @@
                 <input type="checkbox" id="chkInvoice">
                 <div class="checkTxt">
                   <div class="a">Facture <span class="pillMini" id="pubInvNumberPill">—</span></div>
-                  
                 </div>
               </div>
               <span class="pillMini">lecture seule</span>
@@ -787,22 +785,11 @@
   <div id="stmtModal" class="modalMask" role="dialog" aria-modal="true" aria-hidden="true">
     <div class="modal">
       <div class="modalHead">
-        <div class="title">Relevé de factures (mensuel)</div>
+        <div class="title">Relevé de factures</div>
         <button class="btn" id="stmtCloseBtn" type="button">Fermer</button>
       </div>
 
       <div class="modalBody">
-        <div id="stmtSuccessBar" class="successBar" role="status" aria-live="polite">
-          <div class="left">
-            <span>✅ Relevé de factures publié côté propriétaire.</span>
-            <span class="pillMini" id="stmtSuccessHint">—</span>
-          </div>
-          <div class="right">
-            <button class="btn" id="stmtAfterMailBtn" type="button">Préparer email</button>
-            <button class="btn primary" id="stmtAfterCloseBtn" type="button">Fermer</button>
-          </div>
-        </div>
-
         <div id="stmtModalAlert" class="modalAlert"></div>
 
         <div class="grid2">
@@ -819,39 +806,16 @@
           </div>
         </div>
 
-        <div style="margin-top:12px;">
-          <div class="miniT">Aperçu du relevé</div>
-          <div class="boxMini" style="margin-top:8px;">
-            <div class="miniS" id="stmtCounts">—</div>
-
-            <div style="margin-top:10px; display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px;">
-              <div class="tBox">
-                <div class="t">Factures TTC</div>
-                <div class="v" id="stmtInvTTC">—</div>
-              </div>
-              <div class="tBox">
-                <div class="t">Avoirs TTC</div>
-                <div class="v" id="stmtCredTTC">—</div>
-              </div>
-              <div class="tBox">
-                <div class="t">Net TTC</div>
-                <div class="v" id="stmtNetTTC">—</div>
-              </div>
-            </div>
-
-            <div id="stmtItemsBox" style="margin-top:10px; display:flex; flex-direction:column; gap:8px;"></div>
+        <div class="boxMini" style="margin-top:12px;">
+          <div class="miniT">Action</div>
+          <div class="miniS" style="margin-top:6px;">
+            Le relevé complet s’ouvrira sur une vraie page dédiée, avec impression et publication propriétaire.
           </div>
-        </div>
 
-        <div style="margin-top:12px;">
-          <div class="miniT">Message (optionnel)</div>
-          <textarea id="stmtText" class="modalTxt" rows="2" placeholder="Ex: Relevé de factures mensuel."></textarea>
-        </div>
-
-        <div class="modalActions">
-          <button id="stmtCancelBtn" type="button" class="btn">Annuler</button>
-          <button id="stmtPublishBtn" type="button" class="btn primary">Publier</button>
-          <button id="stmtMailBtn" type="button" class="btn">Préparer email</button>
+          <div class="modalActions" style="margin-top:12px;">
+            <button id="stmtCancelBtn" type="button" class="btn">Annuler</button>
+            <button id="stmtOpenPageBtn" type="button" class="btn primary">Ouvrir le relevé</button>
+          </div>
         </div>
       </div>
     </div>
@@ -928,8 +892,7 @@
   const stmtModal = document.getElementById("stmtModal");
   const stmtCloseBtn = document.getElementById("stmtCloseBtn");
   const stmtCancelBtn = document.getElementById("stmtCancelBtn");
-  const stmtPublishBtn = document.getElementById("stmtPublishBtn");
-  const stmtMailBtn = document.getElementById("stmtMailBtn");
+  const stmtOpenPageBtn = document.getElementById("stmtOpenPageBtn");
 
   const stmtOwnerSelect = document.getElementById("stmtOwnerSelect");
   const stmtOwnerEmail = document.getElementById("stmtOwnerEmail");
@@ -937,17 +900,6 @@
   const stmtPeriodLabel = document.getElementById("stmtPeriodLabel");
 
   const stmtModalAlert = document.getElementById("stmtModalAlert");
-  const stmtSuccessBar = document.getElementById("stmtSuccessBar");
-  const stmtSuccessHint = document.getElementById("stmtSuccessHint");
-  const stmtAfterMailBtn = document.getElementById("stmtAfterMailBtn");
-  const stmtAfterCloseBtn = document.getElementById("stmtAfterCloseBtn");
-
-  const stmtText = document.getElementById("stmtText");
-  const stmtCounts = document.getElementById("stmtCounts");
-  const stmtInvTTC = document.getElementById("stmtInvTTC");
-  const stmtCredTTC = document.getElementById("stmtCredTTC");
-  const stmtNetTTC = document.getElementById("stmtNetTTC");
-  const stmtItemsBox = document.getElementById("stmtItemsBox");
 
   let currentUser = null;
   let allItems = [];
@@ -964,8 +916,6 @@
   let modalCreditAlreadySent = false;
 
   let stmtOwners = [];
-  let stmtDraft = null;
-  let stmtAlreadyPublished = false;
 
   function showAlert(msg, ok=false){
     alertBox.style.display = "block";
@@ -1007,12 +957,6 @@
       .replaceAll(">","&gt;")
       .replaceAll('"',"&quot;")
       .replaceAll("'","&#039;");
-  }
-  function escMini(s){
-    return String(s||"")
-      .replaceAll("&","&amp;")
-      .replaceAll("<","&lt;")
-      .replaceAll(">","&gt;");
   }
   function normalize(s){ return String(s||"").trim().toLowerCase(); }
 
@@ -1313,9 +1257,7 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
       return;
     }
 
-    
-
-const text = `${subject}\n\n${body}`;
+    const text = `${subject}\n\n${body}`;
     const ok = await copyToClipboard(text);
     showModalAlert(ok ? "✅ Texte copié. Partage non disponible sur ce navigateur." : "⛔ Partage indisponible.", !!ok);
   }
@@ -1600,8 +1542,7 @@ const text = `${subject}\n\n${body}`;
     openModal(modalMaskSend);
   }
 
-
-async function publishToOwner(){
+  async function publishToOwner(){
     hideModalAlert();
     resetPubSuccess();
 
@@ -1811,7 +1752,6 @@ async function publishToOwner(){
 
     const card = document.createElement("div");
     card.className = "card";
-
     card.innerHTML = `
       <div class="left">
         <div class="row1">
@@ -1937,324 +1877,78 @@ async function publishToOwner(){
     return { startKey, endKey };
   }
 
-  function statementId(conciergerieUid, ownerUid, periodKey){
-    return `st_${conciergerieUid}_${ownerUid}_${periodKey}`;
-  }
-
-  function requestIdForStatement(stId){
-    return `stmt_${stId}`;
-  }
-
-  function absMoney(n){
-    const x = Number(n);
-    return Number.isFinite(x) ? Math.abs(x) : 0;
-  }
-
   async function loadOwnersForConciergerie(uid){
-    try{
-      const s1 = await getDocs(query(
-        collection(db,"owners"),
-        where("conciergerieUid","==", uid),
-        limit(500)
-      ));
-      const a1 = s1.docs.map(d=>({ id:d.id, ...(d.data()||{}) }));
-      if(a1.length) return a1;
-    }catch(e){}
+    const ownerDocIdsWithBills = new Set();
 
-    const s2 = await getDocs(query(collection(db,"owners"), limit(500)));
-    return s2.docs.map(d=>({ id:d.id, ...(d.data()||{}) }));
+    for(const it of allItems){
+      const d = it.data || {};
+      const ownerDocId = getOwnerDocId(d);
+      const invNum = String(d.invoiceNumber || "").trim();
+      if(ownerDocId && invNum){
+        ownerDocIdsWithBills.add(ownerDocId);
+      }
+    }
+
+    if(!ownerDocIdsWithBills.size) return [];
+
+    const s1 = await getDocs(query(
+      collection(db,"owners"),
+      where("conciergerieUid","==", uid),
+      limit(500)
+    ));
+
+    return s1.docs
+      .map(d => ({ id:d.id, ...(d.data()||{}) }))
+      .filter(o => ownerDocIdsWithBills.has(o.id))
+      .map(o => ({
+        id: o.id,
+        ownerUid: String(o.ownerUid || o.userUid || "").trim(),
+        name: String(o.fullname || o.displayName || o.name || "Propriétaire").trim(),
+        email: String(o.email || "").trim()
+      }))
+      .filter(o => !!o.id && !!o.ownerUid)
+      .sort((a,b)=> a.name.localeCompare(b.name, "fr", { sensitivity:"base" }));
   }
 
   function fillOwnerSelect(){
     stmtOwnerSelect.innerHTML = "";
+
     if(!stmtOwners.length){
       const opt = document.createElement("option");
       opt.value = "";
-      opt.textContent = "Aucun propriétaire";
+      opt.textContent = "Aucun propriétaire avec facture";
       stmtOwnerSelect.appendChild(opt);
+      stmtOwnerEmail.textContent = "—";
       return;
     }
+
     for(const o of stmtOwners){
       const opt = document.createElement("option");
       opt.value = o.id;
-      opt.textContent = String(o.name || "Propriétaire").trim();
+      opt.textContent = o.name || "Propriétaire";
       stmtOwnerSelect.appendChild(opt);
     }
+
     stmtOwnerSelect.value = stmtOwners[0].id;
+    refreshOwnerEmail();
   }
 
   function refreshOwnerEmail(){
-    const ownerDocId = String(stmtOwnerSelect.value||"").trim();
-    const o = stmtOwners.find(x=>x.id === ownerDocId);
-    const em = String(o?.email || "").trim();
-    stmtOwnerEmail.textContent = em || "—";
-  }
+    const ownerDocId = String(stmtOwnerSelect.value || "").trim();
+    const o = stmtOwners.find(x => x.id === ownerDocId);
+    stmtOwnerEmail.textContent = String(o?.email || "").trim() || "—";
 
-  function getOwnerStatementLink(stId){
-    return `${location.origin}/owner-statement.html?statementId=${encodeURIComponent(stId)}`;
-  }
-
-  function buildStmtEmailSubject(){
-    if(!stmtDraft) return "Relevé de factures mensuel";
-    return `Relevé de factures ${stmtDraft.periodKey}`;
-  }
-
-  function buildStmtEmailBody(){
-    if(!stmtDraft) return "";
-    const msg = String(stmtText.value||"").trim();
-    const ownerDocId = String(stmtOwnerSelect.value||"").trim();
-    const o = stmtOwners.find(x=>x.id === ownerDocId);
-    const ownerName = String(o?.name || "Bonjour").trim();
-
-    const stId = statementId(currentUser.uid, stmtDraft.ownerUid, stmtDraft.periodKey);
-    const link = getOwnerStatementLink(stId);
-
-    const lines = [];
-    if(ownerName) lines.push(`Bonjour ${ownerName},`);
-    lines.push("");
-    if(msg) lines.push(msg, "");
-    lines.push(`Veuillez trouver votre relevé de factures pour ${stmtDraft.periodKey} :`);
-    lines.push(link);
-    lines.push("");
-    lines.push("Bonne réception,");
-    lines.push("Cordialement,");
-    lines.push(String(conciergerieCompanyName || "Votre conciergerie").trim());
-    return lines.join("\n");
-  }
-
-  function openStmtMailDraft(){
-    const ownerDocId = String(stmtOwnerSelect.value||"").trim();
-    const o = stmtOwners.find(x=>x.id === ownerDocId);
-    const email = String(o?.email || "").trim();
-    if(!email) return showStmtAlert("⛔ Email propriétaire manquant.", false);
-
-    const mailto = buildMailto(email, buildStmtEmailSubject(), buildStmtEmailBody());
-    window.location.href = mailto;
-  }
-
-  async function queryDocsForMonth(uid, type, startKey, endKey){
-    const qx = query(
-      collection(db,"salesDocuments"),
-      where("conciergerieUid","==", uid),
-      where("type","==", type),
-      where("docDateKey", ">=", startKey),
-      where("docDateKey", "<=", endKey),
-      orderBy("docDateKey","asc"),
-      limit(2000)
-    );
-    const snap = await getDocs(qx);
-    return snap.docs.map(d=>({ id:d.id, ...(d.data()||{}) }));
-  }
-
-  function normalizeItemFromDoc(d){
-    const type = String(d.type||"").toUpperCase().trim();
-    const isInv = type === "INVOICE";
-    const kind = isInv ? "INVOICE" : "CREDIT";
-
-    const number = String(isInv ? d.invoiceNumber : d.creditNumber).trim();
-    const status = String(isInv ? d.invoiceStatus : d.creditStatus).toUpperCase().trim() || "MISSING";
-
-    const dateKey = String(d.docDateKey || "").trim();
-    const homeName = String(d.homeName || "").trim();
-    const totalTTC = Number.isFinite(Number(d.totalTTC)) ? Number(d.totalTTC) : 0;
-
-    return {
-      kind,
-      salesDocId: String(d.id||"").trim(),
-      number,
-      dateKey,
-      homeName,
-      totalTTC: absMoney(totalTTC),
-      status
-    };
-  }
-
-  function renderStmtDraft(){
-    if(!stmtDraft){
-      stmtCounts.textContent = "—";
-      stmtInvTTC.textContent = "—";
-      stmtCredTTC.textContent = "—";
-      stmtNetTTC.textContent = "—";
-      stmtItemsBox.innerHTML = "";
-      return;
-    }
-
-    const invCount = stmtDraft.items.filter(i=>i.kind==="INVOICE").length;
-    const credCount = stmtDraft.items.filter(i=>i.kind==="CREDIT").length;
-
-stmtCounts.textContent = `${invCount} facture(s) • ${credCount} avoir(s) • ${stmtDraft.items.length} ligne(s)`;
-    stmtInvTTC.textContent = fmtMoney(stmtDraft.totals.invoicesTTC);
-    stmtCredTTC.textContent = fmtMoney(stmtDraft.totals.creditsTTC);
-    stmtNetTTC.textContent = fmtMoney(stmtDraft.totals.netTTC);
-
-    if(!stmtDraft.items.length){
-      stmtItemsBox.innerHTML = `<div class="miniS">Aucune facture ni aucun avoir émis sur ce mois pour ce propriétaire.</div>`;
-      return;
-    }
-
-    stmtItemsBox.innerHTML = stmtDraft.items.slice(0, 120).map(i=>{
-      const sign = i.kind === "CREDIT" ? "−" : "";
-      const label = i.kind === "CREDIT" ? "Avoir" : "Facture";
-      return `
-        <div class="checkItem">
-          <div class="checkLeft">
-            <div class="checkTxt">
-              <div class="a">${escMini(label)} <span class="pillMini">${escMini(i.number)}</span></div>
-              <div class="b">${escMini(i.dateKey)} • ${escMini(i.homeName || "—")} • ${escMini(i.status)}</div>
-            </div>
-          </div>
-          <span class="pillMini">${sign}${fmtMoney(absMoney(i.totalTTC))}</span>
-        </div>
-      `;
-    }).join("");
-  }
-
-  function refreshStmtButtons(){
-    const canPublish = !!stmtDraft && stmtDraft.items.length > 0 && !stmtAlreadyPublished;
-    stmtPublishBtn.disabled = !canPublish;
-    stmtPublishBtn.title = stmtAlreadyPublished ? "Déjà publié (email toujours possible)." : (stmtDraft?.items?.length ? "" : "Aucune ligne à publier.");
-    stmtMailBtn.disabled = false;
-  }
-
-  async function buildStmtDraft(){
-    hideStmtAlert();
-    stmtSuccessBar.style.display = "none";
-
-    stmtDraft = null;
-    stmtAlreadyPublished = false;
-
-    if(!currentUser?.uid) return showStmtAlert("Session invalide.");
-    const ownerDocId = String(stmtOwnerSelect.value||"").trim();
-    if(!ownerDocId) return showStmtAlert("Choisis un propriétaire.");
-
-    const o = stmtOwners.find(x=>x.id === ownerDocId);
-    const ownerUid = String(o?.ownerUid || "").trim();
-    if(!ownerUid) return showStmtAlert("⛔ ownerUid manquant dans owners.", false);
-
-    const periodKey = String(stmtMonthInput.value||"").trim();
-    if(!periodKey) return showStmtAlert("Choisis un mois.");
-
-    const { startKey, endKey } = monthRange(periodKey);
-    stmtPeriodLabel.textContent = `${startKey} → ${endKey}`;
-
-    let inv = [], cred = [];
-    try{
-      [inv, cred] = await Promise.all([
-        queryDocsForMonth(currentUser.uid, "INVOICE", startKey, endKey),
-        queryDocsForMonth(currentUser.uid, "CREDIT", startKey, endKey)
-      ]);
-    }catch(e){
-      console.error(e);
-      return showStmtAlert("⛔ Erreur requête salesDocuments (index docDateKey requis).", false);
-    }
-
-    inv = inv.filter(x => String(x.ownerUid||"").trim() === ownerUid);
-    cred = cred.filter(x => String(x.ownerUid||"").trim() === ownerUid);
-
-    inv = inv.filter(x => !!String(x.invoiceNumber||"").trim());
-    cred = cred.filter(x => !!String(x.creditNumber||"").trim());
-
-    const items = [...inv.map(normalizeItemFromDoc), ...cred.map(normalizeItemFromDoc)]
-      .sort((a,b)=> String(a.dateKey).localeCompare(String(b.dateKey)));
-
-    const invoicesTTC = items.filter(i=>i.kind==="INVOICE").reduce((s,i)=> s + absMoney(i.totalTTC), 0);
-    const creditsTTC  = items.filter(i=>i.kind==="CREDIT").reduce((s,i)=> s + absMoney(i.totalTTC), 0);
-    const netTTC = invoicesTTC - creditsTTC;
-
-    stmtDraft = {
-      conciergerieUid: currentUser.uid,
-      ownerUid,
-      ownerDocId,
-      periodKey,
-      startKey,
-      endKey,
-      items,
-      totals: { invoicesTTC, creditsTTC, netTTC }
-    };
-
-    const stId = statementId(currentUser.uid, ownerUid, periodKey);
-    const stSnap = await getDoc(doc(db,"ownerStatements", stId));
-    stmtAlreadyPublished = stSnap.exists() && (stSnap.data()?.ownerVisible === true || !!stSnap.data()?.publishedAt);
-
-    renderStmtDraft();
-    refreshStmtButtons();
-  }
-
-  async function publishStatement(){
-    hideStmtAlert();
-    stmtSuccessBar.style.display = "none";
-
-    if(!currentUser?.uid) return showStmtAlert("Session invalide.");
-    if(!stmtDraft) return showStmtAlert("Aucun draft.");
-    if(!stmtDraft.items.length) return showStmtAlert("Aucune ligne à publier.");
-
-    if(stmtAlreadyPublished){
-      refreshStmtButtons();
-      return showStmtAlert("ℹ️ Déjà publié : rien à republier. (Tu peux préparer l’email.)", true);
-    }
-
-    stmtPublishBtn.disabled = true;
-    stmtMailBtn.disabled = true;
-    stmtCancelBtn.disabled = true;
-    stmtCloseBtn.disabled = true;
-
-    try{
-      const stId = statementId(stmtDraft.conciergerieUid, stmtDraft.ownerUid, stmtDraft.periodKey);
-      const note = String(stmtText.value||"").trim();
-
-      await setDoc(doc(db,"ownerStatements", stId), {
-        type: "OWNER_STATEMENT",
-        conciergerieUid: stmtDraft.conciergerieUid,
-        ownerUid: stmtDraft.ownerUid,
-        ownerDocId: stmtDraft.ownerDocId,
-        periodKey: stmtDraft.periodKey,
-        periodStartKey: stmtDraft.startKey,
-        periodEndKey: stmtDraft.endKey,
-        currency: "EUR",
-        items: stmtDraft.items,
-        totals: stmtDraft.totals,
-        note,
-        ownerVisible: true,
-        publishedAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-        createdAt: serverTimestamp()
-      }, { merge:true });
-
-      const rid = requestIdForStatement(stId);
-      await setDoc(doc(db,"requests", rid), {
-        type: "billing_statement",
-        status: "sent",
-        conciergerieUid: stmtDraft.conciergerieUid,
-        ownerUid: stmtDraft.ownerUid,
-        ownerDocId: stmtDraft.ownerDocId,
-        statementId: stId,
-        periodKey: stmtDraft.periodKey,
-        totals: stmtDraft.totals,
-        note,
-        updatedAt: serverTimestamp(),
-        createdAt: serverTimestamp()
-      }, { merge:true });
-
-      stmtAlreadyPublished = true;
-      stmtSuccessHint.textContent = `Relevé ${stmtDraft.periodKey}`;
-      stmtSuccessBar.style.display = "flex";
-      showStmtAlert("✅ Publication effectuée côté propriétaire.", true);
-      refreshStmtButtons();
-
-    }catch(e){
-      console.error(e);
-      showStmtAlert("⛔ Erreur publication : " + (e?.message || "inconnue"), false);
-      stmtPublishBtn.disabled = false;
-      stmtMailBtn.disabled = false;
-      stmtCancelBtn.disabled = false;
-      stmtCloseBtn.disabled = false;
-      refreshStmtButtons();
+    const periodKey = String(stmtMonthInput.value || "").trim();
+    if(periodKey){
+      const { startKey, endKey } = monthRange(periodKey);
+      stmtPeriodLabel.textContent = `${startKey} → ${endKey}`;
+    }else{
+      stmtPeriodLabel.textContent = "—";
     }
   }
 
   async function openStmtModal(){
     hideStmtAlert();
-    stmtSuccessBar.style.display = "none";
 
     if(!currentUser?.uid) return showAlert("Session invalide.");
 
@@ -2262,49 +1956,40 @@ stmtCounts.textContent = `${invCount} facture(s) • ${credCount} avoir(s) • $
     const defMonth = `${now.getFullYear()}-${pad2(now.getMonth()+1)}`;
     if(!stmtMonthInput.value) stmtMonthInput.value = defMonth;
 
-    if(!stmtOwners.length){
-      try{
-        const raw = await loadOwnersForConciergerie(currentUser.uid);
-        stmtOwners = raw
-          .map(o=>({
-            id: o.id,
-            ownerUid: String(o.ownerUid || o.userUid || "").trim(),
-            name: String(o.fullname || o.displayName || o.name || "Propriétaire").trim(),
-            email: String(o.email || "").trim()
-          }))
-          .filter(o=>!!o.ownerUid);
-
-        fillOwnerSelect();
-      }catch(e){
-        console.error(e);
-        return showStmtAlert("⛔ Erreur chargement owners.", false);
-      }
-    }else{
+    try{
+      stmtOwners = await loadOwnersForConciergerie(currentUser.uid);
       fillOwnerSelect();
+      refreshOwnerEmail();
+      openModal(stmtModal);
+    }catch(e){
+      console.error(e);
+      showStmtAlert("⛔ Erreur chargement propriétaires.", false);
     }
-
-    refreshOwnerEmail();
-    stmtText.value = `Relevé de factures ${stmtMonthInput.value}.`;
-
-    openModal(stmtModal);
-    await buildStmtDraft();
   }
 
   function closeStmtModal(){
     closeModal(stmtModal);
     hideStmtAlert();
-    stmtSuccessBar.style.display = "none";
-    stmtDraft = null;
-    stmtAlreadyPublished = false;
-    stmtCounts.textContent = "—";
-    stmtInvTTC.textContent = "—";
-    stmtCredTTC.textContent = "—";
-    stmtNetTTC.textContent = "—";
-    stmtItemsBox.innerHTML = "";
-    stmtPublishBtn.disabled = false;
-    stmtMailBtn.disabled = false;
-    stmtCancelBtn.disabled = false;
-    stmtCloseBtn.disabled = false;
+  }
+
+  function openStatementPage(){
+    hideStmtAlert();
+
+    const ownerDocId = String(stmtOwnerSelect.value || "").trim();
+    if(!ownerDocId) return showStmtAlert("Choisis un propriétaire.");
+
+    const owner = stmtOwners.find(x => x.id === ownerDocId);
+    if(!owner?.ownerUid) return showStmtAlert("⛔ ownerUid manquant sur ce propriétaire.");
+
+    const periodKey = String(stmtMonthInput.value || "").trim();
+    if(!periodKey) return showStmtAlert("Choisis un mois.");
+
+    const u = new URL("releve.html", location.href);
+    u.searchParams.set("ownerDocId", ownerDocId);
+    u.searchParams.set("ownerUid", owner.ownerUid);
+    u.searchParams.set("month", periodKey);
+
+    location.href = u.toString();
   }
 
   closeSendBtn.addEventListener("click", ()=> closeModal(modalMaskSend));
@@ -2354,20 +2039,11 @@ stmtCounts.textContent = `${invCount} facture(s) • ${credCount} avoir(s) • $
   stmtOpenBtn.addEventListener("click", openStmtModal);
   stmtCloseBtn.addEventListener("click", closeStmtModal);
   stmtCancelBtn.addEventListener("click", closeStmtModal);
-  stmtAfterCloseBtn.addEventListener("click", closeStmtModal);
   stmtModal.addEventListener("click",(e)=>{ if(e.target===stmtModal) closeStmtModal(); });
-  stmtAfterMailBtn.addEventListener("click", openStmtMailDraft);
-  stmtMailBtn.addEventListener("click", openStmtMailDraft);
-  stmtPublishBtn.addEventListener("click", publishStatement);
 
-  stmtOwnerSelect.addEventListener("change", async ()=>{
-    refreshOwnerEmail();
-    await buildStmtDraft();
-  });
-  stmtMonthInput.addEventListener("change", async ()=>{
-    stmtText.value = `Relevé de factures ${stmtMonthInput.value}.`;
-    await buildStmtDraft();
-  });
+  stmtOwnerSelect.addEventListener("change", refreshOwnerEmail);
+  stmtMonthInput.addEventListener("change", refreshOwnerEmail);
+  stmtOpenPageBtn.addEventListener("click", openStatementPage);
 
   window.addEventListener("keydown",(e)=>{
     if(e.key === "Escape"){
