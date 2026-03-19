@@ -1,4 +1,4 @@
-<!-- docs/owner-facturation.html (CORRIGÉ COMPLET — historique salesDocuments ownerUid + ownerVisible=true + propagation token + ouverture owner=1 propre) -->
+<!-- docs/owner-facturation.html (COMPLET — historique salesDocuments + ownerStatements ownerUid + ownerVisible=true + ouverture relevé via releve-apercu.html?statementId=...&owner=1 ) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -120,6 +120,9 @@
       padding:10px 10px 12px;
       border-left:5px solid rgba(122,92,255,.55);
     }
+    .item.statement{
+      border-left-color: rgba(27,143,77,.55);
+    }
     .meta{
       display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap;
       font-size:11px; font-weight:1000; color:#666; margin-bottom:6px;
@@ -170,6 +173,7 @@
     }
     .status.ok{ background:rgba(27,143,77,0.12); color:var(--ok); }
     .status.bad{ background:rgba(179,38,30,0.10); color:var(--bad); }
+    .status.statement{ background:rgba(27,143,77,0.12); color:var(--ok); }
 
     .bottom-nav{
       position:fixed; left:50%; transform:translateX(-50%); bottom:0;
@@ -359,6 +363,9 @@
   }
 
   let unsubSales = null;
+  let unsubStatements = null;
+  let currentSalesItems = [];
+  let currentStatementItems = [];
 
   async function guardOwnerProfile(user){
     const us = await getDoc(doc(db, "users", user.uid));
@@ -389,6 +396,12 @@
       return buildOwnerUrl(`avoir-apercu.html?docId=${encodeURIComponent(id)}&owner=1`);
     }
     return buildOwnerUrl(`facture-apercu.html?docId=${encodeURIComponent(id)}&owner=1`);
+  }
+
+  function buildOpenHrefFromStatement(d){
+    const id = String(d.id || "").trim();
+    if(!id) return "";
+    return buildOwnerUrl(`releve-apercu.html?statementId=${encodeURIComponent(id)}&owner=1`);
   }
 
   function renderSalesRow(d){
@@ -425,39 +438,107 @@
     return el;
   }
 
+  function renderStatementRow(d){
+    const period = String(d.periodKey || "").trim() || "—";
+    const when = fmt(d.publishedAt || d.updatedAt || d.createdAt);
+    const totalNet = money(d?.totals?.netTTC || 0);
+    const paid = money(d?.paymentSummary?.paidTTC || 0);
+    const due = money(d?.paymentSummary?.dueTTC || 0);
+    const openHref = buildOpenHrefFromStatement(d);
+
+    const el = document.createElement("div");
+    el.className = "item statement";
+    el.innerHTML = `
+      <div class="meta">
+        <span><b>Relevé</b> • ${esc(period)}</span>
+        <span>${esc(when)} <span class="status statement">publié</span></span>
+      </div>
+      <p class="msg">${[
+        `Période : ${esc(d.periodStartKey || "—")} → ${esc(d.periodEndKey || "—")}`,
+        `Net TTC : ${esc(totalNet)}`,
+        `Réglé : ${esc(paid)}`,
+        `Reste dû : ${esc(due)}`
+      ].join("\n")}</p>
+      <div class="row">
+        <span></span>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;">
+          ${openHref ? `<a class="btn" href="${esc(openHref)}">Ouvrir</a>` : `<span class="tiny">—</span>`}
+        </div>
+      </div>
+    `;
+    return el;
+  }
+
+  function toSortDate(x){
+    try{
+      if(x?.toDate) return x.toDate();
+      if(x?.seconds) return new Date(x.seconds * 1000);
+      return new Date(x || 0);
+    }catch{
+      return new Date(0);
+    }
+  }
+
+  function renderHistoryMerged(){
+    const merged = [
+      ...currentSalesItems.map(d => ({
+        _kind: "sales",
+        _sortDate: d.createdAt || d.updatedAt || d.creditIssuedAt || d.invoiceIssuedAt || d.quoteIssuedAt || null,
+        ...d
+      })),
+      ...currentStatementItems.map(d => ({
+        _kind: "statement",
+        _sortDate: d.publishedAt || d.updatedAt || d.createdAt || null,
+        ...d
+      }))
+    ];
+
+    merged.sort((a,b)=> toSortDate(b._sortDate) - toSortDate(a._sortDate));
+
+    historyCount.textContent = `${merged.length} document${merged.length > 1 ? "s" : ""}`;
+    historyList.innerHTML = "";
+
+    if(!merged.length){
+      historyList.innerHTML = `
+        <div class="item">
+          <div class="meta"><span>Aucun document</span><span>—</span></div>
+          <p class="msg">Aucun devis, facture, avoir ou relevé publié pour le moment.</p>
+        </div>
+      `;
+      return;
+    }
+
+    for(const d of merged){
+      if(d._kind === "statement"){
+        historyList.appendChild(renderStatementRow(d));
+      }else{
+        historyList.appendChild(renderSalesRow(d));
+      }
+    }
+
+    resetUnreadBilling();
+  }
+
   function listenSalesHistory(uid){
     if(unsubSales) unsubSales();
+    if(unsubStatements) unsubStatements();
+
     hideAlert(alertHistory);
     historyList.innerHTML = "";
     historyCount.textContent = "—";
+    currentSalesItems = [];
+    currentStatementItems = [];
 
-    const qs = query(
+    const qsSales = query(
       collection(db, "salesDocuments"),
       where("ownerUid", "==", uid),
       where("ownerVisible", "==", true),
       orderBy("createdAt", "desc")
     );
 
-    unsubSales = onSnapshot(qs, (snap)=>{
-      const items = snap.docs.map(d => ({ id:d.id, ...(d.data()||{}) }));
-
-      historyCount.textContent = `${items.length} document${items.length > 1 ? "s" : ""}`;
-      historyList.innerHTML = "";
-
-      if(!items.length){
-        historyList.innerHTML = `
-          <div class="item">
-            <div class="meta"><span>Aucun document</span><span>—</span></div>
-            <p class="msg">Aucun devis, facture ou avoir publié pour le moment.</p>
-          </div>
-        `;
-      }else{
-        for(const d of items){
-          historyList.appendChild(renderSalesRow(d));
-        }
-      }
-
-      resetUnreadBilling();
+    unsubSales = onSnapshot(qsSales, (snap)=>{
+      currentSalesItems = snap.docs.map(d => ({ id:d.id, ...(d.data()||{}) }));
+      renderHistoryMerged();
     }, (err)=>{
       console.error(err);
       const msg = String(err?.message || "");
@@ -476,7 +557,39 @@
           false
         );
       }else{
-        showAlert(alertHistory, "Erreur chargement historique : " + msg, false);
+        showAlert(alertHistory, "Erreur chargement historique documents : " + msg, false);
+      }
+    });
+
+    const qsStatements = query(
+      collection(db, "ownerStatements"),
+      where("ownerUid", "==", uid),
+      where("ownerVisible", "==", true),
+      orderBy("publishedAt", "desc")
+    );
+
+    unsubStatements = onSnapshot(qsStatements, (snap)=>{
+      currentStatementItems = snap.docs.map(d => ({ id:d.id, ...(d.data()||{}) }));
+      renderHistoryMerged();
+    }, (err)=>{
+      console.error(err);
+      const msg = String(err?.message || "");
+      const low = msg.toLowerCase();
+
+      if(low.includes("index")){
+        showAlert(
+          alertHistory,
+          "⛔ Index Firestore manquant.\nCrée l’index composite : ownerStatements (ownerUid ASC, ownerVisible ASC, publishedAt DESC).\nPuis recharge.",
+          false
+        );
+      }else if(low.includes("permission")){
+        showAlert(
+          alertHistory,
+          "⛔ Permission refusée sur ownerStatements.\nRule attendue : lecture owner autorisée si ownerUid == auth.uid ET ownerVisible == true.",
+          false
+        );
+      }else{
+        showAlert(alertHistory, "Erreur chargement historique relevés : " + msg, false);
       }
     });
   }
