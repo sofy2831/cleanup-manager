@@ -31,14 +31,14 @@ const IS_DEV_PROJECT =
 // =====================
 const PRICE_IDS = IS_DEV_PROJECT
   ? {
+      starter: "price_1TD80IAB1M9iCDJFg2ueU92M",
+      pro: "price_1TD80IAB1M9iCDJFltm8ExpI",
+      business: "price_1TD80IAB1M9iCDJFnxJHLuCm",
+    }
+  : {
       starter: "price_1T84fOAB1M9iCDJFB9qiQiQh",
       pro: "price_1T84fNAB1M9iCDJFOKSGuGMI",
       business: "price_1T84fNAB1M9iCDJFnZCGxkEf",
-    }
-  : {
-      starter: "",
-      pro: "",
-      business: "",
     };
 
 // =====================
