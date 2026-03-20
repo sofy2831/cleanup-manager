@@ -12,6 +12,36 @@ const STRIPE_SECRET = defineSecret("STRIPE_SECRET");
 const STRIPE_WEBHOOK_SECRET = defineSecret("STRIPE_WEBHOOK_SECRET");
 
 // =====================
+// Environnement projet
+// =====================
+const PROJECT_ID =
+  process.env.GCLOUD_PROJECT ||
+  process.env.GCP_PROJECT ||
+  "";
+
+const IS_DEV_PROJECT =
+  PROJECT_ID === "cleanup-manager-dev" ||
+  PROJECT_ID === "cleanup-manager-d9301-a44f1" ||
+  PROJECT_ID.includes("-dev");
+
+// =====================
+// Stripe price IDs
+// DEV = tes IDs test actuels
+// PROD = à remplir avec tes vrais price_live_...
+// =====================
+const PRICE_IDS = IS_DEV_PROJECT
+  ? {
+      starter: "price_1T84fOAB1M9iCDJFB9qiQiQh",
+      pro: "price_1T84fNAB1M9iCDJFOKSGuGMI",
+      business: "price_1T84fNAB1M9iCDJFnZCGxkEf",
+    }
+  : {
+      starter: "",
+      pro: "",
+      business: "",
+    };
+
+// =====================
 // CORS – Firebase Hosting / DEV / local
 // =====================
 const ALLOWED_ORIGINS = [
@@ -85,6 +115,48 @@ function planToMaxHomes(plan) {
     default:
       return 2;
   }
+}
+
+function getPriceIdForPlan(plan) {
+  switch (String(plan || "").toLowerCase()) {
+    case "starter":
+      return PRICE_IDS.starter || null;
+    case "pro":
+      return PRICE_IDS.pro || null;
+    case "business":
+      return PRICE_IDS.business || null;
+    default:
+      return null;
+  }
+}
+
+function stripeUnixToTimestamp(unixSeconds) {
+  const n = Number(unixSeconds);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return admin.firestore.Timestamp.fromMillis(n * 1000);
+}
+
+function mapStripeSubscriptionStatus(sub) {
+  const status = String(sub?.status || "").toLowerCase();
+  const cancelAtPeriodEnd = sub?.cancel_at_period_end === true;
+
+  if (cancelAtPeriodEnd && (status === "active" || status === "trialing")) {
+    return "cancel_at_period_end";
+  }
+
+  if (status === "active" || status === "trialing") {
+    return "active";
+  }
+
+  if (status === "past_due" || status === "unpaid" || status === "incomplete") {
+    return "suspended";
+  }
+
+  if (status === "canceled" || status === "incomplete_expired") {
+    return "cancelled";
+  }
+
+  return "suspended";
 }
 
 // =====================
@@ -296,11 +368,34 @@ exports.api = onRequest(
       );
     }
 
+    async function findUserBySubscriptionId(subscriptionId) {
+      if (!subscriptionId) return null;
+
+      const snap = await db
+        .collection("users")
+        .where("stripeSubscriptionId", "==", subscriptionId)
+        .limit(1)
+        .get();
+
+      if (snap.empty) return null;
+
+      return {
+        uid: snap.docs[0].id,
+        ref: snap.docs[0].ref,
+        data: snap.docs[0].data() || {},
+      };
+    }
+
     // =====================
     // 1) PING
     // =====================
     if (method === "GET" && (path === "/" || path === "")) {
-      return res.json({ ok: true, version: "api-v5" });
+      return res.json({
+        ok: true,
+        version: "api-v6",
+        projectId: PROJECT_ID || null,
+        mode: IS_DEV_PROJECT ? "dev" : "prod",
+      });
     }
 
     // =====================
@@ -345,6 +440,12 @@ exports.api = onRequest(
           subscriptionSource: "FREE_PLAN",
           maxHomes: 2,
           subscribedAt: admin.firestore.FieldValue.serverTimestamp(),
+          stripeSubscriptionId: admin.firestore.FieldValue.delete(),
+          cancelAtPeriodEnd: false,
+          cancelReason: admin.firestore.FieldValue.delete(),
+          cancelComment: admin.firestore.FieldValue.delete(),
+          cancelRequestedAt: admin.firestore.FieldValue.delete(),
+          currentPeriodEnd: admin.firestore.FieldValue.delete(),
         });
 
         await rebuildStatsFor(uid);
@@ -368,19 +469,55 @@ exports.api = onRequest(
     // =====================
     // 2) CREATE CHECKOUT SESSION
     // POST /create-checkout-session
-    // body: { uid, email, plan, priceId }
+    // body: { uid, email, plan }
     // =====================
     if (method === "POST" && path === "/create-checkout-session") {
       try {
         const body = ensureJsonBody(req);
-        const { uid, plan, priceId, email } = body || {};
+        const { uid, plan, email } = body || {};
 
-        if (!uid || !priceId) {
-          return res.status(400).json({ error: "uid et priceId requis" });
+        const planNorm = String(plan || "starter").toLowerCase();
+        const priceId = getPriceIdForPlan(planNorm);
+
+        if (!uid || !planNorm || !priceId) {
+          return res.status(400).json({
+            error: "uid et plan valides requis",
+            plan: planNorm || null,
+            mode: IS_DEV_PROJECT ? "dev" : "prod",
+          });
         }
 
-        const emailNorm = normEmail(email);
-        const planNorm = String(plan || "starter").toLowerCase();
+        const userRef = db.collection("users").doc(uid);
+        const userSnap = await userRef.get();
+
+        if (!userSnap.exists) {
+          return res.status(404).json({ error: "user introuvable" });
+        }
+
+        const userData = userSnap.data() || {};
+
+        if (String(userData.role || "").toLowerCase() !== "conciergerie") {
+          return res.status(403).json({ error: "role non autorisé" });
+        }
+
+        if (!userData.billingReady) {
+          return res.status(400).json({ error: "billingReady requis" });
+        }
+
+        const existingSubId = String(userData.stripeSubscriptionId || "").trim();
+        if (
+          existingSubId &&
+          ["active", "cancel_at_period_end", "suspended"].includes(
+            String(userData.subscriptionStatus || "").toLowerCase()
+          )
+        ) {
+          return res.status(409).json({
+            error: "abonnement déjà existant",
+            subscriptionStatus: userData.subscriptionStatus || null,
+          });
+        }
+
+        const emailNorm = normEmail(email || userData.email || "");
 
         const origin =
           req.headers.origin && ALLOWED_ORIGINS.includes(req.headers.origin)
@@ -395,6 +532,8 @@ exports.api = onRequest(
           origin,
           email: emailNorm || null,
           priceId,
+          projectId: PROJECT_ID || null,
+          mode: IS_DEV_PROJECT ? "dev" : "prod",
         });
 
         const session = await stripe.checkout.sessions.create({
@@ -424,7 +563,11 @@ exports.api = onRequest(
           { merge: true }
         );
 
-        return res.json({ url: session.url });
+        return res.json({
+          ok: true,
+          url: session.url,
+          mode: session.livemode ? "live" : "test",
+        });
       } catch (err) {
         console.error("❌ create-checkout-session error:", {
           message: err?.message,
@@ -481,6 +624,69 @@ exports.api = onRequest(
     }
 
     // =====================
+    // 2ter) CANCEL SUBSCRIPTION
+    // POST /cancel-subscription
+    // body: { uid, reason, comment? }
+    // =====================
+    if (method === "POST" && path === "/cancel-subscription") {
+      try {
+        const body = ensureJsonBody(req);
+        const { uid, reason, comment } = body || {};
+
+        if (!uid) {
+          return res.status(400).json({ error: "uid requis" });
+        }
+
+        if (!reason) {
+          return res.status(400).json({ error: "reason requis" });
+        }
+
+        const userRef = db.collection("users").doc(uid);
+        const userSnap = await userRef.get();
+
+        if (!userSnap.exists) {
+          return res.status(404).json({ error: "user introuvable" });
+        }
+
+        const user = userSnap.data() || {};
+        const subscriptionId = String(user.stripeSubscriptionId || "").trim();
+
+        if (!subscriptionId) {
+          return res.status(400).json({ error: "subscription introuvable" });
+        }
+
+        const sub = await stripe.subscriptions.update(subscriptionId, {
+          cancel_at_period_end: true,
+        });
+
+        await updateUser(uid, {
+          subscriptionStatus: "cancel_at_period_end",
+          cancelAtPeriodEnd: true,
+          cancelReason: String(reason || "").trim(),
+          cancelComment: String(comment || "").trim(),
+          cancelRequestedAt: admin.firestore.FieldValue.serverTimestamp(),
+          currentPeriodEnd: stripeUnixToTimestamp(sub?.current_period_end),
+          stripeSubscriptionId: sub.id,
+          stripeCustomerId: sub.customer || null,
+        });
+
+        return res.json({
+          ok: true,
+          subscriptionStatus: "cancel_at_period_end",
+          currentPeriodEnd: sub?.current_period_end || null,
+        });
+      } catch (err) {
+        console.error("❌ cancel-subscription error:", {
+          message: err?.message,
+          type: err?.type,
+          rawMessage: err?.raw?.message,
+          code: err?.code,
+        });
+        return res.status(500).json({ error: "cancel subscription failed" });
+      }
+    }
+
+    // =====================
     // 3) STRIPE WEBHOOK
     // POST /webhook
     // =====================
@@ -520,6 +726,7 @@ exports.api = onRequest(
             stripeCustomerEmail: email
               ? normEmail(email)
               : admin.firestore.FieldValue.delete(),
+            cancelAtPeriodEnd: false,
           });
 
           await rebuildStatsFor(uid);
@@ -534,15 +741,17 @@ exports.api = onRequest(
           const sub = obj;
           const uid = sub?.metadata?.uid || null;
           const plan = sub?.metadata?.plan || "starter";
-          const status = sub.status;
-          const isActive = status === "active" || status === "trialing";
+          const appStatus = mapStripeSubscriptionStatus(sub);
 
           await updateUser(uid, {
-            subscriptionStatus: isActive ? "active" : "inactive",
+            subscriptionStatus: appStatus,
             subscriptionSource: "stripe",
             plan,
             maxHomes: planToMaxHomes(plan),
             stripeSubscriptionId: sub.id,
+            stripeCustomerId: sub.customer || null,
+            cancelAtPeriodEnd: sub?.cancel_at_period_end === true,
+            currentPeriodEnd: stripeUnixToTimestamp(sub?.current_period_end),
           });
 
           await rebuildStatsFor(uid);
@@ -554,16 +763,10 @@ exports.api = onRequest(
           const subId = invoice.subscription;
 
           if (subId) {
-            const snap = await db
-              .collection("users")
-              .where("stripeSubscriptionId", "==", subId)
-              .limit(1)
-              .get();
+            const found = await findUserBySubscriptionId(subId);
 
-            if (!snap.empty) {
-              const uid = snap.docs[0].id;
-
-              await snap.docs[0].ref.set(
+            if (found?.uid) {
+              await found.ref.set(
                 {
                   subscriptionStatus: "active",
                   subscriptionSource: "stripe",
@@ -572,7 +775,7 @@ exports.api = onRequest(
                 { merge: true }
               );
 
-              await rebuildStatsFor(uid);
+              await rebuildStatsFor(found.uid);
             }
           }
         }
@@ -583,25 +786,19 @@ exports.api = onRequest(
           const subId = invoice.subscription;
 
           if (subId) {
-            const snap = await db
-              .collection("users")
-              .where("stripeSubscriptionId", "==", subId)
-              .limit(1)
-              .get();
+            const found = await findUserBySubscriptionId(subId);
 
-            if (!snap.empty) {
-              const uid = snap.docs[0].id;
-
-              await snap.docs[0].ref.set(
+            if (found?.uid) {
+              await found.ref.set(
                 {
-                  subscriptionStatus: "inactive",
+                  subscriptionStatus: "suspended",
                   subscriptionSource: "stripe",
                   updatedAt: admin.firestore.FieldValue.serverTimestamp(),
                 },
                 { merge: true }
               );
 
-              await rebuildStatsFor(uid);
+              await rebuildStatsFor(found.uid);
             }
           }
         }
