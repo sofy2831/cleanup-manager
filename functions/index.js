@@ -878,7 +878,68 @@ if (method === "POST" && path === "/create-checkout-session") {
         return res.status(500).json({ error: "Webhook handler failed" });
       }
     }
+    // =====================
+    // 2quater) BILLING PORTAL
+    // POST /create-billing-portal-session
+    // body: { uid }
+    // =====================
+    if (method === "POST" && path === "/create-billing-portal-session") {
+      try {
+        const body = ensureJsonBody(req);
+        const { uid } = body || {};
 
+        if (!uid) {
+          return res.status(400).json({ error: "uid requis" });
+        }
+
+        const userRef = db.collection("users").doc(uid);
+        const userSnap = await userRef.get();
+
+        if (!userSnap.exists) {
+          return res.status(404).json({ error: "user introuvable" });
+        }
+
+        const userData = userSnap.data() || {};
+        const customerId = String(userData.stripeCustomerId || "").trim();
+        const subscriptionStatus = String(userData.subscriptionStatus || "").toLowerCase();
+
+        if (!customerId) {
+          return res.status(400).json({ error: "stripeCustomerId introuvable" });
+        }
+
+        if (!["active", "cancel_at_period_end", "suspended"].includes(subscriptionStatus)) {
+          return res.status(400).json({
+            error: "abonnement non éligible au portail",
+            subscriptionStatus: subscriptionStatus || null,
+          });
+        }
+
+        const origin =
+          req.headers.origin && ALLOWED_ORIGINS.includes(req.headers.origin)
+            ? req.headers.origin
+            : "https://cleanup-manager.fr";
+
+        const session = await stripe.billingPortal.sessions.create({
+          customer: customerId,
+          return_url: `${origin}/conciergerie.html`,
+        });
+
+        return res.json({
+          ok: true,
+          url: session.url,
+        });
+      } catch (err) {
+        console.error("❌ create-billing-portal-session error:", {
+          message: err?.message,
+          type: err?.type,
+          rawMessage: err?.raw?.message,
+          code: err?.code,
+        });
+        return res.status(500).json({ error: "billing portal session failed" });
+      }
+    }
+
+    
     // =====================
     // 404
     // =====================
