@@ -721,100 +721,156 @@ if (method === "POST" && path === "/create-checkout-session") {
         const obj = event.data.object;
 
         // Checkout validé
-        if (type === "checkout.session.completed") {
-          const session = obj;
-          const uid = session?.metadata?.uid || null;
-          const plan = session?.metadata?.plan || "starter";
-          const email =
-            session?.customer_details?.email || session?.customer_email || null;
+       if (type === "checkout.session.completed") {
+  const session = obj;
+  const uid = session?.metadata?.uid || null;
+  const plan = session?.metadata?.plan || "starter";
+  const email =
+    session?.customer_details?.email || session?.customer_email || null;
 
-          await updateUser(uid, {
-            subscriptionStatus: "active",
-            subscriptionSource: "stripe",
-            subscribedAt: admin.firestore.FieldValue.serverTimestamp(),
-            plan,
-            maxHomes: planToMaxHomes(plan),
-            stripeCustomerId: session.customer || null,
-            stripeSubscriptionId: session.subscription || null,
-            stripeCustomerEmail: email
-              ? normEmail(email)
-              : admin.firestore.FieldValue.delete(),
-            cancelAtPeriodEnd: false,
-          });
+  let stripeSub = null;
+  const stripeSubId = String(session?.subscription || "").trim();
 
-          await rebuildStatsFor(uid);
-        }
+  if (stripeSubId) {
+    try {
+      stripeSub = await stripe.subscriptions.retrieve(stripeSubId);
+    } catch (e) {
+      console.error("❌ checkout.session.completed subscription retrieve error:", {
+        message: e?.message,
+        code: e?.code,
+        subscriptionId: stripeSubId,
+      });
+    }
+  }
+
+  const appStatus = stripeSub
+    ? mapStripeSubscriptionStatus(stripeSub)
+    : "active";
+
+  await updateUser(uid, {
+    subscriptionStatus: appStatus,
+    subscriptionSource: "stripe",
+    subscribedAt: stripeSub?.created
+      ? stripeUnixToTimestamp(stripeSub.created)
+      : admin.firestore.FieldValue.serverTimestamp(),
+    plan,
+    maxHomes: planToMaxHomes(plan),
+    stripeCustomerId: stripeSub?.customer || session.customer || null,
+    stripeSubscriptionId: stripeSub?.id || session.subscription || null,
+    stripeCustomerEmail: email
+      ? normEmail(email)
+      : admin.firestore.FieldValue.delete(),
+    cancelAtPeriodEnd: stripeSub?.cancel_at_period_end === true,
+    currentPeriodEnd: stripeUnixToTimestamp(stripeSub?.current_period_end),
+    cancelReason: admin.firestore.FieldValue.delete(),
+    cancelComment: admin.firestore.FieldValue.delete(),
+    cancelRequestedAt: admin.firestore.FieldValue.delete(),
+  });
+
+  await rebuildStatsFor(uid);
+}
 
         // Abonnement créé / modifié / supprimé
-        if (
-          type === "customer.subscription.created" ||
-          type === "customer.subscription.updated" ||
-          type === "customer.subscription.deleted"
-        ) {
-          const sub = obj;
-          const uid = sub?.metadata?.uid || null;
-          const plan = sub?.metadata?.plan || "starter";
-          const appStatus = mapStripeSubscriptionStatus(sub);
+       if (
+  type === "customer.subscription.created" ||
+  type === "customer.subscription.updated" ||
+  type === "customer.subscription.deleted"
+) {
+  const sub = obj;
+  const uid = sub?.metadata?.uid || null;
+  const plan = sub?.metadata?.plan || "starter";
+  const appStatus = mapStripeSubscriptionStatus(sub);
 
-          await updateUser(uid, {
-            subscriptionStatus: appStatus,
-            subscriptionSource: "stripe",
-            plan,
-            maxHomes: planToMaxHomes(plan),
-            stripeSubscriptionId: sub.id,
-            stripeCustomerId: sub.customer || null,
-            cancelAtPeriodEnd: sub?.cancel_at_period_end === true,
-            currentPeriodEnd: stripeUnixToTimestamp(sub?.current_period_end),
-          });
+  await updateUser(uid, {
+    subscriptionStatus: appStatus,
+    subscriptionSource: "stripe",
+    plan,
+    maxHomes: planToMaxHomes(plan),
+    stripeSubscriptionId: sub.id,
+    stripeCustomerId: sub.customer || null,
+    cancelAtPeriodEnd: sub?.cancel_at_period_end === true,
+    currentPeriodEnd: stripeUnixToTimestamp(sub?.current_period_end),
+    subscribedAt: sub?.created
+      ? stripeUnixToTimestamp(sub.created)
+      : admin.firestore.FieldValue.serverTimestamp(),
+  });
 
-          await rebuildStatsFor(uid);
-        }
+  await rebuildStatsFor(uid);
+}
 
         // Paiement réussi
-        if (type === "invoice.payment_succeeded") {
-          const invoice = obj;
-          const subId = invoice.subscription;
+       if (type === "invoice.payment_succeeded") {
+  const invoice = obj;
+  const subId = invoice.subscription;
 
-          if (subId) {
-            const found = await findUserBySubscriptionId(subId);
+  if (subId) {
+    const found = await findUserBySubscriptionId(subId);
 
-            if (found?.uid) {
-              await found.ref.set(
-                {
-                  subscriptionStatus: "active",
-                  subscriptionSource: "stripe",
-                  updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-                },
-                { merge: true }
-              );
+    if (found?.uid) {
+      let stripeSub = null;
+      try {
+        stripeSub = await stripe.subscriptions.retrieve(subId);
+      } catch (e) {
+        console.error("❌ invoice.payment_succeeded subscription retrieve error:", {
+          message: e?.message,
+          code: e?.code,
+          subscriptionId: subId,
+        });
+      }
 
-              await rebuildStatsFor(found.uid);
-            }
-          }
-        }
+      await found.ref.set(
+        {
+          subscriptionStatus: stripeSub
+            ? mapStripeSubscriptionStatus(stripeSub)
+            : "active",
+          subscriptionSource: "stripe",
+          cancelAtPeriodEnd: stripeSub?.cancel_at_period_end === true,
+          currentPeriodEnd: stripeUnixToTimestamp(stripeSub?.current_period_end),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+
+      await rebuildStatsFor(found.uid);
+    }
+  }
+}
 
         // Paiement échoué
         if (type === "invoice.payment_failed") {
-          const invoice = obj;
-          const subId = invoice.subscription;
+  const invoice = obj;
+  const subId = invoice.subscription;
 
-          if (subId) {
-            const found = await findUserBySubscriptionId(subId);
+  if (subId) {
+    const found = await findUserBySubscriptionId(subId);
 
-            if (found?.uid) {
-              await found.ref.set(
-                {
-                  subscriptionStatus: "suspended",
-                  subscriptionSource: "stripe",
-                  updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-                },
-                { merge: true }
-              );
+    if (found?.uid) {
+      let stripeSub = null;
+      try {
+        stripeSub = await stripe.subscriptions.retrieve(subId);
+      } catch (e) {
+        console.error("❌ invoice.payment_failed subscription retrieve error:", {
+          message: e?.message,
+          code: e?.code,
+          subscriptionId: subId,
+        });
+      }
 
-              await rebuildStatsFor(found.uid);
-            }
-          }
-        }
+      await found.ref.set(
+        {
+          subscriptionStatus: "suspended",
+          subscriptionSource: "stripe",
+          cancelAtPeriodEnd: stripeSub?.cancel_at_period_end === true,
+          currentPeriodEnd: stripeUnixToTimestamp(stripeSub?.current_period_end),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+
+      await rebuildStatsFor(found.uid);
+    }
+  }
+}
 
         return res.json({ received: true });
       } catch (err) {
