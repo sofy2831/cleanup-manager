@@ -471,114 +471,127 @@ exports.api = onRequest(
     // POST /create-checkout-session
     // body: { uid, email, plan }
     // =====================
-    if (method === "POST" && path === "/create-checkout-session") {
-      try {
-        const body = ensureJsonBody(req);
-        const { uid, plan, email } = body || {};
+if (method === "POST" && path === "/create-checkout-session") {
+  try {
+    const body = ensureJsonBody(req);
+    const { uid, plan, email } = body || {};
 
-        const planNorm = String(plan || "starter").toLowerCase();
-        const priceId = getPriceIdForPlan(planNorm);
+    const planNorm = String(plan || "starter").toLowerCase().trim();
+    const priceId = getPriceIdForPlan(planNorm);
 
-        if (!uid || !planNorm || !priceId) {
-          return res.status(400).json({
-            error: "uid et plan valides requis",
-            plan: planNorm || null,
-            mode: IS_DEV_PROJECT ? "dev" : "prod",
-          });
-        }
+    console.log("🔥 CHECKOUT INPUT", {
+      uid: uid || null,
+      plan: planNorm || null,
+      email: email || null,
+      projectId: PROJECT_ID || null,
+      isDevProject: IS_DEV_PROJECT,
+      priceId: priceId || null,
+      stripeKeyMode: String(stripeKey || "").startsWith("sk_test_") ? "test" : "live",
+    });
 
-        const userRef = db.collection("users").doc(uid);
-        const userSnap = await userRef.get();
-
-        if (!userSnap.exists) {
-          return res.status(404).json({ error: "user introuvable" });
-        }
-
-        const userData = userSnap.data() || {};
-
-        if (String(userData.role || "").toLowerCase() !== "conciergerie") {
-          return res.status(403).json({ error: "role non autorisé" });
-        }
-
-        if (!userData.billingReady) {
-          return res.status(400).json({ error: "billingReady requis" });
-        }
-
-        const existingSubId = String(userData.stripeSubscriptionId || "").trim();
-        if (
-          existingSubId &&
-          ["active", "cancel_at_period_end", "suspended"].includes(
-            String(userData.subscriptionStatus || "").toLowerCase()
-          )
-        ) {
-          return res.status(409).json({
-            error: "abonnement déjà existant",
-            subscriptionStatus: userData.subscriptionStatus || null,
-          });
-        }
-
-        const emailNorm = normEmail(email || userData.email || "");
-
-        const origin =
-          req.headers.origin && ALLOWED_ORIGINS.includes(req.headers.origin)
-            ? req.headers.origin
-            : "https://cleanup-manager.fr";
-
-        const basePath = "";
-
-        console.log("create-checkout-session", {
-          uid,
-          plan: planNorm,
-          origin,
-          email: emailNorm || null,
-          priceId,
-          projectId: PROJECT_ID || null,
-          mode: IS_DEV_PROJECT ? "dev" : "prod",
-        });
-
-        const session = await stripe.checkout.sessions.create({
-          mode: "subscription",
-          line_items: [{ price: priceId, quantity: 1 }],
-          customer_email: emailNorm || undefined,
-          success_url: `${origin}${basePath}/merci.html?session_id={CHECKOUT_SESSION_ID}`,
-          cancel_url: `${origin}${basePath}/abonnement.html?cancel=1`,
-          metadata: {
-            uid,
-            plan: planNorm,
-          },
-          subscription_data: {
-            metadata: {
-              uid,
-              plan: planNorm,
-            },
-          },
-        });
-
-        await db.collection("users").doc(uid).set(
-          {
-            lastCheckoutSessionId: session.id,
-            lastCheckoutAt: admin.firestore.FieldValue.serverTimestamp(),
-            stripeCustomerEmail: emailNorm || admin.firestore.FieldValue.delete(),
-          },
-          { merge: true }
-        );
-
-        return res.json({
-          ok: true,
-          url: session.url,
-          mode: session.livemode ? "live" : "test",
-        });
-      } catch (err) {
-        console.error("❌ create-checkout-session error:", {
-          message: err?.message,
-          type: err?.type,
-          rawMessage: err?.raw?.message,
-          code: err?.code,
-        });
-        return res.status(500).json({ error: "checkout session failed" });
-      }
+    if (!uid || !planNorm || !priceId) {
+      return res.status(400).json({
+        error: "uid et plan valides requis",
+        plan: planNorm || null,
+        mode: IS_DEV_PROJECT ? "dev" : "prod",
+      });
     }
 
+    const userRef = db.collection("users").doc(uid);
+    const userSnap = await userRef.get();
+
+    if (!userSnap.exists) {
+      return res.status(404).json({ error: "user introuvable" });
+    }
+
+    const userData = userSnap.data() || {};
+
+    if (String(userData.role || "").toLowerCase() !== "conciergerie") {
+      return res.status(403).json({ error: "role non autorisé" });
+    }
+
+    if (!userData.billingReady) {
+      return res.status(400).json({ error: "billingReady requis" });
+    }
+
+    const existingSubId = String(userData.stripeSubscriptionId || "").trim();
+    if (
+      existingSubId &&
+      ["active", "cancel_at_period_end", "suspended"].includes(
+        String(userData.subscriptionStatus || "").toLowerCase()
+      )
+    ) {
+      return res.status(409).json({
+        error: "abonnement déjà existant",
+        subscriptionStatus: userData.subscriptionStatus || null,
+      });
+    }
+
+    const emailNorm = normEmail(email || userData.email || "");
+
+    const origin =
+      req.headers.origin && ALLOWED_ORIGINS.includes(req.headers.origin)
+        ? req.headers.origin
+        : "https://cleanup-manager.fr";
+
+    const basePath = "";
+
+    // Vérif explicite côté Stripe AVANT création session
+    const stripePrice = await stripe.prices.retrieve(priceId);
+    console.log("💰 STRIPE PRICE FOUND", {
+      id: stripePrice?.id || null,
+      active: stripePrice?.active || false,
+      livemode: stripePrice?.livemode || false,
+      currency: stripePrice?.currency || null,
+      recurring: stripePrice?.recurring?.interval || null,
+      product: stripePrice?.product || null,
+    });
+
+    const session = await stripe.checkout.sessions.create({
+      mode: "subscription",
+      line_items: [{ price: priceId, quantity: 1 }],
+      customer_email: emailNorm || undefined,
+      success_url: `${origin}${basePath}/merci.html?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${origin}${basePath}/abonnement.html?cancel=1`,
+      metadata: {
+        uid,
+        plan: planNorm,
+      },
+      subscription_data: {
+        metadata: {
+          uid,
+          plan: planNorm,
+        },
+      },
+    });
+
+    await db.collection("users").doc(uid).set(
+      {
+        lastCheckoutSessionId: session.id,
+        lastCheckoutAt: admin.firestore.FieldValue.serverTimestamp(),
+        stripeCustomerEmail: emailNorm || admin.firestore.FieldValue.delete(),
+      },
+      { merge: true }
+    );
+
+    return res.json({
+      ok: true,
+      url: session.url,
+      mode: session.livemode ? "live" : "test",
+    });
+  } catch (err) {
+    console.error("❌ create-checkout-session error:", {
+      message: err?.message,
+      type: err?.type,
+      rawMessage: err?.raw?.message,
+      code: err?.code,
+      stripeKeyMode: String(stripeKey || "").startsWith("sk_test_") ? "test" : "live",
+      projectId: PROJECT_ID || null,
+      isDevProject: IS_DEV_PROJECT,
+    });
+    return res.status(500).json({ error: "checkout session failed" });
+  }
+}
     // =====================
     // 2bis) READ CHECKOUT SESSION
     // GET /checkout-session?session_id=cs_...
