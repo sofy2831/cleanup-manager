@@ -803,25 +803,37 @@ if (method === "POST" && path === "/create-checkout-session") {
       customerId: sub?.customer || null,
     });
   } else {
+    let fullSub = sub;
+
+    try {
+      fullSub = await stripe.subscriptions.retrieve(sub.id);
+    } catch (e) {
+      console.error("❌ subscription retrieve error:", {
+        message: e?.message,
+        code: e?.code,
+        subscriptionId: sub?.id || null,
+      });
+    }
+
     const currentPriceId =
-      sub?.items?.data?.[0]?.price?.id ||
-      sub?.plan?.id ||
+      fullSub?.items?.data?.[0]?.price?.id ||
+      fullSub?.plan?.id ||
       null;
 
     const plan = getPlanFromPriceId(currentPriceId);
-    const appStatus = mapStripeSubscriptionStatus(sub);
+    const appStatus = mapStripeSubscriptionStatus(fullSub);
 
     await updateUser(uid, {
       subscriptionStatus: appStatus,
       subscriptionSource: "stripe",
       plan,
       maxHomes: planToMaxHomes(plan),
-      stripeSubscriptionId: sub.id,
-      stripeCustomerId: sub.customer || null,
-      cancelAtPeriodEnd: sub?.cancel_at_period_end === true,
-      currentPeriodEnd: stripeUnixToTimestamp(sub?.current_period_end),
-      subscribedAt: sub?.created
-        ? stripeUnixToTimestamp(sub.created)
+      stripeSubscriptionId: fullSub.id,
+      stripeCustomerId: fullSub.customer || null,
+      cancelAtPeriodEnd: fullSub?.cancel_at_period_end === true,
+      currentPeriodEnd: stripeUnixToTimestamp(fullSub?.current_period_end),
+      subscribedAt: fullSub?.created
+        ? stripeUnixToTimestamp(fullSub.created)
         : admin.firestore.FieldValue.serverTimestamp(),
     });
 
