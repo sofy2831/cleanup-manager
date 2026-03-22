@@ -31,9 +31,9 @@ const IS_DEV_PROJECT =
 // =====================
 const PRICE_IDS = IS_DEV_PROJECT
   ? {
-      starter: "price_1TD80IAB1M9iCDJFg2ueU92M",
-      pro: "price_1TD80IAB1M9iCDJFltm8ExpI",
-      business: "price_1TD80IAB1M9iCDJFnxJHLuCm",
+      starter: "price_1TDnNAAB1M9iCDJFi6bipg2U",
+      pro: "price_1TDnQQAB1M9iCDJFbsWcAfgp",
+      business: "price_1TDnRqAB1M9iCDJFhRkyk4Ua",
     }
   : {
       starter: "price_1T84fOAB1M9iCDJFB9qiQiQh",
