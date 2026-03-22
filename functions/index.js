@@ -711,7 +711,75 @@ exports.api = onRequest(
         return res.status(500).json({ error: "cancel subscription failed" });
       }
     }
+    // =====================
+    // 2ter-bis) REACTIVATE SUBSCRIPTION
+    // POST /reactivate-subscription
+    // body: { uid }
+    // =====================
+    if (method === "POST" && path === "/reactivate-subscription") {
+      try {
+        const body = ensureJsonBody(req);
+        const { uid } = body || {};
 
+        if (!uid) {
+          return res.status(400).json({ error: "uid requis" });
+        }
+
+        const userRef = db.collection("users").doc(uid);
+        const userSnap = await userRef.get();
+
+        if (!userSnap.exists) {
+          return res.status(404).json({ error: "user introuvable" });
+        }
+
+        const user = userSnap.data() || {};
+        const subscriptionId = String(user.stripeSubscriptionId || "").trim();
+
+        if (!subscriptionId) {
+          return res.status(400).json({ error: "subscription introuvable" });
+        }
+
+        const currentStatus = String(user.subscriptionStatus || "").toLowerCase();
+
+        if (currentStatus !== "cancel_at_period_end") {
+          return res.status(400).json({
+            error: "abonnement non réactivable",
+            subscriptionStatus: currentStatus || null,
+          });
+        }
+
+        const sub = await stripe.subscriptions.update(subscriptionId, {
+          cancel_at_period_end: false,
+        });
+
+        await updateUser(uid, {
+          subscriptionStatus: mapStripeSubscriptionStatus(sub),
+          cancelAtPeriodEnd: false,
+          cancelReason: admin.firestore.FieldValue.delete(),
+          cancelComment: admin.firestore.FieldValue.delete(),
+          cancelRequestedAt: admin.firestore.FieldValue.delete(),
+          currentPeriodEnd: stripeUnixToTimestamp(sub?.current_period_end),
+          stripeSubscriptionId: sub.id,
+          stripeCustomerId: sub.customer || null,
+        });
+
+        await rebuildStatsFor(uid);
+
+        return res.json({
+          ok: true,
+          subscriptionStatus: mapStripeSubscriptionStatus(sub),
+          currentPeriodEnd: sub?.current_period_end || null,
+        });
+      } catch (err) {
+        console.error("❌ reactivate-subscription error:", {
+          message: err?.message,
+          type: err?.type,
+          rawMessage: err?.raw?.message,
+          code: err?.code,
+        });
+        return res.status(500).json({ error: "reactivate subscription failed" });
+      }
+    }
     // =====================
     // 3) STRIPE WEBHOOK
     // =====================
