@@ -34,9 +34,9 @@ const PRICE_IDS = IS_DEV_PROJECT
       business: "price_1TDnRqAB1M9iCDJFhRkyk4Ua",
     }
   : {
-      starter: "price_1T84fOAB1M9iCDJFB9qiQiQh",
-      pro: "price_1T84fNAB1M9iCDJFOKSGuGMI",
-      business: "price_1T84fNAB1M9iCDJFnZCGxkEf",
+      starter: "price_1TDskOAB1M9iCDJF4Lltjn1s",
+      pro: "price_1TDslzAB1M9iCDJFvd8tBxyY",
+      business: "price_1TDsnnAB1M9iCDJFdOJEuZRk",
     };
 
 // =====================
