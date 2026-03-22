@@ -467,10 +467,10 @@ exports.api = onRequest(
     }
 
     // =====================
-    // 2) CREATE CHECKOUT SESSION
-    // POST /create-checkout-session
-    // body: { uid, email, plan }
-    // =====================
+// 2) CREATE CHECKOUT SESSION
+// POST /create-checkout-session
+// body: { uid, email, plan }
+// =====================
 if (method === "POST" && path === "/create-checkout-session") {
   try {
     const body = ensureJsonBody(req);
@@ -514,22 +514,19 @@ if (method === "POST" && path === "/create-checkout-session") {
       return res.status(400).json({ error: "billingReady requis" });
     }
 
-    const existingSubId = String(userData.stripeSubscriptionId || "").trim();
-    if (
-      existingSubId &&
+    const hasSubscription =
+      String(userData.stripeSubscriptionId || "").trim().length > 0 &&
       ["active", "cancel_at_period_end", "suspended"].includes(
         String(userData.subscriptionStatus || "").toLowerCase()
-      )
-    ) {
-      const hasSubscription = String(userData.stripeSubscriptionId || "").trim().length > 0;
+      );
 
-if (hasSubscription) {
-  return res.status(409).json({
-    error: "subscription_exists",
-    subscriptionStatus: userData.subscriptionStatus || null,
-    redirectToPortal: true
-  });
-}
+    if (hasSubscription) {
+      return res.status(409).json({
+        error: "subscription_exists",
+        subscriptionStatus: userData.subscriptionStatus || null,
+        redirectToPortal: true,
+      });
+    }
 
     const emailNorm = normEmail(email || userData.email || "");
 
