@@ -26,8 +26,6 @@ const IS_DEV_PROJECT =
 
 // =====================
 // Stripe price IDs
-// DEV = tes IDs test actuels
-// PROD = à remplir avec tes vrais price_live_...
 // =====================
 const PRICE_IDS = IS_DEV_PROJECT
   ? {
@@ -129,6 +127,7 @@ function getPriceIdForPlan(plan) {
       return null;
   }
 }
+
 function getPlanFromPriceId(priceId) {
   const id = String(priceId || "").trim();
 
@@ -139,11 +138,22 @@ function getPlanFromPriceId(priceId) {
   return "starter";
 }
 
-
 function stripeUnixToTimestamp(unixSeconds) {
   const n = Number(unixSeconds);
   if (!Number.isFinite(n) || n <= 0) return null;
   return admin.firestore.Timestamp.fromMillis(n * 1000);
+}
+
+function getCurrentPeriodEndTimestamp(sub) {
+  const direct = stripeUnixToTimestamp(sub?.current_period_end);
+  if (direct) return direct;
+
+  const itemCurrent = stripeUnixToTimestamp(
+    sub?.items?.data?.[0]?.current_period_end
+  );
+  if (itemCurrent) return itemCurrent;
+
+  return null;
 }
 
 function mapStripeSubscriptionStatus(sub) {
@@ -402,7 +412,7 @@ exports.api = onRequest(
     if (method === "GET" && (path === "/" || path === "")) {
       return res.json({
         ok: true,
-        version: "api-v6",
+        version: "api-v7",
         projectId: PROJECT_ID || null,
         mode: IS_DEV_PROJECT ? "dev" : "prod",
       });
@@ -410,8 +420,6 @@ exports.api = onRequest(
 
     // =====================
     // 1bis) ACTIVATE FREE PLAN
-    // POST /activate-free-plan
-    // body: { uid, email? }
     // =====================
     if (method === "POST" && path === "/activate-free-plan") {
       try {
@@ -451,6 +459,7 @@ exports.api = onRequest(
           maxHomes: 2,
           subscribedAt: admin.firestore.FieldValue.serverTimestamp(),
           stripeSubscriptionId: admin.firestore.FieldValue.delete(),
+          stripeCustomerId: admin.firestore.FieldValue.delete(),
           cancelAtPeriodEnd: false,
           cancelReason: admin.firestore.FieldValue.delete(),
           cancelComment: admin.firestore.FieldValue.delete(),
@@ -477,135 +486,130 @@ exports.api = onRequest(
     }
 
     // =====================
-// 2) CREATE CHECKOUT SESSION
-// POST /create-checkout-session
-// body: { uid, email, plan }
-// =====================
-if (method === "POST" && path === "/create-checkout-session") {
-  try {
-    const body = ensureJsonBody(req);
-    const { uid, plan, email } = body || {};
+    // 2) CREATE CHECKOUT SESSION
+    // =====================
+    if (method === "POST" && path === "/create-checkout-session") {
+      try {
+        const body = ensureJsonBody(req);
+        const { uid, plan, email } = body || {};
 
-    const planNorm = String(plan || "starter").toLowerCase().trim();
-    const priceId = getPriceIdForPlan(planNorm);
+        const planNorm = String(plan || "starter").toLowerCase().trim();
+        const priceId = getPriceIdForPlan(planNorm);
 
-    console.log("🔥 CHECKOUT INPUT", {
-      uid: uid || null,
-      plan: planNorm || null,
-      email: email || null,
-      projectId: PROJECT_ID || null,
-      isDevProject: IS_DEV_PROJECT,
-      priceId: priceId || null,
-      stripeKeyMode: String(stripeKey || "").startsWith("sk_test_") ? "test" : "live",
-    });
+        console.log("🔥 CHECKOUT INPUT", {
+          uid: uid || null,
+          plan: planNorm || null,
+          email: email || null,
+          projectId: PROJECT_ID || null,
+          isDevProject: IS_DEV_PROJECT,
+          priceId: priceId || null,
+          stripeKeyMode: String(stripeKey || "").startsWith("sk_test_") ? "test" : "live",
+        });
 
-    if (!uid || !planNorm || !priceId) {
-      return res.status(400).json({
-        error: "uid et plan valides requis",
-        plan: planNorm || null,
-        mode: IS_DEV_PROJECT ? "dev" : "prod",
-      });
+        if (!uid || !planNorm || !priceId) {
+          return res.status(400).json({
+            error: "uid et plan valides requis",
+            plan: planNorm || null,
+            mode: IS_DEV_PROJECT ? "dev" : "prod",
+          });
+        }
+
+        const userRef = db.collection("users").doc(uid);
+        const userSnap = await userRef.get();
+
+        if (!userSnap.exists) {
+          return res.status(404).json({ error: "user introuvable" });
+        }
+
+        const userData = userSnap.data() || {};
+
+        if (String(userData.role || "").toLowerCase() !== "conciergerie") {
+          return res.status(403).json({ error: "role non autorisé" });
+        }
+
+        if (!userData.billingReady) {
+          return res.status(400).json({ error: "billingReady requis" });
+        }
+
+        const hasSubscription =
+          String(userData.stripeSubscriptionId || "").trim().length > 0 &&
+          ["active", "cancel_at_period_end", "suspended"].includes(
+            String(userData.subscriptionStatus || "").toLowerCase()
+          );
+
+        if (hasSubscription) {
+          return res.status(409).json({
+            error: "subscription_exists",
+            subscriptionStatus: userData.subscriptionStatus || null,
+            redirectToPortal: true,
+          });
+        }
+
+        const emailNorm = normEmail(email || userData.email || "");
+
+        const origin =
+          req.headers.origin && ALLOWED_ORIGINS.includes(req.headers.origin)
+            ? req.headers.origin
+            : "https://cleanup-manager.fr";
+
+        const stripePrice = await stripe.prices.retrieve(priceId);
+        console.log("💰 STRIPE PRICE FOUND", {
+          id: stripePrice?.id || null,
+          active: stripePrice?.active || false,
+          livemode: stripePrice?.livemode || false,
+          currency: stripePrice?.currency || null,
+          recurring: stripePrice?.recurring?.interval || null,
+          product: stripePrice?.product || null,
+        });
+
+        const session = await stripe.checkout.sessions.create({
+          mode: "subscription",
+          line_items: [{ price: priceId, quantity: 1 }],
+          customer_email: emailNorm || undefined,
+          success_url: `${origin}/merci.html?session_id={CHECKOUT_SESSION_ID}`,
+          cancel_url: `${origin}/abonnement.html?cancel=1`,
+          metadata: {
+            uid,
+            plan: planNorm,
+          },
+          subscription_data: {
+            metadata: {
+              uid,
+              plan: planNorm,
+            },
+          },
+        });
+
+        await db.collection("users").doc(uid).set(
+          {
+            lastCheckoutSessionId: session.id,
+            lastCheckoutAt: admin.firestore.FieldValue.serverTimestamp(),
+            stripeCustomerEmail: emailNorm || admin.firestore.FieldValue.delete(),
+          },
+          { merge: true }
+        );
+
+        return res.json({
+          ok: true,
+          url: session.url,
+          mode: session.livemode ? "live" : "test",
+        });
+      } catch (err) {
+        console.error("❌ create-checkout-session error:", {
+          message: err?.message,
+          type: err?.type,
+          rawMessage: err?.raw?.message,
+          code: err?.code,
+          stripeKeyMode: String(stripeKey || "").startsWith("sk_test_") ? "test" : "live",
+          projectId: PROJECT_ID || null,
+          isDevProject: IS_DEV_PROJECT,
+        });
+        return res.status(500).json({ error: "checkout session failed" });
+      }
     }
 
-    const userRef = db.collection("users").doc(uid);
-    const userSnap = await userRef.get();
-
-    if (!userSnap.exists) {
-      return res.status(404).json({ error: "user introuvable" });
-    }
-
-    const userData = userSnap.data() || {};
-
-    if (String(userData.role || "").toLowerCase() !== "conciergerie") {
-      return res.status(403).json({ error: "role non autorisé" });
-    }
-
-    if (!userData.billingReady) {
-      return res.status(400).json({ error: "billingReady requis" });
-    }
-
-    const hasSubscription =
-      String(userData.stripeSubscriptionId || "").trim().length > 0 &&
-      ["active", "cancel_at_period_end", "suspended"].includes(
-        String(userData.subscriptionStatus || "").toLowerCase()
-      );
-
-    if (hasSubscription) {
-      return res.status(409).json({
-        error: "subscription_exists",
-        subscriptionStatus: userData.subscriptionStatus || null,
-        redirectToPortal: true,
-      });
-    }
-
-    const emailNorm = normEmail(email || userData.email || "");
-
-    const origin =
-      req.headers.origin && ALLOWED_ORIGINS.includes(req.headers.origin)
-        ? req.headers.origin
-        : "https://cleanup-manager.fr";
-
-    const basePath = "";
-
-    // Vérif explicite côté Stripe AVANT création session
-    const stripePrice = await stripe.prices.retrieve(priceId);
-    console.log("💰 STRIPE PRICE FOUND", {
-      id: stripePrice?.id || null,
-      active: stripePrice?.active || false,
-      livemode: stripePrice?.livemode || false,
-      currency: stripePrice?.currency || null,
-      recurring: stripePrice?.recurring?.interval || null,
-      product: stripePrice?.product || null,
-    });
-
-    const session = await stripe.checkout.sessions.create({
-      mode: "subscription",
-      line_items: [{ price: priceId, quantity: 1 }],
-      customer_email: emailNorm || undefined,
-      success_url: `${origin}${basePath}/merci.html?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${origin}${basePath}/abonnement.html?cancel=1`,
-      metadata: {
-        uid,
-        plan: planNorm,
-      },
-      subscription_data: {
-        metadata: {
-          uid,
-          plan: planNorm,
-        },
-      },
-    });
-
-    await db.collection("users").doc(uid).set(
-      {
-        lastCheckoutSessionId: session.id,
-        lastCheckoutAt: admin.firestore.FieldValue.serverTimestamp(),
-        stripeCustomerEmail: emailNorm || admin.firestore.FieldValue.delete(),
-      },
-      { merge: true }
-    );
-
-    return res.json({
-      ok: true,
-      url: session.url,
-      mode: session.livemode ? "live" : "test",
-    });
-  } catch (err) {
-    console.error("❌ create-checkout-session error:", {
-      message: err?.message,
-      type: err?.type,
-      rawMessage: err?.raw?.message,
-      code: err?.code,
-      stripeKeyMode: String(stripeKey || "").startsWith("sk_test_") ? "test" : "live",
-      projectId: PROJECT_ID || null,
-      isDevProject: IS_DEV_PROJECT,
-    });
-    return res.status(500).json({ error: "checkout session failed" });
-  }
-}
     // =====================
     // 2bis) READ CHECKOUT SESSION
-    // GET /checkout-session?session_id=cs_...
     // =====================
     if (method === "GET" && path === "/checkout-session") {
       try {
@@ -649,8 +653,6 @@ if (method === "POST" && path === "/create-checkout-session") {
 
     // =====================
     // 2ter) CANCEL SUBSCRIPTION
-    // POST /cancel-subscription
-    // body: { uid, reason, comment? }
     // =====================
     if (method === "POST" && path === "/cancel-subscription") {
       try {
@@ -689,7 +691,7 @@ if (method === "POST" && path === "/create-checkout-session") {
           cancelReason: String(reason || "").trim(),
           cancelComment: String(comment || "").trim(),
           cancelRequestedAt: admin.firestore.FieldValue.serverTimestamp(),
-          currentPeriodEnd: stripeUnixToTimestamp(sub?.current_period_end),
+          currentPeriodEnd: getCurrentPeriodEndTimestamp(sub),
           stripeSubscriptionId: sub.id,
           stripeCustomerId: sub.customer || null,
         });
@@ -712,7 +714,6 @@ if (method === "POST" && path === "/create-checkout-session") {
 
     // =====================
     // 3) STRIPE WEBHOOK
-    // POST /webhook
     // =====================
     if (method === "POST" && path === "/webhook") {
       let event;
@@ -731,188 +732,213 @@ if (method === "POST" && path === "/create-checkout-session") {
         const type = event.type;
         const obj = event.data.object;
 
+        // =====================
         // Checkout validé
-       if (type === "checkout.session.completed") {
-  const session = obj;
-  const uid = session?.metadata?.uid || null;
-  const plan = session?.metadata?.plan || "starter";
-  const email =
-    session?.customer_details?.email || session?.customer_email || null;
+        // =====================
+        if (type === "checkout.session.completed") {
+          const session = obj;
+          const uid = session?.metadata?.uid || null;
+          const plan = session?.metadata?.plan || "starter";
+          const email =
+            session?.customer_details?.email || session?.customer_email || null;
 
-  let stripeSub = null;
-  const stripeSubId = String(session?.subscription || "").trim();
+          let stripeSub = null;
+          const stripeSubId = String(session?.subscription || "").trim();
 
-  if (stripeSubId) {
-    try {
-      stripeSub = await stripe.subscriptions.retrieve(stripeSubId);
-    } catch (e) {
-      console.error("❌ checkout.session.completed subscription retrieve error:", {
-        message: e?.message,
-        code: e?.code,
-        subscriptionId: stripeSubId,
-      });
-    }
-  }
+          if (stripeSubId) {
+            try {
+              stripeSub = await stripe.subscriptions.retrieve(stripeSubId);
+            } catch (e) {
+              console.error("❌ checkout.session.completed subscription retrieve error:", {
+                message: e?.message,
+                code: e?.code,
+                subscriptionId: stripeSubId,
+              });
+            }
+          }
 
-  const appStatus = stripeSub
-    ? mapStripeSubscriptionStatus(stripeSub)
-    : "active";
-
-  await updateUser(uid, {
-    subscriptionStatus: appStatus,
-    subscriptionSource: "stripe",
-    subscribedAt: stripeSub?.created
-      ? stripeUnixToTimestamp(stripeSub.created)
-      : admin.firestore.FieldValue.serverTimestamp(),
-    plan,
-    maxHomes: planToMaxHomes(plan),
-    stripeCustomerId: stripeSub?.customer || session.customer || null,
-    stripeSubscriptionId: stripeSub?.id || session.subscription || null,
-    stripeCustomerEmail: email
-      ? normEmail(email)
-      : admin.firestore.FieldValue.delete(),
-    cancelAtPeriodEnd: stripeSub?.cancel_at_period_end === true,
-    currentPeriodEnd: stripeUnixToTimestamp(stripeSub?.current_period_end),
-    cancelReason: admin.firestore.FieldValue.delete(),
-    cancelComment: admin.firestore.FieldValue.delete(),
-    cancelRequestedAt: admin.firestore.FieldValue.delete(),
-  });
-
-  await rebuildStatsFor(uid);
-}
-
-        // Abonnement créé / modifié / supprimé
-       if (
-  type === "customer.subscription.created" ||
-  type === "customer.subscription.updated" ||
-  type === "customer.subscription.deleted"
-) {
-  const sub = obj;
-
-  let uid = String(sub?.metadata?.uid || "").trim() || null;
-
-  if (!uid && sub?.id) {
-    const found = await findUserBySubscriptionId(sub.id);
-    if (found?.uid) uid = found.uid;
-  }
-
-  if (!uid) {
-    console.error("❌ subscription webhook: uid introuvable", {
-      type,
-      subscriptionId: sub?.id || null,
-      customerId: sub?.customer || null,
-    });
-  } else {
-    let fullSub = sub;
-
-    try {
-      fullSub = await stripe.subscriptions.retrieve(sub.id);
-    } catch (e) {
-      console.error("❌ subscription retrieve error:", {
-        message: e?.message,
-        code: e?.code,
-        subscriptionId: sub?.id || null,
-      });
-    }
-
-    const currentPriceId =
-      fullSub?.items?.data?.[0]?.price?.id ||
-      fullSub?.plan?.id ||
-      null;
-
-    const plan = getPlanFromPriceId(currentPriceId);
-    const appStatus = mapStripeSubscriptionStatus(fullSub);
-
-    await updateUser(uid, {
-      subscriptionStatus: appStatus,
-      subscriptionSource: "stripe",
-      plan,
-      maxHomes: planToMaxHomes(plan),
-      stripeSubscriptionId: fullSub.id,
-      stripeCustomerId: fullSub.customer || null,
-      cancelAtPeriodEnd: fullSub?.cancel_at_period_end === true,
-      currentPeriodEnd: stripeUnixToTimestamp(fullSub?.current_period_end),
-      subscribedAt: fullSub?.created
-        ? stripeUnixToTimestamp(fullSub.created)
-        : admin.firestore.FieldValue.serverTimestamp(),
-    });
-
-    await rebuildStatsFor(uid);
-  }
-}
-        // Paiement réussi
-       if (type === "invoice.payment_succeeded") {
-  const invoice = obj;
-  const subId = invoice.subscription;
-
-  if (subId) {
-    const found = await findUserBySubscriptionId(subId);
-
-    if (found?.uid) {
-      let stripeSub = null;
-      try {
-        stripeSub = await stripe.subscriptions.retrieve(subId);
-      } catch (e) {
-        console.error("❌ invoice.payment_succeeded subscription retrieve error:", {
-          message: e?.message,
-          code: e?.code,
-          subscriptionId: subId,
-        });
-      }
-
-      await found.ref.set(
-        {
-          subscriptionStatus: stripeSub
+          const appStatus = stripeSub
             ? mapStripeSubscriptionStatus(stripeSub)
-            : "active",
-          subscriptionSource: "stripe",
-          cancelAtPeriodEnd: stripeSub?.cancel_at_period_end === true,
-          currentPeriodEnd: stripeUnixToTimestamp(stripeSub?.current_period_end),
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        },
-        { merge: true }
-      );
+            : "active";
 
-      await rebuildStatsFor(found.uid);
-    }
-  }
-}
+          await updateUser(uid, {
+            subscriptionStatus: appStatus,
+            subscriptionSource: "stripe",
+            subscribedAt: stripeSub?.created
+              ? stripeUnixToTimestamp(stripeSub.created)
+              : admin.firestore.FieldValue.serverTimestamp(),
+            plan,
+            maxHomes: planToMaxHomes(plan),
+            stripeCustomerId: stripeSub?.customer || session.customer || null,
+            stripeSubscriptionId: stripeSub?.id || session.subscription || null,
+            stripeCustomerEmail: email
+              ? normEmail(email)
+              : admin.firestore.FieldValue.delete(),
+            cancelAtPeriodEnd: stripeSub?.cancel_at_period_end === true,
+            currentPeriodEnd: getCurrentPeriodEndTimestamp(stripeSub),
+            cancelReason: admin.firestore.FieldValue.delete(),
+            cancelComment: admin.firestore.FieldValue.delete(),
+            cancelRequestedAt: admin.firestore.FieldValue.delete(),
+          });
 
+          await rebuildStatsFor(uid);
+        }
+
+        // =====================
+        // Abonnement créé / modifié / supprimé
+        // =====================
+        if (
+          type === "customer.subscription.created" ||
+          type === "customer.subscription.updated" ||
+          type === "customer.subscription.deleted"
+        ) {
+          const sub = obj;
+
+          let uid = String(sub?.metadata?.uid || "").trim() || null;
+
+          if (!uid && sub?.id) {
+            const found = await findUserBySubscriptionId(sub.id);
+            if (found?.uid) uid = found.uid;
+          }
+
+          if (!uid) {
+            console.error("❌ subscription webhook: uid introuvable", {
+              type,
+              subscriptionId: sub?.id || null,
+              customerId: sub?.customer || null,
+            });
+          } else {
+            let fullSub = sub;
+
+            try {
+              fullSub = await stripe.subscriptions.retrieve(sub.id);
+            } catch (e) {
+              console.error("❌ subscription retrieve error:", {
+                message: e?.message,
+                code: e?.code,
+                subscriptionId: sub?.id || null,
+              });
+            }
+
+            const currentPriceId =
+              fullSub?.items?.data?.[0]?.price?.id ||
+              fullSub?.plan?.id ||
+              null;
+
+            console.log("📅 SUB PERIOD DEBUG", {
+              subscriptionId: fullSub?.id || null,
+              current_period_end: fullSub?.current_period_end || null,
+              item_current_period_end:
+                fullSub?.items?.data?.[0]?.current_period_end || null,
+            });
+
+            const plan = getPlanFromPriceId(currentPriceId);
+            const appStatus = mapStripeSubscriptionStatus(fullSub);
+
+            const updatePayload = {
+              subscriptionStatus: appStatus,
+              subscriptionSource: "stripe",
+              plan,
+              maxHomes: planToMaxHomes(plan),
+              stripeSubscriptionId: fullSub.id,
+              stripeCustomerId: fullSub.customer || null,
+              cancelAtPeriodEnd: fullSub?.cancel_at_period_end === true,
+              currentPeriodEnd: getCurrentPeriodEndTimestamp(fullSub),
+              subscribedAt: fullSub?.created
+                ? stripeUnixToTimestamp(fullSub.created)
+                : admin.firestore.FieldValue.serverTimestamp(),
+            };
+
+            // si abonnement toujours actif / changé d'offre => on nettoie les champs de résiliation
+            if (appStatus === "active") {
+              updatePayload.cancelReason = admin.firestore.FieldValue.delete();
+              updatePayload.cancelComment = admin.firestore.FieldValue.delete();
+              updatePayload.cancelRequestedAt = admin.firestore.FieldValue.delete();
+            }
+
+            await updateUser(uid, updatePayload);
+
+            await rebuildStatsFor(uid);
+          }
+        }
+
+        // =====================
+        // Paiement réussi
+        // =====================
+        if (type === "invoice.payment_succeeded") {
+          const invoice = obj;
+          const subId = invoice.subscription;
+
+          if (subId) {
+            const found = await findUserBySubscriptionId(subId);
+
+            if (found?.uid) {
+              let stripeSub = null;
+              try {
+                stripeSub = await stripe.subscriptions.retrieve(subId);
+              } catch (e) {
+                console.error("❌ invoice.payment_succeeded subscription retrieve error:", {
+                  message: e?.message,
+                  code: e?.code,
+                  subscriptionId: subId,
+                });
+              }
+
+              await found.ref.set(
+                {
+                  subscriptionStatus: stripeSub
+                    ? mapStripeSubscriptionStatus(stripeSub)
+                    : "active",
+                  subscriptionSource: "stripe",
+                  cancelAtPeriodEnd: stripeSub?.cancel_at_period_end === true,
+                  currentPeriodEnd: getCurrentPeriodEndTimestamp(stripeSub),
+                  updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                },
+                { merge: true }
+              );
+
+              await rebuildStatsFor(found.uid);
+            }
+          }
+        }
+
+        // =====================
         // Paiement échoué
+        // =====================
         if (type === "invoice.payment_failed") {
-  const invoice = obj;
-  const subId = invoice.subscription;
+          const invoice = obj;
+          const subId = invoice.subscription;
 
-  if (subId) {
-    const found = await findUserBySubscriptionId(subId);
+          if (subId) {
+            const found = await findUserBySubscriptionId(subId);
 
-    if (found?.uid) {
-      let stripeSub = null;
-      try {
-        stripeSub = await stripe.subscriptions.retrieve(subId);
-      } catch (e) {
-        console.error("❌ invoice.payment_failed subscription retrieve error:", {
-          message: e?.message,
-          code: e?.code,
-          subscriptionId: subId,
-        });
-      }
+            if (found?.uid) {
+              let stripeSub = null;
+              try {
+                stripeSub = await stripe.subscriptions.retrieve(subId);
+              } catch (e) {
+                console.error("❌ invoice.payment_failed subscription retrieve error:", {
+                  message: e?.message,
+                  code: e?.code,
+                  subscriptionId: subId,
+                });
+              }
 
-      await found.ref.set(
-        {
-          subscriptionStatus: "suspended",
-          subscriptionSource: "stripe",
-          cancelAtPeriodEnd: stripeSub?.cancel_at_period_end === true,
-          currentPeriodEnd: stripeUnixToTimestamp(stripeSub?.current_period_end),
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        },
-        { merge: true }
-      );
+              await found.ref.set(
+                {
+                  subscriptionStatus: "suspended",
+                  subscriptionSource: "stripe",
+                  cancelAtPeriodEnd: stripeSub?.cancel_at_period_end === true,
+                  currentPeriodEnd: getCurrentPeriodEndTimestamp(stripeSub),
+                  updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                },
+                { merge: true }
+              );
 
-      await rebuildStatsFor(found.uid);
-    }
-  }
-}
+              await rebuildStatsFor(found.uid);
+            }
+          }
+        }
 
         return res.json({ received: true });
       } catch (err) {
@@ -920,10 +946,9 @@ if (method === "POST" && path === "/create-checkout-session") {
         return res.status(500).json({ error: "Webhook handler failed" });
       }
     }
+
     // =====================
     // 2quater) BILLING PORTAL
-    // POST /create-billing-portal-session
-    // body: { uid }
     // =====================
     if (method === "POST" && path === "/create-billing-portal-session") {
       try {
@@ -981,7 +1006,6 @@ if (method === "POST" && path === "/create-checkout-session") {
       }
     }
 
-    
     // =====================
     // 404
     // =====================
