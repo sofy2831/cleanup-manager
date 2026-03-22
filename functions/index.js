@@ -788,27 +788,46 @@ if (method === "POST" && path === "/create-checkout-session") {
   type === "customer.subscription.deleted"
 ) {
   const sub = obj;
-  const uid = sub?.metadata?.uid || null;
-  const plan = sub?.metadata?.plan || "starter";
-  const appStatus = mapStripeSubscriptionStatus(sub);
 
-  await updateUser(uid, {
-    subscriptionStatus: appStatus,
-    subscriptionSource: "stripe",
-    plan,
-    maxHomes: planToMaxHomes(plan),
-    stripeSubscriptionId: sub.id,
-    stripeCustomerId: sub.customer || null,
-    cancelAtPeriodEnd: sub?.cancel_at_period_end === true,
-    currentPeriodEnd: stripeUnixToTimestamp(sub?.current_period_end),
-    subscribedAt: sub?.created
-      ? stripeUnixToTimestamp(sub.created)
-      : admin.firestore.FieldValue.serverTimestamp(),
-  });
+  let uid = String(sub?.metadata?.uid || "").trim() || null;
 
-  await rebuildStatsFor(uid);
+  if (!uid && sub?.id) {
+    const found = await findUserBySubscriptionId(sub.id);
+    if (found?.uid) uid = found.uid;
+  }
+
+  if (!uid) {
+    console.error("❌ subscription webhook: uid introuvable", {
+      type,
+      subscriptionId: sub?.id || null,
+      customerId: sub?.customer || null,
+    });
+  } else {
+    const currentPriceId =
+      sub?.items?.data?.[0]?.price?.id ||
+      sub?.plan?.id ||
+      null;
+
+    const plan = getPlanFromPriceId(currentPriceId);
+    const appStatus = mapStripeSubscriptionStatus(sub);
+
+    await updateUser(uid, {
+      subscriptionStatus: appStatus,
+      subscriptionSource: "stripe",
+      plan,
+      maxHomes: planToMaxHomes(plan),
+      stripeSubscriptionId: sub.id,
+      stripeCustomerId: sub.customer || null,
+      cancelAtPeriodEnd: sub?.cancel_at_period_end === true,
+      currentPeriodEnd: stripeUnixToTimestamp(sub?.current_period_end),
+      subscribedAt: sub?.created
+        ? stripeUnixToTimestamp(sub.created)
+        : admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    await rebuildStatsFor(uid);
+  }
 }
-
         // Paiement réussi
        if (type === "invoice.payment_succeeded") {
   const invoice = obj;
