@@ -521,11 +521,15 @@ if (method === "POST" && path === "/create-checkout-session") {
         String(userData.subscriptionStatus || "").toLowerCase()
       )
     ) {
-      return res.status(409).json({
-        error: "abonnement déjà existant",
-        subscriptionStatus: userData.subscriptionStatus || null,
-      });
-    }
+      const hasSubscription = String(userData.stripeSubscriptionId || "").trim().length > 0;
+
+if (hasSubscription) {
+  return res.status(409).json({
+    error: "subscription_exists",
+    subscriptionStatus: userData.subscriptionStatus || null,
+    redirectToPortal: true
+  });
+}
 
     const emailNorm = normEmail(email || userData.email || "");
 
