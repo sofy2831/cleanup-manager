@@ -1,4 +1,4 @@
-<!-- docs/conciergerie.html (FINAL — stats + abonnement compact dans Profil conciergerie + résiliation Stripe) -->
+<!-- docs/conciergerie.html (FINAL — stats + abonnement compact + portail Stripe + résiliation Stripe) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -521,6 +521,12 @@
       white-space:nowrap;
     }
 
+    .btn-secondary:disabled{
+      opacity:0.6;
+      pointer-events:none;
+      cursor:default;
+    }
+
     .btn-secondary.danger{
       color:var(--bad);
       border-color:rgba(179,38,30,0.22);
@@ -844,7 +850,7 @@ Une aide dédiée s’y trouve pour te guider pas à pas.
         </div>
 
         <div class="sub-actions">
-         <button class="btn-secondary" id="changeOfferBtn" type="button">Changer d’offre</button>
+          <button class="btn-secondary" id="changeOfferBtn" type="button">Changer d’offre</button>
           <button class="btn-secondary danger" id="openCancelBtn" type="button">Résilier</button>
         </div>
 
@@ -966,6 +972,7 @@ Une aide dédiée s’y trouve pour te guider pas à pas.
     const cancelReason = document.getElementById("cancelReason");
     const cancelComment = document.getElementById("cancelComment");
     const cancelInfoText = document.getElementById("cancelInfoText");
+    const changeOfferBtn = document.getElementById("changeOfferBtn");
 
     const FREE_EMAILS = new Set([
       "mathildeconciergerie45@gmail.com",
@@ -985,6 +992,7 @@ Une aide dédiée s’y trouve pour te guider pas à pas.
       : "https://europe-west1-cleanup-manager-d9301.cloudfunctions.net/api";
 
     let currentUid = "";
+    let currentUserData = null;
 
     function showAlert(msg, ok = false){
       alertBox.style.display = "block";
@@ -1071,40 +1079,34 @@ Une aide dédiée s’y trouve pour te guider pas à pas.
         subNextBilling.textContent = formatDateFR(currentPeriodEnd);
         cancelInfoText.textContent =
           `Votre abonnement restera actif jusqu’au ${formatDateFR(currentPeriodEnd)} puis sera arrêté.`;
+
         openCancelBtn.disabled = true;
         openCancelBtn.textContent = "Déjà résilié";
-        openCancelBtn.style.opacity = "0.6";
-        openCancelBtn.style.pointerEvents = "none";
       }else if(String(status || "").toLowerCase() === "suspended"){
         subPeriodLabel.textContent = "Situation";
         subNextBilling.textContent = "Paiement à régulariser";
+
         openCancelBtn.disabled = true;
         openCancelBtn.textContent = "Abonnement suspendu";
-        openCancelBtn.style.opacity = "0.6";
-        openCancelBtn.style.pointerEvents = "none";
       }else if(String(status || "").toLowerCase() === "cancelled"){
         subPeriodLabel.textContent = "Fin d’accès";
         subNextBilling.textContent = formatDateFR(currentPeriodEnd);
+
         openCancelBtn.disabled = true;
         openCancelBtn.textContent = "Abonnement résilié";
-        openCancelBtn.style.opacity = "0.6";
-        openCancelBtn.style.pointerEvents = "none";
       }else{
         subPeriodLabel.textContent = "Prochain prélèvement";
         subNextBilling.textContent = formatDateFR(currentPeriodEnd);
         cancelInfoText.textContent =
           "Votre abonnement restera actif jusqu’à la fin de la période déjà payée.";
+
         openCancelBtn.disabled = false;
         openCancelBtn.textContent = "Résilier";
-        openCancelBtn.style.opacity = "1";
-        openCancelBtn.style.pointerEvents = "auto";
       }
 
       if(planKey === "free" || !hasStripeSub){
         openCancelBtn.disabled = true;
         openCancelBtn.textContent = "Pas de résiliation";
-        openCancelBtn.style.opacity = "0.6";
-        openCancelBtn.style.pointerEvents = "none";
       }
     }
 
@@ -1142,6 +1144,46 @@ Une aide dédiée s’y trouve pour te guider pas à pas.
     closeCancelBtn.addEventListener("click", () => {
       cancelBox.style.display = "none";
     });
+
+    async function openBillingPortalOrCheckout() {
+      if (!currentUid) return;
+
+      const status = String(currentUserData?.subscriptionStatus || "").toLowerCase();
+      const hasCustomerId = String(currentUserData?.stripeCustomerId || "").trim().length > 0;
+      const hasSubId = String(currentUserData?.stripeSubscriptionId || "").trim().length > 0;
+
+      if (hasCustomerId && hasSubId && ["active", "cancel_at_period_end", "suspended"].includes(status)) {
+        try {
+          changeOfferBtn.disabled = true;
+
+          const res = await fetch(FUNCTIONS_BASE + "/create-billing-portal-session", {
+            method: "POST",
+            headers: { "Content-Type":"application/json" },
+            body: JSON.stringify({ uid: currentUid })
+          });
+
+          const data = await res.json().catch(() => ({}));
+
+          if (!res.ok || !data.url) {
+            showAlert("⛔ Impossible d’ouvrir le portail abonnement.", false);
+            changeOfferBtn.disabled = false;
+            return;
+          }
+
+          location.href = data.url;
+          return;
+        } catch (e) {
+          console.error("billing portal error", e);
+          showAlert("⛔ Erreur réseau vers le portail abonnement.", false);
+          changeOfferBtn.disabled = false;
+          return;
+        }
+      }
+
+      location.href = "abonnement.html";
+    }
+
+    changeOfferBtn.addEventListener("click", openBillingPortalOrCheckout);
 
     confirmCancelBtn.addEventListener("click", async () => {
       if(!currentUid) return;
@@ -1562,6 +1604,8 @@ Une aide dédiée s’y trouve pour te guider pas à pas.
 
       hideAlert();
       await loadCompanyProfile(user.uid);
+
+      currentUserData = guard.data || null;
       renderSubscriptionCompact(guard.data || {});
 
       try{
