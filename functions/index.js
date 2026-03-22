@@ -758,7 +758,7 @@ exports.api = onRequest(
           cancelReason: admin.firestore.FieldValue.delete(),
           cancelComment: admin.firestore.FieldValue.delete(),
           cancelRequestedAt: admin.firestore.FieldValue.delete(),
-          currentPeriodEnd: stripeUnixToTimestamp(sub?.current_period_end),
+          currentPeriodEnd: getCurrentPeriodEndTimestamp(sub),
           stripeSubscriptionId: sub.id,
           stripeCustomerId: sub.customer || null,
         });
