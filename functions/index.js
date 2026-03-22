@@ -129,6 +129,16 @@ function getPriceIdForPlan(plan) {
       return null;
   }
 }
+function getPlanFromPriceId(priceId) {
+  const id = String(priceId || "").trim();
+
+  if (id === PRICE_IDS.starter) return "starter";
+  if (id === PRICE_IDS.pro) return "pro";
+  if (id === PRICE_IDS.business) return "business";
+
+  return "starter";
+}
+
 
 function stripeUnixToTimestamp(unixSeconds) {
   const n = Number(unixSeconds);
