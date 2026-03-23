@@ -29,11 +29,21 @@
     .topbar{
       width:100%; max-width:980px;
       display:flex; justify-content:space-between; align-items:center;
+      gap:10px;
       padding:10px 0;
       position:sticky; top:0; z-index:10;
       background:rgba(248,244,255,.85);
       backdrop-filter:blur(6px);
     }
+
+    .topbar-left,
+    .topbar-right{
+      display:flex;
+      align-items:center;
+      gap:10px;
+      flex-wrap:wrap;
+    }
+
     .pill{
       padding:8px 12px;
       border-radius:999px;
@@ -165,6 +175,16 @@
       color:#fff;
       box-shadow:0 10px 22px rgba(0,0,0,0.10);
     }
+
+    @media(max-width:700px){
+      .topbar{
+        align-items:flex-start;
+      }
+      .topbar-left,
+      .topbar-right{
+        gap:8px;
+      }
+    }
   </style>
 </head>
 
@@ -172,8 +192,14 @@
 <div class="page">
 
   <div class="topbar">
-    <a class="pill" id="profileBtn" href="profil-proprietaire.html?self=1">Mon profil</a>
-    <button class="pill" id="logoutBtn" type="button">Déconnexion</button>
+    <div class="topbar-left">
+      <a class="pill" id="profileBtn" href="profil-proprietaire.html?self=1">Mon profil</a>
+      <a class="pill" id="supportBtn" href="#">Support</a>
+    </div>
+
+    <div class="topbar-right">
+      <button class="pill" id="logoutBtn" type="button">Déconnexion</button>
+    </div>
   </div>
 
   <div class="hero">
@@ -228,6 +254,7 @@
   const countBill = document.getElementById("countBill");
 
   const profileBtn = document.getElementById("profileBtn");
+  const supportBtn = document.getElementById("supportBtn");
   const homesLink = document.getElementById("homesLink");
   const planningLink = document.getElementById("planningLink");
   const messagesLink = document.getElementById("messagesLink");
@@ -270,6 +297,12 @@
   let lastUnreadMsg = 0;
   let lastSalesDocsCount = 0;
   let lastOwnerStatementsCount = 0;
+
+  let currentOwnerName = "";
+  let currentUserEmail = "";
+  let currentConciergerieName = "";
+  let currentConciergerieUid = "";
+  let currentOwnerDocId = "";
 
   function setCount(el, n){
     const v = Number(n || 0);
@@ -326,6 +359,56 @@
     const ownerDocId = String(userDoc?.ownerDocId || "").trim();
     const conciergerieUid = String(userDoc?.conciergerieUid || "").trim();
     return { ok: !!(ownerDocId && conciergerieUid), ownerDocId, conciergerieUid };
+  }
+
+  function buildSupportMailto(){
+    const subject = "CleanUp Manager - Support propriétaire";
+
+    const body = `Bonjour,
+
+Propriétaire : ${currentOwnerName || ""}
+Email du compte : ${currentUserEmail || ""}
+Conciergerie : ${currentConciergerieName || ""}
+Type de demande :
+[ ] Bug
+[ ] Question
+[ ] Facturation
+[ ] Autre
+
+Problème rencontré :
+-
+
+Action effectuée :
+-
+
+Vous pouvez joindre des captures d’écran ou des photos à votre email.
+`;
+
+    return `mailto:contact@cleanup-manager.fr?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  }
+
+  function refreshSupportLink(){
+    supportBtn.href = buildSupportMailto();
+  }
+
+  async function loadConciergerieName(conciergerieUid){
+    try{
+      if(!conciergerieUid){
+        currentConciergerieName = "";
+        refreshSupportLink();
+        return;
+      }
+
+      const snap = await getDoc(doc(db, "users", conciergerieUid));
+      const data = snap.exists() ? (snap.data() || {}) : {};
+      currentConciergerieName = String(
+        data?.businessProfile?.companyName || data?.companyName || ""
+      ).trim();
+      refreshSupportLink();
+    }catch(_){
+      currentConciergerieName = "";
+      refreshSupportLink();
+    }
   }
 
   function startUnreadThreadsListener(ownerUid, conciergerieUid){
@@ -410,6 +493,7 @@
   });
 
   refreshBadges();
+  refreshSupportLink();
 
   onAuthStateChanged(auth, async (user)=>{
     if(!user){
@@ -441,7 +525,15 @@
       if(!name){
         name = user.email || "Propriétaire";
       }
+
+      currentOwnerName = name;
+      currentUserEmail = String(user.email || "").trim();
+      currentConciergerieUid = String(link.conciergerieUid || "").trim();
+      currentOwnerDocId = String(link.ownerDocId || "").trim();
+
       ownerNameLine.textContent = "Bonjour et bienvenue " + name;
+      refreshSupportLink();
+      loadConciergerieName(currentConciergerieUid);
 
       startUnreadThreadsListener(user.uid, link.conciergerieUid);
       startBillingBadge(user.uid, link.conciergerieUid);
