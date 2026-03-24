@@ -184,7 +184,7 @@
     .small{
       font-size:12px;
       color:#666;
-      line-height:1.35;
+      line-height:1.45;
       margin-top:8px;
     }
 
@@ -198,6 +198,33 @@
       color:#333;
       display:none;
       white-space:pre-wrap;
+    }
+
+    .help-box{
+      margin-top:12px;
+      background:rgba(243,236,255,.65);
+      border:1px solid rgba(122,92,255,.18);
+      border-radius:14px;
+      padding:12px;
+      font-size:12px;
+      color:#333;
+      line-height:1.45;
+    }
+    .help-box b{ color:#111; }
+    .help-box ul{
+      margin:8px 0 0 18px;
+      padding:0;
+    }
+    .help-box li+li{ margin-top:6px; }
+    .codeish{
+      display:inline-block;
+      padding:2px 6px;
+      border-radius:8px;
+      background:#fff;
+      border:1px solid rgba(0,0,0,.08);
+      font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size:11px;
+      color:#111;
     }
   </style>
 </head>
@@ -220,7 +247,7 @@
 
     <div class="card">
       <div class="small">
-        Objectif : importer les réservations (Airbnb/Booking/Google Calendar) pour alimenter le planning.
+        Objectif : importer les réservations (Airbnb / Booking / autres plateformes) pour alimenter le planning.
         <br>Les données sont stockées dans <b>icalEvents</b> et visibles dans le Planning.
         <br><b>Important :</b> seul le compte conciergerie peut importer.
       </div>
@@ -249,7 +276,19 @@
       <div class="preview" id="previewBox"></div>
 
       <div class="small" id="icalHint">
-        Colle le lien iCal de la plateforme de réservation du logement.
+        Colle le lien iCal du logement.
+        <br>👉 Le lien doit commencer par <span class="codeish">https://</span>
+        <br>👉 Un fichier <span class="codeish">.ics</span> téléchargé ne permet pas une synchronisation automatique.
+      </div>
+
+      <div class="help-box">
+        <b>Comment récupérer le bon lien iCal ?</b>
+        <ul>
+          <li><b>Airbnb</b> : Annonce → Disponibilité / Calendrier → Synchroniser les calendriers → Exporter le calendrier → copier le lien iCal</li>
+          <li><b>Booking</b> : Extranet → Calendrier / Tarifs et disponibilités → Synchronisation calendrier → Exporter → copier le lien iCal</li>
+          <li>Le bon lien est un lien internet qui commence par <span class="codeish">https://</span> ou parfois <span class="codeish">webcal://</span></li>
+          <li>Si vous avez seulement un fichier <span class="codeish">.ics</span>, ce n’est pas suffisant pour une mise à jour automatique.</li>
+        </ul>
       </div>
     </div>
   </div>
@@ -301,22 +340,20 @@
     location.hostname.includes("localhost") ||
     location.hostname.includes("127.0.0.1");
 
-    const DEFAULT_ICAL = location.origin + "/test.ics";
+  const DEFAULT_ICAL = location.origin + "/test.ics";
 
- 
   if(IS_DEV_HOST && !icalUrlEl.value){
     icalUrlEl.value = DEFAULT_ICAL;
   }
 
   if(icalHint){
     if(IS_DEV_HOST){
-      icalHint.innerHTML = 'Astuce test : <span style="font-weight:900;">ton iCal de test</span> est pré-rempli.';
-    } else {
-      icalHint.textContent = "Colle le lien iCal de la plateforme de réservation du logement.";
+      icalHint.innerHTML =
+        'Astuce test : <span style="font-weight:900;">ton iCal de test</span> est pré-rempli.' +
+        '<br>En production, colle uniquement un vrai lien iCal qui commence par <span class="codeish">https://</span>.';
     }
   }
 
-  
   function pad2(n){ return n < 10 ? "0"+n : ""+n; }
   function dateKeyFromDate(d){ return d.getFullYear()+"-"+pad2(d.getMonth()+1)+"-"+pad2(d.getDate()); }
   function timeFromDate(d){ return pad2(d.getHours()) + ":" + pad2(d.getMinutes()); }
@@ -407,6 +444,63 @@
     return events.filter(e => e.start instanceof Date && !isNaN(e.start));
   }
 
+  function normalizeAndValidateIcalUrl(raw){
+    let value = String(raw || "").trim();
+
+    if(!value){
+      return { ok:false, message:"Colle un lien iCal." };
+    }
+
+    // Cas fréquent : un utilisateur colle juste le nom du fichier
+    if (/\.ics$/i.test(value) && !/^https?:\/\//i.test(value) && !/^webcal:\/\//i.test(value)) {
+      return {
+        ok:false,
+        message:
+`Ce que tu as collé ressemble à un fichier .ics, pas à un lien iCal.
+
+Pour une synchronisation automatique, il faut un lien internet qui commence par https://
+Exemple attendu : https://...
+
+Un fichier .ics téléchargé ne suffit pas.`
+      };
+    }
+
+    // Accepter webcal:// mais le convertir proprement
+    if(/^webcal:\/\//i.test(value)){
+      value = value.replace(/^webcal:\/\//i, "https://");
+    }
+
+    if(!/^https:\/\//i.test(value)){
+      return {
+        ok:false,
+        message:
+`Lien iCal invalide.
+
+Le lien doit commencer par https://
+Exemple attendu : https://...
+
+Si tu as reçu un fichier .ics ou une pièce jointe, ce n’est pas le bon format pour une synchronisation automatique.`
+      };
+    }
+
+    try{
+      const u = new URL(value);
+      if(u.protocol !== "https:"){
+        return {
+          ok:false,
+          message:"Le lien iCal doit commencer par https://"
+        };
+      }
+    }catch{
+      return {
+        ok:false,
+        message:"Lien iCal invalide. Vérifie le format du lien."
+      };
+    }
+
+    return { ok:true, url:value };
+  }
+
   async function fetchIcs(url){
     const res = await fetch(url, { cache: "no-store" });
     if(!res.ok) throw new Error("HTTP " + res.status);
@@ -444,7 +538,6 @@
     return out;
   }
 
-  // ===== Data =====
   let currentUser = null;
   let homes = [];
   let homesById = new Map();
@@ -504,16 +597,20 @@
     hideAlert();
   });
 
-  // ===== Actions =====
   testBtn.addEventListener("click", async ()=>{
     hideAlert();
     hidePreview();
 
     const home = getSelectedHome();
-    const url = (icalUrlEl.value || "").trim();
+    const rawUrl = icalUrlEl.value;
 
     if(!home) return showAlert("Choisis un logement.");
-    if(!url) return showAlert("Colle un lien iCal.");
+
+    const check = normalizeAndValidateIcalUrl(rawUrl);
+    if(!check.ok) return showAlert(check.message);
+
+    const url = check.url;
+    icalUrlEl.value = url;
 
     lockButtons(true);
     try{
@@ -542,11 +639,16 @@
     hidePreview();
 
     const home = getSelectedHome();
-    const url = (icalUrlEl.value || "").trim();
+    const rawUrl = icalUrlEl.value;
 
     if(!currentUser) return showAlert("Pas connecté.");
     if(!home) return showAlert("Choisis un logement.");
-    if(!url) return showAlert("Colle un lien iCal.");
+
+    const check = normalizeAndValidateIcalUrl(rawUrl);
+    if(!check.ok) return showAlert(check.message);
+
+    const url = check.url;
+    icalUrlEl.value = url;
 
     lockButtons(true);
 
@@ -593,7 +695,6 @@
 
         if(e.end instanceof Date && !isNaN(e.end)){
           if(isAllDayRaw(e.dtendRaw)){
-            // DTEND date-only = date de départ (exclusive dans Ical)
             departureDateKey = dateKeyFromDate(e.end);
             departureTime = "10:00";
           }else{
