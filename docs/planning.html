@@ -1,4 +1,4 @@
-<!-- docs/planning.html (FINAL — missionQueue + missionDetail + validation par mission + event opStatus synthétique + facture depuis event/interventions) -->
+<!-- docs/planning.html (FINAL — missionQueue + missionDetail + validation par mission + event opStatus synthétique + facture depuis event/interventions + loader validation) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -344,11 +344,15 @@
       background: linear-gradient(90deg, rgba(255,140,0,0.14), rgba(255,255,255,1) 55%);
       border-left: 6px solid rgba(255,140,0,0.50);
       cursor:pointer;
-      transition: transform .06s ease, box-shadow .10s ease;
+      transition: transform .06s ease, box-shadow .10s ease, opacity .15s ease;
     }
     .item.validateMissionRow:hover{
       transform: translateY(-1px);
       box-shadow: 0 18px 34px rgba(0,0,0,0.10);
+    }
+    .item.validating{
+      opacity:.72;
+      pointer-events:none;
     }
 
     .iMain{ min-width:0; flex:1; }
@@ -364,6 +368,29 @@
       font-size:12px; font-weight:800; color:#666;
       white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
       max-width: 980px;
+    }
+
+    .validateProgress{
+      margin-top:10px;
+      width:100%;
+      height:6px;
+      border-radius:999px;
+      background:rgba(122,92,255,0.10);
+      overflow:hidden;
+      border:1px solid rgba(122,92,255,0.12);
+    }
+
+    .validateProgressBar{
+      width:40%;
+      height:100%;
+      border-radius:999px;
+      background:linear-gradient(90deg,var(--violet-main),var(--violet-dark));
+      animation: validateBarMove 1s linear infinite;
+    }
+
+    @keyframes validateBarMove{
+      0%   { transform:translateX(-120%); }
+      100% { transform:translateX(320%); }
     }
 
     .actionsRow{
@@ -1635,6 +1662,21 @@ La prestation passe en “RÉALISÉE” seulement quand toutes les missions envo
     if(!row?.eventId || !row?.missionId || !row?.queueId) return;
     hideAlert();
 
+    const btnEl = document.querySelector(`[data-validate-mission="${CSS.escape(row.queueId)}"]`);
+    const rowEl = btnEl?.closest(".item");
+    const progressEl = document.querySelector(`[data-progress-wrap="${CSS.escape(row.queueId)}"]`);
+
+    if(rowEl) rowEl.classList.add("validating");
+    if(progressEl) progressEl.style.display = "block";
+
+    if(btnEl){
+      btnEl.disabled = true;
+      const txt = btnEl.querySelector(".txt");
+      const ico = btnEl.querySelector(".ico");
+      if(txt) txt.textContent = "Validation...";
+      if(ico) ico.textContent = "⏳";
+    }
+
     try{
       await updateDoc(doc(db, "events", row.eventId, "missions", row.missionId), {
         status: "VALIDEE",
@@ -1662,6 +1704,18 @@ La prestation passe en “RÉALISÉE” seulement quand toutes les missions envo
 
     }catch(err){
       console.error(err);
+
+      if(rowEl) rowEl.classList.remove("validating");
+      if(progressEl) progressEl.style.display = "none";
+
+      if(btnEl){
+        btnEl.disabled = false;
+        const txt = btnEl.querySelector(".txt");
+        const ico = btnEl.querySelector(".ico");
+        if(txt) txt.textContent = "Valider";
+        if(ico) ico.textContent = "✅";
+      }
+
       showAlert("Erreur validation mission : " + (err?.message || "inconnue"));
     }
   }
@@ -1948,6 +2002,10 @@ La prestation passe en “RÉALISÉE” seulement quand toutes les missions envo
           <div class="iTitle">${esc(title)}</div>
           <div class="iSub">${esc(`Mission technique : ${row.missionLabel} • Détail mission : ${detailLine}`)}</div>
           <div class="iSub">${esc(`Date : ${dateLine} • Agent : ${agent}`)}</div>
+
+          <div class="validateProgress" data-progress-wrap="${esc(row.queueId)}" style="display:none;">
+            <div class="validateProgressBar"></div>
+          </div>
 
           <div class="actionsRow">
             <button class="mini" type="button" data-validate-mission="${esc(row.queueId)}" title="Valider">
