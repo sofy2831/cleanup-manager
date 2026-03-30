@@ -21,7 +21,7 @@ const PROJECT_ID =
 
 const IS_DEV_PROJECT =
   PROJECT_ID === "cleanup-manager-dev" ||
-  PROJECT_ID === "cleanup-manager-d9301-a44f1" ||
+  PROJECT_ID === "cleanup-manager-d9301" ||
   PROJECT_ID.includes("-dev");
 
 // =====================
