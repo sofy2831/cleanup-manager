@@ -287,7 +287,7 @@
           <li><b>Airbnb</b> : Annonce → Disponibilité / Calendrier → Synchroniser les calendriers → Exporter le calendrier → copier le lien iCal</li>
           <li><b>Booking</b> : Extranet → Calendrier / Tarifs et disponibilités → Synchronisation calendrier → Exporter → copier le lien iCal</li>
           <li>Le bon lien est un lien internet qui commence par <span class="codeish">https://</span> ou parfois <span class="codeish">webcal://</span></li>
-          <li>CleanUp n'accepte pas les fichiers <span class="codeish">.ics</span>, pour la synchronisation automatique.</li>
+          <li>CleanUp n'accepte pas les fichiers <span class="codeish">.ics</span> pour la synchronisation automatique.</li>
         </ul>
       </div>
     </div>
@@ -346,13 +346,11 @@
     icalUrlEl.value = DEFAULT_ICAL;
   }
 
-  if(icalHint){
-    if(IS_DEV_HOST){
-      icalHint.innerHTML =
-        
-        '<br>Colle uniquement un vrai lien iCal qui commence par <span class="codeish">https://</span>.';
-    }
-  }
+ if(icalHint && IS_DEV_HOST){
+  icalHint.innerHTML =
+    'Environnement de test détecté.' +
+    '<br>Colle uniquement un vrai lien iCal qui commence par <span class="codeish">https://</span>.';
+}
 
   function pad2(n){ return n < 10 ? "0"+n : ""+n; }
   function dateKeyFromDate(d){ return d.getFullYear()+"-"+pad2(d.getMonth()+1)+"-"+pad2(d.getDate()); }
@@ -508,11 +506,24 @@ Si tu as reçu un fichier .ics ou une pièce jointe, ce n’est pas le bon forma
     return { ok:true, url:value };
   }
 
-  async function fetchIcs(url){
-    const res = await fetch(url, { cache: "no-store" });
-    if(!res.ok) throw new Error("HTTP " + res.status);
-    return await res.text();
+ async function fetchIcs(url){
+  const proxyUrl = "https://europe-west1-cleanup-manager-d9301.cloudfunctions.net/fetchIcal";
+  const res = await fetch(
+    proxyUrl + "?url=" + encodeURIComponent(url),
+    { cache: "no-store" }
+  );
+
+  if(!res.ok){
+    let msg = "Erreur iCal";
+    try{
+      const data = await res.json();
+      msg = data.error || msg;
+    }catch{}
+    throw new Error(msg);
   }
+
+  return await res.text();
+}
 
   function lockButtons(locked){
     [testBtn, syncBtn].forEach(b=>{
@@ -763,7 +774,8 @@ Si tu as reçu un fichier .ics ou une pièce jointe, ce n’est pas le bon forma
 
     }catch(err){
       console.error(err);
-      showAlert("Erreur sync : " + (err?.message || "inconnue"));
+      const msg = String(err?.message || "");
+showAlert("Erreur sync : " + (msg || "inconnue"));
     }finally{
       lockButtons(false);
     }

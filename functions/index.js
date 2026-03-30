@@ -21,7 +21,7 @@ const PROJECT_ID =
 
 const IS_DEV_PROJECT =
   PROJECT_ID === "cleanup-manager-dev" ||
-  PROJECT_ID === "cleanup-manager-d9301-a44f1" ||
+  PROJECT_ID === "cleanup-manager-d9301" ||
   PROJECT_ID.includes("-dev");
 
 // =====================
@@ -351,6 +351,68 @@ exports.onAgentWrite = onDocumentWritten(
     if (afterUid) uids.add(afterUid);
 
     await Promise.all([...uids].map((uid) => rebuildStatsFor(uid)));
+  }
+);
+
+// =====================
+// iCal fetch proxy
+// =====================
+exports.fetchIcal = onRequest(
+  {
+    region: "europe-west1",
+    cors: true,
+    timeoutSeconds: 60,
+    memory: "256MiB",
+  },
+  async (req, res) => {
+    try {
+      let url = String(req.query.url || "").trim();
+
+      if (!url) {
+        return res.status(400).json({ error: "URL iCal manquante" });
+      }
+
+      if (/^webcal:\/\//i.test(url)) {
+        url = url.replace(/^webcal:\/\//i, "https://");
+      }
+
+      if (!/^https:\/\//i.test(url)) {
+        return res.status(400).json({
+          error: "Le lien doit commencer par https://"
+        });
+      }
+
+      const response = await fetch(url, {
+        method: "GET",
+        headers: {
+          "User-Agent": "CleanUpManager/1.0",
+          "Accept": "text/calendar,text/plain,*/*"
+        }
+      });
+
+      if (!response.ok) {
+        return res.status(response.status).json({
+          error: `Lecture iCal impossible (HTTP ${response.status})`
+        });
+      }
+
+      const text = await response.text();
+
+      if (!text.includes("BEGIN:VCALENDAR")) {
+        return res.status(400).json({
+          error: "Le contenu récupéré n'est pas un iCal valide"
+        });
+      }
+
+      res.set("Content-Type", "text/plain; charset=utf-8");
+      return res.status(200).send(text);
+
+    } catch (error) {
+      console.error("fetchIcal error:", error);
+      return res.status(500).json({
+        error: "Impossible de récupérer le lien iCal"
+      });
+    }
   }
 );
 
