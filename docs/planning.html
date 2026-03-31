@@ -1,4 +1,3 @@
-<!-- docs/planning.html (FINAL V2 — desktop propre + calendrier compact + recherche + filtre + vue liste) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -270,11 +269,11 @@
 
     .filtersRow{
       display:grid;
-      grid-template-columns:minmax(0,1fr) 170px;
+      grid-template-columns:minmax(0,1fr) 170px 220px 220px;
       gap:8px;
     }
 
-    .planningSearch, .planningFilter{
+    .planningSearch, .planningFilter, .homeFilter, .ownerFilter{
       height:44px;
       border-radius:14px;
       border:1px solid rgba(0,0,0,0.08);
@@ -670,14 +669,16 @@
       }
     }
 
+    @media(max-width:980px){
+      .filtersRow{
+        grid-template-columns:1fr;
+      }
+    }
+
     @media(max-width:820px){
       .mini .txt{ display:none; }
       .mini .ico{ display:inline; }
       .mini{ padding:10px 10px; min-width:44px; height:44px; }
-
-      .filtersRow{
-        grid-template-columns:1fr;
-      }
     }
 
     @media(max-width:520px){
@@ -788,6 +789,12 @@ La prestation passe en “RÉALISÉE” seulement quand toutes les missions envo
                 <option value="PRESTA">Prestations</option>
                 <option value="VALIDER">À valider</option>
               </select>
+              <select id="homeFilter" class="homeFilter">
+                <option value="">Tous les logements</option>
+              </select>
+              <select id="ownerFilter" class="ownerFilter">
+                <option value="">Tous les propriétaires</option>
+              </select>
             </div>
           </div>
 
@@ -862,8 +869,7 @@ La prestation passe en “RÉALISÉE” seulement quand toutes les missions envo
       <div class="modalFoot" id="eventModalFoot"></div>
     </div>
   </div>
-
-<script type="module">
+  <script type="module">
   import { auth, db } from "./firebase-init.js";
   import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
   import {
@@ -890,6 +896,8 @@ La prestation passe en “RÉALISÉE” seulement quand toutes les missions envo
 
   const planningSearch = document.getElementById("planningSearch");
   const planningFilter = document.getElementById("planningFilter");
+  const homeFilter = document.getElementById("homeFilter");
+  const ownerFilter = document.getElementById("ownerFilter");
   const viewCalendarBtn = document.getElementById("viewCalendarBtn");
   const viewListBtn = document.getElementById("viewListBtn");
   const calendarPanel = document.getElementById("calendarPanel");
@@ -1386,6 +1394,8 @@ La prestation passe en “RÉALISÉE” seulement quand toutes les missions envo
   let currentView = "CALENDAR";
   let searchText = "";
   let filterMode = "ALL";
+  let selectedHomeId = "";
+  let selectedOwner = "";
 
   function monthRangeKeys(y, m){
     const start = new Date(y, m, 1);
@@ -1605,6 +1615,7 @@ La prestation passe en “RÉALISÉE” seulement quand toutes les missions envo
         homeCity: String(qd.homeCity || "").trim(),
         homeAddress: String(qd.homeAddress || "").trim(),
         homeZip: String(qd.homeZip || "").trim(),
+        ownerName: String(qd.ownerName || ev?.ownerName || "").trim(),
         event: ev || null
       });
     }
@@ -1737,6 +1748,66 @@ La prestation passe en “RÉALISÉE” seulement quand toutes les missions envo
     await loadMissionQueueForMonth();
   }
 
+  function populateFilterSelects(){
+    const homesMap = new Map();
+    const ownersMap = new Map();
+
+    for(const b of allBookings){
+      if(b.homeId && b.homeName) homesMap.set(b.homeId, b.homeName);
+      if(b.ownerName) ownersMap.set(b.ownerName, b.ownerName);
+    }
+    for(const ev of allEvents){
+      if(ev.homeId && ev.homeName) homesMap.set(ev.homeId, ev.homeName);
+      if(ev.ownerName) ownersMap.set(ev.ownerName, ev.ownerName);
+    }
+    for(const row of toValidate){
+      const hid = String(row.homeId || row.event?.homeId || "");
+      const hname = String(row.homeName || row.event?.homeName || "");
+      const oname = String(row.ownerName || row.event?.ownerName || "");
+      if(hid && hname) homesMap.set(hid, hname);
+      if(oname) ownersMap.set(oname, oname);
+    }
+
+    const prevHome = selectedHomeId;
+    const prevOwner = selectedOwner;
+
+    homeFilter.innerHTML = `<option value="">Tous les logements</option>`;
+    Array.from(homesMap.entries())
+      .sort((a,b)=> String(a[1]).localeCompare(String(b[1]), "fr"))
+      .forEach(([id, name])=>{
+        const opt = document.createElement("option");
+        opt.value = id;
+        opt.textContent = name;
+        homeFilter.appendChild(opt);
+      });
+
+    ownerFilter.innerHTML = `<option value="">Tous les propriétaires</option>`;
+    Array.from(ownersMap.keys())
+      .sort((a,b)=> String(a).localeCompare(String(b), "fr"))
+      .forEach(name=>{
+        const opt = document.createElement("option");
+        opt.value = name;
+        opt.textContent = name;
+        ownerFilter.appendChild(opt);
+      });
+
+    if(prevHome && homesMap.has(prevHome)){
+      selectedHomeId = prevHome;
+      homeFilter.value = prevHome;
+    }else{
+      selectedHomeId = "";
+      homeFilter.value = "";
+    }
+
+    if(prevOwner && ownersMap.has(prevOwner)){
+      selectedOwner = prevOwner;
+      ownerFilter.value = prevOwner;
+    }else{
+      selectedOwner = "";
+      ownerFilter.value = "";
+    }
+  }
+
   function matchesSearch(parts){
     if(!searchText) return true;
     return normTxt(parts.filter(Boolean).join(" ")).includes(normTxt(searchText));
@@ -1744,6 +1815,9 @@ La prestation passe en “RÉALISÉE” seulement quand toutes les missions envo
 
   function bookingPasses(b){
     if(filterMode === "PRESTA" || filterMode === "VALIDER") return false;
+    if(selectedHomeId && String(b.homeId || "") !== selectedHomeId) return false;
+    if(selectedOwner && String(b.ownerName || "") !== selectedOwner) return false;
+
     return matchesSearch([
       b.homeName, b.homeCity, b.homeZip, b.homeAddress,
       b.ownerName, b.ownerEmail, b.ownerPhone, b.meta
@@ -1752,6 +1826,9 @@ La prestation passe en “RÉALISÉE” seulement quand toutes les missions envo
 
   function eventPasses(ev){
     if(filterMode === "RESA" || filterMode === "VALIDER") return false;
+    if(selectedHomeId && String(ev.homeId || "") !== selectedHomeId) return false;
+    if(selectedOwner && String(ev.ownerName || "") !== selectedOwner) return false;
+
     return matchesSearch([
       ev.homeName, ev.homeCity, ev.homeZip, ev.homeAddress,
       ev.ownerName, ev.ownerEmail, ev.ownerPhone,
@@ -1761,10 +1838,17 @@ La prestation passe en “RÉALISÉE” seulement quand toutes les missions envo
 
   function validatePasses(row){
     if(filterMode === "RESA" || filterMode === "PRESTA") return false;
+
+    const rowHomeId = String(row.homeId || row.event?.homeId || "");
+    const rowOwner = String(row.ownerName || row.event?.ownerName || "");
+
+    if(selectedHomeId && rowHomeId !== selectedHomeId) return false;
+    if(selectedOwner && rowOwner !== selectedOwner) return false;
+
     return matchesSearch([
       row.homeName, row.homeCity, row.homeAddress,
       row.assignedToName, row.assignedToEmail,
-      row.missionLabel, row.missionDetail
+      row.missionLabel, row.missionDetail, rowOwner
     ]);
   }
 
@@ -1930,31 +2014,24 @@ La prestation passe en “RÉALISÉE” seulement quand toutes les missions envo
         type: "INVOICE",
         docType: "INVOICE_EVENT",
         listable: true,
-
         sourceKind: "EVENT",
         sourceEventId: ev.id,
-
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
-
         invoiceStatus: "DRAFT",
         commercialStatus: "FACTURE",
         commercialUpdatedAt: serverTimestamp(),
-
         homeId: ev.homeId || "",
         homeName: ev.homeName || "",
         homeAddress: ev.homeAddress || "",
         homeZip: ev.homeZip || "",
         homeCity: ev.homeCity || "",
-
         arrivalDateKey: ev.arrivalDateKey || "",
         departureDateKey: ev.departureDateKey || "",
-
         clientName: ev.ownerName || "",
         clientEmail: ev.ownerEmail || "",
         clientPhone: ev.ownerPhone || "",
         clientOwnerDocId: ev.ownerDocId || null,
-
         ownerName: ev.ownerName || "",
         ownerEmail: ev.ownerEmail || "",
         ownerPhone: ev.ownerPhone || "",
@@ -1963,9 +2040,7 @@ La prestation passe en “RÉALISÉE” seulement quand toutes les missions envo
         ownerZip: ev.ownerZip || "",
         ownerCity: ev.ownerCity || "",
         ownerCountry: ev.ownerCountry || "FR",
-
         lines,
-
         totalHT: Number(totals.ht) || 0,
         totalTVA: 0,
         totalTTC: Number(totals.ttc) || 0
@@ -2421,6 +2496,7 @@ La prestation passe en “RÉALISÉE” seulement quand toutes les missions envo
             <span class="badge">Réservation</span>
           </div>
           <div class="iTitle">${esc(title)}</div>
+          <div class="iSub">${esc(periodLabel(b))}</div>
 
           <div class="actionsSplit">
             <div class="leftSide">
@@ -2465,7 +2541,6 @@ La prestation passe en “RÉALISÉE” seulement quand toutes les missions envo
 
         const params = new URLSearchParams();
         params.set("homeId", b.homeId);
-
         params.set("from", "ical");
         params.set("icalEventId", b.id);
         params.set("dateKey", selectedDateKey);
@@ -2679,6 +2754,7 @@ La prestation passe en “RÉALISÉE” seulement quand toutes les missions envo
   }
 
   function renderAll(){
+    populateFilterSelects();
     renderToValidate();
     renderCalendar();
     renderMainPanel();
@@ -2776,6 +2852,16 @@ La prestation passe en “RÉALISÉE” seulement quand toutes les missions envo
 
   planningFilter.addEventListener("change", ()=>{
     filterMode = planningFilter.value || "ALL";
+    renderAll();
+  });
+
+  homeFilter.addEventListener("change", ()=>{
+    selectedHomeId = homeFilter.value || "";
+    renderAll();
+  });
+
+  ownerFilter.addEventListener("change", ()=>{
+    selectedOwner = ownerFilter.value || "";
     renderAll();
   });
 
