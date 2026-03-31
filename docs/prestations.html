@@ -921,6 +921,11 @@
       return !!id && id !== "PHOTOS";
     }
 
+    function isBusinessMissionId(missionId){
+      const x = String(missionId || "").toUpperCase().trim();
+      return ["CHECKIN","MENAGE","CHECKOUT","LINGE","MAINTENANCE","KITS"].includes(x);
+    }
+
     function missionLabelFromId(missionId){
       const x = String(missionId || "").toUpperCase().trim();
       if(x === "CHECKIN") return "Arrivée";
@@ -1147,6 +1152,23 @@
       ));
     }
 
+    function sumMissionPhotosByIntervention(it, key){
+      const photoCounts = it?.photoCounts || {};
+      if(key === "arrival"){
+        return Number(photoCounts.CHECKIN || 0);
+      }
+      if(key === "midstay"){
+        return Number(photoCounts.MENAGE || 0) + Number(photoCounts.LINGE || 0) + Number(photoCounts.KITS || 0);
+      }
+      if(key === "departure"){
+        return Number(photoCounts.CHECKOUT || 0);
+      }
+      if(key === "other"){
+        return Number(photoCounts.MAINTENANCE || 0);
+      }
+      return 0;
+    }
+
     function normalizeForSearch(d){
       const iv = d.interventions || {};
       const labels = interventionKeys()
@@ -1167,6 +1189,14 @@
         labels, notes
       ];
       return normTxt(parts.filter(Boolean).join(" "));
+    }
+
+    function missionPhotoBadgeHtml(it){
+      const total = Number(it.totalMissionPhotos || 0);
+      if(total > 0){
+        return `<span class="badge small blue">📷 ${esc(String(total))}</span>`;
+      }
+      return `<span class="badge small">📷 0</span>`;
     }
 
     let currentUser = null;
@@ -1311,6 +1341,7 @@
               <button class="mini" type="button" data-open-photos="${esc(row.eventId)}">Photos</button>
               <button class="mini" type="button" data-open-interv="${esc(row.eventId)}">Interventions</button>
               <button class="mini" type="button" data-open-planning="${esc(row.missionDateKey || "")}">Planning</button>
+              ${row.missionPhotoCount > 0 ? `<span class="badge small blue">📷 ${esc(String(row.missionPhotoCount))}</span>` : `<span class="badge small">📷 0</span>`}
               <span class="badge small blue">À valider</span>
             </div>
           </div>
@@ -1381,6 +1412,7 @@
               <button class="mini" type="button" data-program="${esc(it.id)}">Interventions</button>
               <button class="mini primary" type="button" data-facture="${esc(it.id)}" ${op==="REALISEE" ? "" : "disabled"}>Facture</button>
               ${missionBadgeHtml(it)}
+              ${missionPhotoBadgeHtml(it)}
               <span class="badge">${esc(money(Number(it.total || 0)))}</span>
             </div>
           </div>
@@ -1489,6 +1521,7 @@
         const done = !!interventionDoneAt(iv, key);
         const subtotal = interventionTotal(iv, key);
         const lines = interventionLines(iv, key);
+        const photoCount = sumMissionPhotosByIntervention(selected, key);
 
         const status = useful ? (done ? "✅ prête" : "📝 brouillon") : "—";
 
@@ -1515,6 +1548,7 @@
               <div>${esc(label)} <span style="font-weight:800;color:#666;">• ${esc(dk)}</span></div>
               <div style="white-space:nowrap;">${esc(status)} • ${esc(money(subtotal))}</div>
             </div>
+            <div class="intervention-sub">Photos : ${esc(String(photoCount))}</div>
             ${note ? `<div class="intervention-sub">Note : ${esc(note)}</div>` : ``}
             ${linesHtml}
           </div>
@@ -1765,17 +1799,39 @@
       await Promise.all(itemsList.map(async (it)=>{
         try{
           const snap = await getDocs(collection(db, "events", it.id, "missions"));
-          const missions = snap.docs.map(d => d.data() || {});
+          const missions = snap.docs.map(d => ({ id:d.id, ...(d.data() || {}) }));
           const tracked = missions.filter(isTrackedMissionDoc);
 
           it.totalTrackedMissions = tracked.length;
           it.validatedTrackedMissions = tracked.filter(m => normalizeMissionStatus(m.status) === "VALIDEE").length;
           it.pendingTrackedMissions = Math.max(0, it.totalTrackedMissions - it.validatedTrackedMissions);
+
+          const photoCounts = {
+            CHECKIN:0, MENAGE:0, CHECKOUT:0, LINGE:0, MAINTENANCE:0, KITS:0
+          };
+
+          for(const m of missions){
+            const missionId = String(m.missionId || m.type || m.id || "").toUpperCase().trim();
+            if(!isBusinessMissionId(missionId)) continue;
+
+            let c = 0;
+            if(Array.isArray(m.photoUrls)) c = m.photoUrls.length;
+            else if(Number.isFinite(Number(m.photoCount))) c = Number(m.photoCount);
+            else if(Number.isFinite(Number(m.proofPhotosTotal))) c = Number(m.proofPhotosTotal);
+
+            photoCounts[missionId] = c;
+          }
+
+          it.photoCounts = photoCounts;
+          it.totalMissionPhotos = Object.values(photoCounts).reduce((sum, n)=> sum + Number(n || 0), 0);
+
         }catch(err){
           console.warn("Mission progress unreadable for", it.id, err);
           it.totalTrackedMissions = 0;
           it.validatedTrackedMissions = 0;
           it.pendingTrackedMissions = 0;
+          it.photoCounts = { CHECKIN:0, MENAGE:0, CHECKOUT:0, LINGE:0, MAINTENANCE:0, KITS:0 };
+          it.totalMissionPhotos = 0;
         }
       }));
     }
@@ -1828,6 +1884,8 @@
         totalTrackedMissions: 0,
         validatedTrackedMissions: 0,
         pendingTrackedMissions: 0,
+        photoCounts: { CHECKIN:0, MENAGE:0, CHECKOUT:0, LINGE:0, MAINTENANCE:0, KITS:0 },
+        totalMissionPhotos: 0,
         _search: ""
       };
 
@@ -1857,10 +1915,13 @@
 
       validateRows = docs.map(qd => {
         const linked = items.find(x => x.id === String(qd.eventId || "").trim());
+        const missionId = String(qd.missionId || "").trim().toUpperCase();
+        const missionPhotoCount = Number(linked?.photoCounts?.[missionId] || 0);
+
         return {
           queueId: String(qd.queueId || qd.id || "").trim(),
           eventId: String(qd.eventId || "").trim(),
-          missionId: String(qd.missionId || "").trim(),
+          missionId,
           missionLabel: String(qd.missionLabel || missionLabelFromId(qd.missionId)).trim(),
           missionDetail: String(qd.missionDetail || "").trim(),
           missionDateKey: String(qd.missionDateKey || "").trim(),
@@ -1870,7 +1931,8 @@
           homeName: String(qd.homeName || linked?.homeName || "").trim(),
           homeCity: String(qd.homeCity || linked?.homeCity || "").trim(),
           homeAddress: String(qd.homeAddress || linked?.homeAddress || "").trim(),
-          ownerName: String(qd.ownerName || linked?.ownerName || "").trim()
+          ownerName: String(qd.ownerName || linked?.ownerName || "").trim(),
+          missionPhotoCount
         };
       });
     }
@@ -1898,7 +1960,6 @@
     }
 
     async function reloadAllData(){
-      selected = selected ? { id:selected.id } : null;
       const keepId = selected?.id || "";
       await loadInitial();
       if(keepId){
