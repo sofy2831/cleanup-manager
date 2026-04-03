@@ -560,8 +560,13 @@
     <div class="subtitle">Kits (essentiel • cuisine • bain • séjour) + produits à l’unité</div>
 
     <div class="hint">
-      Boutique prête pour panier + passage Stripe Checkout.
-      Important : les prix finaux doivent toujours être recalculés côté backend avant création de la session Stripe.
+      Kits aux tarifs fixes décidés :
+      - Kit essentiel : 4,90 €
+      - Kit cuisine : 5,90 €
+      - Kit bain : 4,20 €
+      - Kit séjour : 13,90 €
+
+      Produits unitaires : prix exacts conservés.
     </div>
 
     <div class="wrap">
@@ -619,8 +624,7 @@
           </div>
 
           <div class="smallNote" id="stripeNote">
-            Flux conseillé : Front → Cloud Function sécurisée → création session Stripe Checkout → redirection.
-            Le front ne doit jamais décider du vrai prix. Sinon un client malin te paye un kit séjour au prix d’un sachet de thé. Ce serait dommage.
+            Étape suivante : brancher Stripe en mode catalogue propre avec produits/prices Stripe distincts.
           </div>
         </div>
       </div>
@@ -647,7 +651,6 @@
     });
 
     onAuthStateChanged(auth, (user)=>{
-      // si tu veux forcer login conciergerie, décommente :
       // if(!user) location.href="login.html?role=conciergerie";
     });
 
@@ -676,10 +679,14 @@
       "Après-shampoing": 0.29
     };
 
-    // ========= Kits fixés =========
-    // Je garde 4 familles comme demandé.
-    // Le kit séjour = pack regroupant essentiel + cuisine + bain.
-    // Prix calculé automatiquement sur la base des kits.
+    // ========= Kits aux tarifs fixes =========
+    const KIT_PRICES = {
+      ESS: 4.90,
+      CUIS: 5.90,
+      BAIN: 4.20,
+      SEJ: 13.90
+    };
+
     const kits = [
       {
         id:"kit_ess",
@@ -687,7 +694,8 @@
         cat:"ESS",
         name:"Kit essentiel",
         subtitle:"Base ménage",
-        unit:"par kit",
+        unit:"kit",
+        price: KIT_PRICES.ESS,
         items:[
           "1 Tampon à récurer",
           "1 Torchon",
@@ -704,7 +712,8 @@
         cat:"CUIS",
         name:"Kit cuisine",
         subtitle:"Accueil cuisine",
-        unit:"par kit",
+        unit:"kit",
+        price: KIT_PRICES.CUIS,
         items:[
           "2 Capsule Café",
           "1 Sachet de Thé",
@@ -723,7 +732,8 @@
         cat:"BAIN",
         name:"Kit bain",
         subtitle:"Hygiène",
-        unit:"par kit",
+        unit:"kit",
+        price: KIT_PRICES.BAIN,
         items:[
           "1 Papier toilette",
           "2 Gel douche",
@@ -731,35 +741,22 @@
           "2 Savon mains",
           "1 Après-shampoing"
         ]
+      },
+      {
+        id:"kit_sej",
+        kind:"KIT",
+        cat:"SEJ",
+        name:"Kit séjour",
+        subtitle:"Essentiel + cuisine + bain",
+        unit:"kit",
+        price: KIT_PRICES.SEJ,
+        items:[
+          "Kit essentiel",
+          "Kit cuisine",
+          "Kit bain"
+        ]
       }
     ];
-
-    function round2(n){
-      return Math.round((Number(n) || 0) * 100) / 100;
-    }
-
-    function computeKitPrice(itemNames){
-      return round2(itemNames.reduce((sum, label)=> sum + (UNIT_PRICES[label] || 0), 0));
-    }
-
-    kits.forEach(k => {
-      k.price = computeKitPrice(k.items);
-    });
-
-    const kitSejour = {
-      id:"kit_sej",
-      kind:"KIT",
-      cat:"SEJ",
-      name:"Kit séjour",
-      subtitle:"Essentiel + cuisine + bain",
-      unit:"par kit",
-      items:["Kit essentiel", "Kit cuisine", "Kit bain"],
-      price: round2(
-        (kits.find(k=>k.id==="kit_ess")?.price || 0) +
-        (kits.find(k=>k.id==="kit_cuis")?.price || 0) +
-        (kits.find(k=>k.id==="kit_bain")?.price || 0)
-      )
-    };
 
     const units = Object.entries(UNIT_PRICES).map(([name, price], idx)=>({
       id:`u_${idx+1}`,
@@ -772,7 +769,7 @@
       items:[]
     }));
 
-    const catalog = [...kits, kitSejour, ...units];
+    const catalog = [...kits, ...units];
 
     const grid = document.getElementById("grid");
     const filter = document.getElementById("filter");
@@ -787,6 +784,10 @@
     const clearBtn = document.getElementById("clearBtn");
     const saveBtn = document.getElementById("saveBtn");
     const payBtn = document.getElementById("payBtn");
+
+    function round2(n){
+      return Math.round((Number(n) || 0) * 100) / 100;
+    }
 
     function fmtMoney(n){
       const v = Number(n);
@@ -803,7 +804,7 @@
         .replaceAll("'","&#039;");
     }
 
-    const CART_KEY = "cm_shop_cart_v2";
+    const CART_KEY = "cm_shop_cart_v3";
     let cart = {};
 
     function loadCart(){
@@ -1092,24 +1093,15 @@
 
     saveBtn.addEventListener("click", ()=>{
       if(saveBtn.getAttribute("aria-disabled")==="true") return;
-      alert("Panier enregistré localement. Étape suivante propre : commande draft en Firestore.");
+      alert("Panier enregistré localement. Étape suivante : brouillon commande en Firestore.");
     });
 
     payBtn.addEventListener("click", async ()=>{
       if(payBtn.getAttribute("aria-disabled")==="true") return;
 
-      // ====== PLACEHOLDER ======
-      // Flux réel conseillé :
-      // 1) récupérer le panier
-      // 2) envoyer seulement les IDs + quantités à une Cloud Function
-      // 3) la fonction recalcule les prix côté serveur
-      // 4) la fonction crée la session Stripe Checkout
-      // 5) retour URL ou sessionId
-      // 6) redirection Stripe
-
       const items = Object.values(cart).map(x=>`${x.qty} × ${x.name}`).join("\n");
       alert(
-        "Stripe Checkout à brancher.\n\n" +
+        "Stripe sera branché ensuite.\n\n" +
         "Panier :\n" + items +
         "\n\nTotal : " + grandTotal.textContent
       );
