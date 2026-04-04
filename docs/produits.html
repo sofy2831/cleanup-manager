@@ -235,25 +235,25 @@
     }
 
     .pmedia{
-  width:100%;
-  height:140px;
-  border-radius:14px;
-  overflow:hidden;
-  background:#fff;
-  border:1px solid rgba(122,92,255,0.14);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,.7);
-  display:flex;
-  align-items:center;
-  justify-content:center;
-  padding:10px;
-}
+      width:100%;
+      height:140px;
+      border-radius:14px;
+      overflow:hidden;
+      background:#fff;
+      border:1px solid rgba(122,92,255,0.14);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.7);
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      padding:10px;
+    }
 
-.pmedia img{
-  width:100%;
-  height:100%;
-  object-fit:contain;
-  display:block;
-}
+    .pmedia img{
+      width:100%;
+      height:100%;
+      object-fit:contain;
+      display:block;
+    }
 
     .pmedia.placeholder{
       display:flex;
@@ -478,7 +478,7 @@
     .cartTotals{
       margin-top:12px;
       display:grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: repeat(3, minmax(0,1fr));
       gap:10px;
     }
 
@@ -545,6 +545,12 @@
       padding: 10px 8px;
       border-radius: 999px;
       white-space: nowrap;
+    }
+
+    @media(max-width:640px){
+      .cartTotals{
+        grid-template-columns: 1fr;
+      }
     }
 
     @media(min-width: 860px){
@@ -630,6 +636,10 @@
               <div class="v" id="subTotal">—</div>
             </div>
             <div class="tbox">
+              <div class="t">Livraison</div>
+              <div class="v" id="shippingTotal">—</div>
+            </div>
+            <div class="tbox">
               <div class="t">Total</div>
               <div class="v" id="grandTotal">—</div>
             </div>
@@ -641,7 +651,10 @@
             <button class="btn primary" id="payBtn" type="button" aria-disabled="true">Payer (Stripe)</button>
           </div>
 
-          <div class="smallNote" id="stripeNote"></div>
+          <div class="smallNote" id="stripeNote">
+            Livraison : 4,90 € • Offerte dès 100 € TTC<br>
+            TVA non applicable – art. 293 B CGI
+          </div>
         </div>
       </div>
     </div>
@@ -659,6 +672,11 @@
     import { auth } from "./firebase-init.js";
     import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
 
+    const TAX_MODE = "EXEMPT"; // EXEMPT | SUBJECT
+    const VAT_RATE = 0.20;     // prêt pour plus tard
+    const SHIPPING_FEE = 4.90;
+    const FREE_SHIPPING_FROM = 100;
+
     const logoutBtn = document.getElementById("logoutBtn");
     if (logoutBtn) {
       logoutBtn.addEventListener("click", async ()=>{
@@ -672,7 +690,6 @@
       // if(!user) location.href="login.html?role=conciergerie";
     });
 
-    // ========= Prix unitaires exacts =========
     const UNIT_PRICES = {
       "Tampon à récurer": 0.20,
       "Torchon": 1.28,
@@ -697,7 +714,6 @@
       "Après-shampoing": 0.29
     };
 
-    // ========= Images =========
     const PRODUCT_IMAGES = {
       kit_ess: "images/kit-essentiel.jpg",
       kit_cuis: "images/kit-cuisine.jpg",
@@ -724,7 +740,6 @@
       u_19: "images/shampooing.jpg"
     };
 
-    // ========= Kits aux tarifs fixes =========
     const KIT_PRICES = {
       ESS: 4.90,
       CUIS: 5.90,
@@ -825,6 +840,7 @@
     const cartList = document.getElementById("cartList");
     const cartTotals = document.getElementById("cartTotals");
     const subTotal = document.getElementById("subTotal");
+    const shippingTotal = document.getElementById("shippingTotal");
     const grandTotal = document.getElementById("grandTotal");
     const clearBtn = document.getElementById("clearBtn");
     const saveBtn = document.getElementById("saveBtn");
@@ -851,14 +867,13 @@
 
     function getProductImage(product){
       if (PRODUCT_IMAGES[product.id]) return PRODUCT_IMAGES[product.id];
-      if (product.id === "kit_sej") return "";
       if (product.name === "Savon mains") return "images/savon-main.jpg";
       if (product.name === "Après-shampoing") return "images/apres-shampooing.jpg";
       if (product.name === "Sel + poivre") return "images/poivre.jpg";
       return "";
     }
 
-    const CART_KEY = "cm_shop_cart_v3";
+    const CART_KEY = "cm_shop_cart_v4";
     let cart = {};
 
     function loadCart(){
@@ -884,6 +899,22 @@
       return round2(
         Object.values(cart).reduce((sum, it)=> sum + (Number(it.qty) || 0) * (Number(it.price) || 0), 0)
       );
+    }
+
+    function getShippingAmount(subtotal){
+      return subtotal >= FREE_SHIPPING_FROM ? 0 : SHIPPING_FEE;
+    }
+
+    function getCartTotals(){
+      const st = cartSubTotal();
+      const shipping = getShippingAmount(st);
+      const total = round2(st + shipping);
+
+      return {
+        subTotal: st,
+        shipping,
+        total
+      };
     }
 
     function setCartButtons(){
@@ -1137,9 +1168,10 @@
         cartList.appendChild(row);
       }
 
-      const st = cartSubTotal();
-      subTotal.textContent = fmtMoney(st);
-      grandTotal.textContent = fmtMoney(st);
+      const totals = getCartTotals();
+      subTotal.textContent = fmtMoney(totals.subTotal);
+      shippingTotal.textContent = totals.shipping === 0 ? "Offerte" : fmtMoney(totals.shipping);
+      grandTotal.textContent = fmtMoney(totals.total);
 
       setCartButtons();
     }
@@ -1162,11 +1194,16 @@
     payBtn.addEventListener("click", async ()=>{
       if(payBtn.getAttribute("aria-disabled")==="true") return;
 
+      const totals = getCartTotals();
       const items = Object.values(cart).map(x=>`${x.qty} × ${x.name}`).join("\n");
+
       alert(
         "Stripe sera branché ensuite.\n\n" +
         "Panier :\n" + items +
-        "\n\nTotal : " + grandTotal.textContent
+        "\n\nSous-total : " + fmtMoney(totals.subTotal) +
+        "\nLivraison : " + (totals.shipping === 0 ? "Offerte" : fmtMoney(totals.shipping)) +
+        "\nTotal : " + fmtMoney(totals.total) +
+        (TAX_MODE === "EXEMPT" ? "\n\nTVA non applicable – art. 293 B CGI" : "")
       );
     });
 
