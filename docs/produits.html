@@ -595,7 +595,6 @@
 
     <div class="wrap">
       <div class="layout">
-        <!-- Produits -->
         <div class="card products-col">
           <div class="toolbar">
             <select class="select" id="filter">
@@ -621,7 +620,6 @@
           <div class="grid" id="grid"></div>
         </div>
 
-        <!-- Panier -->
         <div class="card cart-col">
           <div class="cartTitle">
             <b>Panier</b>
@@ -672,10 +670,12 @@
     import { auth } from "./firebase-init.js";
     import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
 
-    const TAX_MODE = "EXEMPT"; // EXEMPT | SUBJECT
-    const VAT_RATE = 0.20;     // prêt pour plus tard
+    const TAX_MODE = "EXEMPT";
+    const VAT_RATE = 0.20;
     const SHIPPING_FEE = 4.90;
     const FREE_SHIPPING_FROM = 100;
+    const SHIPPING_THRESHOLD = 100;
+    const SHIPPING_PRICE = 4.90;
 
     const logoutBtn = document.getElementById("logoutBtn");
     if (logoutBtn) {
@@ -740,7 +740,38 @@
       u_18: "images/gel-pour-le-corps.jpg",
       u_19: "images/shampooing.jpg",
       u_20: "images/savon-main.jpg",
-      u_21: "images/apres-shampooing.jpg",
+      u_21: "images/apres-shampooing.jpg"
+    };
+
+    const STRIPE_PRICE_IDS = {
+      kit_ess: "price_1TIVH5AMMazMXNc1eXlKmTYr",
+      kit_cuis: "price_1TIVJxAMMazMXNc1ycyEMrd4",
+      kit_bain: "price_1TIVL5AMMazMXNc1e5NF1029",
+      kit_sej: "price_1TIVM8AMMazMXNc14yWtnNym",
+
+      u_1: "price_1TIVOHAMMazMXNc1W9qiSMho",
+      u_2: "price_1TIVPjAMMazMXNc1iuhegcPW",
+      u_3: "price_1TIVQyAMMazMXNc1lSRKw5fA",
+      u_4: "price_1TIVSNAMMazMXNc1lRbAcZkY",
+      u_5: "price_1TIVTVAMMazMXNc14gciTFfs",
+      u_6: "price_1TIVUVAMMazMXNc15uJM9Kgx",
+      u_7: "price_1TIVVhAMMazMXNc1mfQIn5z0",
+      u_8: "price_1TIVWvAMMazMXNc1I8OGkaSM",
+      u_9: "price_1TIVXnAMMazMXNc1nPGhLkH0",
+      u_10: "price_1TIVZWAMMazMXNc1EBYPc6Kn",
+      u_11: "price_1TIVaLAMMazMXNc1wNIRZRFc",
+      u_12: "price_1TIVbJAMMazMXNc1k03PiXjp",
+      u_13: "price_1TIVcLAMMazMXNc1GPf6MdA7",
+      u_14: "price_1TIVd7AMMazMXNc1M5XbUMo1",
+      u_15: "price_1TIVe6AMMazMXNc1hoBsZHKB",
+      u_16: "price_1TIVerAMMazMXNc1VpoU41BQ",
+      u_17: "price_1TIVfWAMMazMXNc11j42JYMm",
+      u_18: "price_1TIVgCAMMazMXNc1Z2deb05r",
+      u_19: "price_1TIVgqAMMazMXNc1PgDUh5dV",
+      u_20: "price_1TIVhjAMMazMXNc1efqCaDYb",
+      u_21: "price_1TIViLAMMazMXNc1UZDen24a",
+
+      shipping: "price_1TIVjWAMMazMXNc1TOW80j9H"
     };
 
     const KIT_PRICES = {
@@ -869,8 +900,8 @@
     }
 
     function getProductImage(product){
-  return PRODUCT_IMAGES[product.id] || "";
-}
+      return PRODUCT_IMAGES[product.id] || "";
+    }
 
     const CART_KEY = "cm_shop_cart_v4";
     let cart = {};
@@ -902,6 +933,10 @@
 
     function getShippingAmount(subtotal){
       return subtotal >= FREE_SHIPPING_FROM ? 0 : SHIPPING_FEE;
+    }
+
+    function getShippingCost(subtotal){
+      return subtotal >= SHIPPING_THRESHOLD ? 0 : SHIPPING_PRICE;
     }
 
     function getCartTotals(){
@@ -1172,6 +1207,11 @@
       shippingTotal.textContent = totals.shipping === 0 ? "Offerte" : fmtMoney(totals.shipping);
       grandTotal.textContent = fmtMoney(totals.total);
 
+      const note = document.getElementById("stripeNote");
+      note.innerHTML = totals.shipping === 0
+        ? "Livraison offerte<br>TVA non applicable – art. 293 B CGI"
+        : `Livraison : ${fmtMoney(totals.shipping)} • offerte dès ${fmtMoney(SHIPPING_THRESHOLD)} TTC<br>TVA non applicable – art. 293 B CGI`;
+
       setCartButtons();
     }
 
@@ -1193,11 +1233,28 @@
     payBtn.addEventListener("click", async ()=>{
       if(payBtn.getAttribute("aria-disabled")==="true") return;
 
+      const subtotal = cartSubTotal();
+      const shipping = getShippingCost(subtotal);
+
+      const lineItems = Object.values(cart).map(item => ({
+        price: STRIPE_PRICE_IDS[item.id],
+        quantity: item.qty
+      }));
+
+      if(shipping > 0){
+        lineItems.push({
+          price: STRIPE_PRICE_IDS.shipping,
+          quantity: 1
+        });
+      }
+
+      console.log("Panier Stripe", lineItems);
+
       const totals = getCartTotals();
       const items = Object.values(cart).map(x=>`${x.qty} × ${x.name}`).join("\n");
 
       alert(
-        "Stripe sera branché ensuite.\n\n" +
+        "Panier Stripe prêt.\n\n" +
         "Panier :\n" + items +
         "\n\nSous-total : " + fmtMoney(totals.subTotal) +
         "\nLivraison : " + (totals.shipping === 0 ? "Offerte" : fmtMoney(totals.shipping)) +
