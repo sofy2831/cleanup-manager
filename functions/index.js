@@ -778,6 +778,124 @@ exports.api = onRequest(
         return res.status(500).json({ error: "checkout session failed" });
       }
     }
+    
+         // =====================
+    // 2-shop) CREATE SHOP CHECKOUT SESSION
+    // =====================
+    if (method === "POST" && path === "/create-shop-checkout-session") {
+      try {
+        const body = ensureJsonBody(req);
+        const { items, successUrl, cancelUrl } = body || {};
+
+        if (!Array.isArray(items) || !items.length) {
+          return res.status(400).json({ error: "panier vide" });
+        }
+
+        const cleanedItems = items
+          .map((item) => ({
+            id: String(item?.id || "").trim(),
+            quantity: Math.floor(Number(item?.quantity || 0)),
+          }))
+          .filter(
+            (item) =>
+              item.id &&
+              Number.isInteger(item.quantity) &&
+              item.quantity > 0 &&
+              item.quantity <= 999
+          );
+
+        if (!cleanedItems.length) {
+          return res.status(400).json({ error: "panier invalide" });
+        }
+
+        const line_items = [];
+        let subtotalCents = 0;
+
+        for (const item of cleanedItems) {
+          const priceId = getShopPriceId(item.id);
+          const unitAmount = getShopItemAmount(item.id);
+
+          if (!priceId || !unitAmount) {
+            return res.status(400).json({
+              error: "article invalide",
+              itemId: item.id || null,
+              mode: IS_DEV_PROJECT ? "dev" : "prod",
+            });
+          }
+
+          line_items.push({
+            price: priceId,
+            quantity: item.quantity,
+          });
+
+          subtotalCents += unitAmount * item.quantity;
+        }
+
+        const needsShipping = subtotalCents < SHOP_SHIPPING_THRESHOLD_CENTS;
+
+        if (needsShipping) {
+          const shippingPriceId = SHOP_PRICE_IDS.shipping;
+
+          if (!shippingPriceId) {
+            return res.status(500).json({
+              error: "shipping price id manquant",
+              mode: IS_DEV_PROJECT ? "dev" : "prod",
+            });
+          }
+
+          line_items.push({
+            price: shippingPriceId,
+            quantity: 1,
+          });
+        }
+
+        const origin =
+          req.headers.origin && ALLOWED_ORIGINS.includes(req.headers.origin)
+            ? req.headers.origin
+            : "https://cleanup-manager.fr";
+
+        const safeSuccessUrl =
+          String(successUrl || "").trim() ||
+          `${origin}/shop-success.html?session_id={CHECKOUT_SESSION_ID}`;
+
+        const safeCancelUrl =
+          String(cancelUrl || "").trim() ||
+          `${origin}/shop-cancel.html`;
+
+        const session = await stripe.checkout.sessions.create({
+          mode: "payment",
+          line_items,
+          success_url: safeSuccessUrl,
+          cancel_url: safeCancelUrl,
+          billing_address_collection: "auto",
+          payment_method_types: ["card"],
+          metadata: {
+            source: "cleanup_shop",
+            subtotalCents: String(subtotalCents),
+            shippingApplied: needsShipping ? "yes" : "no",
+          },
+        });
+
+        return res.json({
+          ok: true,
+          url: session.url,
+          mode: session.livemode ? "live" : "test",
+        });
+      } catch (err) {
+        console.error("❌ create-shop-checkout-session error:", {
+          message: err?.message,
+          type: err?.type,
+          rawMessage: err?.raw?.message,
+          code: err?.code,
+          stripeKeyMode: String(stripeKey || "").startsWith("sk_test_")
+            ? "test"
+            : "live",
+          projectId: PROJECT_ID || null,
+          isDevProject: IS_DEV_PROJECT,
+        });
+        return res.status(500).json({ error: "shop checkout session failed" });
+      }
+    }
 
     // =====================
     // 2bis) READ CHECKOUT SESSION
