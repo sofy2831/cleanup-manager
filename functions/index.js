@@ -239,6 +239,14 @@ function getPlanFromPriceId(priceId) {
   return "starter";
 }
 
+function getShopPriceId(itemId) {
+  return SHOP_PRICE_IDS[String(itemId || "").trim()] || null;
+}
+
+function getShopItemAmount(itemId) {
+  return Number(SHOP_CATALOG[String(itemId || "").trim()]?.unitAmount || 0);
+}
+
 function stripeUnixToTimestamp(unixSeconds) {
   const n = Number(unixSeconds);
   if (!Number.isFinite(n) || n <= 0) return null;
