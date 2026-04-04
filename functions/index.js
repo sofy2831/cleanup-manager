@@ -40,6 +40,107 @@ const PRICE_IDS = IS_DEV_PROJECT
     };
 
 // =====================
+// Stripe boutique (shop) price IDs
+// =====================
+const SHOP_PRICE_IDS = IS_DEV_PROJECT
+  ? {
+      kit_ess: "price_1TIVH5AMMazMXNc1eXlKmTYr",
+      kit_cuis: "price_1TIVJxAMMazMXNc1ycyEMrd4",
+      kit_bain: "price_1TIVL5AMMazMXNc1e5NF1029",
+      kit_sej: "price_1TIVM8AMMazMXNc14yWtnNym",
+
+      u_1: "price_1TIVOHAMMazMXNc1W9qiSMho",
+      u_2: "price_1TIVPjAMMazMXNc1iuhegcPW",
+      u_3: "price_1TIVQyAMMazMXNc1lSRKw5fA",
+      u_4: "price_1TIVSNAMMazMXNc1lRbAcZkY",
+      u_5: "price_1TIVTVAMMazMXNc14gciTFfs",
+      u_6: "price_1TIVUVAMMazMXNc15uJM9Kgx",
+      u_7: "price_1TIVVhAMMazMXNc1mfQIn5z0",
+      u_8: "price_1TIVWvAMMazMXNc1I8OGkaSM",
+      u_9: "price_1TIVXnAMMazMXNc1nPGhLkH0",
+      u_10: "price_1TIVZWAMMazMXNc1EBYPc6Kn",
+      u_11: "price_1TIVaLAMMazMXNc1wNIRZRFc",
+      u_12: "price_1TIVbJAMMazMXNc1k03PiXjp",
+      u_13: "price_1TIVcLAMMazMXNc1GPf6MdA7",
+      u_14: "price_1TIVd7AMMazMXNc1M5XbUMo1",
+      u_15: "price_1TIVe6AMMazMXNc1hoBsZHKB",
+      u_16: "price_1TIVerAMMazMXNc1VpoU41BQ",
+      u_17: "price_1TIVfWAMMazMXNc11j42JYMm",
+      u_18: "price_1TIVgCAMMazMXNc1Z2deb05r",
+      u_19: "price_1TIVgqAMMazMXNc1PgDUh5dV",
+      u_20: "price_1TIVhjAMMazMXNc1efqCaDYb",
+      u_21: "price_1TIViLAMMazMXNc1UZDen24a",
+
+      shipping: "price_1TIVjWAMMazMXNc1TOW80j9H",
+    }
+  : {
+      // À renseigner plus tard avec les vrais price_ live
+      kit_ess: "",
+      kit_cuis: "",
+      kit_bain: "",
+      kit_sej: "",
+
+      u_1: "",
+      u_2: "",
+      u_3: "",
+      u_4: "",
+      u_5: "",
+      u_6: "",
+      u_7: "",
+      u_8: "",
+      u_9: "",
+      u_10: "",
+      u_11: "",
+      u_12: "",
+      u_13: "",
+      u_14: "",
+      u_15: "",
+      u_16: "",
+      u_17: "",
+      u_18: "",
+      u_19: "",
+      u_20: "",
+      u_21: "",
+
+      shipping: "",
+    };
+
+// =====================
+// Catalogue boutique (montants en centimes)
+// =====================
+const SHOP_CATALOG = {
+  kit_ess: { name: "Kit essentiel", unitAmount: 490 },
+  kit_cuis: { name: "Kit cuisine", unitAmount: 590 },
+  kit_bain: { name: "Kit bain", unitAmount: 420 },
+  kit_sej: { name: "Kit séjour (2 pers)", unitAmount: 1390 },
+
+  u_1: { name: "Tampon à récurer", unitAmount: 20 },
+  u_2: { name: "Torchon", unitAmount: 128 },
+  u_3: { name: "30ml de liquide vaisselle", unitAmount: 56 },
+  u_4: { name: "Sac poubelle 50L", unitAmount: 24 },
+  u_5: { name: "Capsule pour lave-linge", unitAmount: 43 },
+  u_6: { name: "Pastille pour lave-vaisselle", unitAmount: 19 },
+  u_7: { name: "Nettoyant multi usage sol + surface 30ml", unitAmount: 60 },
+  u_8: { name: "Capsule Café", unitAmount: 39 },
+  u_9: { name: "Sachet de Thé", unitAmount: 20 },
+  u_10: { name: "Sucre monodose", unitAmount: 7 },
+  u_11: { name: "Lait monodose", unitAmount: 20 },
+  u_12: { name: "Nesquick", unitAmount: 60 },
+  u_13: { name: "Huile olive 20ml", unitAmount: 78 },
+  u_14: { name: "Vinaigre xérès 20ml", unitAmount: 39 },
+  u_15: { name: "Sel + poivre", unitAmount: 10 },
+  u_16: { name: "Essuie tout", unitAmount: 116 },
+  u_17: { name: "Papier toilette", unitAmount: 56 },
+  u_18: { name: "Gel douche", unitAmount: 27 },
+  u_19: { name: "Shampoing", unitAmount: 27 },
+  u_20: { name: "Savon mains", unitAmount: 15 },
+  u_21: { name: "Après-shampoing", unitAmount: 29 },
+};
+
+const SHOP_SHIPPING_THRESHOLD_CENTS = 10000; // 100,00 €
+const SHOP_SHIPPING_AMOUNT_CENTS = 490;      // 4,90 €
+
+// =====================
 // CORS – Firebase Hosting / DEV / local
 // =====================
 const ALLOWED_ORIGINS = [
