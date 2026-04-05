@@ -40,6 +40,107 @@ const PRICE_IDS = IS_DEV_PROJECT
     };
 
 // =====================
+// Stripe boutique (shop) price IDs
+// =====================
+const SHOP_PRICE_IDS = IS_DEV_PROJECT
+  ? {
+      kit_ess: "price_1TIVH5AMMazMXNc1eXlKmTYr",
+      kit_cuis: "price_1TIVJxAMMazMXNc1ycyEMrd4",
+      kit_bain: "price_1TIVL5AMMazMXNc1e5NF1029",
+      kit_sej: "price_1TIVM8AMMazMXNc14yWtnNym",
+
+      u_1: "price_1TIVOHAMMazMXNc1W9qiSMho",
+      u_2: "price_1TIVPjAMMazMXNc1iuhegcPW",
+      u_3: "price_1TIVQyAMMazMXNc1lSRKw5fA",
+      u_4: "price_1TIVSNAMMazMXNc1lRbAcZkY",
+      u_5: "price_1TIVTVAMMazMXNc14gciTFfs",
+      u_6: "price_1TIVUVAMMazMXNc15uJM9Kgx",
+      u_7: "price_1TIVVhAMMazMXNc1mfQIn5z0",
+      u_8: "price_1TIVWvAMMazMXNc1I8OGkaSM",
+      u_9: "price_1TIVXnAMMazMXNc1nPGhLkH0",
+      u_10: "price_1TIVZWAMMazMXNc1EBYPc6Kn",
+      u_11: "price_1TIVaLAMMazMXNc1wNIRZRFc",
+      u_12: "price_1TIVbJAMMazMXNc1k03PiXjp",
+      u_13: "price_1TIVcLAMMazMXNc1GPf6MdA7",
+      u_14: "price_1TIVd7AMMazMXNc1M5XbUMo1",
+      u_15: "price_1TIVe6AMMazMXNc1hoBsZHKB",
+      u_16: "price_1TIVerAMMazMXNc1VpoU41BQ",
+      u_17: "price_1TIVfWAMMazMXNc11j42JYMm",
+      u_18: "price_1TIVgCAMMazMXNc1Z2deb05r",
+      u_19: "price_1TIVgqAMMazMXNc1PgDUh5dV",
+      u_20: "price_1TIVhjAMMazMXNc1efqCaDYb",
+      u_21: "price_1TIViLAMMazMXNc1UZDen24a",
+
+      shipping: "price_1TIVjWAMMazMXNc1TOW80j9H",
+    }
+  : {
+      // À renseigner plus tard avec les vrais price_ live
+      kit_ess: "price_1TIoQJAB1M9iCDJFPfxPCFEZ",
+      kit_cuis: "price_1TIoTeAB1M9iCDJFHgtcgpXy",
+      kit_bain: "price_1TIoVBAB1M9iCDJFa4wutFhS",
+      kit_sej: "price_1TIozuAB1M9iCDJFqYaX6AnC",
+
+      u_1: "price_1TIoVyAB1M9iCDJFzL9nTYAa",
+      u_2: "price_1TIoWUAB1M9iCDJFCfFgqKFJ",
+      u_3: "price_1TIoXGAB1M9iCDJFreT4j7kq",
+      u_4: "price_1TIoXkAB1M9iCDJFgBQ4TdMk",
+      u_5: "price_1TIoYLAB1M9iCDJFOKViZfxH",
+      u_6: "price_1TIoYtAB1M9iCDJF58weinny",
+      u_7: "price_1TIoZVAB1M9iCDJFaEZecZ8i",
+      u_8: "price_1TIoa1AB1M9iCDJF9jRvn53X",
+      u_9: "price_1TIoaVAB1M9iCDJFwQnZ9JT3",
+      u_10: "price_1TIob1AB1M9iCDJFmWgOcEUO",
+      u_11: "price_1TIobTAB1M9iCDJFsVxz148E",
+      u_12: "price_1TIobtAB1M9iCDJFqLSqrkLs",
+      u_13: "price_1TIocNAB1M9iCDJFjKVJTdq3",
+      u_14: "price_1TIocqAB1M9iCDJFR2PGwugJ",
+      u_15: "price_1TIoduAB1M9iCDJFnYdZa8Fw",
+      u_16: "price_1TIoecAB1M9iCDJFdXwLQGMw",
+      u_17: "price_1TIof4AB1M9iCDJFSfm1CxcL",
+      u_18: "price_1TIofZAB1M9iCDJFp87R48tt",
+      u_19: "price_1TIofzAB1M9iCDJFKLpnqpIE",
+      u_20: "price_1TIogSAB1M9iCDJF6UIGS6jg",
+      u_21: "price_1TIogvAB1M9iCDJFA1kuQsuT",
+
+      shipping: "price_1TIohPAB1M9iCDJFdkstcxCV",
+    };
+
+// =====================
+// Catalogue boutique (montants en centimes)
+// =====================
+const SHOP_CATALOG = {
+  kit_ess: { name: "Kit essentiel", unitAmount: 490 },
+  kit_cuis: { name: "Kit cuisine", unitAmount: 590 },
+  kit_bain: { name: "Kit bain", unitAmount: 420 },
+  kit_sej: { name: "Kit séjour (2 pers)", unitAmount: 1390 },
+
+  u_1: { name: "Tampon à récurer", unitAmount: 20 },
+  u_2: { name: "Torchon", unitAmount: 128 },
+  u_3: { name: "30ml de liquide vaisselle", unitAmount: 56 },
+  u_4: { name: "Sac poubelle 50L", unitAmount: 24 },
+  u_5: { name: "Capsule pour lave-linge", unitAmount: 43 },
+  u_6: { name: "Pastille pour lave-vaisselle", unitAmount: 19 },
+  u_7: { name: "Nettoyant multi usage sol + surface 30ml", unitAmount: 60 },
+  u_8: { name: "Capsule Café", unitAmount: 39 },
+  u_9: { name: "Sachet de Thé", unitAmount: 20 },
+  u_10: { name: "Sucre monodose", unitAmount: 7 },
+  u_11: { name: "Lait monodose", unitAmount: 20 },
+  u_12: { name: "Nesquick", unitAmount: 60 },
+  u_13: { name: "Huile olive 20ml", unitAmount: 78 },
+  u_14: { name: "Vinaigre xérès 20ml", unitAmount: 39 },
+  u_15: { name: "Sel + poivre", unitAmount: 10 },
+  u_16: { name: "Essuie tout", unitAmount: 116 },
+  u_17: { name: "Papier toilette", unitAmount: 56 },
+  u_18: { name: "Gel douche", unitAmount: 27 },
+  u_19: { name: "Shampoing", unitAmount: 27 },
+  u_20: { name: "Savon mains", unitAmount: 15 },
+  u_21: { name: "Après-shampoing", unitAmount: 29 },
+};
+
+const SHOP_SHIPPING_THRESHOLD_CENTS = 10000; // 100,00 €
+const SHOP_SHIPPING_AMOUNT_CENTS = 490;      // 4,90 €
+
+// =====================
 // CORS – Firebase Hosting / DEV / local
 // =====================
 const ALLOWED_ORIGINS = [
@@ -74,9 +175,20 @@ function setCors(req, res) {
 
 function getPath(req) {
   try {
-    if (req.path) return req.path;
-    const u = new URL(req.url, "http://localhost");
-    return u.pathname || "/";
+    let path = req.path;
+    if (!path) {
+      const u = new URL(req.url, "http://localhost");
+      path = u.pathname || "/";
+    }
+
+    // normalise le préfixe Hosting rewrite /api
+    if (path.startsWith("/api/")) {
+      path = path.slice(4); // "/api/test" => "/test"
+    } else if (path === "/api") {
+      path = "/";
+    }
+
+    return path || "/";
   } catch {
     return "/";
   }
@@ -136,6 +248,14 @@ function getPlanFromPriceId(priceId) {
   if (id === PRICE_IDS.business) return "business";
 
   return "starter";
+}
+
+function getShopPriceId(itemId) {
+  return SHOP_PRICE_IDS[String(itemId || "").trim()] || null;
+}
+
+function getShopItemAmount(itemId) {
+  return Number(SHOP_CATALOG[String(itemId || "").trim()]?.unitAmount || 0);
 }
 
 function stripeUnixToTimestamp(unixSeconds) {
@@ -468,17 +588,20 @@ exports.api = onRequest(
       };
     }
 
-    // =====================
-    // 1) PING
-    // =====================
-    if (method === "GET" && (path === "/" || path === "")) {
-      return res.json({
-        ok: true,
-        version: "api-v7",
-        projectId: PROJECT_ID || null,
-        mode: IS_DEV_PROJECT ? "dev" : "prod",
-      });
-    }
+   // =====================
+// 1) PING
+// =====================
+if (
+  method === "GET" &&
+  (path === "/" || path === "" || path === "/api" || path === "/api/")
+) {
+  return res.json({
+    ok: true,
+    version: "api-v7",
+    projectId: PROJECT_ID || null,
+    mode: IS_DEV_PROJECT ? "dev" : "prod",
+  });
+}
 
     // =====================
     // 1bis) ACTIVATE FREE PLAN
@@ -667,6 +790,124 @@ exports.api = onRequest(
           isDevProject: IS_DEV_PROJECT,
         });
         return res.status(500).json({ error: "checkout session failed" });
+      }
+    }
+    
+         // =====================
+    // 2-shop) CREATE SHOP CHECKOUT SESSION
+    // =====================
+    if (method === "POST" && path === "/create-shop-checkout-session") {
+      try {
+        const body = ensureJsonBody(req);
+        const { items, successUrl, cancelUrl } = body || {};
+
+        if (!Array.isArray(items) || !items.length) {
+          return res.status(400).json({ error: "panier vide" });
+        }
+
+        const cleanedItems = items
+          .map((item) => ({
+            id: String(item?.id || "").trim(),
+            quantity: Math.floor(Number(item?.quantity || 0)),
+          }))
+          .filter(
+            (item) =>
+              item.id &&
+              Number.isInteger(item.quantity) &&
+              item.quantity > 0 &&
+              item.quantity <= 999
+          );
+
+        if (!cleanedItems.length) {
+          return res.status(400).json({ error: "panier invalide" });
+        }
+
+        const line_items = [];
+        let subtotalCents = 0;
+
+        for (const item of cleanedItems) {
+          const priceId = getShopPriceId(item.id);
+          const unitAmount = getShopItemAmount(item.id);
+
+          if (!priceId || !unitAmount) {
+            return res.status(400).json({
+              error: "article invalide",
+              itemId: item.id || null,
+              mode: IS_DEV_PROJECT ? "dev" : "prod",
+            });
+          }
+
+          line_items.push({
+            price: priceId,
+            quantity: item.quantity,
+          });
+
+          subtotalCents += unitAmount * item.quantity;
+        }
+
+        const needsShipping = subtotalCents < SHOP_SHIPPING_THRESHOLD_CENTS;
+
+        if (needsShipping) {
+          const shippingPriceId = SHOP_PRICE_IDS.shipping;
+
+          if (!shippingPriceId) {
+            return res.status(500).json({
+              error: "shipping price id manquant",
+              mode: IS_DEV_PROJECT ? "dev" : "prod",
+            });
+          }
+
+          line_items.push({
+            price: shippingPriceId,
+            quantity: 1,
+          });
+        }
+
+        const origin =
+          req.headers.origin && ALLOWED_ORIGINS.includes(req.headers.origin)
+            ? req.headers.origin
+            : "https://cleanup-manager.fr";
+
+        const safeSuccessUrl =
+          String(successUrl || "").trim() ||
+          `${origin}/shop-success.html?session_id={CHECKOUT_SESSION_ID}`;
+
+        const safeCancelUrl =
+          String(cancelUrl || "").trim() ||
+          `${origin}/shop-cancel.html`;
+
+        const session = await stripe.checkout.sessions.create({
+          mode: "payment",
+          line_items,
+          success_url: safeSuccessUrl,
+          cancel_url: safeCancelUrl,
+          billing_address_collection: "auto",
+          payment_method_types: ["card"],
+          metadata: {
+            source: "cleanup_shop",
+            subtotalCents: String(subtotalCents),
+            shippingApplied: needsShipping ? "yes" : "no",
+          },
+        });
+
+        return res.json({
+          ok: true,
+          url: session.url,
+          mode: session.livemode ? "live" : "test",
+        });
+      } catch (err) {
+        console.error("❌ create-shop-checkout-session error:", {
+          message: err?.message,
+          type: err?.type,
+          rawMessage: err?.raw?.message,
+          code: err?.code,
+          stripeKeyMode: String(stripeKey || "").startsWith("sk_test_")
+            ? "test"
+            : "live",
+          projectId: PROJECT_ID || null,
+          isDevProject: IS_DEV_PROJECT,
+        });
+        return res.status(500).json({ error: "shop checkout session failed" });
       }
     }
 
