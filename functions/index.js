@@ -577,17 +577,20 @@ exports.api = onRequest(
       };
     }
 
-    // =====================
-    // 1) PING
-    // =====================
-    if (method === "GET" && (path === "/" || path === "")) {
-      return res.json({
-        ok: true,
-        version: "api-v7",
-        projectId: PROJECT_ID || null,
-        mode: IS_DEV_PROJECT ? "dev" : "prod",
-      });
-    }
+   // =====================
+// 1) PING
+// =====================
+if (
+  method === "GET" &&
+  (path === "/" || path === "" || path === "/api" || path === "/api/")
+) {
+  return res.json({
+    ok: true,
+    version: "api-v7",
+    projectId: PROJECT_ID || null,
+    mode: IS_DEV_PROJECT ? "dev" : "prod",
+  });
+}
 
     // =====================
     // 1bis) ACTIVATE FREE PLAN
