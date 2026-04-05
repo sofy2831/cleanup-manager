@@ -19,10 +19,7 @@ const PROJECT_ID =
   process.env.GCP_PROJECT ||
   "";
 
-const IS_DEV_PROJECT =
-  PROJECT_ID === "cleanup-manager-dev" ||
-  PROJECT_ID === "cleanup-manager-d9301" ||
-  PROJECT_ID.includes("-dev");
+const IS_DEV_PROJECT = PROJECT_ID === "cleanup-manager-dev";
 
 // =====================
 // Stripe price IDs
