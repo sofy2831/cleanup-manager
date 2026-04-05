@@ -175,9 +175,20 @@ function setCors(req, res) {
 
 function getPath(req) {
   try {
-    if (req.path) return req.path;
-    const u = new URL(req.url, "http://localhost");
-    return u.pathname || "/";
+    let path = req.path;
+    if (!path) {
+      const u = new URL(req.url, "http://localhost");
+      path = u.pathname || "/";
+    }
+
+    // normalise le préfixe Hosting rewrite /api
+    if (path.startsWith("/api/")) {
+      path = path.slice(4); // "/api/test" => "/test"
+    } else if (path === "/api") {
+      path = "/";
+    }
+
+    return path || "/";
   } catch {
     return "/";
   }
