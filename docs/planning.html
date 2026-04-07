@@ -428,7 +428,7 @@
       position:fixed;
       right:16px;
       top:140px;
-      width:280px;
+      width:260px;
       background:#fff;
       border-radius:18px;
       padding:16px;
@@ -451,8 +451,13 @@
       color:#555;
     }
 
-    .onboarding-step.done{ color:var(--ok); }
-    .onboarding-step.pending{ color:#666; }
+    .onboarding-step.done{
+      color:var(--ok);
+    }
+
+    .onboarding-step.pending{
+      color:#666;
+    }
 
     .bottom-nav{
       position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
@@ -708,12 +713,7 @@
       </div>
     </div>
 
-    <div id="planningOnboardingPanel" class="onboarding-panel">
-      <div class="onboarding-title">Onboarding</div>
-      <div class="onboarding-step done">✓ Réservation présente</div>
-      <div class="onboarding-step pending">○ Créer une prestation</div>
-      <div class="onboarding-step pending">○ Passer en production</div>
-    </div>
+    <div id="planningOnboardingPanel" class="onboarding-panel"></div>
   </div>
 
   <nav class="bottom-nav" aria-label="Navigation">
@@ -736,7 +736,7 @@
   </div>
 
   <script type="module">
-  import { auth, db } from "./firebase-init.js";
+      import { auth, db } from "./firebase-init.js";
   import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
   import {
     collection, query, where, orderBy, limit, getDocs,
@@ -773,6 +773,7 @@
 
   const dashLink = document.getElementById("dashLink");
   const icalLink  = document.getElementById("icalLink");
+  const planningOnboardingPanel = document.getElementById("planningOnboardingPanel");
 
   function showAlert(msg, ok=false){
     alertBox.style.display = "block";
@@ -917,92 +918,9 @@
 
   window.addEventListener("keydown", (e)=>{
     if(e.key === "Escape"){
-      closeAllHelpBubbles();
       if(modalBack.style.display === "flex") closeModal();
     }
   });
-
-  function closeAllHelpBubbles(){
-    document.querySelectorAll("[data-help-bubble]").forEach(b=> b.style.display = "none");
-    document.querySelectorAll("[data-help-btn]").forEach(btn=> btn.setAttribute("aria-expanded","false"));
-  }
-  function clamp(n, min, max){ return Math.max(min, Math.min(max, n)); }
-  function portalBubbleToBody(bub){
-    if(bub.dataset.portaled === "1") return;
-    const ph = document.createElement("span");
-    ph.style.display = "none";
-    ph.dataset.helpPlaceholder = "1";
-    ph.id = "hbph_" + Math.random().toString(16).slice(2);
-    bub.parentNode?.insertBefore(ph, bub);
-    bub.dataset.placeholderId = ph.id;
-    document.body.appendChild(bub);
-    bub.dataset.portaled = "1";
-  }
-  function positionHelpBubble(btn, bub){
-    const r = btn.getBoundingClientRect();
-    const margin = 12;
-
-    bub.style.display = "block";
-    bub.style.visibility = "hidden";
-
-    const bw = bub.offsetWidth;
-    const bh = bub.offsetHeight;
-
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-
-    const targetLeft = r.left + (r.width/2) - (bw/2);
-    const left = clamp(targetLeft, margin, vw - bw - margin);
-
-    let top = r.bottom + 10;
-    if(top + bh > vh - margin){
-      top = r.top - bh - 10;
-    }
-    top = clamp(top, margin, vh - bh - margin);
-
-    bub.style.left = `${left}px`;
-    bub.style.top  = `${top}px`;
-
-    const maxArrow = Math.max(16, bw - 34);
-    const arrowX = clamp((r.left + r.width/2) - left - 9, 16, maxArrow);
-    bub.style.setProperty("--arrow-x", `${arrowX}px`);
-
-    bub.style.visibility = "visible";
-  }
-  function wireHelpBubbles(){
-    const wraps = document.querySelectorAll(".helpWrap[data-help-wrap]");
-    wraps.forEach(w=>{
-      if(w.dataset.wired === "1") return;
-
-      const key = w.getAttribute("data-help-wrap");
-      const btn = w.querySelector(`[data-help-btn="${CSS.escape(key)}"]`);
-      const bub = w.querySelector(`[data-help-bubble="${CSS.escape(key)}"]`);
-      if(!btn || !bub) return;
-
-      w.dataset.wired = "1";
-
-      btn.addEventListener("click", (e)=>{
-        e.stopPropagation();
-        const isOpen = bub.style.display === "block";
-        closeAllHelpBubbles();
-
-        if(!isOpen){
-          portalBubbleToBody(bub);
-          positionHelpBubble(btn, bub);
-          bub.style.display = "block";
-          btn.setAttribute("aria-expanded","true");
-        }else{
-          bub.style.display = "none";
-          btn.setAttribute("aria-expanded","false");
-        }
-      });
-
-      bub.addEventListener("click", (e)=> e.stopPropagation());
-    });
-  }
-  document.addEventListener("click", ()=> closeAllHelpBubbles());
-  window.addEventListener("resize", ()=> closeAllHelpBubbles());
-  window.addEventListener("scroll", ()=> closeAllHelpBubbles(), true);
 
   let currentUser = null;
   let myRole = "";
@@ -1336,6 +1254,25 @@
     return (eventsByDate.get(dateKey) || []);
   }
 
+  function renderPlanningOnboarding(){
+    let hasBooking = false;
+    let hasPresta = false;
+
+    if(currentView === "LIST"){
+      hasBooking = allBookings.filter(bookingPasses).length > 0;
+      hasPresta = allBookings.filter(bookingPasses).some(b => findLinkedEventsForBooking(b).length > 0);
+    }else{
+      hasBooking = getFilteredBookingsByDate(selectedDateKey).length > 0;
+      hasPresta = getFilteredBookingsByDate(selectedDateKey).some(b => findLinkedEventsForBooking(b).length > 0);
+    }
+
+    planningOnboardingPanel.innerHTML = `
+      <div class="onboarding-title">Onboarding</div>
+      <div class="onboarding-step ${hasBooking ? "done" : "pending"}">${hasBooking ? "✓" : "○"} Réservation présente</div>
+      <div class="onboarding-step ${hasPresta ? "done" : "pending"}">${hasPresta ? "✓" : "○"} Créer une prestation</div>
+    `;
+  }
+
   function getFilteredMonthRows(){
     const rows = [];
 
@@ -1574,7 +1511,6 @@
         setFocusParams(selectedDateKey, "");
         renderCalendar();
         renderMainPanel();
-        wireHelpBubbles();
         rewriteNavLinks();
       });
     }
@@ -1596,22 +1532,7 @@
         <div class="sectionHeader resa">
           <div class="left">
             <span>🏠 Séjours (réservations)</span>
-
-            <div class="helpWrap" data-help-wrap="booking">
-              <button class="helpBtn" type="button" data-help-btn="booking" aria-expanded="false">💡 Aide</button>
-              <div class="helpBubble" data-help-bubble="booking" role="dialog" aria-modal="false" aria-label="Aide prestations">
-                <p class="hbTitle">Planning</p>
-                <p class="hbText">
-Ici tu gères surtout les réservations.
-
-• “+ prestations” crée une prestation depuis la réservation.
-• “Voir production” ouvre prestations.html quand une prestation existe déjà.
-• La production, la validation et la facture se font maintenant dans la page Production.
-                </p>
-              </div>
-            </div>
           </div>
-
           <span class="count">${books.length}</span>
         </div>
       </div>
@@ -1627,7 +1548,7 @@ Ici tu gères surtout les réservations.
         </div>
       `;
       dayList.appendChild(div);
-      wireHelpBubbles();
+      renderPlanningOnboarding();
       return;
     }
 
@@ -1738,7 +1659,7 @@ Ici tu gères surtout les réservations.
       });
     }
 
-    wireHelpBubbles();
+    renderPlanningOnboarding();
   }
 
   function renderListMode(){
@@ -1758,6 +1679,7 @@ Ici tu gères surtout les réservations.
         </div>
       `;
       dayList.appendChild(div);
+      renderPlanningOnboarding();
       return;
     }
 
@@ -1799,6 +1721,8 @@ Ici tu gères surtout les réservations.
 
       dayList.appendChild(div);
     }
+
+    renderPlanningOnboarding();
   }
 
   function renderMainPanel(){
@@ -1821,7 +1745,6 @@ Ici tu gères surtout les réservations.
     renderCalendar();
     renderMainPanel();
     syncViewButtons();
-    wireHelpBubbles();
     rewriteNavLinks();
   }
 
@@ -1862,7 +1785,6 @@ Ici tu gères surtout les réservations.
     await loadBookingsForMonth();
     renderAll();
     focusIfNeeded();
-    wireHelpBubbles();
     rewriteNavLinks();
   }
 
@@ -1969,7 +1891,6 @@ Ici tu gères surtout les réservations.
       }
     }
 
-    wireHelpBubbles();
     rewriteNavLinks();
   });
 </script>
