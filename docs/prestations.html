@@ -732,1266 +732,1412 @@
       </div>
     </div>
   </div>
-  <script type="module">
-    import { auth, db } from "./firebase-init.js";
-    import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-    import {
-      collection, query, where, orderBy, limit, getDocs,
-      doc, deleteDoc, getDoc, updateDoc, addDoc, serverTimestamp
-    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+<script type="module">
+  import { auth, db } from "./firebase-init.js";
+  import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+  import {
+    collection, query, where, orderBy, limit, getDocs,
+    doc, deleteDoc, getDoc, updateDoc, addDoc, serverTimestamp
+  } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
-    const helloLine = document.getElementById("helloLine");
-    const companyLine = document.getElementById("companyLine");
+  const helloLine = document.getElementById("helloLine");
+  const companyLine = document.getElementById("companyLine");
 
-    const planningLink = document.getElementById("planningLink");
-    const planningNavLink = document.getElementById("planningNavLink");
-    const productionOnboardingPanel = document.getElementById("productionOnboardingPanel");
-    const productionOnboardingSteps = document.getElementById("productionOnboardingSteps");
-    const productionOnboardingCloseBtn = document.getElementById("productionOnboardingCloseBtn");
+  const planningLink = document.getElementById("planningLink");
+  const planningNavLink = document.getElementById("planningNavLink");
+  const productionOnboardingPanel = document.getElementById("productionOnboardingPanel");
+  const productionOnboardingSteps = document.getElementById("productionOnboardingSteps");
+  const productionOnboardingCloseBtn = document.getElementById("productionOnboardingCloseBtn");
 
-    const alertBox = document.getElementById("alertBox");
-    const listEl = document.getElementById("list");
-    const countLabel = document.getElementById("countLabel");
+  const alertBox = document.getElementById("alertBox");
+  const listEl = document.getElementById("list");
+  const countLabel = document.getElementById("countLabel");
 
-    const validateList = document.getElementById("validateList");
-    const validateCountLabel = document.getElementById("validateCountLabel");
+  const validateList = document.getElementById("validateList");
+  const validateCountLabel = document.getElementById("validateCountLabel");
 
-    const searchInput = document.getElementById("searchInput");
-    const clearSearchBtn = document.getElementById("clearSearchBtn");
-    let searchQuery = "";
+  const searchInput = document.getElementById("searchInput");
+  const clearSearchBtn = document.getElementById("clearSearchBtn");
+  let searchQuery = "";
 
-    const detailBackdrop = document.getElementById("detailBackdrop");
-    const detailCloseBtn = document.getElementById("detailCloseBtn");
-    const detailModalSub = document.getElementById("detailModalSub");
-    const detailModalContext = document.getElementById("detailModalContext");
-    const detailModalInterventions = document.getElementById("detailModalInterventions");
-    const detailModalTotalValue = document.getElementById("detailModalTotalValue");
+  const detailBackdrop = document.getElementById("detailBackdrop");
+  const detailCloseBtn = document.getElementById("detailCloseBtn");
+  const detailModalSub = document.getElementById("detailModalSub");
+  const detailModalContext = document.getElementById("detailModalContext");
+  const detailModalInterventions = document.getElementById("detailModalInterventions");
+  const detailModalTotalValue = document.getElementById("detailModalTotalValue");
 
-    let productionOnboardingDismissed = false;
+  let productionOnboardingDismissed = false;
 
-    function showAlert(msg, ok=false){
-      if(!alertBox) return;
-      alertBox.style.display = "block";
-      alertBox.classList.toggle("ok", !!ok);
-      alertBox.textContent = msg;
-    }
-    function hideAlert(){
-      if(!alertBox) return;
-      alertBox.style.display = "none";
-      alertBox.classList.remove("ok");
-      alertBox.textContent = "";
-    }
+  function showAlert(msg, ok=false){
+    if(!alertBox) return;
+    alertBox.style.display = "block";
+    alertBox.classList.toggle("ok", !!ok);
+    alertBox.textContent = msg;
+  }
+  function hideAlert(){
+    if(!alertBox) return;
+    alertBox.style.display = "none";
+    alertBox.classList.remove("ok");
+    alertBox.textContent = "";
+  }
 
-    function esc(s){
-      return String(s ?? "")
-        .replaceAll("&","&amp;")
-        .replaceAll("<","&lt;")
-        .replaceAll(">","&gt;")
-        .replaceAll('"',"&quot;")
-        .replaceAll("'","&#039;");
-    }
-    function money(n){
-      const x = Number(n || 0);
-      return x.toLocaleString("fr-FR",{minimumFractionDigits:2,maximumFractionDigits:2})+" €";
-    }
-    function asRaw(s){ return String(s||"").toUpperCase().trim(); }
-    function qs(name){ return new URLSearchParams(location.search).get(name) || ""; }
-    function safeStr(v){ return (v ?? "").toString().trim(); }
-    function normTxt(s){
-      return String(s || "")
-        .toLowerCase()
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "");
-    }
+  function esc(s){
+    return String(s ?? "")
+      .replaceAll("&","&amp;")
+      .replaceAll("<","&lt;")
+      .replaceAll(">","&gt;")
+      .replaceAll('"',"&quot;")
+      .replaceAll("'","&#039;");
+  }
+  function money(n){
+    const x = Number(n || 0);
+    return x.toLocaleString("fr-FR",{minimumFractionDigits:2,maximumFractionDigits:2})+" €";
+  }
+  function asRaw(s){ return String(s||"").toUpperCase().trim(); }
+  function qs(name){ return new URLSearchParams(location.search).get(name) || ""; }
+  function safeStr(v){ return (v ?? "").toString().trim(); }
+  function normTxt(s){
+    return String(s || "")
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "");
+  }
 
-    productionOnboardingCloseBtn?.addEventListener("click", ()=>{
-      productionOnboardingDismissed = true;
-      productionOnboardingPanel.hidden = true;
-    });
+  productionOnboardingCloseBtn?.addEventListener("click", ()=>{
+    productionOnboardingDismissed = true;
+    productionOnboardingPanel.hidden = true;
+  });
 
-    function buildPlanningReturnHref(){
-      const returnDate = (qs("returnDate") || qs("date") || "").trim();
-      const returnBookingId = (qs("returnBookingId") || qs("bookingId") || "").trim();
+  function buildPlanningReturnHref(){
+    const returnDate = (qs("returnDate") || qs("date") || "").trim();
+    const returnBookingId = (qs("returnBookingId") || qs("bookingId") || "").trim();
 
-      const p = new URLSearchParams();
-      if(returnDate) p.set("date", returnDate);
-      if(returnBookingId) p.set("bookingId", returnBookingId);
+    const p = new URLSearchParams();
+    if(returnDate) p.set("date", returnDate);
+    if(returnBookingId) p.set("bookingId", returnBookingId);
 
-      const suffix = p.toString();
-      return suffix ? `planning.html?${suffix}` : "planning.html";
-    }
+    const suffix = p.toString();
+    return suffix ? `planning.html?${suffix}` : "planning.html";
+  }
 
-    function wireReturnLinks(){
-      const href = buildPlanningReturnHref();
-      if(planningLink) planningLink.href = href;
-      if(planningNavLink) planningNavLink.href = href;
-    }
+  function wireReturnLinks(){
+    const href = buildPlanningReturnHref();
+    if(planningLink) planningLink.href = href;
+    if(planningNavLink) planningNavLink.href = href;
+  }
 
-    function normalizeOpStatus(s){
-      const x = asRaw(s);
-      if(x === "REALISEE" || x === "RÉALISÉE" || x === "DONE" || x === "VALIDEE" || x === "VALIDÉE") return "REALISEE";
-      if(x === "ANNULEE" || x === "ANNULÉE" || x === "CANCELLED") return "ANNULEE";
-      if(x === "A_VALIDER" || x === "À VALIDER" || x === "À_VALIDER") return "A_VALIDER";
-      return "EN_COURS";
-    }
-    function opLabel(st){
-      const s = normalizeOpStatus(st);
-      if(s==="EN_COURS") return "EN COURS";
-      if(s==="A_VALIDER") return "À VALIDER";
-      if(s==="REALISEE") return "RÉALISÉE";
-      if(s==="ANNULEE") return "ANNULÉE";
-      return s;
-    }
+  function normalizeOpStatus(s){
+    const x = asRaw(s);
+    if(x === "REALISEE" || x === "RÉALISÉE" || x === "DONE" || x === "VALIDEE" || x === "VALIDÉE") return "REALISEE";
+    if(x === "ANNULEE" || x === "ANNULÉE" || x === "CANCELLED") return "ANNULEE";
+    if(x === "A_VALIDER" || x === "À VALIDER" || x === "À_VALIDER") return "A_VALIDER";
+    return "EN_COURS";
+  }
+  function opLabel(st){
+    const s = normalizeOpStatus(st);
+    if(s==="EN_COURS") return "EN COURS";
+    if(s==="A_VALIDER") return "À VALIDER";
+    if(s==="REALISEE") return "RÉALISÉE";
+    if(s==="ANNULEE") return "ANNULÉE";
+    return s;
+  }
 
-    function normalizeMissionStatus(s){
-      const x = asRaw(s);
-      if(x === "VALIDEE" || x === "VALIDÉE") return "VALIDEE";
-      if(x === "A_VALIDER" || x === "À VALIDER" || x === "À_VALIDER" || x === "TERMINEE" || x === "TERMINÉE") return "A_VALIDER";
-      if(x === "ASSIGNEE" || x === "ASSIGNÉE" || x === "A_FAIRE" || x === "EN_COURS" || x === "EN COURS") return "EN_COURS";
-      return "EN_COURS";
-    }
+  function normalizeMissionStatus(s){
+    const x = asRaw(s);
+    if(x === "VALIDEE" || x === "VALIDÉE") return "VALIDEE";
+    if(x === "A_VALIDER" || x === "À VALIDER" || x === "À_VALIDER" || x === "TERMINEE" || x === "TERMINÉE") return "A_VALIDER";
+    if(x === "ASSIGNEE" || x === "ASSIGNÉE" || x === "A_FAIRE" || x === "EN_COURS" || x === "EN COURS") return "EN_COURS";
+    return "EN_COURS";
+  }
 
-    function isTrackedMissionDoc(m){
-      const id = String(m?.missionId || m?.type || "").toUpperCase().trim();
-      return !!id && id !== "PHOTOS";
-    }
+  function isTrackedMissionDoc(m){
+    const id = String(m?.missionId || m?.type || "").toUpperCase().trim();
+    return !!id && id !== "PHOTOS";
+  }
 
-    function isBusinessMissionId(missionId){
-      const x = String(missionId || "").toUpperCase().trim();
-      return ["CHECKIN","MENAGE","CHECKOUT","LINGE","MAINTENANCE","KITS"].includes(x);
-    }
+  function isBusinessMissionId(missionId){
+    const x = String(missionId || "").toUpperCase().trim();
+    return ["CHECKIN","MENAGE","CHECKOUT","LINGE","MAINTENANCE","KITS"].includes(x);
+  }
 
-    function missionLabelFromId(missionId){
-      const x = String(missionId || "").toUpperCase().trim();
-      if(x === "CHECKIN") return "Arrivée";
-      if(x === "MENAGE") return "Inter-séjour";
-      if(x === "CHECKOUT") return "Départ";
-      if(x === "MAINTENANCE") return "Libre";
-      if(x === "LINGE") return "Linge";
-      if(x === "KITS") return "Kits";
-      if(x === "PHOTOS") return "Photos";
-      return x || "Mission";
-    }
+  function missionLabelFromId(missionId){
+    const x = String(missionId || "").toUpperCase().trim();
+    if(x === "CHECKIN") return "Arrivée";
+    if(x === "MENAGE") return "Inter-séjour";
+    if(x === "CHECKOUT") return "Départ";
+    if(x === "MAINTENANCE") return "Libre";
+    if(x === "LINGE") return "Linge";
+    if(x === "KITS") return "Kits";
+    if(x === "PHOTOS") return "Photos";
+    return x || "Mission";
+  }
 
-    function interventionLabelFromKey(key, rawLabel=""){
-      const lbl = String(rawLabel || "").trim();
-      if(lbl) return lbl;
-      if(key === "arrival") return "Arrivée";
-      if(key === "midstay") return "Inter-séjour";
-      if(key === "departure") return "Départ";
-      if(key === "other") return "Libre";
-      return "Intervention";
-    }
+  function interventionLabelFromKey(key, rawLabel=""){
+    const lbl = String(rawLabel || "").trim();
+    if(lbl) return lbl;
+    if(key === "arrival") return "Arrivée";
+    if(key === "midstay") return "Inter-séjour";
+    if(key === "departure") return "Départ";
+    if(key === "other") return "Libre";
+    return "Intervention";
+  }
 
-    function normalizeInterventions(eventDoc){
-      const e = eventDoc || {};
-      const src = (e.interventions && typeof e.interventions === "object") ? e.interventions : null;
+  function normalizeInterventions(eventDoc){
+    const e = eventDoc || {};
+    const src = (e.interventions && typeof e.interventions === "object") ? e.interventions : null;
 
-      if(src){
-        const keys = ["arrival","midstay","departure","other"];
-        return keys.map((key)=> {
-          const raw = src[key] || {};
-          return {
-            key,
-            title: interventionLabelFromKey(key, raw.label),
-            type: String(raw.type || "").trim(),
-            dateKey: String(raw.dateKey || "").trim(),
-            note: String(raw.note || "").trim(),
-            lines: Array.isArray(raw.lines) ? raw.lines : []
-          };
-        });
-      }
-
-      const legacyLines = Array.isArray(e.lines) ? e.lines : [];
-      return [{
-        key: "legacy",
-        title: "Prestation",
-        type: String(e.type || "").trim(),
-        dateKey: String(e.dateKey || e.date || "").trim(),
-        note: String(e.meta || "").trim(),
-        lines: legacyLines
-      }];
-    }
-
-    function expectedMissionTypesFromInterventions(eventDoc){
-      const interventions = normalizeInterventions(eventDoc);
-      const out = new Set();
-
-      for(const iv of interventions){
-        const lines = Array.isArray(iv.lines) ? iv.lines : [];
-        for(const l of lines){
-          const label = normTxt(l?.label || l?.name || l?.title || "");
-          const category = normTxt(l?.category || "");
-          const text = `${label} ${category}`.trim();
-
-          if(!text) continue;
-
-          if(label.includes("check-in") || label.includes("check in") || label.includes("arrivee")) out.add("CHECKIN");
-          if(label.includes("check-out") || label.includes("check out")) out.add("CHECKOUT");
-          if(text.includes("menage") || text.includes("nettoyage")) out.add("MENAGE");
-          if(text.includes("linge") || text.includes("drap") || text.includes("serviette") || text.includes("collecte") || text.includes("lavage") || text.includes("sechage") || text.includes("lessive") || text.includes("blanch")) out.add("LINGE");
-          if(text.includes("maintenance") || text.includes("reparation") || text.includes("bricol") || text.includes("artisan") || text.includes("fuite") || text.includes("serrure") || text.includes("urgence") || text.includes("ampoule") || text.includes("joint")) out.add("MAINTENANCE");
-          if(text.includes("kit") || text.includes("consommable") || text.includes("capsule") || text.includes("shampo") || text.includes("savon") || text.includes("reassort")) out.add("KITS");
-        }
-      }
-
-      const order = ["CHECKIN","MENAGE","CHECKOUT","LINGE","MAINTENANCE","KITS"];
-      return order.filter(x => out.has(x));
-    }
-
-    function synthesizeEventStatusFromExpectedMissions(eventDoc, missions){
-      const expected = expectedMissionTypesFromInterventions(eventDoc);
-      if(!expected.length) return "EN_COURS";
-
-      const tracked = (Array.isArray(missions) ? missions : []).filter(isTrackedMissionDoc);
-      const byId = new Map();
-
-      for(const m of tracked){
-        const missionId = String(m?.missionId || m?.type || "").toUpperCase().trim();
-        if(!missionId) continue;
-        byId.set(missionId, normalizeMissionStatus(m.status || ""));
-      }
-
-      const expectedStatuses = expected.map(id => byId.get(id) || "MISSING");
-
-      if(expectedStatuses.some(s => s === "A_VALIDER")) return "A_VALIDER";
-      if(expectedStatuses.every(s => s === "VALIDEE")) return "REALISEE";
-      return "EN_COURS";
-    }
-
-    const FREE_EMAILS = new Set(["mathilde.debout31@gmail.com","s.dumas974@gmail.com"]);
-
-    async function guardConciergerie(user){
-      const email = (user.email || "").toLowerCase();
-      const isAdmin = FREE_EMAILS.has(email);
-
-      try{
-        const snap = await getDoc(doc(db, "users", user.uid));
-        if(!snap.exists()) return { ok:false, reason:"no_profile" };
-
-        const data = snap.data() || {};
-        const roleOk = (data.role === "conciergerie" || data.role === "admin");
-        if(!roleOk) return { ok:false, reason:"bad_role" };
-
-        if(isAdmin || data.role === "admin") return { ok:true, data };
-
-        const sub = String(data.subscriptionStatus || "").toLowerCase();
-        if(!["active", "cancel_at_period_end"].includes(sub)){
-          return { ok:false, reason:"sub_inactive" };
-        }
-
-        if(!data.billingReady){
-          return { ok:false, reason:"profile_missing" };
-        }
-
-        return { ok:true, data };
-      }catch(e){
-        return { ok:false, reason:"error" };
-      }
-    }
-
-    async function loadCompanyName(user){
-      try{
-        const uSnap = await getDoc(doc(db, "users", user.uid));
-        const company = uSnap.exists() ? (uSnap.data()?.businessProfile?.companyName || "") : "";
-        companyLine.textContent = (company || "").trim() || "Conciergerie";
-      }catch(e){
-        companyLine.textContent = "Conciergerie";
-      }
-    }
-
-    function normalizeInterventionsFromEvent(x){
-      if(x?.interventions && typeof x.interventions === "object"){
+    if(src){
+      const keys = ["arrival","midstay","departure","other"];
+      return keys.map((key)=> {
+        const raw = src[key] || {};
         return {
-          arrival: x.interventions.arrival || { label:"Arrivée", type:"ARRIVEE", lines:[], note:"", dateKey:"", completedAt:null },
-          midstay: x.interventions.midstay || { label:"Inter-séjour", type:"INTER_SEJOUR", lines:[], note:"", dateKey:"", completedAt:null },
-          departure: x.interventions.departure || { label:"Départ", type:"DEPART", lines:[], note:"", dateKey:"", completedAt:null },
-          other: x.interventions.other || { label:"Libre", type:"LIBRE", lines:[], note:"", dateKey:"", completedAt:null }
+          key,
+          title: interventionLabelFromKey(key, raw.label),
+          type: String(raw.type || "").trim(),
+          dateKey: String(raw.dateKey || "").trim(),
+          note: String(raw.note || "").trim(),
+          lines: Array.isArray(raw.lines) ? raw.lines : []
         };
+      });
+    }
+
+    const legacyLines = Array.isArray(e.lines) ? e.lines : [];
+    return [{
+      key: "legacy",
+      title: "Prestation",
+      type: String(e.type || "").trim(),
+      dateKey: String(e.dateKey || e.date || "").trim(),
+      note: String(e.meta || "").trim(),
+      lines: legacyLines
+    }];
+  }
+
+  function expectedMissionTypesFromInterventions(eventDoc){
+    const interventions = normalizeInterventions(eventDoc);
+    const out = new Set();
+
+    for(const iv of interventions){
+      const lines = Array.isArray(iv.lines) ? iv.lines : [];
+
+      for(const l of lines){
+        const label = normTxt(l?.label || l?.name || l?.title || "");
+        const category = normTxt(l?.category || "");
+        const text = `${label} ${category}`.trim();
+
+        if(!text) continue;
+
+        // CHECK-IN
+        if(
+          text.includes("check-in") ||
+          text.includes("check in") ||
+          text.includes("checkin") ||
+          text.includes("arrivee") ||
+          text.includes("arrivée")
+        ){
+          out.add("CHECKIN");
+        }
+
+        // CHECK-OUT seulement si la ligne le dit vraiment
+        if(
+          text === "check-out" ||
+          text.includes("check-out") ||
+          text.includes("check out") ||
+          text.includes("checkout") ||
+          text.includes("recuperation cles") ||
+          text.includes("récupération clés")
+        ){
+          out.add("CHECKOUT");
+        }
+
+        // MENAGE
+        if(
+          text.includes("menage") ||
+          text.includes("ménage") ||
+          text.includes("nettoyage") ||
+          text.includes("remise en etat") ||
+          text.includes("remise en état") ||
+          text.includes("back-to-back") ||
+          category === "menage" ||
+          category === "ménage"
+        ){
+          out.add("MENAGE");
+        }
+
+        // LINGE
+        if(
+          text.includes("linge") ||
+          text.includes("drap") ||
+          text.includes("serviette") ||
+          text.includes("collecte") ||
+          text.includes("lavage") ||
+          text.includes("sechage") ||
+          text.includes("séchage") ||
+          text.includes("lessive") ||
+          text.includes("blanch")
+        ){
+          out.add("LINGE");
+        }
+
+        // MAINTENANCE
+        if(
+          text.includes("maintenance") ||
+          text.includes("reparation") ||
+          text.includes("réparation") ||
+          text.includes("bricol") ||
+          text.includes("artisan") ||
+          text.includes("fuite") ||
+          text.includes("serrure") ||
+          text.includes("urgence") ||
+          text.includes("ampoule") ||
+          text.includes("joint")
+        ){
+          out.add("MAINTENANCE");
+        }
+
+        // KITS
+        if(
+          text.includes("kit") ||
+          text.includes("consommable") ||
+          text.includes("capsule") ||
+          text.includes("shampo") ||
+          text.includes("savon") ||
+          text.includes("reassort") ||
+          text.includes("réassort")
+        ){
+          out.add("KITS");
+        }
+      }
+    }
+
+    const order = ["CHECKIN","MENAGE","CHECKOUT","LINGE","MAINTENANCE","KITS"];
+    return order.filter(x => out.has(x));
+  }
+
+  function synthesizeEventStatusFromExpectedMissions(eventDoc, missions){
+    const expected = expectedMissionTypesFromInterventions(eventDoc);
+    if(!expected.length) return "EN_COURS";
+
+    const tracked = (Array.isArray(missions) ? missions : []).filter(isTrackedMissionDoc);
+    const byId = new Map();
+
+    for(const m of tracked){
+      const missionId = String(m?.missionId || m?.type || "").toUpperCase().trim();
+      if(!missionId) continue;
+      byId.set(missionId, normalizeMissionStatus(m.status || ""));
+    }
+
+    const expectedStatuses = expected.map(id => byId.get(id) || "MISSING");
+
+    if(expectedStatuses.some(s => s === "A_VALIDER")) return "A_VALIDER";
+    if(expectedStatuses.every(s => s === "VALIDEE")) return "REALISEE";
+    return "EN_COURS";
+  }
+
+  const FREE_EMAILS = new Set(["mathilde.debout31@gmail.com","s.dumas974@gmail.com"]);
+
+  async function guardConciergerie(user){
+    const email = (user.email || "").toLowerCase();
+    const isAdmin = FREE_EMAILS.has(email);
+
+    try{
+      const snap = await getDoc(doc(db, "users", user.uid));
+      if(!snap.exists()) return { ok:false, reason:"no_profile" };
+
+      const data = snap.data() || {};
+      const roleOk = (data.role === "conciergerie" || data.role === "admin");
+      if(!roleOk) return { ok:false, reason:"bad_role" };
+
+      if(isAdmin || data.role === "admin") return { ok:true, data };
+
+      const sub = String(data.subscriptionStatus || "").toLowerCase();
+      if(!["active", "cancel_at_period_end"].includes(sub)){
+        return { ok:false, reason:"sub_inactive" };
       }
 
-      const packs = (x?.packs && typeof x.packs === "object") ? x.packs : {};
+      if(!data.billingReady){
+        return { ok:false, reason:"profile_missing" };
+      }
+
+      return { ok:true, data };
+    }catch(e){
+      return { ok:false, reason:"error" };
+    }
+  }
+
+  async function loadCompanyName(user){
+    try{
+      const uSnap = await getDoc(doc(db, "users", user.uid));
+      const company = uSnap.exists() ? (uSnap.data()?.businessProfile?.companyName || "") : "";
+      companyLine.textContent = (company || "").trim() || "Conciergerie";
+    }catch(e){
+      companyLine.textContent = "Conciergerie";
+    }
+  }
+
+  function normalizeInterventionsFromEvent(x){
+    if(x?.interventions && typeof x.interventions === "object"){
       return {
-        arrival: {
-          label:"Arrivée",
-          type:"ARRIVEE",
-          lines:Array.isArray(packs?.arrival?.lines) ? packs.arrival.lines : [],
-          note:String(packs?.arrival?.note || "").trim(),
-          dateKey:String(packs?.arrival?.dateKey || x?.arrivalDateKey || x?.dateKey || x?.date || "").trim(),
-          completedAt:packs?.arrival?.doneAt || packs?.arrival?.validatedAt || null
-        },
-        midstay: {
-          label:"Inter-séjour",
-          type:"INTER_SEJOUR",
-          lines:Array.isArray(packs?.midstay?.lines) ? packs.midstay.lines : [],
-          note:String(packs?.midstay?.note || "").trim(),
-          dateKey:String(packs?.midstay?.dateKey || x?.interstayDateKey || "").trim(),
-          completedAt:packs?.midstay?.doneAt || packs?.midstay?.validatedAt || null
-        },
-        departure: {
-          label:"Départ",
-          type:"DEPART",
-          lines:Array.isArray(packs?.departure?.lines) ? packs.departure.lines : [],
-          note:String(packs?.departure?.note || "").trim(),
-          dateKey:String(packs?.departure?.dateKey || x?.departureDateKey || "").trim(),
-          completedAt:packs?.departure?.doneAt || packs?.departure?.validatedAt || null
-        },
-        other: {
-          label:"Libre",
-          type:"LIBRE",
-          lines:Array.isArray(packs?.other?.lines) ? packs.other.lines : [],
-          note:String(packs?.other?.note || "").trim(),
-          dateKey:String(packs?.other?.dateKey || "").trim(),
-          completedAt:packs?.other?.doneAt || packs?.other?.validatedAt || null
-        }
+        arrival: x.interventions.arrival || { label:"Arrivée", type:"ARRIVEE", lines:[], note:"", dateKey:"", completedAt:null },
+        midstay: x.interventions.midstay || { label:"Inter-séjour", type:"INTER_SEJOUR", lines:[], note:"", dateKey:"", completedAt:null },
+        departure: x.interventions.departure || { label:"Départ", type:"DEPART", lines:[], note:"", dateKey:"", completedAt:null },
+        other: x.interventions.other || { label:"Libre", type:"LIBRE", lines:[], note:"", dateKey:"", completedAt:null }
       };
     }
 
-    function interventionKeys(){
-      return ["arrival","midstay","departure","other"];
-    }
-    function interventionLines(interventions, key){
-      const ls = interventions?.[key]?.lines;
-      return Array.isArray(ls) ? ls : [];
-    }
-    function interventionNote(interventions, key){
-      return String(interventions?.[key]?.note || "").trim();
-    }
-    function interventionDateKey(interventions, key){
-      return String(interventions?.[key]?.dateKey || "").trim();
-    }
-    function interventionDoneAt(interventions, key){
-      return interventions?.[key]?.completedAt || interventions?.[key]?.validatedAt || interventions?.[key]?.doneAt || null;
-    }
-    function interventionUseful(interventions, key){
-      return interventionLines(interventions, key).length > 0 || !!interventionNote(interventions, key);
-    }
-    function interventionTotal(interventions, key){
-      const ls = interventionLines(interventions, key);
-      return ls.reduce((s,l)=> s + (Number(l?.qty)||0)*(Number(l?.unitPrice)||0), 0);
-    }
-    function totalFromInterventions(interventions){
-      return interventionKeys().reduce((sum, key)=> sum + interventionTotal(interventions, key), 0);
-    }
-    function countUsefulPendingInterventions(interventions){
-      let pending = 0;
-      for(const key of interventionKeys()){
-        if(!interventionUseful(interventions,key)) continue;
-        if(interventionDoneAt(interventions,key)) continue;
-        pending++;
+    const packs = (x?.packs && typeof x.packs === "object") ? x.packs : {};
+    return {
+      arrival: {
+        label:"Arrivée",
+        type:"ARRIVEE",
+        lines:Array.isArray(packs?.arrival?.lines) ? packs.arrival.lines : [],
+        note:String(packs?.arrival?.note || "").trim(),
+        dateKey:String(packs?.arrival?.dateKey || x?.arrivalDateKey || x?.dateKey || x?.date || "").trim(),
+        completedAt:packs?.arrival?.doneAt || packs?.arrival?.validatedAt || null
+      },
+      midstay: {
+        label:"Inter-séjour",
+        type:"INTER_SEJOUR",
+        lines:Array.isArray(packs?.midstay?.lines) ? packs.midstay.lines : [],
+        note:String(packs?.midstay?.note || "").trim(),
+        dateKey:String(packs?.midstay?.dateKey || x?.interstayDateKey || "").trim(),
+        completedAt:packs?.midstay?.doneAt || packs?.midstay?.validatedAt || null
+      },
+      departure: {
+        label:"Départ",
+        type:"DEPART",
+        lines:Array.isArray(packs?.departure?.lines) ? packs.departure.lines : [],
+        note:String(packs?.departure?.note || "").trim(),
+        dateKey:String(packs?.departure?.dateKey || x?.departureDateKey || "").trim(),
+        completedAt:packs?.departure?.doneAt || packs?.departure?.validatedAt || null
+      },
+      other: {
+        label:"Libre",
+        type:"LIBRE",
+        lines:Array.isArray(packs?.other?.lines) ? packs.other.lines : [],
+        note:String(packs?.other?.note || "").trim(),
+        dateKey:String(packs?.other?.dateKey || "").trim(),
+        completedAt:packs?.other?.doneAt || packs?.other?.validatedAt || null
       }
-      return pending;
+    };
+  }
+
+  function interventionKeys(){
+    return ["arrival","midstay","departure","other"];
+  }
+  function interventionLines(interventions, key){
+    const ls = interventions?.[key]?.lines;
+    return Array.isArray(ls) ? ls : [];
+  }
+  function interventionNote(interventions, key){
+    return String(interventions?.[key]?.note || "").trim();
+  }
+  function interventionDateKey(interventions, key){
+    return String(interventions?.[key]?.dateKey || "").trim();
+  }
+  function interventionDoneAt(interventions, key){
+    return interventions?.[key]?.completedAt || interventions?.[key]?.validatedAt || interventions?.[key]?.doneAt || null;
+  }
+  function interventionUseful(interventions, key){
+    return interventionLines(interventions, key).length > 0 || !!interventionNote(interventions, key);
+  }
+  function interventionTotal(interventions, key){
+    const ls = interventionLines(interventions, key);
+    return ls.reduce((s,l)=> s + (Number(l?.qty)||0)*(Number(l?.unitPrice)||0), 0);
+  }
+  function totalFromInterventions(interventions){
+    return interventionKeys().reduce((sum, key)=> sum + interventionTotal(interventions, key), 0);
+  }
+  function countUsefulPendingInterventions(interventions){
+    let pending = 0;
+    for(const key of interventionKeys()){
+      if(!interventionUseful(interventions,key)) continue;
+      if(interventionDoneAt(interventions,key)) continue;
+      pending++;
     }
-    function interventionLabel(key, interventions){
-      return String(interventions?.[key]?.label || (
-        key === "arrival" ? "Arrivée" :
-        key === "midstay" ? "Inter-séjour" :
-        key === "departure" ? "Départ" : "Libre"
-      ));
-    }
+    return pending;
+  }
+  function interventionLabel(key, interventions){
+    return String(interventions?.[key]?.label || (
+      key === "arrival" ? "Arrivée" :
+      key === "midstay" ? "Inter-séjour" :
+      key === "departure" ? "Départ" : "Libre"
+    ));
+  }
 
-    function sumMissionPhotosByIntervention(it, key){
-      const photoCounts = it?.photoCounts || {};
-      if(key === "arrival"){
-        return Number(photoCounts.CHECKIN || 0);
-      }
-      if(key === "midstay"){
-        return Number(photoCounts.MENAGE || 0) + Number(photoCounts.LINGE || 0) + Number(photoCounts.KITS || 0);
-      }
-      if(key === "departure"){
-        return Number(photoCounts.CHECKOUT || 0);
-      }
-      if(key === "other"){
-        return Number(photoCounts.MAINTENANCE || 0);
-      }
-      return 0;
-    }
+  function sumMissionPhotosByIntervention(it, key){
+    const photoCounts = it?.photoCounts || {};
 
-    function normalizeForSearch(d){
-      const iv = d.interventions || {};
-      const labels = interventionKeys()
-        .flatMap(k => interventionLines(iv,k).map(x=>x?.label))
-        .filter(Boolean)
-        .join(" ");
-
-      const notes = interventionKeys()
-        .map(k => interventionNote(iv,k))
-        .filter(Boolean)
-        .join(" ");
-
-      const parts = [
-        d.homeName, d.homeCity, d.homeType, d.homeAddress, d.homeZip,
-        d.ownerName, d.ownerPhone,
-        d.meta, d.summary,
-        d.arrivalDateKey, d.arrivalTime, d.interstayDateKey, d.departureDateKey, d.departureTime,
-        labels, notes
-      ];
-      return normTxt(parts.filter(Boolean).join(" "));
-    }
-
-    function missionPhotoBadgeHtml(it){
-      const total = Number(it.totalMissionPhotos || 0);
-      if(total > 0){
-        return `<span class="badge small blue">📷 ${esc(String(total))}</span>`;
-      }
-      return `<span class="badge small">📷 0</span>`;
+    if(key === "arrival"){
+      return Number(photoCounts.CHECKIN || 0);
     }
 
-    let currentUser = null;
-    const PAGE_SIZE = 60;
-    let items = [];
-    let selected = null;
-    let validateRows = [];
-    let currentOnboarding = {};
-
-    function applySearchUI(){
-      const q = (searchQuery || "").trim();
-      clearSearchBtn?.classList.toggle("show", !!q);
+    if(key === "midstay"){
+      return Number(photoCounts.MENAGE || 0) + Number(photoCounts.LINGE || 0) + Number(photoCounts.KITS || 0);
     }
-    searchInput?.addEventListener("input", ()=>{
-      searchQuery = searchInput.value || "";
-      applySearchUI();
-      renderAll();
-    });
-    clearSearchBtn?.addEventListener("click", ()=>{
-      searchQuery = "";
-      if(searchInput) searchInput.value = "";
-      applySearchUI();
-      renderAll();
-      searchInput?.focus();
-    });
 
-    function openDetailModal(){
-      if(!selected) return;
-      detailBackdrop.style.display = "flex";
-    }
-    function closeDetailModal(){
-      detailBackdrop.style.display = "none";
-    }
-    detailBackdrop?.addEventListener("click",(e)=>{ if(e.target===detailBackdrop) closeDetailModal(); });
-    detailCloseBtn?.addEventListener("click", closeDetailModal);
+    if(key === "departure"){
+      const departureLines = interventionLines(it?.interventions || {}, "departure");
+      const departureText = departureLines.map(l => {
+        const label = normTxt(l?.label || l?.name || l?.title || "");
+        const category = normTxt(l?.category || "");
+        return `${label} ${category}`.trim();
+      }).join(" ");
 
-    function renderProductionOnboarding(){
-      const ob = currentOnboarding || {};
-      const steps = [
-        { done: ob.firstServiceCreated === true, label: "Première prestation créée" },
-        { done: ob.firstMissionCreated === true, label: "Première mission créée" },
-        { done: ob.firstProofValidated === true, label: "Première mission validée" },
-        { done: ob.firstInvoiceOrQuoteCreated === true, label: "Première facture créée" }
-      ];
+      let total = 0;
 
-      const allDone = steps.every(step => step.done === true);
-
-      if(productionOnboardingDismissed || allDone){
-        productionOnboardingPanel.hidden = true;
-        productionOnboardingSteps.innerHTML = "";
-        return;
+      if(
+        departureText.includes("check-out") ||
+        departureText.includes("check out") ||
+        departureText.includes("checkout") ||
+        departureText.includes("recuperation cles") ||
+        departureText.includes("récupération clés")
+      ){
+        total += Number(photoCounts.CHECKOUT || 0);
       }
 
-      productionOnboardingPanel.hidden = false;
-      productionOnboardingSteps.innerHTML = steps.map(step => `
-        <div class="onboarding-step ${step.done ? "done" : "pending"}">
-          ${step.done ? "✓" : "○"} ${esc(step.label)}
-        </div>
-      `).join("");
-    }
-
-    function goEdit(prestationId){
-      const it = items.find(x=>x.id === prestationId);
-      const homeId = (it?.homeId || "").trim();
-
-      if(!homeId){
-        showAlert("⛔ homeId manquant sur la prestation. Impossible d'ouvrir l'édition.");
-        return;
+      if(
+        departureText.includes("menage") ||
+        departureText.includes("ménage") ||
+        departureText.includes("nettoyage") ||
+        departureText.includes("remise en etat") ||
+        departureText.includes("remise en état") ||
+        departureText.includes("back-to-back")
+      ){
+        total += Number(photoCounts.MENAGE || 0);
       }
 
-      const returnDate = (qs("returnDate") || qs("date") || "").trim();
-      const returnBookingId = (qs("returnBookingId") || qs("bookingId") || "").trim();
-
-      const p = new URLSearchParams();
-      p.set("mode","edit");
-      p.set("eventId", prestationId);
-      p.set("homeId", homeId);
-
-      if(returnDate) p.set("returnDate", returnDate);
-      if(returnBookingId) p.set("returnBookingId", returnBookingId);
-      p.set("returnTo", "prestations");
-
-      location.href = `nouvelle-prestation.html?${p.toString()}`;
-    }
-
-    function goInterventions(prestationId){
-      const returnDate = (qs("returnDate") || qs("date") || "").trim();
-      const returnBookingId = (qs("returnBookingId") || qs("bookingId") || "").trim();
-
-      const p = new URLSearchParams();
-      p.set("prestationId", prestationId);
-      p.set("returnTo", "prestations");
-      if(returnDate) p.set("returnDate", returnDate);
-      if(returnBookingId) p.set("returnBookingId", returnBookingId);
-
-      location.href = `intervention.html?${p.toString()}`;
-    }
-
-    function goPhotos(prestationId){
-      const p = new URLSearchParams();
-      p.set("prestationId", prestationId);
-      p.set("return", "prestations");
-      const returnDate = (qs("returnDate") || qs("date") || "").trim();
-      if(returnDate) p.set("date", returnDate);
-      location.href = `preuves-admin.html?${p.toString()}`;
-    }
-
-    function missionBadgeHtml(it){
-      const pending = Number(it.pendingTrackedMissions || 0);
-      const total = Number(it.totalTrackedMissions || 0);
-
-      if(total > 0){
-        if(pending > 0){
-          return `<span class="badge small warn">${esc(`Missions : ${pending} restante(s)`)}</span>`;
-        }
-        return `<span class="badge small ok">Missions : OK</span>`;
+      if(
+        departureText.includes("linge") ||
+        departureText.includes("drap") ||
+        departureText.includes("serviette") ||
+        departureText.includes("collecte") ||
+        departureText.includes("lavage") ||
+        departureText.includes("sechage") ||
+        departureText.includes("séchage") ||
+        departureText.includes("lessive") ||
+        departureText.includes("blanch")
+      ){
+        total += Number(photoCounts.LINGE || 0);
       }
 
-      const pendingInterventions = countUsefulPendingInterventions(it.interventions || {});
-      if(pendingInterventions > 0){
-        return `<span class="badge small warn">${esc(`Interventions : ${pendingInterventions} à finir`)}</span>`;
-      }
-      return `<span class="badge small ok">Interventions : OK</span>`;
+      return total;
     }
 
-    function renderValidateList(){
-      validateList.innerHTML = "";
-      const q = normTxt(searchQuery || "");
-      const shown = q
-        ? validateRows.filter(r => normTxt([
-            r.homeName, r.homeCity, r.homeAddress,
-            r.ownerName, r.assignedToName, r.assignedToEmail,
-            r.missionLabel, r.missionDetail, r.missionDateKey, r.missionTime
-          ].filter(Boolean).join(" ")).includes(q))
-        : validateRows.slice();
-
-      if(validateCountLabel) validateCountLabel.textContent = `${shown.length} mission(s)`;
-
-      if(!shown.length){
-        const div = document.createElement("div");
-        div.className = "empty";
-        div.textContent = q ? "Aucune mission à valider pour cette recherche." : "Rien à valider.";
-        validateList.appendChild(div);
-        return;
-      }
-
-      for(const row of shown){
-        const title = `${row.homeName || "Logement"}${row.homeCity ? " — " + row.homeCity : ""}`;
-        const agent = row.assignedToName || row.assignedToEmail || "—";
-        const detailLine = row.missionDetail || "—";
-        const dateLine = `${row.missionDateKey || "—"}${row.missionTime ? " • " + row.missionTime : ""}`;
-
-        const div = document.createElement("div");
-        div.className = "item validateItem";
-        div.innerHTML = `
-          <div class="i-main">
-            <div class="i-title">${esc(title)}</div>
-            <div class="i-sub">${esc(`Mission : ${row.missionLabel} • Détail : ${detailLine}`)}</div>
-            <div class="i-sub">${esc(`Date : ${dateLine} • Agent : ${agent}`)}</div>
-
-            <div class="validateProgress" data-progress="${esc(row.queueId)}">
-              <div class="validateProgressBar"></div>
-            </div>
-
-            <div class="actions">
-              <button class="mini ok" type="button" data-validate="${esc(row.queueId)}">Valider</button>
-              <button class="mini" type="button" data-open-presta="${esc(row.eventId)}">Ouvrir</button>
-              <button class="mini" type="button" data-open-photos="${esc(row.eventId)}">Photos</button>
-              <button class="mini" type="button" data-open-interv="${esc(row.eventId)}">Interventions</button>
-              <button class="mini" type="button" data-open-planning="${esc(row.missionDateKey || "")}">Planning</button>
-              ${row.missionPhotoCount > 0 ? `<span class="badge small blue">📷 ${esc(String(row.missionPhotoCount))}</span>` : `<span class="badge small">📷 0</span>`}
-              <span class="badge small blue">À valider</span>
-            </div>
-          </div>
-        `;
-        validateList.appendChild(div);
-
-        div.querySelector(`[data-validate="${CSS.escape(row.queueId)}"]`)?.addEventListener("click", async (e)=>{
-          e.stopPropagation();
-          await validateMission(row);
-        });
-
-        div.querySelector(`[data-open-presta="${CSS.escape(row.eventId)}"]`)?.addEventListener("click",(e)=>{
-          e.stopPropagation();
-          selectItem(row.eventId);
-          openDetailModal();
-        });
-
-        div.querySelector(`[data-open-photos="${CSS.escape(row.eventId)}"]`)?.addEventListener("click",(e)=>{
-          e.stopPropagation();
-          goPhotos(row.eventId);
-        });
-
-        div.querySelector(`[data-open-interv="${CSS.escape(row.eventId)}"]`)?.addEventListener("click",(e)=>{
-          e.stopPropagation();
-          goInterventions(row.eventId);
-        });
-
-        div.querySelector(`[data-open-planning="${CSS.escape(row.missionDateKey || "")}"]`)?.addEventListener("click",(e)=>{
-          e.stopPropagation();
-          const p = new URLSearchParams();
-          if(row.missionDateKey) p.set("date", row.missionDateKey);
-          location.href = `planning.html${p.toString() ? "?" + p.toString() : ""}`;
-        });
-      }
+    if(key === "other"){
+      return Number(photoCounts.MAINTENANCE || 0);
     }
 
-    function renderList(){
-      listEl.innerHTML = "";
+    return 0;
+  }
 
-      const q = (searchQuery || "").trim();
-      const shown = q ? items.filter(x => (x._search || "").includes(normTxt(q))) : items;
+  function normalizeForSearch(d){
+    const iv = d.interventions || {};
+    const labels = interventionKeys()
+      .flatMap(k => interventionLines(iv,k).map(x=>x?.label))
+      .filter(Boolean)
+      .join(" ");
 
-      if(countLabel) countLabel.textContent = `${shown.length} prestation(s)`;
+    const notes = interventionKeys()
+      .map(k => interventionNote(iv,k))
+      .filter(Boolean)
+      .join(" ");
 
-      if(!shown.length){
-        const div = document.createElement("div");
-        div.className = "empty";
-        div.textContent = q ? "Aucun résultat pour cette recherche." : "Aucune prestation.";
-        listEl.appendChild(div);
-        return;
-      }
+    const parts = [
+      d.homeName, d.homeCity, d.homeType, d.homeAddress, d.homeZip,
+      d.ownerName, d.ownerPhone,
+      d.meta, d.summary,
+      d.arrivalDateKey, d.arrivalTime, d.interstayDateKey, d.departureDateKey, d.departureTime,
+      labels, notes
+    ];
+    return normTxt(parts.filter(Boolean).join(" "));
+  }
 
-      for(const it of shown){
-        const op = normalizeOpStatus(it.opStatus);
-        const title = `${it.homeName || "Logement"}${it.homeCity ? " — " + it.homeCity : ""}${it.homeType ? " (" + it.homeType + ")" : ""}`;
-
-        const div = document.createElement("div");
-        div.className = "item";
-        div.innerHTML = `
-          <div class="i-main">
-            <div class="i-title">${esc(title)}</div>
-
-            <div class="actions">
-              <button class="mini" type="button" data-open="${esc(it.id)}">Détails</button>
-              <button class="mini" type="button" data-edit="${esc(it.id)}">Modifier</button>
-              <button class="mini" type="button" data-photos="${esc(it.id)}" title="Photos">📷</button>
-              ${ (op==="EN_COURS") ? `<button class="mini danger" type="button" data-del="${esc(it.id)}">Supprimer</button>` : `` }
-              <button class="mini" type="button" data-program="${esc(it.id)}">Interventions</button>
-              <button class="mini primary" type="button" data-facture="${esc(it.id)}" ${op==="REALISEE" ? "" : "disabled"}>Facture</button>
-              ${missionBadgeHtml(it)}
-              ${missionPhotoBadgeHtml(it)}
-              <span class="badge">${esc(money(Number(it.total || 0)))}</span>
-            </div>
-          </div>
-        `;
-        listEl.appendChild(div);
-
-        div.querySelector("button[data-open]")?.addEventListener("click",(e)=>{
-          e.stopPropagation();
-          selectItem(it.id);
-          openDetailModal();
-        });
-
-        div.querySelector("button[data-edit]")?.addEventListener("click",(e)=>{
-          e.stopPropagation();
-          const op2 = normalizeOpStatus(it.opStatus);
-          if(op2 !== "EN_COURS"){ showAlert("⛔ Modification refusée : seulement EN COURS."); return; }
-          goEdit(it.id);
-        });
-
-        div.querySelector("button[data-photos]")?.addEventListener("click",(e)=>{
-          e.stopPropagation();
-          goPhotos(it.id);
-        });
-
-        div.querySelector("button[data-program]")?.addEventListener("click",(e)=>{
-          e.stopPropagation();
-          goInterventions(it.id);
-        });
-
-        div.querySelector("button[data-facture]")?.addEventListener("click", async (e)=>{
-          e.stopPropagation();
-          if(normalizeOpStatus(it.opStatus) !== "REALISEE") return;
-          await openFacture(it);
-        });
-
-        div.querySelector("button[data-del]")?.addEventListener("click",(e)=>{
-          e.stopPropagation();
-          selectItem(it.id);
-          deleteSelected();
-        });
-      }
+  function missionPhotoBadgeHtml(it){
+    const total = Number(it.totalMissionPhotos || 0);
+    if(total > 0){
+      return `<span class="badge small blue">📷 ${esc(String(total))}</span>`;
     }
-
-    function renderDetail(){
-      if(!selected){
-        detailModalSub.textContent = "—";
-        detailModalContext.innerHTML = "";
-        detailModalInterventions.innerHTML = "";
-        detailModalTotalValue.textContent = money(0);
-        return;
-      }
-
-      const op = normalizeOpStatus(selected.opStatus);
-      const title = `${selected.homeName || "Logement"}${selected.homeCity ? " — " + selected.homeCity : ""}${selected.homeType ? " ("+selected.homeType+")" : ""}`;
-
-      const arrival = (selected.arrivalDateKey || selected.dateKey)
-        ? `${selected.arrivalDateKey || selected.dateKey}${selected.arrivalTime ? " • " + selected.arrivalTime : ""}`
-        : "—";
-
-      const midstay = selected.interstayDateKey || interventionDateKey(selected.interventions, "midstay") || "—";
-
-      const departure = selected.departureDateKey
-        ? `${selected.departureDateKey}${selected.departureTime ? " • " + selected.departureTime : ""}`
-        : "—";
-
-      const addr = [selected.homeAddress, selected.homeZip, selected.homeCity].filter(Boolean).join(" ").trim() || "—";
-      const owner = [selected.ownerName, selected.ownerPhone].filter(Boolean).join(" • ") || "—";
-
-      detailModalSub.textContent = `#${selected.id.slice(0,6)} • ${opLabel(op)}`;
-
-      detailModalContext.innerHTML = `
-        <div class="ctx-row">
-          <div class="k">Logement :</div>
-          <div class="v">${esc(title)}</div>
-        </div>
-        <div class="ctx-row">
-          <div class="k">Arrivée :</div>
-          <div class="v">${esc(arrival)}</div>
-        </div>
-        <div class="ctx-row">
-          <div class="k">Inter-séjour :</div>
-          <div class="v">${esc(midstay)}</div>
-        </div>
-        <div class="ctx-row">
-          <div class="k">Départ :</div>
-          <div class="v">${esc(departure)}</div>
-        </div>
-        <div class="ctx-row">
-          <div class="k">Adresse :</div>
-          <div class="v">${esc(addr)}</div>
-        </div>
-        <div class="ctx-row">
-          <div class="k">Propriétaire :</div>
-          <div class="v">${esc(owner)}</div>
-        </div>
-      `;
-
-      const iv = selected.interventions || {};
-      const total = (selected.total != null) ? Number(selected.total) : totalFromInterventions(iv);
-
-      function interventionCard(key){
-        const label = interventionLabel(key, iv);
-        const dk = interventionDateKey(iv, key) || "—";
-        const note = interventionNote(iv, key);
-        const useful = interventionUseful(iv, key);
-        const done = !!interventionDoneAt(iv, key);
-        const subtotal = interventionTotal(iv, key);
-        const lines = interventionLines(iv, key);
-        const photoCount = sumMissionPhotosByIntervention(selected, key);
-
-        const status = useful ? (done ? "✅ prête" : "📝 brouillon") : "—";
-
-        const linesHtml = lines.length
-          ? lines.map(l=>{
-              const qty = Number(l?.qty || 0);
-              const unit = String(l?.unit || "unité");
-              const unitPrice = Number(l?.unitPrice || 0);
-              const lineTotal = qty * unitPrice;
-              return `
-                <div class="line-row">
-                  <div style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
-                    ${esc(l?.label || "Ligne")} <span style="color:#777;">(${esc(String(qty))} ${esc(unit)})</span>
-                  </div>
-                  <div style="white-space:nowrap;">${esc(money(lineTotal))}</div>
-                </div>
-              `;
-            }).join("")
-          : `<div class="line-row"><div style="color:#777;">Aucune ligne</div><div>—</div></div>`;
-
-        return `
-          <div class="intervention-box">
-            <div class="intervention-head">
-              <div>${esc(label)} <span style="font-weight:800;color:#666;">• ${esc(dk)}</span></div>
-              <div style="white-space:nowrap;">${esc(status)} • ${esc(money(subtotal))}</div>
-            </div>
-            <div class="intervention-sub">Photos : ${esc(String(photoCount))}</div>
-            ${note ? `<div class="intervention-sub">Note : ${esc(note)}</div>` : ``}
-            ${linesHtml}
-          </div>
-        `;
-      }
-
-      detailModalInterventions.innerHTML = `
-        ${interventionCard("arrival")}
-        ${interventionCard("midstay")}
-        ${interventionCard("departure")}
-        ${interventionCard("other")}
-      `;
-
-      detailModalTotalValue.textContent = money(total);
-    }
-
-    function selectItem(id){
-      selected = items.find(x=>x.id === id) || null;
-      renderDetail();
-    }
-
-    async function deleteSelected(){
-      if(!selected) return;
-      const op = normalizeOpStatus(selected.opStatus);
-      if(op !== "EN_COURS"){
-        showAlert("⛔ Suppression refusée : uniquement EN COURS.");
-        return;
-      }
-      const ok = confirm("Supprimer cette prestation ? (irréversible)");
-      if(!ok) return;
-
-      try{
-        await deleteDoc(doc(db,"events", selected.id));
-        items = items.filter(x=>x.id !== selected.id);
-        selected = null;
-        closeDetailModal();
-        renderAll();
-        renderDetail();
-        showAlert("✅ Prestation supprimée.", true);
-      }catch(err){
-        console.error(err);
-        showAlert("Erreur suppression : " + (err?.message || "inconnue"));
-      }
-    }
-
-    async function loadMissionsForEvent(eventId){
-      const out = [];
-      try{
-        const snap = await getDocs(collection(db, "events", eventId, "missions"));
-        snap.forEach(d=>{
-          out.push({
-            id: d.id,
-            ...(d.data() || {})
-          });
-        });
-      }catch(err){
-        console.warn("loadMissionsForEvent failed", eventId, err);
-      }
-      return out;
-    }
-
-    async function recalcEventStatus(eventId){
-      const eSnap = await getDoc(doc(db, "events", eventId));
-      if(!eSnap.exists()) throw new Error("Prestation introuvable.");
-
-      const eventDoc = { id: eSnap.id, ...(eSnap.data() || {}) };
-      const missions = await loadMissionsForEvent(eventId);
-
-      const nextStatus = synthesizeEventStatusFromExpectedMissions(eventDoc, missions);
-
-      await updateDoc(doc(db, "events", eventId), {
-        opStatus: nextStatus,
-        statusUpdatedAt: serverTimestamp(),
-        updatedAt: serverTimestamp()
-      });
-
-      return nextStatus;
-    }
-
-    function computeTotalsFromLines(lines){
-      let ht = 0;
-      for(const l of (Array.isArray(lines) ? lines : [])){
-        const qty = Number(l?.qty)||0;
-        const up  = Number(l?.unitPrice)||0;
-        ht += qty * up;
-      }
-      return { ht, ttc: ht };
-    }
-
-    function flattenInvoiceLinesFromEvent(eventDoc){
-      const interventions = normalizeInterventions(eventDoc);
-      const out = [];
-
-      for(const iv of interventions){
-        const ivLines = Array.isArray(iv.lines) ? iv.lines : [];
-        if(!ivLines.length) continue;
-
-        for(const raw of ivLines){
-          const qty = Number(raw?.qty || 0);
-          const unitPrice = Number(raw?.unitPrice || 0);
-          const label = String(raw?.label || raw?.name || "Ligne").trim();
-          const unit = String(raw?.unit || "unité").trim() || "unité";
-          const category = String(raw?.category || "").trim();
-          const note = String(raw?.note || "").trim();
-
-          if(!label) continue;
-          if(!(qty > 0)) continue;
-
-          out.push({
-            label,
-            qty,
-            unit,
-            unitPrice,
-            category,
-            note,
-            interventionKey: String(iv.key || "").trim(),
-            interventionLabel: interventionLabelFromKey(iv.key, iv.title),
-            interventionDateKey: String(iv.dateKey || "").trim()
-          });
-        }
-      }
-
-      return out;
-    }
-
-    async function openFacture(it){
-      try{
-        if(!it?.id) return;
-
-        if(it.invoiceDocId){
-          location.href = `facture.html?docId=${encodeURIComponent(it.invoiceDocId)}&returnTo=prestations`;
-          return;
-        }
-
-        const eSnap = await getDoc(doc(db, "events", it.id));
-        if(!eSnap.exists()){
-          showAlert("⛔ Prestation introuvable.");
-          return;
-        }
-        const ev = { id: eSnap.id, ...(eSnap.data() || {}) };
-
-        const op = normalizeOpStatus(ev.opStatus || ev.status || "");
-        if(op !== "REALISEE"){
-          showAlert("⛔ Facturation refusée : prestation non réalisée.");
-          return;
-        }
-
-        const lines = flattenInvoiceLinesFromEvent(ev);
-        if(!lines.length){
-          showAlert("⛔ Impossible de créer la facture : aucune ligne trouvée dans les interventions.");
-          return;
-        }
-
-        const totals = computeTotalsFromLines(lines);
-
-        const payload = {
-          conciergerieUid: currentUser.uid,
-          type: "INVOICE",
-          docType: "INVOICE_EVENT",
-          listable: true,
-          sourceKind: "EVENT",
-          sourceEventId: ev.id,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-          invoiceStatus: "DRAFT",
-          commercialStatus: "FACTURE",
-          commercialUpdatedAt: serverTimestamp(),
-          homeId: ev.homeId || "",
-          homeName: ev.homeName || "",
-          homeAddress: ev.homeAddress || "",
-          homeZip: ev.homeZip || "",
-          homeCity: ev.homeCity || "",
-          arrivalDateKey: ev.arrivalDateKey || "",
-          departureDateKey: ev.departureDateKey || "",
-          clientName: ev.ownerName || "",
-          clientEmail: ev.ownerEmail || "",
-          clientPhone: ev.ownerPhone || "",
-          clientOwnerDocId: ev.ownerDocId || null,
-          ownerName: ev.ownerName || "",
-          ownerEmail: ev.ownerEmail || "",
-          ownerPhone: ev.ownerPhone || "",
-          ownerAddress1: ev.ownerAddress1 || "",
-          ownerAddress2: ev.ownerAddress2 || "",
-          ownerZip: ev.ownerZip || "",
-          ownerCity: ev.ownerCity || "",
-          ownerCountry: ev.ownerCountry || "FR",
-          lines,
-          totalHT: Number(totals.ht) || 0,
-          totalTVA: 0,
-          totalTTC: Number(totals.ttc) || 0
-        };
-
-        const created = await addDoc(collection(db,"salesDocuments"), payload);
-
-        await updateDoc(doc(db,"events", ev.id), {
-          invoiceDocId: created.id,
-          invoiceDocUpdatedAt: serverTimestamp(),
-          updatedAt: serverTimestamp()
-        });
-
-        await updateDoc(doc(db, "users", currentUser.uid), {
-          "onboarding.firstInvoiceOrQuoteCreated": true,
-          "onboarding.updatedAt": serverTimestamp()
-        });
-        currentOnboarding.firstInvoiceOrQuoteCreated = true;
-
-        location.href = `facture.html?docId=${encodeURIComponent(created.id)}&returnTo=prestations`;
-      }catch(err){
-        console.error(err);
-        showAlert("Erreur création facture : " + (err?.message || "inconnue"));
-      }
-    }
-
-    async function syncMissionProgress(itemsList){
-      await Promise.all(itemsList.map(async (it)=>{
-        try{
-          const snap = await getDocs(collection(db, "events", it.id, "missions"));
-          const missions = snap.docs.map(d => ({ id:d.id, ...(d.data() || {}) }));
-          const tracked = missions.filter(isTrackedMissionDoc);
-
-          it.totalTrackedMissions = tracked.length;
-          it.validatedTrackedMissions = tracked.filter(m => normalizeMissionStatus(m.status) === "VALIDEE").length;
-          it.pendingTrackedMissions = Math.max(0, it.totalTrackedMissions - it.validatedTrackedMissions);
-
-          const photoCounts = {
-            CHECKIN:0, MENAGE:0, CHECKOUT:0, LINGE:0, MAINTENANCE:0, KITS:0
-          };
-
-          for(const m of missions){
-            const missionId = String(m.missionId || m.type || m.id || "").toUpperCase().trim();
-            if(!isBusinessMissionId(missionId)) continue;
-
-            let c = 0;
-            if(Array.isArray(m.photoUrls)) c = m.photoUrls.length;
-            else if(Number.isFinite(Number(m.photoCount))) c = Number(m.photoCount);
-            else if(Number.isFinite(Number(m.proofPhotosTotal))) c = Number(m.proofPhotosTotal);
-
-            photoCounts[missionId] = c;
-          }
-
-          it.photoCounts = photoCounts;
-          it.totalMissionPhotos = Object.values(photoCounts).reduce((sum, n)=> sum + Number(n || 0), 0);
-
-        }catch(err){
-          console.warn("Mission progress unreadable for", it.id, err);
-          it.totalTrackedMissions = 0;
-          it.validatedTrackedMissions = 0;
-          it.pendingTrackedMissions = 0;
-          it.photoCounts = { CHECKIN:0, MENAGE:0, CHECKOUT:0, LINGE:0, MAINTENANCE:0, KITS:0 };
-          it.totalMissionPhotos = 0;
-        }
-      }));
-    }
-
-    function mapEventToItem(id, x){
-      const interventions = normalizeInterventionsFromEvent(x);
-      const computedTotal = totalFromInterventions(interventions);
-
-      const obj = {
-        id,
-        opStatus: x.opStatus || x.status || "EN_COURS",
-
-        dateKey: x.dateKey || x.date || "",
-        time: x.time || "",
-
-        arrivalDateKey: x.arrivalDateKey || "",
-        arrivalTime: x.arrivalTime || "",
-        interstayDateKey: x.interstayDateKey || "",
-        departureDateKey: x.departureDateKey || "",
-        departureTime: x.departureTime || "",
-
-        homeId: x.homeId || "",
-        homeName: x.homeName || "",
-        homeCity: x.homeCity || x.city || "",
-        homeType: x.homeType || "",
-        homeAddress: x.homeAddress || x.address || "",
-        homeZip: x.homeZip || x.zip || "",
-
-        ownerName: x.ownerName || "",
-        ownerPhone: x.ownerPhone || x.phone || "",
-        ownerEmail: x.ownerEmail || "",
-        ownerDocId: x.ownerDocId || "",
-        ownerAddress1: x.ownerAddress1 || "",
-        ownerAddress2: x.ownerAddress2 || "",
-        ownerZip: x.ownerZip || "",
-        ownerCity: x.ownerCity || "",
-        ownerCountry: x.ownerCountry || "FR",
-
-        assignedToEmail: x.assignedToEmail || x.agentEmail || "",
-        assignedToName: x.assignedToName || x.agentName || "",
-
-        meta: x.meta || "",
-        summary: x.summary || "",
-
-        interventions,
-        total: (x.total != null) ? Number(x.total) : computedTotal,
-        invoiceDocId: x.invoiceDocId || "",
-
-        createdAt: x.createdAt || null,
-        totalTrackedMissions: 0,
-        validatedTrackedMissions: 0,
-        pendingTrackedMissions: 0,
-        photoCounts: { CHECKIN:0, MENAGE:0, CHECKOUT:0, LINGE:0, MAINTENANCE:0, KITS:0 },
-        totalMissionPhotos: 0,
-        _search: ""
-      };
-
-      obj._search = normalizeForSearch(obj);
-      return obj;
-    }
-
-    async function loadValidateQueue(){
-      validateRows = [];
-      const docs = [];
-
-      try{
-        const qQueue = query(
-          collection(db, "missionQueue"),
-          where("conciergerieUid", "==", currentUser.uid),
-          where("status", "==", "A_VALIDER"),
-          orderBy("missionDateKey", "asc"),
-          orderBy("missionTime", "asc"),
-          limit(300)
-        );
-        const snap = await getDocs(qQueue);
-        snap.forEach(d => docs.push({ id:d.id, ...(d.data() || {}) }));
-      }catch(err){
-        console.warn("missionQueue inaccessible", err);
-        return;
-      }
-
-      validateRows = docs.map(qd => {
-        const linked = items.find(x => x.id === String(qd.eventId || "").trim());
-        const missionId = String(qd.missionId || "").trim().toUpperCase();
-        const missionPhotoCount = Number(linked?.photoCounts?.[missionId] || 0);
-
-        return {
-          queueId: String(qd.queueId || qd.id || "").trim(),
-          eventId: String(qd.eventId || "").trim(),
-          missionId,
-          missionLabel: String(qd.missionLabel || missionLabelFromId(qd.missionId)).trim(),
-          missionDetail: String(qd.missionDetail || "").trim(),
-          missionDateKey: String(qd.missionDateKey || "").trim(),
-          missionTime: String(qd.missionTime || "").trim(),
-          assignedToName: String(qd.assignedToName || "").trim(),
-          assignedToEmail: String(qd.assignedToEmail || "").trim(),
-          homeName: String(qd.homeName || linked?.homeName || "").trim(),
-          homeCity: String(qd.homeCity || linked?.homeCity || "").trim(),
-          homeAddress: String(qd.homeAddress || linked?.homeAddress || "").trim(),
-          ownerName: String(qd.ownerName || linked?.ownerName || "").trim(),
-          missionPhotoCount
-        };
-      });
-    }
-async function validateMission(row){
-  try{
-    if(!row?.queueId || !row?.eventId || !row?.missionId){
-      showAlert("⛔ Données de validation incomplètes.");
+    return `<span class="badge small">📷 0</span>`;
+  }
+
+  let currentUser = null;
+  const PAGE_SIZE = 60;
+  let items = [];
+  let selected = null;
+  let validateRows = [];
+  let currentOnboarding = {};
+
+  function applySearchUI(){
+    const q = (searchQuery || "").trim();
+    clearSearchBtn?.classList.toggle("show", !!q);
+  }
+  searchInput?.addEventListener("input", ()=>{
+    searchQuery = searchInput.value || "";
+    applySearchUI();
+    renderAll();
+  });
+  clearSearchBtn?.addEventListener("click", ()=>{
+    searchQuery = "";
+    if(searchInput) searchInput.value = "";
+    applySearchUI();
+    renderAll();
+    searchInput?.focus();
+  });
+
+  function openDetailModal(){
+    if(!selected) return;
+    detailBackdrop.style.display = "flex";
+  }
+  function closeDetailModal(){
+    detailBackdrop.style.display = "none";
+  }
+  detailBackdrop?.addEventListener("click",(e)=>{ if(e.target===detailBackdrop) closeDetailModal(); });
+  detailCloseBtn?.addEventListener("click", closeDetailModal);
+
+  function renderProductionOnboarding(){
+    const ob = currentOnboarding || {};
+    const steps = [
+      { done: ob.firstServiceCreated === true, label: "Première prestation créée" },
+      { done: ob.firstMissionCreated === true, label: "Première mission créée" },
+      { done: ob.firstProofValidated === true, label: "Première mission validée" },
+      { done: ob.firstInvoiceOrQuoteCreated === true, label: "Première facture créée" }
+    ];
+
+    const allDone = steps.every(step => step.done === true);
+
+    if(productionOnboardingDismissed || allDone){
+      productionOnboardingPanel.hidden = true;
+      productionOnboardingSteps.innerHTML = "";
       return;
     }
 
-    const progressEl = document.querySelector(`[data-progress="${CSS.escape(row.queueId)}"]`);
-    const itemEl = progressEl?.closest(".item");
-
-    if(progressEl) progressEl.style.display = "block";
-    if(itemEl) itemEl.classList.add("validating");
-
-    const missionRef = doc(db, "events", row.eventId, "missions", row.missionId);
-
-    await updateDoc(missionRef, {
-      status: "VALIDEE",
-      validatedAt: serverTimestamp(),
-      updatedAt: serverTimestamp()
-    });
-
-    await updateDoc(doc(db, "missionQueue", row.queueId), {
-      status: "VALIDEE",
-      validatedAt: serverTimestamp(),
-      updatedAt: serverTimestamp()
-    });
-
-    await recalcEventStatus(row.eventId);
-
-    await updateDoc(doc(db, "users", currentUser.uid), {
-      "onboarding.firstProofValidated": true,
-      "onboarding.updatedAt": serverTimestamp()
-    });
-
-    currentOnboarding.firstProofValidated = true;
-
-    showAlert("✅ Mission validée.", true);
-
-    await reloadAllData();
-
-  }catch(err){
-    console.error("validateMission error", err);
-    showAlert("Erreur validation : " + (err?.message || "inconnue"));
+    productionOnboardingPanel.hidden = false;
+    productionOnboardingSteps.innerHTML = steps.map(step => `
+      <div class="onboarding-step ${step.done ? "done" : "pending"}">
+        ${step.done ? "✓" : "○"} ${esc(step.label)}
+      </div>
+    `).join("");
   }
-}
-    async function loadInitial(){
-      const qEvents = query(
-        collection(db,"events"),
-        where("conciergerieUid","==", currentUser.uid),
-        orderBy("createdAt","desc"),
-        limit(PAGE_SIZE)
-      );
 
-      const snap = await getDocs(qEvents);
+  function goEdit(prestationId){
+    const it = items.find(x=>x.id === prestationId);
+    const homeId = (it?.homeId || "").trim();
 
-      items = snap.docs.map(d=>{
-        const x = d.data() || {};
-        return mapEventToItem(d.id, x);
+    if(!homeId){
+      showAlert("⛔ homeId manquant sur la prestation. Impossible d'ouvrir l'édition.");
+      return;
+    }
+
+    const returnDate = (qs("returnDate") || qs("date") || "").trim();
+    const returnBookingId = (qs("returnBookingId") || qs("bookingId") || "").trim();
+
+    const p = new URLSearchParams();
+    p.set("mode","edit");
+    p.set("eventId", prestationId);
+    p.set("homeId", homeId);
+
+    if(returnDate) p.set("returnDate", returnDate);
+    if(returnBookingId) p.set("returnBookingId", returnBookingId);
+    p.set("returnTo", "prestations");
+
+    location.href = `nouvelle-prestation.html?${p.toString()}`;
+  }
+
+  function goInterventions(prestationId){
+    const returnDate = (qs("returnDate") || qs("date") || "").trim();
+    const returnBookingId = (qs("returnBookingId") || qs("bookingId") || "").trim();
+
+    const p = new URLSearchParams();
+    p.set("prestationId", prestationId);
+    p.set("returnTo", "prestations");
+    if(returnDate) p.set("returnDate", returnDate);
+    if(returnBookingId) p.set("returnBookingId", returnBookingId);
+
+    location.href = `intervention.html?${p.toString()}`;
+  }
+
+  function goPhotos(prestationId){
+    const p = new URLSearchParams();
+    p.set("prestationId", prestationId);
+    p.set("return", "prestations");
+    const returnDate = (qs("returnDate") || qs("date") || "").trim();
+    if(returnDate) p.set("date", returnDate);
+    location.href = `preuves-admin.html?${p.toString()}`;
+  }
+
+  function missionBadgeHtml(it){
+    const pending = Number(it.pendingTrackedMissions || 0);
+    const total = Number(it.totalTrackedMissions || 0);
+
+    if(total > 0){
+      if(pending > 0){
+        return `<span class="badge small warn">${esc(`Missions : ${pending} restante(s)`)}</span>`;
+      }
+      return `<span class="badge small ok">Missions : OK</span>`;
+    }
+
+    const pendingInterventions = countUsefulPendingInterventions(it.interventions || {});
+    if(pendingInterventions > 0){
+      return `<span class="badge small warn">${esc(`Interventions : ${pendingInterventions} à finir`)}</span>`;
+    }
+    return `<span class="badge small ok">Interventions : OK</span>`;
+  }
+
+  function renderValidateList(){
+    validateList.innerHTML = "";
+    const q = normTxt(searchQuery || "");
+    const shown = q
+      ? validateRows.filter(r => normTxt([
+          r.homeName, r.homeCity, r.homeAddress,
+          r.ownerName, r.assignedToName, r.assignedToEmail,
+          r.missionLabel, r.missionDetail, r.missionDateKey, r.missionTime
+        ].filter(Boolean).join(" ")).includes(q))
+      : validateRows.slice();
+
+    if(validateCountLabel) validateCountLabel.textContent = `${shown.length} mission(s)`;
+
+    if(!shown.length){
+      const div = document.createElement("div");
+      div.className = "empty";
+      div.textContent = q ? "Aucune mission à valider pour cette recherche." : "Rien à valider.";
+      validateList.appendChild(div);
+      return;
+    }
+
+    for(const row of shown){
+      const title = `${row.homeName || "Logement"}${row.homeCity ? " — " + row.homeCity : ""}`;
+      const agent = row.assignedToName || row.assignedToEmail || "—";
+      const detailLine = row.missionDetail || "—";
+      const dateLine = `${row.missionDateKey || "—"}${row.missionTime ? " • " + row.missionTime : ""}`;
+
+      const div = document.createElement("div");
+      div.className = "item validateItem";
+      div.innerHTML = `
+        <div class="i-main">
+          <div class="i-title">${esc(title)}</div>
+          <div class="i-sub">${esc(`Mission : ${row.missionLabel} • Détail : ${detailLine}`)}</div>
+          <div class="i-sub">${esc(`Date : ${dateLine} • Agent : ${agent}`)}</div>
+
+          <div class="validateProgress" data-progress="${esc(row.queueId)}">
+            <div class="validateProgressBar"></div>
+          </div>
+
+          <div class="actions">
+            <button class="mini ok" type="button" data-validate="${esc(row.queueId)}">Valider</button>
+            <button class="mini" type="button" data-open-presta="${esc(row.eventId)}">Ouvrir</button>
+            <button class="mini" type="button" data-open-photos="${esc(row.eventId)}">Photos</button>
+            <button class="mini" type="button" data-open-interv="${esc(row.eventId)}">Interventions</button>
+            <button class="mini" type="button" data-open-planning="${esc(row.missionDateKey || "")}">Planning</button>
+            ${row.missionPhotoCount > 0 ? `<span class="badge small blue">📷 ${esc(String(row.missionPhotoCount))}</span>` : `<span class="badge small">📷 0</span>`}
+            <span class="badge small blue">À valider</span>
+          </div>
+        </div>
+      `;
+      validateList.appendChild(div);
+
+      div.querySelector(`[data-validate="${CSS.escape(row.queueId)}"]`)?.addEventListener("click", async (e)=>{
+        e.stopPropagation();
+        await validateMission(row);
       });
 
-      await syncMissionProgress(items);
-      await loadValidateQueue();
+      div.querySelector(`[data-open-presta="${CSS.escape(row.eventId)}"]`)?.addEventListener("click",(e)=>{
+        e.stopPropagation();
+        selectItem(row.eventId);
+        openDetailModal();
+      });
 
+      div.querySelector(`[data-open-photos="${CSS.escape(row.eventId)}"]`)?.addEventListener("click",(e)=>{
+        e.stopPropagation();
+        goPhotos(row.eventId);
+      });
+
+      div.querySelector(`[data-open-interv="${CSS.escape(row.eventId)}"]`)?.addEventListener("click",(e)=>{
+        e.stopPropagation();
+        goInterventions(row.eventId);
+      });
+
+      div.querySelector(`[data-open-planning="${CSS.escape(row.missionDateKey || "")}"]`)?.addEventListener("click",(e)=>{
+        e.stopPropagation();
+        const p = new URLSearchParams();
+        if(row.missionDateKey) p.set("date", row.missionDateKey);
+        location.href = `planning.html${p.toString() ? "?" + p.toString() : ""}`;
+      });
+    }
+  }
+
+  function renderList(){
+    listEl.innerHTML = "";
+
+    const q = (searchQuery || "").trim();
+    const shown = q ? items.filter(x => (x._search || "").includes(normTxt(q))) : items;
+
+    if(countLabel) countLabel.textContent = `${shown.length} prestation(s)`;
+
+    if(!shown.length){
+      const div = document.createElement("div");
+      div.className = "empty";
+      div.textContent = q ? "Aucun résultat pour cette recherche." : "Aucune prestation.";
+      listEl.appendChild(div);
+      return;
+    }
+
+    for(const it of shown){
+      const op = normalizeOpStatus(it.opStatus);
+      const title = `${it.homeName || "Logement"}${it.homeCity ? " — " + it.homeCity : ""}${it.homeType ? " (" + it.homeType + ")" : ""}`;
+
+      const div = document.createElement("div");
+      div.className = "item";
+      div.innerHTML = `
+        <div class="i-main">
+          <div class="i-title">${esc(title)}</div>
+
+          <div class="actions">
+            <button class="mini" type="button" data-open="${esc(it.id)}">Détails</button>
+            <button class="mini" type="button" data-edit="${esc(it.id)}">Modifier</button>
+            <button class="mini" type="button" data-photos="${esc(it.id)}" title="Photos">📷</button>
+            ${ (op==="EN_COURS") ? `<button class="mini danger" type="button" data-del="${esc(it.id)}">Supprimer</button>` : `` }
+            <button class="mini" type="button" data-program="${esc(it.id)}">Interventions</button>
+            <button class="mini primary" type="button" data-facture="${esc(it.id)}" ${op==="REALISEE" ? "" : "disabled"}>Facture</button>
+            ${missionBadgeHtml(it)}
+            ${missionPhotoBadgeHtml(it)}
+            <span class="badge">${esc(money(Number(it.total || 0)))}</span>
+          </div>
+        </div>
+      `;
+      listEl.appendChild(div);
+
+      div.querySelector("button[data-open]")?.addEventListener("click",(e)=>{
+        e.stopPropagation();
+        selectItem(it.id);
+        openDetailModal();
+      });
+
+      div.querySelector("button[data-edit]")?.addEventListener("click",(e)=>{
+        e.stopPropagation();
+        const op2 = normalizeOpStatus(it.opStatus);
+        if(op2 !== "EN_COURS"){ showAlert("⛔ Modification refusée : seulement EN COURS."); return; }
+        goEdit(it.id);
+      });
+
+      div.querySelector("button[data-photos]")?.addEventListener("click",(e)=>{
+        e.stopPropagation();
+        goPhotos(it.id);
+      });
+
+      div.querySelector("button[data-program]")?.addEventListener("click",(e)=>{
+        e.stopPropagation();
+        goInterventions(it.id);
+      });
+
+      div.querySelector("button[data-facture]")?.addEventListener("click", async (e)=>{
+        e.stopPropagation();
+        if(normalizeOpStatus(it.opStatus) !== "REALISEE") return;
+        await openFacture(it);
+      });
+
+      div.querySelector("button[data-del]")?.addEventListener("click",(e)=>{
+        e.stopPropagation();
+        selectItem(it.id);
+        deleteSelected();
+      });
+    }
+  }
+
+  function renderDetail(){
+    if(!selected){
+      detailModalSub.textContent = "—";
+      detailModalContext.innerHTML = "";
+      detailModalInterventions.innerHTML = "";
+      detailModalTotalValue.textContent = money(0);
+      return;
+    }
+
+    const op = normalizeOpStatus(selected.opStatus);
+    const title = `${selected.homeName || "Logement"}${selected.homeCity ? " — " + selected.homeCity : ""}${selected.homeType ? " ("+selected.homeType+")" : ""}`;
+
+    const arrival = (selected.arrivalDateKey || selected.dateKey)
+      ? `${selected.arrivalDateKey || selected.dateKey}${selected.arrivalTime ? " • " + selected.arrivalTime : ""}`
+      : "—";
+
+    const midstay = selected.interstayDateKey || interventionDateKey(selected.interventions, "midstay") || "—";
+
+    const departure = selected.departureDateKey
+      ? `${selected.departureDateKey}${selected.departureTime ? " • " + selected.departureTime : ""}`
+      : "—";
+
+    const addr = [selected.homeAddress, selected.homeZip, selected.homeCity].filter(Boolean).join(" ").trim() || "—";
+    const owner = [selected.ownerName, selected.ownerPhone].filter(Boolean).join(" • ") || "—";
+
+    detailModalSub.textContent = `#${selected.id.slice(0,6)} • ${opLabel(op)}`;
+
+    detailModalContext.innerHTML = `
+      <div class="ctx-row">
+        <div class="k">Logement :</div>
+        <div class="v">${esc(title)}</div>
+      </div>
+      <div class="ctx-row">
+        <div class="k">Arrivée :</div>
+        <div class="v">${esc(arrival)}</div>
+      </div>
+      <div class="ctx-row">
+        <div class="k">Inter-séjour :</div>
+        <div class="v">${esc(midstay)}</div>
+      </div>
+      <div class="ctx-row">
+        <div class="k">Départ :</div>
+        <div class="v">${esc(departure)}</div>
+      </div>
+      <div class="ctx-row">
+        <div class="k">Adresse :</div>
+        <div class="v">${esc(addr)}</div>
+      </div>
+      <div class="ctx-row">
+        <div class="k">Propriétaire :</div>
+        <div class="v">${esc(owner)}</div>
+      </div>
+    `;
+
+    const iv = selected.interventions || {};
+    const total = (selected.total != null) ? Number(selected.total) : totalFromInterventions(iv);
+
+    function interventionCard(key){
+      const label = interventionLabel(key, iv);
+      const dk = interventionDateKey(iv, key) || "—";
+      const note = interventionNote(iv, key);
+      const useful = interventionUseful(iv, key);
+      const done = !!interventionDoneAt(iv, key);
+      const subtotal = interventionTotal(iv, key);
+      const lines = interventionLines(iv, key);
+      const photoCount = sumMissionPhotosByIntervention(selected, key);
+
+      const status = useful ? (done ? "✅ prête" : "📝 brouillon") : "—";
+
+      const linesHtml = lines.length
+        ? lines.map(l=>{
+            const qty = Number(l?.qty || 0);
+            const unit = String(l?.unit || "unité");
+            const unitPrice = Number(l?.unitPrice || 0);
+            const lineTotal = qty * unitPrice;
+            return `
+              <div class="line-row">
+                <div style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                  ${esc(l?.label || "Ligne")} <span style="color:#777;">(${esc(String(qty))} ${esc(unit)})</span>
+                </div>
+                <div style="white-space:nowrap;">${esc(money(lineTotal))}</div>
+              </div>
+            `;
+          }).join("")
+        : `<div class="line-row"><div style="color:#777;">Aucune ligne</div><div>—</div></div>`;
+
+      return `
+        <div class="intervention-box">
+          <div class="intervention-head">
+            <div>${esc(label)} <span style="font-weight:800;color:#666;">• ${esc(dk)}</span></div>
+            <div style="white-space:nowrap;">${esc(status)} • ${esc(money(subtotal))}</div>
+          </div>
+          <div class="intervention-sub">Photos : ${esc(String(photoCount))}</div>
+          ${note ? `<div class="intervention-sub">Note : ${esc(note)}</div>` : ``}
+          ${linesHtml}
+        </div>
+      `;
+    }
+
+    detailModalInterventions.innerHTML = `
+      ${interventionCard("arrival")}
+      ${interventionCard("midstay")}
+      ${interventionCard("departure")}
+      ${interventionCard("other")}
+    `;
+
+    detailModalTotalValue.textContent = money(total);
+  }
+
+  function selectItem(id){
+    selected = items.find(x=>x.id === id) || null;
+    renderDetail();
+  }
+
+  async function deleteSelected(){
+    if(!selected) return;
+    const op = normalizeOpStatus(selected.opStatus);
+    if(op !== "EN_COURS"){
+      showAlert("⛔ Suppression refusée : uniquement EN COURS.");
+      return;
+    }
+    const ok = confirm("Supprimer cette prestation ? (irréversible)");
+    if(!ok) return;
+
+    try{
+      await deleteDoc(doc(db,"events", selected.id));
+      items = items.filter(x=>x.id !== selected.id);
+      selected = null;
+      closeDetailModal();
       renderAll();
       renderDetail();
+      showAlert("✅ Prestation supprimée.", true);
+    }catch(err){
+      console.error(err);
+      showAlert("Erreur suppression : " + (err?.message || "inconnue"));
     }
+  }
 
-    async function reloadAllData(){
-      const keepId = selected?.id || "";
-      await loadInitial();
-      if(keepId){
-        selectItem(keepId);
-      }
+  async function loadMissionsForEvent(eventId){
+    const out = [];
+    try{
+      const snap = await getDocs(collection(db, "events", eventId, "missions"));
+      snap.forEach(d=>{
+        out.push({
+          id: d.id,
+          ...(d.data() || {})
+        });
+      });
+    }catch(err){
+      console.warn("loadMissionsForEvent failed", eventId, err);
     }
+    return out;
+  }
 
-    function renderAll(){
-      renderValidateList();
-      renderList();
-      renderProductionOnboarding();
-      renderDetail();
-    }
+  async function recalcEventStatus(eventId){
+    const eSnap = await getDoc(doc(db, "events", eventId));
+    if(!eSnap.exists()) throw new Error("Prestation introuvable.");
 
-    onAuthStateChanged(auth, async (user)=>{
-      if(!user){
-        location.href = "login.html?role=conciergerie";
-        return;
-      }
+    const eventDoc = { id: eSnap.id, ...(eSnap.data() || {}) };
+    const missions = await loadMissionsForEvent(eventId);
 
-      const res = await guardConciergerie(user);
-      if(!res.ok){
-        if(res.reason === "sub_inactive"){
-          showAlert("⛔ Abonnement inactif. Merci de choisir une offre.", false);
-          setTimeout(()=> location.href = "abonnement.html?plan=free", 500);
-          return;
-        }
-        if(res.reason === "profile_missing"){
-          showAlert("⚠️ Profil conciergerie à compléter (obligatoire).", false);
-          setTimeout(()=> location.href = "profil-conciergerie.html", 500);
-          return;
-        }
-        location.href = "login.html?role=conciergerie";
-        return;
-      }
+    const nextStatus = synthesizeEventStatusFromExpectedMissions(eventDoc, missions);
 
-      currentUser = user;
-      currentOnboarding = (res.data?.onboarding || {});
-
-      wireReturnLinks();
-
-      if(helloLine) helloLine.textContent = "Bonjour,";
-      await loadCompanyName(user);
-
-      applySearchUI();
-
-      try{
-        hideAlert();
-        selected = null;
-        closeDetailModal();
-        await loadInitial();
-      }catch(err){
-        console.error(err);
-        showAlert("Erreur initialisation prestations : " + (err?.message || "inconnue"));
-      }
+    await updateDoc(doc(db, "events", eventId), {
+      opStatus: nextStatus,
+      statusUpdatedAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
     });
-  </script>
+
+    return nextStatus;
+  }
+
+  function computeTotalsFromLines(lines){
+    let ht = 0;
+    for(const l of (Array.isArray(lines) ? lines : [])){
+      const qty = Number(l?.qty)||0;
+      const up  = Number(l?.unitPrice)||0;
+      ht += qty * up;
+    }
+    return { ht, ttc: ht };
+  }
+
+  function flattenInvoiceLinesFromEvent(eventDoc){
+    const interventions = normalizeInterventions(eventDoc);
+    const out = [];
+
+    for(const iv of interventions){
+      const ivLines = Array.isArray(iv.lines) ? iv.lines : [];
+      if(!ivLines.length) continue;
+
+      for(const raw of ivLines){
+        const qty = Number(raw?.qty || 0);
+        const unitPrice = Number(raw?.unitPrice || 0);
+        const label = String(raw?.label || raw?.name || "Ligne").trim();
+        const unit = String(raw?.unit || "unité").trim() || "unité";
+        const category = String(raw?.category || "").trim();
+        const note = String(raw?.note || "").trim();
+
+        if(!label) continue;
+        if(!(qty > 0)) continue;
+
+        out.push({
+          label,
+          qty,
+          unit,
+          unitPrice,
+          category,
+          note,
+          interventionKey: String(iv.key || "").trim(),
+          interventionLabel: interventionLabelFromKey(iv.key, iv.title),
+          interventionDateKey: String(iv.dateKey || "").trim()
+        });
+      }
+    }
+
+    return out;
+  }
+
+  async function openFacture(it){
+    try{
+      if(!it?.id) return;
+
+      if(it.invoiceDocId){
+        location.href = `facture.html?docId=${encodeURIComponent(it.invoiceDocId)}&returnTo=prestations`;
+        return;
+      }
+
+      const eSnap = await getDoc(doc(db, "events", it.id));
+      if(!eSnap.exists()){
+        showAlert("⛔ Prestation introuvable.");
+        return;
+      }
+      const ev = { id: eSnap.id, ...(eSnap.data() || {}) };
+
+      const op = normalizeOpStatus(ev.opStatus || ev.status || "");
+      if(op !== "REALISEE"){
+        showAlert("⛔ Facturation refusée : prestation non réalisée.");
+        return;
+      }
+
+      const lines = flattenInvoiceLinesFromEvent(ev);
+      if(!lines.length){
+        showAlert("⛔ Impossible de créer la facture : aucune ligne trouvée dans les interventions.");
+        return;
+      }
+
+      const totals = computeTotalsFromLines(lines);
+
+      const payload = {
+        conciergerieUid: currentUser.uid,
+        type: "INVOICE",
+        docType: "INVOICE_EVENT",
+        listable: true,
+        sourceKind: "EVENT",
+        sourceEventId: ev.id,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        invoiceStatus: "DRAFT",
+        commercialStatus: "FACTURE",
+        commercialUpdatedAt: serverTimestamp(),
+        homeId: ev.homeId || "",
+        homeName: ev.homeName || "",
+        homeAddress: ev.homeAddress || "",
+        homeZip: ev.homeZip || "",
+        homeCity: ev.homeCity || "",
+        arrivalDateKey: ev.arrivalDateKey || "",
+        departureDateKey: ev.departureDateKey || "",
+        clientName: ev.ownerName || "",
+        clientEmail: ev.ownerEmail || "",
+        clientPhone: ev.ownerPhone || "",
+        clientOwnerDocId: ev.ownerDocId || null,
+        ownerName: ev.ownerName || "",
+        ownerEmail: ev.ownerEmail || "",
+        ownerPhone: ev.ownerPhone || "",
+        ownerAddress1: ev.ownerAddress1 || "",
+        ownerAddress2: ev.ownerAddress2 || "",
+        ownerZip: ev.ownerZip || "",
+        ownerCity: ev.ownerCity || "",
+        ownerCountry: ev.ownerCountry || "FR",
+        lines,
+        totalHT: Number(totals.ht) || 0,
+        totalTVA: 0,
+        totalTTC: Number(totals.ttc) || 0
+      };
+
+      const created = await addDoc(collection(db,"salesDocuments"), payload);
+
+      await updateDoc(doc(db,"events", ev.id), {
+        invoiceDocId: created.id,
+        invoiceDocUpdatedAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+
+      await updateDoc(doc(db, "users", currentUser.uid), {
+        "onboarding.firstInvoiceOrQuoteCreated": true,
+        "onboarding.updatedAt": serverTimestamp()
+      });
+      currentOnboarding.firstInvoiceOrQuoteCreated = true;
+
+      location.href = `facture.html?docId=${encodeURIComponent(created.id)}&returnTo=prestations`;
+    }catch(err){
+      console.error(err);
+      showAlert("Erreur création facture : " + (err?.message || "inconnue"));
+    }
+  }
+
+  async function syncMissionProgress(itemsList){
+    await Promise.all(itemsList.map(async (it)=>{
+      try{
+        const snap = await getDocs(collection(db, "events", it.id, "missions"));
+        const missions = snap.docs.map(d => ({ id:d.id, ...(d.data() || {}) }));
+        const tracked = missions.filter(isTrackedMissionDoc);
+        const expected = expectedMissionTypesFromInterventions(it);
+
+        const trackedById = new Map();
+        for(const m of tracked){
+          const missionId = String(m.missionId || m.type || m.id || "").toUpperCase().trim();
+          if(!missionId) continue;
+          trackedById.set(missionId, m);
+        }
+
+        it.totalTrackedMissions = expected.length;
+        it.validatedTrackedMissions = expected.filter(id => {
+          const m = trackedById.get(id);
+          return m && normalizeMissionStatus(m.status) === "VALIDEE";
+        }).length;
+        it.pendingTrackedMissions = Math.max(0, it.totalTrackedMissions - it.validatedTrackedMissions);
+
+        const photoCounts = {
+          CHECKIN:0, MENAGE:0, CHECKOUT:0, LINGE:0, MAINTENANCE:0, KITS:0
+        };
+
+        for(const m of missions){
+          const missionId = String(m.missionId || m.type || m.id || "").toUpperCase().trim();
+          if(!isBusinessMissionId(missionId)) continue;
+
+          let c = 0;
+          if(Array.isArray(m.photoUrls)) c = m.photoUrls.length;
+          else if(Number.isFinite(Number(m.photoCount))) c = Number(m.photoCount);
+          else if(Number.isFinite(Number(m.proofPhotosTotal))) c = Number(m.proofPhotosTotal);
+          else if(Number.isFinite(Number(m.proofPhotosCount))) c = Number(m.proofPhotosCount);
+
+          photoCounts[missionId] = c;
+        }
+
+        it.photoCounts = photoCounts;
+
+        let totalMissionPhotos = 0;
+        for(const missionId of expected){
+          totalMissionPhotos += Number(photoCounts[missionId] || 0);
+        }
+        it.totalMissionPhotos = totalMissionPhotos;
+
+      }catch(err){
+        console.warn("Mission progress unreadable for", it.id, err);
+        it.totalTrackedMissions = 0;
+        it.validatedTrackedMissions = 0;
+        it.pendingTrackedMissions = 0;
+        it.photoCounts = { CHECKIN:0, MENAGE:0, CHECKOUT:0, LINGE:0, MAINTENANCE:0, KITS:0 };
+        it.totalMissionPhotos = 0;
+      }
+    }));
+  }
+
+  function mapEventToItem(id, x){
+    const interventions = normalizeInterventionsFromEvent(x);
+    const computedTotal = totalFromInterventions(interventions);
+
+    const obj = {
+      id,
+      opStatus: x.opStatus || x.status || "EN_COURS",
+
+      dateKey: x.dateKey || x.date || "",
+      time: x.time || "",
+
+      arrivalDateKey: x.arrivalDateKey || "",
+      arrivalTime: x.arrivalTime || "",
+      interstayDateKey: x.interstayDateKey || "",
+      departureDateKey: x.departureDateKey || "",
+      departureTime: x.departureTime || "",
+
+      homeId: x.homeId || "",
+      homeName: x.homeName || "",
+      homeCity: x.homeCity || x.city || "",
+      homeType: x.homeType || "",
+      homeAddress: x.homeAddress || x.address || "",
+      homeZip: x.homeZip || x.zip || "",
+
+      ownerName: x.ownerName || "",
+      ownerPhone: x.ownerPhone || x.phone || "",
+      ownerEmail: x.ownerEmail || "",
+      ownerDocId: x.ownerDocId || "",
+      ownerAddress1: x.ownerAddress1 || "",
+      ownerAddress2: x.ownerAddress2 || "",
+      ownerZip: x.ownerZip || "",
+      ownerCity: x.ownerCity || "",
+      ownerCountry: x.ownerCountry || "FR",
+
+      assignedToEmail: x.assignedToEmail || x.agentEmail || "",
+      assignedToName: x.assignedToName || x.agentName || "",
+
+      meta: x.meta || "",
+      summary: x.summary || "",
+
+      interventions,
+      total: (x.total != null) ? Number(x.total) : computedTotal,
+      invoiceDocId: x.invoiceDocId || "",
+
+      createdAt: x.createdAt || null,
+      totalTrackedMissions: 0,
+      validatedTrackedMissions: 0,
+      pendingTrackedMissions: 0,
+      photoCounts: { CHECKIN:0, MENAGE:0, CHECKOUT:0, LINGE:0, MAINTENANCE:0, KITS:0 },
+      totalMissionPhotos: 0,
+      _search: ""
+    };
+
+    obj._search = normalizeForSearch(obj);
+    return obj;
+  }
+
+  async function loadValidateQueue(){
+    validateRows = [];
+    const docs = [];
+
+    try{
+      const qQueue = query(
+        collection(db, "missionQueue"),
+        where("conciergerieUid", "==", currentUser.uid),
+        where("status", "==", "A_VALIDER"),
+        orderBy("missionDateKey", "asc"),
+        orderBy("missionTime", "asc"),
+        limit(300)
+      );
+      const snap = await getDocs(qQueue);
+      snap.forEach(d => docs.push({ id:d.id, ...(d.data() || {}) }));
+    }catch(err){
+      console.warn("missionQueue inaccessible", err);
+      return;
+    }
+
+    validateRows = docs.map(qd => {
+      const linked = items.find(x => x.id === String(qd.eventId || "").trim());
+      const missionId = String(qd.missionId || "").trim().toUpperCase();
+      const expected = linked ? expectedMissionTypesFromInterventions(linked) : [];
+      const missionPhotoCount = expected.includes(missionId)
+        ? Number(linked?.photoCounts?.[missionId] || 0)
+        : 0;
+
+      return {
+        queueId: String(qd.queueId || qd.id || "").trim(),
+        eventId: String(qd.eventId || "").trim(),
+        missionId,
+        missionLabel: String(qd.missionLabel || missionLabelFromId(qd.missionId)).trim(),
+        missionDetail: String(qd.missionDetail || "").trim(),
+        missionDateKey: String(qd.missionDateKey || "").trim(),
+        missionTime: String(qd.missionTime || "").trim(),
+        assignedToName: String(qd.assignedToName || "").trim(),
+        assignedToEmail: String(qd.assignedToEmail || "").trim(),
+        homeName: String(qd.homeName || linked?.homeName || "").trim(),
+        homeCity: String(qd.homeCity || linked?.homeCity || "").trim(),
+        homeAddress: String(qd.homeAddress || linked?.homeAddress || "").trim(),
+        ownerName: String(qd.ownerName || linked?.ownerName || "").trim(),
+        missionPhotoCount
+      };
+    });
+  }
+
+  async function validateMission(row){
+    try{
+      if(!row?.queueId || !row?.eventId || !row?.missionId){
+        showAlert("⛔ Données de validation incomplètes.");
+        return;
+      }
+
+      const progressEl = document.querySelector(`[data-progress="${CSS.escape(row.queueId)}"]`);
+      const itemEl = progressEl?.closest(".item");
+
+      if(progressEl) progressEl.style.display = "block";
+      if(itemEl) itemEl.classList.add("validating");
+
+      const missionRef = doc(db, "events", row.eventId, "missions", row.missionId);
+
+      await updateDoc(missionRef, {
+        status: "VALIDEE",
+        validatedAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+
+      await updateDoc(doc(db, "missionQueue", row.queueId), {
+        status: "VALIDEE",
+        validatedAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+
+      await recalcEventStatus(row.eventId);
+
+      await updateDoc(doc(db, "users", currentUser.uid), {
+        "onboarding.firstProofValidated": true,
+        "onboarding.updatedAt": serverTimestamp()
+      });
+
+      currentOnboarding.firstProofValidated = true;
+
+      showAlert("✅ Mission validée.", true);
+
+      await reloadAllData();
+
+    }catch(err){
+      console.error("validateMission error", err);
+      showAlert("Erreur validation : " + (err?.message || "inconnue"));
+    }
+  }
+
+  async function loadInitial(){
+    const qEvents = query(
+      collection(db,"events"),
+      where("conciergerieUid","==", currentUser.uid),
+      orderBy("createdAt","desc"),
+      limit(PAGE_SIZE)
+    );
+
+    const snap = await getDocs(qEvents);
+
+    items = snap.docs.map(d=>{
+      const x = d.data() || {};
+      return mapEventToItem(d.id, x);
+    });
+
+    await syncMissionProgress(items);
+    await loadValidateQueue();
+
+    renderAll();
+    renderDetail();
+  }
+
+  async function reloadAllData(){
+    const keepId = selected?.id || "";
+    await loadInitial();
+    if(keepId){
+      selectItem(keepId);
+    }
+  }
+
+  function renderAll(){
+    renderValidateList();
+    renderList();
+    renderProductionOnboarding();
+    renderDetail();
+  }
+
+  onAuthStateChanged(auth, async (user)=>{
+    if(!user){
+      location.href = "login.html?role=conciergerie";
+      return;
+    }
+
+    const res = await guardConciergerie(user);
+    if(!res.ok){
+      if(res.reason === "sub_inactive"){
+        showAlert("⛔ Abonnement inactif. Merci de choisir une offre.", false);
+        setTimeout(()=> location.href = "abonnement.html?plan=free", 500);
+        return;
+      }
+      if(res.reason === "profile_missing"){
+        showAlert("⚠️ Profil conciergerie à compléter (obligatoire).", false);
+        setTimeout(()=> location.href = "profil-conciergerie.html", 500);
+        return;
+      }
+      location.href = "login.html?role=conciergerie";
+      return;
+    }
+
+    currentUser = user;
+    currentOnboarding = (res.data?.onboarding || {});
+
+    wireReturnLinks();
+
+    if(helloLine) helloLine.textContent = "Bonjour,";
+    await loadCompanyName(user);
+
+    applySearchUI();
+
+    try{
+      hideAlert();
+      selected = null;
+      closeDetailModal();
+      await loadInitial();
+    }catch(err){
+      console.error(err);
+      showAlert("Erreur initialisation prestations : " + (err?.message || "inconnue"));
+    }
+  });
+</script>
 </body>
 </html>
   
