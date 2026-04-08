@@ -386,20 +386,55 @@
       z-index:50;
       border:1px solid var(--border);
     }
+    .onboarding-panel[hidden]{
+      display:none !important;
+    }
+    .onboarding-top{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:8px;
+      margin-bottom:12px;
+    }
     .onboarding-title{
       font-size:14px;
       font-weight:900;
-      margin-bottom:12px;
       color:#111;
+      margin:0;
+    }
+    .onboarding-close{
+      border:none;
+      background:#f3ecff;
+      color:#5b45c8;
+      width:28px;
+      height:28px;
+      border-radius:999px;
+      font-size:16px;
+      font-weight:1000;
+      cursor:pointer;
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      line-height:1;
+      box-shadow:0 2px 8px rgba(0,0,0,.06);
+      flex-shrink:0;
+    }
+    .onboarding-steps{
+      display:flex;
+      flex-direction:column;
+      gap:8px;
     }
     .onboarding-step{
       font-size:13px;
       font-weight:800;
-      padding:8px 0;
+      padding:8px 10px;
       color:#555;
+      background:#faf8ff;
+      border-radius:12px;
     }
     .onboarding-step.done{
       color:var(--ok);
+      background:rgba(27,143,77,0.10);
     }
     .onboarding-step.pending{
       color:#666;
@@ -659,7 +694,13 @@
       </section>
     </div>
 
-    <div id="productionOnboardingPanel" class="onboarding-panel"></div>
+    <aside id="productionOnboardingPanel" class="onboarding-panel" hidden aria-label="Onboarding production">
+      <div class="onboarding-top">
+        <div class="onboarding-title">Onboarding</div>
+        <button type="button" id="productionOnboardingCloseBtn" class="onboarding-close" aria-label="Masquer l’onboarding">×</button>
+      </div>
+      <div id="productionOnboardingSteps" class="onboarding-steps"></div>
+    </aside>
   </div>
 
   <nav class="bottom-nav" aria-label="Navigation">
@@ -691,9 +732,8 @@
       </div>
     </div>
   </div>
-
   <script type="module">
-        import { auth, db } from "./firebase-init.js";
+    import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
       collection, query, where, orderBy, limit, getDocs,
@@ -706,6 +746,8 @@
     const planningLink = document.getElementById("planningLink");
     const planningNavLink = document.getElementById("planningNavLink");
     const productionOnboardingPanel = document.getElementById("productionOnboardingPanel");
+    const productionOnboardingSteps = document.getElementById("productionOnboardingSteps");
+    const productionOnboardingCloseBtn = document.getElementById("productionOnboardingCloseBtn");
 
     const alertBox = document.getElementById("alertBox");
     const listEl = document.getElementById("list");
@@ -724,6 +766,8 @@
     const detailModalContext = document.getElementById("detailModalContext");
     const detailModalInterventions = document.getElementById("detailModalInterventions");
     const detailModalTotalValue = document.getElementById("detailModalTotalValue");
+
+    let productionOnboardingDismissed = false;
 
     function showAlert(msg, ok=false){
       if(!alertBox) return;
@@ -759,6 +803,11 @@
         .normalize("NFD")
         .replace(/[\u0300-\u036f]/g, "");
     }
+
+    productionOnboardingCloseBtn?.addEventListener("click", ()=>{
+      productionOnboardingDismissed = true;
+      productionOnboardingPanel.hidden = true;
+    });
 
     function buildPlanningReturnHref(){
       const returnDate = (qs("returnDate") || qs("date") || "").trim();
@@ -913,33 +962,34 @@
     const FREE_EMAILS = new Set(["mathilde.debout31@gmail.com","s.dumas974@gmail.com"]);
 
     async function guardConciergerie(user){
-  const email = (user.email || "").toLowerCase();
-  const isAdmin = FREE_EMAILS.has(email);
+      const email = (user.email || "").toLowerCase();
+      const isAdmin = FREE_EMAILS.has(email);
 
-  try{
-    const snap = await getDoc(doc(db, "users", user.uid));
-    if(!snap.exists()) return { ok:false, reason:"no_profile" };
+      try{
+        const snap = await getDoc(doc(db, "users", user.uid));
+        if(!snap.exists()) return { ok:false, reason:"no_profile" };
 
-    const data = snap.data() || {};
-    const roleOk = (data.role === "conciergerie" || data.role === "admin");
-    if(!roleOk) return { ok:false, reason:"bad_role" };
+        const data = snap.data() || {};
+        const roleOk = (data.role === "conciergerie" || data.role === "admin");
+        if(!roleOk) return { ok:false, reason:"bad_role" };
 
-    if(isAdmin || data.role === "admin") return { ok:true, data };
+        if(isAdmin || data.role === "admin") return { ok:true, data };
 
-    const sub = String(data.subscriptionStatus || "").toLowerCase();
-    if(!["active", "cancel_at_period_end"].includes(sub)){
-      return { ok:false, reason:"sub_inactive" };
+        const sub = String(data.subscriptionStatus || "").toLowerCase();
+        if(!["active", "cancel_at_period_end"].includes(sub)){
+          return { ok:false, reason:"sub_inactive" };
+        }
+
+        if(!data.billingReady){
+          return { ok:false, reason:"profile_missing" };
+        }
+
+        return { ok:true, data };
+      }catch(e){
+        return { ok:false, reason:"error" };
+      }
     }
 
-    if(!data.billingReady){
-      return { ok:false, reason:"profile_missing" };
-    }
-
-    return { ok:true, data };
-  }catch(e){
-    return { ok:false, reason:"error" };
-  }
-}
     async function loadCompanyName(user){
       try{
         const uSnap = await getDoc(doc(db, "users", user.uid));
@@ -1122,16 +1172,29 @@
     detailCloseBtn?.addEventListener("click", closeDetailModal);
 
     function renderProductionOnboarding(){
-  const ob = currentOnboarding || {};
+      const ob = currentOnboarding || {};
+      const steps = [
+        { done: ob.firstServiceCreated === true, label: "Première prestation créée" },
+        { done: ob.firstMissionCreated === true, label: "Première mission créée" },
+        { done: ob.firstProofValidated === true, label: "Première mission validée" },
+        { done: ob.firstInvoiceOrQuoteCreated === true, label: "Première facture créée" }
+      ];
 
-  productionOnboardingPanel.innerHTML = `
-    <div class="onboarding-title">Onboarding</div>
-    <div class="onboarding-step ${ob.firstServiceCreated === true ? "done" : "pending"}">${ob.firstServiceCreated === true ? "✓" : "○"} Première prestation créée</div>
-    <div class="onboarding-step ${ob.firstMissionCreated === true ? "done" : "pending"}">${ob.firstMissionCreated === true ? "✓" : "○"} Première mission créée</div>
-    <div class="onboarding-step ${ob.firstProofValidated === true ? "done" : "pending"}">${ob.firstProofValidated === true ? "✓" : "○"} Première mission validée</div>
-    <div class="onboarding-step ${ob.firstInvoiceOrQuoteCreated === true ? "done" : "pending"}">${ob.firstInvoiceOrQuoteCreated === true ? "✓" : "○"} Première facture créée</div>
-  `;
-}
+      const allDone = steps.every(step => step.done === true);
+
+      if(productionOnboardingDismissed || allDone){
+        productionOnboardingPanel.hidden = true;
+        productionOnboardingSteps.innerHTML = "";
+        return;
+      }
+
+      productionOnboardingPanel.hidden = false;
+      productionOnboardingSteps.innerHTML = steps.map(step => `
+        <div class="onboarding-step ${step.done ? "done" : "pending"}">
+          ${step.done ? "✓" : "○"} ${esc(step.label)}
+        </div>
+      `).join("");
+    }
 
     function goEdit(prestationId){
       const it = items.find(x=>x.id === prestationId);
@@ -1529,51 +1592,6 @@
       return nextStatus;
     }
 
-    async function validateMission(row){
-      if(!row?.queueId || !row?.eventId || !row?.missionId) return;
-      hideAlert();
-
-      const itemEl = document.querySelector(`[data-validate="${CSS.escape(row.queueId)}"]`)?.closest(".item");
-      const prog = document.querySelector(`[data-progress="${CSS.escape(row.queueId)}"]`);
-      const btn = document.querySelector(`[data-validate="${CSS.escape(row.queueId)}"]`);
-
-      if(itemEl) itemEl.classList.add("validating");
-      if(prog) prog.style.display = "block";
-      if(btn) btn.disabled = true;
-
-      try{
-        await updateDoc(doc(db, "events", row.eventId, "missions", row.missionId), {
-          status: "VALIDEE",
-          validatedAt: serverTimestamp(),
-          updatedAt: serverTimestamp()
-        });
-
-        await updateDoc(doc(db, "users", currentUser.uid), {
-  "onboarding.firstProofValidated": true,
-  "onboarding.updatedAt": serverTimestamp()
-});
-currentOnboarding.firstProofValidated = true;
-        
-        await deleteDoc(doc(db, "missionQueue", row.queueId));
-
-        const nextStatus = await recalcEventStatus(row.eventId);
-
-        showAlert(`✅ Mission validée. Statut prestation : ${opLabel(nextStatus)}.`, true);
-
-        await reloadAllData();
-
-        if(selected && selected.id === row.eventId){
-          selectItem(row.eventId);
-        }
-      }catch(err){
-        console.error(err);
-        if(itemEl) itemEl.classList.remove("validating");
-        if(prog) prog.style.display = "none";
-        if(btn) btn.disabled = false;
-        showAlert("Erreur validation mission : " + (err?.message || "inconnue"));
-      }
-    }
-
     function computeTotalsFromLines(lines){
       let ht = 0;
       for(const l of (Array.isArray(lines) ? lines : [])){
@@ -1696,11 +1714,11 @@ currentOnboarding.firstProofValidated = true;
         });
 
         await updateDoc(doc(db, "users", currentUser.uid), {
-  "onboarding.firstInvoiceOrQuoteCreated": true,
-  "onboarding.updatedAt": serverTimestamp()
-});
-currentOnboarding.firstInvoiceOrQuoteCreated = true;
-        
+          "onboarding.firstInvoiceOrQuoteCreated": true,
+          "onboarding.updatedAt": serverTimestamp()
+        });
+        currentOnboarding.firstInvoiceOrQuoteCreated = true;
+
         location.href = `facture.html?docId=${encodeURIComponent(created.id)}&returnTo=prestations`;
       }catch(err){
         console.error(err);
@@ -1911,7 +1929,7 @@ currentOnboarding.firstInvoiceOrQuoteCreated = true;
 
       currentUser = user;
       currentOnboarding = (res.data?.onboarding || {});
-      
+
       wireReturnLinks();
 
       if(helloLine) helloLine.textContent = "Bonjour,";
@@ -1932,3 +1950,4 @@ currentOnboarding.firstInvoiceOrQuoteCreated = true;
   </script>
 </body>
 </html>
+  
