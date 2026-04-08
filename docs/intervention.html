@@ -410,6 +410,7 @@
         <div class="btnrow">
           <button class="pill primary" id="genLinkBtn" type="button">Générer liens</button>
           <button class="pill" id="copyBtn" type="button" disabled>Copier</button>
+          <button class="pill" id="shareBtn" type="button" disabled>Partager</button>
           <button class="pill" id="mailtoBtn" type="button" disabled>Envoyer email</button>
         </div>
 
@@ -422,1002 +423,1076 @@
     </div>
   </div>
 
-  <script type="module">
-        import { auth, db } from "./firebase-init.js";
-    import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-    import {
-      doc, getDoc, setDoc, updateDoc, deleteDoc, deleteField,
-      serverTimestamp, Timestamp
-    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+ <script type="module">
+  import { auth, db } from "./firebase-init.js";
+  import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+  import {
+    doc, getDoc, setDoc, updateDoc, deleteDoc, deleteField,
+    serverTimestamp, Timestamp
+  } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
-    const helloLine = document.getElementById("helloLine");
-    const companyLine = document.getElementById("companyLine");
-    const backBtn = document.getElementById("backBtn");
+  const helloLine = document.getElementById("helloLine");
+  const companyLine = document.getElementById("companyLine");
+  const backBtn = document.getElementById("backBtn");
 
-    const alertBox = document.getElementById("alertBox");
-    const subLine = document.getElementById("subLine");
+  const alertBox = document.getElementById("alertBox");
+  const subLine = document.getElementById("subLine");
 
-    const homeLine = document.getElementById("homeLine");
-    const arrLine  = document.getElementById("arrLine");
-    const midLine  = document.getElementById("midLine");
-    const depLine  = document.getElementById("depLine");
-    const addrLine = document.getElementById("addrLine");
-    const ownerLine= document.getElementById("ownerLine");
-    const noteLine = document.getElementById("noteLine");
+  const homeLine = document.getElementById("homeLine");
+  const arrLine  = document.getElementById("arrLine");
+  const midLine  = document.getElementById("midLine");
+  const depLine  = document.getElementById("depLine");
+  const addrLine = document.getElementById("addrLine");
+  const ownerLine= document.getElementById("ownerLine");
+  const noteLine = document.getElementById("noteLine");
 
-    const linesBox = document.getElementById("linesBox");
-    const totalValue = document.getElementById("totalValue");
-    const missionsHint = document.getElementById("missionsHint");
+  const linesBox = document.getElementById("linesBox");
+  const totalValue = document.getElementById("totalValue");
+  const missionsHint = document.getElementById("missionsHint");
 
-    const agentName = document.getElementById("agentName");
-    const agentEmail = document.getElementById("agentEmail");
-    const conciergerieName = document.getElementById("conciergerieName");
+  const agentName = document.getElementById("agentName");
+  const agentEmail = document.getElementById("agentEmail");
+  const conciergerieName = document.getElementById("conciergerieName");
 
-    const sendSelectorBox = document.getElementById("sendSelectorBox");
+  const sendSelectorBox = document.getElementById("sendSelectorBox");
 
-    const genLinkBtn = document.getElementById("genLinkBtn");
-    const copyBtn = document.getElementById("copyBtn");
-    const mailtoBtn = document.getElementById("mailtoBtn");
-    const linkBox = document.getElementById("linkBox");
+  const genLinkBtn = document.getElementById("genLinkBtn");
+  const copyBtn = document.getElementById("copyBtn");
+  const shareBtn = document.getElementById("shareBtn");
+  const mailtoBtn = document.getElementById("mailtoBtn");
+  const linkBox = document.getElementById("linkBox");
 
-    const photosBox = document.getElementById("photosBox");
-    const photosWrap = document.getElementById("photosWrap");
-    const photosTotalBadge = document.getElementById("photosTotalBadge");
+  const photosBox = document.getElementById("photosBox");
+  const photosWrap = document.getElementById("photosWrap");
+  const photosTotalBadge = document.getElementById("photosTotalBadge");
 
-    const ALL_TECH_MISSIONS = ["MENAGE","CHECKIN","CHECKOUT","LINGE","MAINTENANCE","KITS"];
+  const ALL_TECH_MISSIONS = ["MENAGE","CHECKIN","CHECKOUT","LINGE","MAINTENANCE","KITS"];
 
-    function showAlert(msg, ok=false){
-      alertBox.style.display = "block";
-      alertBox.classList.toggle("ok", !!ok);
-      alertBox.textContent = msg;
+  function showAlert(msg, ok=false){
+    alertBox.style.display = "block";
+    alertBox.classList.toggle("ok", !!ok);
+    alertBox.textContent = msg;
+  }
+
+  function hideAlert(){
+    alertBox.style.display = "none";
+    alertBox.classList.remove("ok");
+    alertBox.textContent = "";
+  }
+
+  function qs(name){
+    return new URLSearchParams(location.search).get(name) || "";
+  }
+
+  function normalizeEmail(s){
+    return (s || "").trim().toLowerCase();
+  }
+
+  function esc(s){
+    return String(s ?? "")
+      .replaceAll("&","&amp;")
+      .replaceAll("<","&lt;")
+      .replaceAll(">","&gt;")
+      .replaceAll('"',"&quot;")
+      .replaceAll("'","&#039;");
+  }
+
+  function isDateKey(s){
+    return /^\d{4}-\d{2}-\d{2}$/.test(String(s || "").trim());
+  }
+
+  function formatTs(ts){
+    try{
+      const d = ts?.toDate ? ts.toDate() : (ts instanceof Date ? ts : null);
+      if(!d || Number.isNaN(d.getTime())) return "";
+      const pad = n => String(n).padStart(2,"0");
+      return `${pad(d.getDate())}/${pad(d.getMonth()+1)} à ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }catch{
+      return "";
     }
-    function hideAlert(){
-      alertBox.style.display = "none";
-      alertBox.classList.remove("ok");
-      alertBox.textContent = "";
+  }
+
+  async function guardConciergerie(user){
+    try{
+      const snap = await getDoc(doc(db,"users",user.uid));
+      if(!snap.exists()) return false;
+
+      const d = snap.data() || {};
+      const sub = String(d.subscriptionStatus || "").toLowerCase();
+
+      return (d.role === "conciergerie" || d.role === "admin")
+        && (sub === "active" || sub === "cancel_at_period_end");
+    }catch{
+      return false;
+    }
+  }
+
+  function applyBackLink(){
+    const returnTo = (qs("returnTo") || "").toLowerCase().trim();
+    const returnDate = (qs("returnDate") || "").trim();
+
+    if(returnTo === "planning"){
+      const p = new URLSearchParams();
+      if(isDateKey(returnDate)) p.set("date", returnDate);
+      backBtn.href = `planning.html${p.toString() ? "?" + p.toString() : ""}`;
+      backBtn.textContent = "← Planning";
+      return;
     }
 
-    function qs(name){ return new URLSearchParams(location.search).get(name) || ""; }
-    function normalizeEmail(s){ return (s||"").trim().toLowerCase(); }
-    function esc(s){
-      return String(s ?? "")
-        .replaceAll("&","&amp;")
-        .replaceAll("<","&lt;")
-        .replaceAll(">","&gt;")
-        .replaceAll('"',"&quot;")
-        .replaceAll("'","&#039;");
-    }
-
-    function isDateKey(s){ return /^\d{4}-\d{2}-\d{2}$/.test(String(s||"").trim()); }
-
-    function formatTs(ts){
-      try{
-        const d = ts?.toDate ? ts.toDate() : (ts instanceof Date ? ts : null);
-        if(!d || Number.isNaN(d.getTime())) return "";
-        const pad = n => String(n).padStart(2,"0");
-        return `${pad(d.getDate())}/${pad(d.getMonth()+1)} à ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-      }catch{
-        return "";
-      }
-    }
-
-    async function guardConciergerie(user){
-      try{
-        const snap = await getDoc(doc(db,"users",user.uid));
-        if(!snap.exists()) return false;
-
-        const d = snap.data() || {};
-        const sub = String(d.subscriptionStatus || "").toLowerCase();
-
-        return (d.role === "conciergerie" || d.role === "admin")
-          && (sub === "active" || sub === "cancel_at_period_end");
-      }catch(e){
-        return false;
-      }
-    }
-
-    function applyBackLink(){
-      const returnTo = (qs("returnTo") || "").toLowerCase().trim();
-      const returnDate = (qs("returnDate") || "").trim();
-
-      if(returnTo === "planning"){
-        const p = new URLSearchParams();
-        if(isDateKey(returnDate)) p.set("date", returnDate);
-        backBtn.href = `planning.html${p.toString() ? "?" + p.toString() : ""}`;
-        backBtn.textContent = "← Planning";
-        return;
-      }
-
-      const prestaId = qs("prestationId");
-      if(prestaId){
-        backBtn.href = `prestations.html?open=${encodeURIComponent(prestaId)}`;
-        backBtn.textContent = "← Production";
-        return;
-      }
-
-      backBtn.href = "prestations.html";
+    const prestaId = qs("prestationId");
+    if(prestaId){
+      backBtn.href = `prestations.html?open=${encodeURIComponent(prestaId)}`;
       backBtn.textContent = "← Production";
+      return;
     }
 
-    function money(n){
-      const x = Number(n || 0);
-      return x.toLocaleString("fr-FR",{minimumFractionDigits:2,maximumFractionDigits:2})+" €";
-    }
+    backBtn.href = "prestations.html";
+    backBtn.textContent = "← Production";
+  }
 
-    function computeTotalFromLines(lines){
-      if(!Array.isArray(lines)) return 0;
-      return lines.reduce((s,l)=> s + (Number(l?.qty)||0)*(Number(l?.unitPrice)||0), 0);
-    }
+  function money(n){
+    const x = Number(n || 0);
+    return x.toLocaleString("fr-FR",{minimumFractionDigits:2,maximumFractionDigits:2})+" €";
+  }
 
-    function randomToken(len=20){
-      const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-      const arr = new Uint32Array(len);
-      crypto.getRandomValues(arr);
-      let out = "";
-      for(const n of arr) out += chars[n % chars.length];
-      return out;
-    }
+  function computeTotalFromLines(lines){
+    if(!Array.isArray(lines)) return 0;
+    return lines.reduce((s,l)=> s + (Number(l?.qty)||0) * (Number(l?.unitPrice)||0), 0);
+  }
 
-    function normTxt(s){
-      return String(s||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
-    }
+  function randomToken(len=20){
+    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    const arr = new Uint32Array(len);
+    crypto.getRandomValues(arr);
+    let out = "";
+    for(const n of arr) out += chars[n % chars.length];
+    return out;
+  }
 
-    function missionLabel(t){
-      const x = String(t||"").toUpperCase();
-      if(x==="CHECKIN") return "Check-in";
-      if(x==="CHECKOUT") return "Check-out";
-      if(x==="MENAGE") return "Ménage";
-      if(x==="LINGE") return "Linge";
-      if(x==="MAINTENANCE") return "Maintenance";
-      if(x==="KITS") return "Kits & conso";
-      if(x==="PHOTOS") return "Photos";
-      return x || "—";
-    }
+  function normTxt(s){
+    return String(s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+  }
 
-    function getInterventionTitle(key, iv){
-      if(iv?.label) return String(iv.label);
-      if(key === "arrival") return "Arrivée";
-      if(key === "midstay") return "Inter-séjour";
-      if(key === "departure") return "Départ";
-      if(key === "other") return "Libre";
-      return "Intervention";
-    }
+  function missionLabel(t){
+    const x = String(t || "").toUpperCase();
+    if(x === "CHECKIN") return "Check-in";
+    if(x === "CHECKOUT") return "Check-out";
+    if(x === "MENAGE") return "Ménage";
+    if(x === "LINGE") return "Linge";
+    if(x === "MAINTENANCE") return "Maintenance";
+    if(x === "KITS") return "Kits & conso";
+    if(x === "PHOTOS") return "Photos";
+    return x || "—";
+  }
 
-    function normalizeInterventions(eventDoc){
-      const e = eventDoc || {};
-      const src = (e.interventions && typeof e.interventions === "object")
-        ? e.interventions
-        : null;
+  function getInterventionTitle(key, iv){
+    if(iv?.label) return String(iv.label);
+    if(key === "arrival") return "Arrivée";
+    if(key === "midstay") return "Inter-séjour";
+    if(key === "departure") return "Départ";
+    if(key === "other") return "Libre";
+    return "Intervention";
+  }
 
-      if(src){
-        const keys = ["arrival","midstay","departure","other"];
-        return keys.map((key)=> {
-          const raw = src[key] || {};
-          return {
-            key,
-            title: getInterventionTitle(key, raw),
-            type: String(raw.type || "").trim(),
-            dateKey: String(raw.dateKey || "").trim(),
-            note: String(raw.note || "").trim(),
-            lines: Array.isArray(raw.lines) ? raw.lines : [],
-            completed: !!raw.completedAt || !!raw.validatedAt
-          };
-        });
-      }
+  function normalizeInterventions(eventDoc){
+    const e = eventDoc || {};
+    const src = (e.interventions && typeof e.interventions === "object")
+      ? e.interventions
+      : null;
 
-      const legacyLines = Array.isArray(e.lines) ? e.lines : [];
-      return [{
-        key: "legacy",
-        title: "Prestation",
-        type: String(e.type || "").trim(),
-        dateKey: String(e.dateKey || e.date || "").trim(),
-        note: String(e.meta || "").trim(),
-        lines: legacyLines,
-        completed: false
-      }];
-    }
-
-    function flattenAllLines(interventions){
-      return (interventions || []).flatMap(iv => Array.isArray(iv.lines) ? iv.lines : []);
-    }
-
-    function findIntervention(interventions, key){
-      return (interventions || []).find(iv => iv.key === key) || null;
-    }
-
-    function interventionHasContent(iv){
-      if(!iv) return false;
-      return (Array.isArray(iv.lines) && iv.lines.length > 0) || !!String(iv.note || "").trim();
-    }
-
-    function missionsFromOneIntervention(iv){
-      const out = new Set();
-      if(!iv) return [];
-
-      const lines = Array.isArray(iv.lines) ? iv.lines : [];
-
-      for(const l of lines){
-        const label = normTxt(l?.label || l?.name || l?.title || "");
-        const category = normTxt(l?.category || "");
-        if(!label && !category) continue;
-
-        const text = `${label} ${category}`.trim();
-
-        if(
-          label.includes("check-in") ||
-          label.includes("check in") ||
-          label.includes("arrivee")
-        ){
-          out.add("CHECKIN");
-        }
-
-        if(
-          label.includes("check-out") ||
-          label.includes("check out")
-        ){
-          out.add("CHECKOUT");
-        }
-
-        if(
-          label.includes("menage") ||
-          label.includes("nettoyage")
-        ){
-          out.add("MENAGE");
-        }
-
-        if(
-          text.includes("linge") ||
-          text.includes("drap") ||
-          text.includes("serviette") ||
-          text.includes("collecte") ||
-          text.includes("lavage") ||
-          text.includes("sechage") ||
-          text.includes("lessive") ||
-          text.includes("blanch")
-        ){
-          out.add("LINGE");
-        }
-
-        if(
-          text.includes("maintenance") ||
-          text.includes("reparation") ||
-          text.includes("bricol") ||
-          text.includes("artisan") ||
-          text.includes("fuite") ||
-          text.includes("serrure") ||
-          text.includes("urgence") ||
-          text.includes("ampoule") ||
-          text.includes("joint")
-        ){
-          out.add("MAINTENANCE");
-        }
-
-        if(
-          text.includes("kit") ||
-          text.includes("consommable") ||
-          text.includes("capsule") ||
-          text.includes("shampo") ||
-          text.includes("savon") ||
-          text.includes("reassort")
-        ){
-          out.add("KITS");
-        }
-      }
-
-      const order = ["MENAGE","CHECKIN","CHECKOUT","LINGE","MAINTENANCE","KITS"];
-      return order.filter(x => out.has(x));
-    }
-
-    function getSelectedInterventionKeys(){
-      return Array.from(sendSelectorBox.querySelectorAll('input[type="checkbox"][data-iv-key]:checked'))
-        .map(el => String(el.getAttribute("data-iv-key") || "").trim())
-        .filter(Boolean);
-    }
-
-    function buildMissionTypesFromSelection(interventions, selectedKeys){
-      const out = new Set();
-      for(const key of selectedKeys){
-        const iv = findIntervention(interventions, key);
-        const missionTypes = missionsFromOneIntervention(iv);
-        missionTypes.forEach(t => out.add(t));
-      }
-      const order = ["MENAGE","CHECKIN","CHECKOUT","LINGE","MAINTENANCE","KITS"];
-      return order.filter(x => out.has(x));
-    }
-
-    function renderSendSelector(interventions, agentLinks = {}){
-      sendSelectorBox.innerHTML = "";
-      const visible = (Array.isArray(interventions) ? interventions : []).filter(interventionHasContent);
-
-      if(!visible.length){
-        sendSelectorBox.innerHTML = `<div class="mini">Aucune intervention exploitable.</div>`;
-        return;
-      }
-
-      for(const iv of visible){
-        const lines = Array.isArray(iv.lines) ? iv.lines : [];
-        const subtotal = computeTotalFromLines(lines);
-        const missionTypes = missionsFromOneIntervention(iv);
-        const linkMeta = agentLinks?.[iv.key] || null;
-        const sentTxt = formatTs(linkMeta?.sentAt);
-        const isSent = !!linkMeta?.tokenId;
-
-        const row = document.createElement("label");
-        row.className = "selectorRow";
-        row.innerHTML = `
-          <input type="checkbox" data-iv-key="${esc(iv.key)}" ${isSent ? "checked" : ""}>
-          <div class="selectorMain">
-            <div class="selectorHead">
-              <div class="selectorTitle">${esc(iv.title)} • ${esc(iv.dateKey || "—")}</div>
-              ${sentTxt ? `<span class="sentBadge">Envoyé le ${esc(sentTxt)}</span>` : ``}
-            </div>
-            <div class="selectorSub">${esc(`${lines.length} ligne(s) • ${money(subtotal)}${missionTypes.length ? " • " + missionTypes.map(missionLabel).join(", ") : ""}`)}</div>
-          </div>
-        `;
-        sendSelectorBox.appendChild(row);
-      }
-
-      sendSelectorBox.querySelectorAll('input[type="checkbox"][data-iv-key]').forEach(el=>{
-        el.addEventListener("change", refreshMissionHintFromSelection);
+    if(src){
+      const keys = ["arrival","midstay","departure","other"];
+      return keys.map((key)=> {
+        const raw = src[key] || {};
+        return {
+          key,
+          title: getInterventionTitle(key, raw),
+          type: String(raw.type || "").trim(),
+          dateKey: String(raw.dateKey || "").trim(),
+          note: String(raw.note || "").trim(),
+          lines: Array.isArray(raw.lines) ? raw.lines : [],
+          completed: !!raw.completedAt || !!raw.validatedAt
+        };
       });
     }
 
-    function refreshMissionHintFromSelection(){
-      const selectedKeys = getSelectedInterventionKeys();
-      const missionTypes = buildMissionTypesFromSelection(currentInterventions, selectedKeys);
+    const legacyLines = Array.isArray(e.lines) ? e.lines : [];
+    return [{
+      key: "legacy",
+      title: "Prestation",
+      type: String(e.type || "").trim(),
+      dateKey: String(e.dateKey || e.date || "").trim(),
+      note: String(e.meta || "").trim(),
+      lines: legacyLines,
+      completed: false
+    }];
+  }
 
-      const parts = selectedKeys.map(key=>{
-        const iv = findIntervention(currentInterventions, key);
-        if(!iv) return null;
-        const m = missionsFromOneIntervention(iv).map(missionLabel).join(", ");
-        return `${iv.title} (${iv.dateKey || "—"}${m ? " • " + m : ""})`;
-      }).filter(Boolean);
+  function flattenAllLines(interventions){
+    return (interventions || []).flatMap(iv => Array.isArray(iv.lines) ? iv.lines : []);
+  }
 
-      if(!parts.length){
-        missionsHint.innerHTML = `<b>Résumé agent :</b> aucune intervention sélectionnée.`;
-        return;
-      }
+  function findIntervention(interventions, key){
+    return (interventions || []).find(iv => iv.key === key) || null;
+  }
 
-      missionsHint.innerHTML =
-        `<b>Résumé agent :</b> ${esc(parts.join(" | "))}` +
-        `${missionTypes.length ? `<br><b>Missions techniques :</b> ${esc(missionTypes.map(missionLabel).join(", "))}` : ""}`;
+  function interventionHasContent(iv){
+    if(!iv) return false;
+    return (Array.isArray(iv.lines) && iv.lines.length > 0) || !!String(iv.note || "").trim();
+  }
+
+  function labelsFromOneIntervention(iv){
+    if(!iv || !Array.isArray(iv.lines)) return [];
+
+    const out = [];
+    for(const l of iv.lines){
+      const label = String(l?.label || l?.name || l?.title || "").trim();
+      if(label) out.push(label);
     }
 
-    function isTime(s){ return /^\d{2}:\d{2}$/.test(String(s||"").trim()); }
+    return [...new Set(out)];
+  }
 
-    function toLocalMs(dateKey, timeHHmm){
-      const d = String(dateKey||"").trim();
-      if(!isDateKey(d)) return 0;
-      const t = isTime(timeHHmm) ? String(timeHHmm).trim() : "00:00";
-      const dt = new Date(`${d}T${t}:00`);
-      const ms = dt.getTime();
-      return Number.isFinite(ms) ? ms : 0;
+ function missionsFromOneIntervention(iv){
+  const out = new Set();
+  if(!iv) return [];
+
+  const lines = Array.isArray(iv.lines) ? iv.lines : [];
+
+  for(const l of lines){
+    const label = normTxt(l?.label || l?.name || l?.title || "");
+    const category = normTxt(l?.category || "");
+    if(!label && !category) continue;
+
+    const text = `${label} ${category}`.trim();
+
+    // CHECK-IN uniquement si la ligne le dit vraiment
+    if(
+      text.includes("check-in") ||
+      text.includes("check in") ||
+      text.includes("checkin") ||
+      text.includes("arrivee") ||
+      text.includes("arrivée")
+    ){
+      out.add("CHECKIN");
     }
 
-    function pickFirst(...vals){
-      for(const v of vals){
-        const s = String(v || "").trim();
-        if(s) return s;
-      }
-      return "";
+    // CHECK-OUT uniquement si la ligne le dit vraiment
+    if(
+      text === "check-out" ||
+      text.includes("check-out") ||
+      text.includes("check out") ||
+      text.includes("checkout") ||
+      text.includes("recuperation cles") ||
+      text.includes("récupération clés")
+    ){
+      out.add("CHECKOUT");
     }
 
-    function computeScheduleForMission(eventDoc, missionType){
-      const e = eventDoc || {};
-      const interventions = normalizeInterventions(e);
-
-      const arrivalIv   = findIntervention(interventions, "arrival");
-      const midstayIv   = findIntervention(interventions, "midstay");
-      const departureIv = findIntervention(interventions, "departure");
-      const otherIv     = findIntervention(interventions, "other");
-
-      const aDate = pickFirst(arrivalIv?.dateKey, e.arrivalDateKey, e.dateKey, e.date);
-      const aTime = pickFirst(e.arrivalTime, e.time);
-
-      const mDate = pickFirst(midstayIv?.dateKey, e.interstayDateKey);
-      const mTime = pickFirst(e.interstayTime);
-
-      const dDate = pickFirst(departureIv?.dateKey, e.departureDateKey);
-      const dTime = pickFirst(e.departureTime);
-
-      const oDate = pickFirst(otherIv?.dateKey, e.maintenanceDateKey, e.maintenanceScheduledDateKey, e.maintenanceDate);
-      const oTime = pickFirst(e.maintenanceTime, e.maintenanceScheduledTime, e.maintenanceHour);
-
-      const lDate = pickFirst(mDate, e.lingeDateKey, e.lingeScheduledDateKey, aDate);
-      const lTime = pickFirst(mTime, e.lingeTime, e.lingeScheduledTime, aTime);
-
-      const kDate = pickFirst(aDate, e.kitsDateKey, e.kitsScheduledDateKey);
-      const kTime = pickFirst(aTime, e.kitsTime, e.kitsScheduledTime);
-
-      const type = String(missionType||"").toUpperCase().trim();
-
-      let scheduledDateKey = aDate;
-      let scheduledTime = aTime;
-      let scheduleSource = "ARRIVAL";
-
-      if(type === "CHECKOUT"){
-        scheduledDateKey = dDate || aDate;
-        scheduledTime = dTime || aTime;
-        scheduleSource = dDate ? "DEPARTURE" : "ARRIVAL";
-      } else if(type === "CHECKIN"){
-        scheduledDateKey = aDate;
-        scheduledTime = aTime;
-        scheduleSource = "ARRIVAL";
-      } else if(type === "MENAGE"){
-        scheduledDateKey = mDate || aDate;
-        scheduledTime = mTime || aTime;
-        scheduleSource = mDate ? "INTERSTAY" : "ARRIVAL";
-      } else if(type === "MAINTENANCE"){
-        scheduledDateKey = oDate || aDate;
-        scheduledTime = oTime || aTime;
-        scheduleSource = oDate ? "OTHER" : "ARRIVAL";
-      } else if(type === "LINGE"){
-        scheduledDateKey = lDate || aDate;
-        scheduledTime = lTime || aTime;
-        scheduleSource = lDate === mDate && mDate ? "INTERSTAY" : "ARRIVAL";
-      } else if(type === "KITS"){
-        scheduledDateKey = kDate || aDate;
-        scheduledTime = kTime || aTime;
-        scheduleSource = "ARRIVAL";
-      }
-
-      const scheduledAtMs = toLocalMs(scheduledDateKey, scheduledTime);
-
-      return {
-        scheduledDateKey: scheduledDateKey || "",
-        scheduledTime: scheduledTime || "",
-        scheduledAtMs: scheduledAtMs || 0,
-        scheduleSource
-      };
+    // MENAGE
+    if(
+      text.includes("menage") ||
+      text.includes("ménage") ||
+      text.includes("nettoyage") ||
+      text.includes("remise en etat") ||
+      text.includes("remise en état") ||
+      text.includes("back-to-back") ||
+      category === "menage" ||
+      category === "ménage"
+    ){
+      out.add("MENAGE");
     }
 
-    const prestationId = qs("prestationId");
-    let currentUser = null;
-    let currentEvent = null;
-    let currentInterventions = [];
+    // LINGE
+    if(
+      text.includes("linge") ||
+      text.includes("drap") ||
+      text.includes("serviette") ||
+      text.includes("collecte") ||
+      text.includes("lavage") ||
+      text.includes("sechage") ||
+      text.includes("séchage") ||
+      text.includes("lessive") ||
+      text.includes("blanch")
+    ){
+      out.add("LINGE");
+    }
 
-    function renderInterventions(interventions){
-      linesBox.innerHTML = "";
+    // MAINTENANCE
+    if(
+      text.includes("maintenance") ||
+      text.includes("reparation") ||
+      text.includes("réparation") ||
+      text.includes("bricol") ||
+      text.includes("artisan") ||
+      text.includes("fuite") ||
+      text.includes("serrure") ||
+      text.includes("urgence") ||
+      text.includes("ampoule") ||
+      text.includes("joint")
+    ){
+      out.add("MAINTENANCE");
+    }
 
-      const list = Array.isArray(interventions) ? interventions : [];
-      if(!list.length){
-        linesBox.innerHTML = `<div class="mini">Aucune ligne.</div>`;
-        return;
-      }
+    // KITS
+    if(
+      text.includes("kit") ||
+      text.includes("consommable") ||
+      text.includes("capsule") ||
+      text.includes("shampo") ||
+      text.includes("savon") ||
+      text.includes("reassort") ||
+      text.includes("réassort")
+    ){
+      out.add("KITS");
+    }
+  }
 
-      const nonEmpty = list.filter(iv => Array.isArray(iv.lines) && iv.lines.length);
-      const finalList = nonEmpty.length ? nonEmpty : list;
+  const order = ["MENAGE","CHECKIN","CHECKOUT","LINGE","MAINTENANCE","KITS"];
+  return order.filter(x => out.has(x));
+}
+  function getSelectedInterventionKeys(){
+    return Array.from(sendSelectorBox.querySelectorAll('input[type="checkbox"][data-iv-key]:checked'))
+      .map(el => String(el.getAttribute("data-iv-key") || "").trim())
+      .filter(Boolean);
+  }
 
-      for(const iv of finalList){
-        const div = document.createElement("div");
-        div.className = "ivBlock";
+  function buildMissionTypesFromSelection(interventions, selectedKeys){
+    const out = new Set();
+    for(const key of selectedKeys){
+      const iv = findIntervention(interventions, key);
+      const missionTypes = missionsFromOneIntervention(iv);
+      missionTypes.forEach(t => out.add(t));
+    }
+    const order = ["MENAGE","CHECKIN","CHECKOUT","LINGE","MAINTENANCE","KITS"];
+    return order.filter(x => out.has(x));
+  }
 
-        const lines = Array.isArray(iv.lines) ? iv.lines : [];
-        const subtotal = computeTotalFromLines(lines);
-        const badge = `${iv.dateKey || "—"} • ${money(subtotal)}`;
+  function renderSendSelector(interventions, agentLinks = {}){
+    sendSelectorBox.innerHTML = "";
+    const visible = (Array.isArray(interventions) ? interventions : []).filter(interventionHasContent);
 
-        let html = `
-          <div class="ivHead">
-            <div class="ivTitle">${esc(iv.title || "Intervention")}</div>
-            <div class="ivBadge">${esc(badge)}</div>
+    if(!visible.length){
+      sendSelectorBox.innerHTML = `<div class="mini">Aucune intervention exploitable.</div>`;
+      return;
+    }
+
+    for(const iv of visible){
+      const lines = Array.isArray(iv.lines) ? iv.lines : [];
+      const subtotal = computeTotalFromLines(lines);
+      const lineLabels = labelsFromOneIntervention(iv);
+      const linkMeta = agentLinks?.[iv.key] || null;
+      const sentTxt = formatTs(linkMeta?.sentAt);
+      const isSent = !!linkMeta?.tokenId;
+
+      const row = document.createElement("label");
+      row.className = "selectorRow";
+      row.innerHTML = `
+        <input type="checkbox" data-iv-key="${esc(iv.key)}" ${isSent ? "checked" : ""}>
+        <div class="selectorMain">
+          <div class="selectorHead">
+            <div class="selectorTitle">${esc(iv.title)} • ${esc(iv.dateKey || "—")}</div>
+            ${sentTxt ? `<span class="sentBadge">Envoyé le ${esc(sentTxt)}</span>` : ``}
           </div>
-        `;
-
-        if(iv.note){
-          html += `<div class="ivNote">${esc(iv.note)}</div>`;
-        }
-
-        if(!lines.length){
-          html += `<div class="mini">Aucune ligne dans cette intervention.</div>`;
-        }else{
-          html += lines.map(l=>{
-            const qty = Number(l?.qty || 0);
-            const unit = String(l?.unit || "unité");
-            const up = Number(l?.unitPrice || 0);
-            const lt = qty * up;
-
-            return `
-              <div class="lineItem">
-                <div style="min-width:0;flex:1;">
-                  <div class="t">${esc(l?.label || "Ligne")}</div>
-                  <div class="s">${esc(`${qty} ${unit} • ${money(up)} / ${unit}`)}</div>
-                  ${l?.category ? `<div class="s">${esc(`Catégorie : ${l.category}`)}</div>` : ``}
-                  ${l?.note ? `<div class="s">${esc(l.note)}</div>` : ``}
-                </div>
-                <div style="font-weight:900;white-space:nowrap;">${esc(money(lt))}</div>
-              </div>
-            `;
-          }).join("");
-        }
-
-        div.innerHTML = html;
-        linesBox.appendChild(div);
-      }
-    }
-
-    async function loadCompanyName(user){
-      try{
-        const uSnap = await getDoc(doc(db, "users", user.uid));
-        const company = uSnap.exists() ? (uSnap.data()?.businessProfile?.companyName || "") : "";
-        const name = (company || "").trim() || "Conciergerie";
-        companyLine.textContent = name;
-        helloLine.textContent = "Bonjour,";
-        if(!String(conciergerieName.value || "").trim()) conciergerieName.value = name;
-      }catch{
-        companyLine.textContent = "Conciergerie";
-        helloLine.textContent = "Bonjour,";
-        if(!String(conciergerieName.value || "").trim()) conciergerieName.value = "Conciergerie";
-      }
-    }
-
-    function thumbHtml(p, idx){
-      const url = p?.url || "";
-      return `
-        <a class="pThumb" href="${esc(url)}" target="_blank" rel="noopener">
-          <img src="${esc(url)}" alt="">
-          <span class="pTag">${esc(String(idx+1))}</span>
-        </a>
+          <div class="selectorSub">${esc(`${lines.length} ligne(s) • ${money(subtotal)}${lineLabels.length ? " • " + lineLabels.join(", ") : ""}`)}</div>
+        </div>
       `;
+      sendSelectorBox.appendChild(row);
     }
 
-    async function loadPhotosByMission(){
-      photosWrap.innerHTML = "";
-      photosBox.style.display = "none";
-      photosTotalBadge.textContent = "📷 0";
+    sendSelectorBox.querySelectorAll('input[type="checkbox"][data-iv-key]').forEach(el=>{
+      el.addEventListener("change", refreshMissionHintFromSelection);
+    });
+  }
 
-      try{
-        const mSnap = await getDoc(doc(db, "events", prestationId, "missions", "PHOTOS"));
-        if(!mSnap.exists()){
-          photosWrap.innerHTML = `
-            <div class="pMission">
-              <div class="pMissionHead">
-                <div class="pMissionName">PHOTOS</div>
-                <span class="badge">📷 0</span>
+  function refreshMissionHintFromSelection(){
+    const selectedKeys = getSelectedInterventionKeys();
+
+    const parts = selectedKeys.map(key=>{
+      const iv = findIntervention(currentInterventions, key);
+      if(!iv) return null;
+
+      const labels = labelsFromOneIntervention(iv).join(", ");
+      return `${iv.title} (${iv.dateKey || "—"}${labels ? " • " + labels : ""})`;
+    }).filter(Boolean);
+
+    if(!parts.length){
+      missionsHint.innerHTML = `<b>Résumé agent :</b> aucune intervention sélectionnée.`;
+      return;
+    }
+
+    missionsHint.innerHTML = `<b>Résumé agent :</b> ${esc(parts.join(" | "))}`;
+  }
+
+  function isTime(s){
+    return /^\d{2}:\d{2}$/.test(String(s || "").trim());
+  }
+
+  function toLocalMs(dateKey, timeHHmm){
+    const d = String(dateKey || "").trim();
+    if(!isDateKey(d)) return 0;
+    const t = isTime(timeHHmm) ? String(timeHHmm).trim() : "00:00";
+    const dt = new Date(`${d}T${t}:00`);
+    const ms = dt.getTime();
+    return Number.isFinite(ms) ? ms : 0;
+  }
+
+  function pickFirst(...vals){
+    for(const v of vals){
+      const s = String(v || "").trim();
+      if(s) return s;
+    }
+    return "";
+  }
+
+  function computeScheduleForMission(eventDoc, missionType){
+    const e = eventDoc || {};
+    const interventions = normalizeInterventions(e);
+
+    const arrivalIv   = findIntervention(interventions, "arrival");
+    const midstayIv   = findIntervention(interventions, "midstay");
+    const departureIv = findIntervention(interventions, "departure");
+    const otherIv     = findIntervention(interventions, "other");
+
+    const aDate = pickFirst(arrivalIv?.dateKey, e.arrivalDateKey, e.dateKey, e.date);
+    const aTime = pickFirst(e.arrivalTime, e.time);
+
+    const mDate = pickFirst(midstayIv?.dateKey, e.interstayDateKey);
+    const mTime = pickFirst(e.interstayTime);
+
+    const dDate = pickFirst(departureIv?.dateKey, e.departureDateKey);
+    const dTime = pickFirst(e.departureTime);
+
+    const oDate = pickFirst(otherIv?.dateKey, e.maintenanceDateKey, e.maintenanceScheduledDateKey, e.maintenanceDate);
+    const oTime = pickFirst(e.maintenanceTime, e.maintenanceScheduledTime, e.maintenanceHour);
+
+    const lDate = pickFirst(mDate, e.lingeDateKey, e.lingeScheduledDateKey, aDate);
+    const lTime = pickFirst(mTime, e.lingeTime, e.lingeScheduledTime, aTime);
+
+    const kDate = pickFirst(aDate, e.kitsDateKey, e.kitsScheduledDateKey);
+    const kTime = pickFirst(aTime, e.kitsTime, e.kitsScheduledTime);
+
+    const type = String(missionType || "").toUpperCase().trim();
+
+    let scheduledDateKey = aDate;
+    let scheduledTime = aTime;
+    let scheduleSource = "ARRIVAL";
+
+    if(type === "CHECKOUT"){
+      scheduledDateKey = dDate || aDate;
+      scheduledTime = dTime || aTime;
+      scheduleSource = dDate ? "DEPARTURE" : "ARRIVAL";
+    }else if(type === "CHECKIN"){
+      scheduledDateKey = aDate;
+      scheduledTime = aTime;
+      scheduleSource = "ARRIVAL";
+    }else if(type === "MENAGE"){
+      scheduledDateKey = mDate || aDate;
+      scheduledTime = mTime || aTime;
+      scheduleSource = mDate ? "INTERSTAY" : "ARRIVAL";
+    }else if(type === "MAINTENANCE"){
+      scheduledDateKey = oDate || aDate;
+      scheduledTime = oTime || aTime;
+      scheduleSource = oDate ? "OTHER" : "ARRIVAL";
+    }else if(type === "LINGE"){
+      scheduledDateKey = lDate || aDate;
+      scheduledTime = lTime || aTime;
+      scheduleSource = lDate === mDate && mDate ? "INTERSTAY" : "ARRIVAL";
+    }else if(type === "KITS"){
+      scheduledDateKey = kDate || aDate;
+      scheduledTime = kTime || aTime;
+      scheduleSource = "ARRIVAL";
+    }
+
+    const scheduledAtMs = toLocalMs(scheduledDateKey, scheduledTime);
+
+    return {
+      scheduledDateKey: scheduledDateKey || "",
+      scheduledTime: scheduledTime || "",
+      scheduledAtMs: scheduledAtMs || 0,
+      scheduleSource
+    };
+  }
+
+  const prestationId = qs("prestationId");
+  let currentUser = null;
+  let currentEvent = null;
+  let currentInterventions = [];
+
+  function renderInterventions(interventions){
+    linesBox.innerHTML = "";
+
+    const list = Array.isArray(interventions) ? interventions : [];
+    if(!list.length){
+      linesBox.innerHTML = `<div class="mini">Aucune ligne.</div>`;
+      return;
+    }
+
+    const nonEmpty = list.filter(iv => Array.isArray(iv.lines) && iv.lines.length);
+    const finalList = nonEmpty.length ? nonEmpty : list;
+
+    for(const iv of finalList){
+      const div = document.createElement("div");
+      div.className = "ivBlock";
+
+      const lines = Array.isArray(iv.lines) ? iv.lines : [];
+      const subtotal = computeTotalFromLines(lines);
+      const badge = `${iv.dateKey || "—"} • ${money(subtotal)}`;
+
+      let html = `
+        <div class="ivHead">
+          <div class="ivTitle">${esc(iv.title || "Intervention")}</div>
+          <div class="ivBadge">${esc(badge)}</div>
+        </div>
+      `;
+
+      if(iv.note){
+        html += `<div class="ivNote">${esc(iv.note)}</div>`;
+      }
+
+      if(!lines.length){
+        html += `<div class="mini">Aucune ligne dans cette intervention.</div>`;
+      }else{
+        html += lines.map(l=>{
+          const qty = Number(l?.qty || 0);
+          const unit = String(l?.unit || "unité");
+          const up = Number(l?.unitPrice || 0);
+          const lt = qty * up;
+
+          return `
+            <div class="lineItem">
+              <div style="min-width:0;flex:1;">
+                <div class="t">${esc(l?.label || "Ligne")}</div>
+                <div class="s">${esc(`${qty} ${unit} • ${money(up)} / ${unit}`)}</div>
+                ${l?.category ? `<div class="s">${esc(`Catégorie : ${l.category}`)}</div>` : ``}
+                ${l?.note ? `<div class="s">${esc(l.note)}</div>` : ``}
               </div>
-              <div class="pEmpty">Aucune photo.</div>
+              <div style="font-weight:900;white-space:nowrap;">${esc(money(lt))}</div>
             </div>
           `;
-          photosBox.style.display = "block";
-          return;
-        }
+        }).join("");
+      }
 
-        const d = mSnap.data() || {};
-        const arr = Array.isArray(d.proofPhotos) ? d.proofPhotos : [];
-        const count = Number(d.proofPhotosCount ?? arr.length ?? 0) || 0;
+      div.innerHTML = html;
+      linesBox.appendChild(div);
+    }
+  }
 
-        photosTotalBadge.textContent = `📷 ${count}`;
+  async function loadCompanyName(user){
+    try{
+      const uSnap = await getDoc(doc(db, "users", user.uid));
+      const company = uSnap.exists() ? (uSnap.data()?.businessProfile?.companyName || "") : "";
+      const name = (company || "").trim() || "Conciergerie";
+      companyLine.textContent = name;
+      helloLine.textContent = "Bonjour,";
+      if(!String(conciergerieName.value || "").trim()) conciergerieName.value = name;
+    }catch{
+      companyLine.textContent = "Conciergerie";
+      helloLine.textContent = "Bonjour,";
+      if(!String(conciergerieName.value || "").trim()) conciergerieName.value = "Conciergerie";
+    }
+  }
 
-        if(!count){
-          photosWrap.innerHTML = `
-            <div class="pMission">
-              <div class="pMissionHead">
-                <div class="pMissionName">PHOTOS</div>
-                <span class="badge">📷 0</span>
-              </div>
-              <div class="pEmpty">Aucune photo.</div>
-            </div>
-          `;
-        }else{
-          const thumbs = arr.slice(0, 24).map((p, i)=>thumbHtml(p, i)).join("");
-          const more = (arr.length > 24)
-            ? `<div class="mini">+ ${arr.length - 24} photo(s) non affichée(s)</div>`
-            : ``;
+  function thumbHtml(p, idx){
+    const url = p?.url || "";
+    return `
+      <a class="pThumb" href="${esc(url)}" target="_blank" rel="noopener">
+        <img src="${esc(url)}" alt="">
+        <span class="pTag">${esc(String(idx+1))}</span>
+      </a>
+    `;
+  }
 
-          photosWrap.innerHTML = `
-            <div class="pMission">
-              <div class="pMissionHead">
-                <div class="pMissionName">PHOTOS</div>
-                <span class="badge">📷 ${esc(String(count))}</span>
-              </div>
-              <div class="pGrid">${thumbs}</div>
-              ${more}
-            </div>
-          `;
-        }
+  async function loadPhotosByMission(){
+    photosWrap.innerHTML = "";
+    photosBox.style.display = "none";
+    photosTotalBadge.textContent = "📷 0";
 
-        photosBox.style.display = "block";
-      }catch(err){
-        console.error("loadPhotosByMission(PHOTOS)", err);
+    try{
+      const mSnap = await getDoc(doc(db, "events", prestationId, "missions", "PHOTOS"));
+      if(!mSnap.exists()){
         photosWrap.innerHTML = `
           <div class="pMission">
             <div class="pMissionHead">
               <div class="pMissionName">PHOTOS</div>
-              <span class="badge">⚠️</span>
+              <span class="badge">📷 0</span>
             </div>
-            <div class="pEmpty">Erreur de lecture des photos.</div>
+            <div class="pEmpty">Aucune photo.</div>
           </div>
         `;
         photosBox.style.display = "block";
-      }
-    }
-
-    async function load(){
-      hideAlert();
-      subLine.textContent = "Chargement…";
-
-      if(!prestationId){
-        subLine.textContent = "";
-        return showAlert("prestationId manquant (URL).");
+        return;
       }
 
-      const eSnap = await getDoc(doc(db, "events", prestationId));
-      if(!eSnap.exists()){
-        subLine.textContent = "";
-        return showAlert("Prestation introuvable.");
-      }
+      const d = mSnap.data() || {};
+      const arr = Array.isArray(d.proofPhotos) ? d.proofPhotos : [];
+      const count = Number(d.proofPhotosCount ?? arr.length ?? 0) || 0;
 
-      const e = eSnap.data() || {};
+      photosTotalBadge.textContent = `📷 ${count}`;
 
-      if(String(e.conciergerieUid || "") !== String(currentUser?.uid || "")){
-        subLine.textContent = "";
-        return showAlert("⛔ Accès refusé : cette prestation ne vous appartient pas.");
-      }
-
-      currentEvent = { id: eSnap.id, ...e };
-      currentInterventions = normalizeInterventions(currentEvent);
-
-      homeLine.textContent = e.homeName || "Logement";
-
-      const aDate = e.arrivalDateKey || e.dateKey || e.date || "";
-      const aTime = e.arrivalTime || e.time || "";
-      arrLine.textContent = (aDate ? aDate : "—") + (aTime ? " • " + aTime : "");
-
-      const mDate = e.interstayDateKey || findIntervention(currentInterventions, "midstay")?.dateKey || "";
-      midLine.textContent = mDate || "—";
-
-      const dDate = e.departureDateKey || "";
-      const dTime = e.departureTime || "";
-      depLine.textContent = (dDate ? dDate : "—") + (dTime ? " • " + dTime : "");
-
-      const addr = (e.homeAddress || e.address || "").trim();
-      const zip  = (e.homeZip || e.zip || "").trim();
-      const city = (e.homeCity || e.city || "").trim();
-      addrLine.textContent = [addr, zip, city].filter(Boolean).join(" ").trim() || "—";
-
-      const owner = (e.ownerName || "").trim();
-      const phone = (e.ownerPhone || e.phone || "").trim();
-      ownerLine.textContent = [owner, phone].filter(Boolean).join(" • ") || "—";
-
-      const note = (e.meta || "").trim();
-      if(note){
-        noteLine.style.display = "block";
-        noteLine.textContent = note;
+      if(!count){
+        photosWrap.innerHTML = `
+          <div class="pMission">
+            <div class="pMissionHead">
+              <div class="pMissionName">PHOTOS</div>
+              <span class="badge">📷 0</span>
+            </div>
+            <div class="pEmpty">Aucune photo.</div>
+          </div>
+        `;
       }else{
-        noteLine.style.display = "none";
-        noteLine.textContent = "";
+        const thumbs = arr.slice(0, 24).map((p, i)=>thumbHtml(p, i)).join("");
+        const more = (arr.length > 24)
+          ? `<div class="mini">+ ${arr.length - 24} photo(s) non affichée(s)</div>`
+          : ``;
+
+        photosWrap.innerHTML = `
+          <div class="pMission">
+            <div class="pMissionHead">
+              <div class="pMissionName">PHOTOS</div>
+              <span class="badge">📷 ${esc(String(count))}</span>
+            </div>
+            <div class="pGrid">${thumbs}</div>
+            ${more}
+          </div>
+        `;
       }
 
-      renderInterventions(currentInterventions);
+      photosBox.style.display = "block";
+    }catch(err){
+      console.error("loadPhotosByMission(PHOTOS)", err);
+      photosWrap.innerHTML = `
+        <div class="pMission">
+          <div class="pMissionHead">
+            <div class="pMissionName">PHOTOS</div>
+            <span class="badge">⚠️</span>
+          </div>
+          <div class="pEmpty">Erreur de lecture des photos.</div>
+        </div>
+      `;
+      photosBox.style.display = "block";
+    }
+  }
 
-      const flatLines = flattenAllLines(currentInterventions);
-      const total = (e.total != null) ? Number(e.total) : computeTotalFromLines(flatLines);
-      totalValue.textContent = money(total);
+  async function load(){
+    hideAlert();
+    subLine.textContent = "Chargement…";
 
-      renderSendSelector(currentInterventions, e.agentLinks || {});
-      refreshMissionHintFromSelection();
-
-      agentName.value = e.assignedToName || "";
-      agentEmail.value = e.assignedToEmail || "";
-
-      await loadPhotosByMission();
-
+    if(!prestationId){
       subLine.textContent = "";
+      return showAlert("prestationId manquant (URL).");
     }
 
-    async function upsertMissionForToken({ tokenId, email, name, missionType }) {
-      const mRef = doc(db, "events", prestationId, "missions", missionType);
+    const eSnap = await getDoc(doc(db, "events", prestationId));
+    if(!eSnap.exists()){
+      subLine.textContent = "";
+      return showAlert("Prestation introuvable.");
+    }
 
-      let locked = false;
-      try{
-        const mSnap = await getDoc(mRef);
-        if(mSnap.exists()){
-          locked = !!(mSnap.data()?.locked);
-        }
-      }catch{
-        locked = false;
+    const e = eSnap.data() || {};
+
+    if(String(e.conciergerieUid || "") !== String(currentUser?.uid || "")){
+      subLine.textContent = "";
+      return showAlert("⛔ Accès refusé : cette prestation ne vous appartient pas.");
+    }
+
+    currentEvent = { id: eSnap.id, ...e };
+    currentInterventions = normalizeInterventions(currentEvent);
+
+    homeLine.textContent = e.homeName || "Logement";
+
+    const aDate = e.arrivalDateKey || e.dateKey || e.date || "";
+    const aTime = e.arrivalTime || e.time || "";
+    arrLine.textContent = (aDate ? aDate : "—") + (aTime ? " • " + aTime : "");
+
+    const mDate = e.interstayDateKey || findIntervention(currentInterventions, "midstay")?.dateKey || "";
+    midLine.textContent = mDate || "—";
+
+    const dDate = e.departureDateKey || "";
+    const dTime = e.departureTime || "";
+    depLine.textContent = (dDate ? dDate : "—") + (dTime ? " • " + dTime : "");
+
+    const addr = (e.homeAddress || e.address || "").trim();
+    const zip  = (e.homeZip || e.zip || "").trim();
+    const city = (e.homeCity || e.city || "").trim();
+    addrLine.textContent = [addr, zip, city].filter(Boolean).join(" ").trim() || "—";
+
+    const owner = (e.ownerName || "").trim();
+    const phone = (e.ownerPhone || e.phone || "").trim();
+    ownerLine.textContent = [owner, phone].filter(Boolean).join(" • ") || "—";
+
+    const note = (e.meta || "").trim();
+    if(note){
+      noteLine.style.display = "block";
+      noteLine.textContent = note;
+    }else{
+      noteLine.style.display = "none";
+      noteLine.textContent = "";
+    }
+
+    renderInterventions(currentInterventions);
+
+    const flatLines = flattenAllLines(currentInterventions);
+    const total = (e.total != null) ? Number(e.total) : computeTotalFromLines(flatLines);
+    totalValue.textContent = money(total);
+
+    renderSendSelector(currentInterventions, e.agentLinks || {});
+    refreshMissionHintFromSelection();
+
+    agentName.value = e.assignedToName || "";
+    agentEmail.value = e.assignedToEmail || "";
+
+    await loadPhotosByMission();
+
+    const hasLinks = !!String(linkBox.dataset.generated || "").trim();
+    copyBtn.disabled = !hasLinks;
+    shareBtn.disabled = !hasLinks;
+    mailtoBtn.disabled = !hasLinks;
+
+    subLine.textContent = "";
+  }
+
+  async function upsertMissionForToken({ tokenId, email, name, missionType }){
+    const mRef = doc(db, "events", prestationId, "missions", missionType);
+
+    let locked = false;
+    try{
+      const mSnap = await getDoc(mRef);
+      if(mSnap.exists()){
+        locked = !!(mSnap.data()?.locked);
       }
+    }catch{
+      locked = false;
+    }
+
+    if(locked) return;
+
+    const sched = computeScheduleForMission(currentEvent, missionType);
+
+    await setDoc(mRef, {
+      type: missionType,
+      missionId: missionType,
+      conciergerieUid: currentUser.uid,
+      eventId: String(prestationId),
+      prestationId: String(prestationId),
+
+      scheduledDateKey: sched.scheduledDateKey || "",
+      scheduledTime: sched.scheduledTime || "",
+      scheduledAtMs: Number(sched.scheduledAtMs || 0) || 0,
+      scheduleSource: sched.scheduleSource || "ARRIVAL",
+
+      locked: false,
+      agentDone: false,
+      status: "ASSIGNEE",
+
+      dayToken: tokenId,
+
+      assignedToEmail: email,
+      assignedToName: name,
+
+      updatedAt: serverTimestamp()
+    }, { merge: true });
+  }
+
+  async function removeMissionIfUnlocked(missionType){
+    if(!missionType || missionType === "PHOTOS") return;
+
+    const mRef = doc(db, "events", prestationId, "missions", missionType);
+
+    try{
+      const mSnap = await getDoc(mRef);
+      if(!mSnap.exists()) return;
+
+      const d = mSnap.data() || {};
+      const locked = !!d.locked;
+      const status = String(d.status || "").toUpperCase().trim();
 
       if(locked) return;
+      if(status === "VALIDEE") return;
 
-      const sched = computeScheduleForMission(currentEvent, missionType);
+      await deleteDoc(mRef);
+    }catch(err){
+      console.warn("removeMissionIfUnlocked", missionType, err);
+    }
+  }
 
-      await setDoc(mRef, {
-        type: missionType,
-        missionId: missionType,
-        conciergerieUid: currentUser.uid,
-        eventId: String(prestationId),
-        prestationId: String(prestationId),
+  async function upsertPhotosMissionForToken({ tokenId }){
+    const mRef = doc(db, "events", prestationId, "missions", "PHOTOS");
 
-        scheduledDateKey: sched.scheduledDateKey || "",
-        scheduledTime: sched.scheduledTime || "",
-        scheduledAtMs: Number(sched.scheduledAtMs || 0) || 0,
-        scheduleSource: sched.scheduleSource || "ARRIVAL",
-
-        locked: false,
-        agentDone: false,
-        status: "ASSIGNEE",
-
-        dayToken: tokenId,
-
-        assignedToEmail: email,
-        assignedToName: name,
-
-        updatedAt: serverTimestamp()
-      }, { merge: true });
+    let locked = false;
+    try{
+      const mSnap = await getDoc(mRef);
+      if(mSnap.exists()){
+        locked = !!(mSnap.data()?.locked);
+      }
+    }catch{
+      locked = false;
     }
 
-    async function removeMissionIfUnlocked(missionType){
-      if(!missionType || missionType === "PHOTOS") return;
+    if(locked) return;
 
-      const mRef = doc(db, "events", prestationId, "missions", missionType);
+    await setDoc(mRef, {
+      missionId: "PHOTOS",
+      type: "PHOTOS",
+      conciergerieUid: currentUser.uid,
+      eventId: String(prestationId),
+      prestationId: String(prestationId),
 
-      try{
-        const mSnap = await getDoc(mRef);
-        if(!mSnap.exists()) return;
+      dayToken: tokenId,
 
-        const d = mSnap.data() || {};
-        const locked = !!d.locked;
-        const status = String(d.status || "").toUpperCase().trim();
+      proofPhotos: [],
+      proofPhotosCount: 0,
+      proofPhotosAtMs: 0,
+      proofToken: tokenId,
 
-        if(locked) return;
-        if(status === "VALIDEE") return;
+      locked: false,
+      agentDone: false,
+      status: "ASSIGNEE",
 
-        await deleteDoc(mRef);
-      }catch(err){
-        console.warn("removeMissionIfUnlocked", missionType, err);
-      }
+      updatedAt: serverTimestamp()
+    }, { merge: true });
+  }
+
+  async function generateLinks(){
+    hideAlert();
+
+    if(!currentEvent) return showAlert("Prestation non chargée.");
+    if(!currentUser) return showAlert("Utilisateur non authentifié.");
+
+    const email = normalizeEmail(agentEmail.value);
+    const name = (agentName.value || "").trim();
+    if(!email || !name) return showAlert("Nom + email agent requis.");
+    if(!/^\S+@\S+\.\S+$/.test(email)) return showAlert("Email agent invalide.");
+
+    const selectedKeys = getSelectedInterventionKeys();
+    if(!selectedKeys.length){
+      return showAlert("Choisis au moins une intervention à envoyer.");
     }
 
-    async function upsertPhotosMissionForToken({ tokenId }) {
-      const mRef = doc(db, "events", prestationId, "missions", "PHOTOS");
-
-      let locked = false;
-      try{
-        const mSnap = await getDoc(mRef);
-        if(mSnap.exists()){
-          locked = !!(mSnap.data()?.locked);
-        }
-      }catch{
-        locked = false;
-      }
-
-      if(locked) return;
-
-      await setDoc(mRef, {
-        missionId: "PHOTOS",
-        type: "PHOTOS",
-        conciergerieUid: currentUser.uid,
-        eventId: String(prestationId),
-        prestationId: String(prestationId),
-
-        dayToken: tokenId,
-
-        proofPhotos: [],
-        proofPhotosCount: 0,
-        proofPhotosAtMs: 0,
-        proofToken: tokenId,
-
-        locked: false,
-        agentDone: false,
-        status: "ASSIGNEE",
-
-        updatedAt: serverTimestamp()
-      }, { merge: true });
+    const missionTypes = buildMissionTypesFromSelection(currentInterventions, selectedKeys);
+    if(!missionTypes.length){
+      return showAlert("Aucune mission exploitable pour les interventions cochées.");
     }
 
-    async function generateLinks(){
-      hideAlert();
+    const tokenId = randomToken(20);
+    const expiresAtMs = Date.now() + 24*60*60*1000;
+    const expiresAt = Timestamp.fromMillis(expiresAtMs);
 
-      if(!currentEvent) return showAlert("Prestation non chargée.");
-      if(!currentUser) return showAlert("Utilisateur non authentifié.");
+    const e = currentEvent || {};
+    const selectedInterventions = selectedKeys.map(key => {
+      const iv = findIntervention(currentInterventions, key);
+      return iv ? {
+        key: iv.key,
+        label: iv.title,
+        dateKey: iv.dateKey || "",
+        note: iv.note || ""
+      } : null;
+    }).filter(Boolean);
 
-      const email = normalizeEmail(agentEmail.value);
-      const name = (agentName.value || "").trim();
-      if(!email || !name) return showAlert("Nom + email agent requis.");
-      if(!/^\S+@\S+\.\S+$/.test(email)) return showAlert("Email agent invalide.");
+    const prestaSnapshot = {
+      homeName: e.homeName || "Logement",
+      homeCity: (e.homeCity || "").trim(),
+      arrivalDateKey: e.arrivalDateKey || e.dateKey || e.date || "",
+      arrivalTime: e.arrivalTime || e.time || "",
+      interstayDateKey: e.interstayDateKey || findIntervention(currentInterventions, "midstay")?.dateKey || "",
+      departureDateKey: e.departureDateKey || "",
+      departureTime: e.departureTime || "",
+      homeAddress: (e.homeAddress || e.address || "").trim(),
+      homeZip: (e.homeZip || e.zip || "").trim(),
+      meta: (e.meta || "").trim(),
+      selectedInterventions
+    };
 
-      const selectedKeys = getSelectedInterventionKeys();
-      if(!selectedKeys.length){
-        return showAlert("Choisis au moins une intervention à envoyer.");
-      }
-
-      const missionTypes = buildMissionTypesFromSelection(currentInterventions, selectedKeys);
-      if(!missionTypes.length){
-        return showAlert("Aucune mission exploitable pour les interventions cochées.");
-      }
-
-      const tokenId = randomToken(20);
-      const expiresAtMs = Date.now() + 24*60*60*1000;
-      const expiresAt = Timestamp.fromMillis(expiresAtMs);
-
-      const e = currentEvent || {};
-      const selectedInterventions = selectedKeys.map(key => {
-        const iv = findIntervention(currentInterventions, key);
-        return iv ? {
-          key: iv.key,
-          label: iv.title,
-          dateKey: iv.dateKey || "",
-          note: iv.note || ""
-        } : null;
-      }).filter(Boolean);
-
-      const prestaSnapshot = {
-        homeName: e.homeName || "Logement",
-        homeCity: (e.homeCity || "").trim(),
-        arrivalDateKey: e.arrivalDateKey || e.dateKey || e.date || "",
-        arrivalTime: e.arrivalTime || e.time || "",
-        interstayDateKey: e.interstayDateKey || findIntervention(currentInterventions, "midstay")?.dateKey || "",
-        departureDateKey: e.departureDateKey || "",
-        departureTime: e.departureTime || "",
-        homeAddress: (e.homeAddress || e.address || "").trim(),
-        homeZip: (e.homeZip || e.zip || "").trim(),
-        meta: (e.meta || "").trim(),
-        selectedInterventions
+    const missionSchedules = {};
+    for(const t of missionTypes){
+      const s = computeScheduleForMission(currentEvent, t);
+      missionSchedules[t] = {
+        scheduledDateKey: s.scheduledDateKey || "",
+        scheduledTime: s.scheduledTime || "",
+        scheduledAtMs: Number(s.scheduledAtMs || 0) || 0,
+        scheduleSource: s.scheduleSource || "ARRIVAL"
       };
-
-      const missionSchedules = {};
-      for(const t of missionTypes){
-        const s = computeScheduleForMission(currentEvent, t);
-        missionSchedules[t] = {
-          scheduledDateKey: s.scheduledDateKey || "",
-          scheduledTime: s.scheduledTime || "",
-          scheduledAtMs: Number(s.scheduledAtMs || 0) || 0,
-          scheduleSource: s.scheduleSource || "ARRIVAL"
-        };
-      }
-
-      await setDoc(doc(db,"dayTokens",tokenId),{
-        conciergerieUid: currentUser.uid,
-        prestationId: String(prestationId),
-
-        agentEmail: email,
-        agentName: name,
-        conciergerieName: (conciergerieName?.value || "").trim() || null,
-
-        selectedInterventionKeys: selectedKeys,
-        selectedInterventions,
-        missionTypes,
-        missionSchedules,
-        presta: prestaSnapshot,
-
-        active:true,
-        expiresAt,
-        expiresAtMs,
-        createdAt: serverTimestamp()
-      });
-
-      for (const t of missionTypes) {
-        await upsertMissionForToken({ tokenId, email, name, missionType: t });
-      }
-
-      await updateDoc(doc(db, "users", currentUser.uid), {
-        "onboarding.firstMissionCreated": true,
-        "onboarding.updatedAt": serverTimestamp()
-      });
-
-      for (const t of ALL_TECH_MISSIONS) {
-        if(!missionTypes.includes(t)){
-          await removeMissionIfUnlocked(t);
-        }
-      }
-
-      await upsertPhotosMissionForToken({ tokenId });
-
-      const eventPatch = {
-        assignedToEmail: email,
-        assignedToName: name,
-        dayToken: tokenId,
-        missionTypes,
-        missionsInitialized: true,
-        updatedAt: serverTimestamp()
-      };
-
-      const visibleInterventions = (Array.isArray(currentInterventions) ? currentInterventions : []).filter(interventionHasContent);
-      for(const iv of visibleInterventions){
-        eventPatch[`agentLinks.${iv.key}`] = deleteField();
-      }
-
-      for(const ivKey of selectedKeys){
-        eventPatch[`agentLinks.${ivKey}.sentAt`] = serverTimestamp();
-        eventPatch[`agentLinks.${ivKey}.sentToEmail`] = email;
-        eventPatch[`agentLinks.${ivKey}.sentToName`] = name;
-        eventPatch[`agentLinks.${ivKey}.tokenId`] = tokenId;
-      }
-
-      await updateDoc(doc(db,"events",prestationId), eventPatch);
-
-      const base = location.href.split("?")[0];
-
-      const tokenLink =
-        base.replace("intervention.html","agent.html")
-        + `?token=${encodeURIComponent(tokenId)}&prestationId=${encodeURIComponent(prestationId)}`;
-
-      const photosLink =
-        base.replace("intervention.html","agent-photos.html")
-        + `?token=${encodeURIComponent(tokenId)}&prestationId=${encodeURIComponent(prestationId)}`;
-
-      linkBox.value =
-        `Checklist (token 24h):\n${tokenLink}\n\n` +
-        `Photos (token 24h):\n${photosLink}\n\n` +
-        `Interventions envoyées:\n${selectedInterventions.map(iv => `- ${iv.label} (${iv.dateKey || "—"})`).join("\n")}\n\n` +
-        `Missions autorisées:\n${missionTypes.join(", ")}`;
-
-      copyBtn.disabled = false;
-      mailtoBtn.disabled = false;
-
-      showAlert("Liens générés pour les interventions cochées.", true);
-      await load();
     }
 
-    copyBtn.addEventListener("click", async ()=>{
-      try{
-        await navigator.clipboard.writeText(linkBox.value || "");
-        showAlert("Copié.", true);
-      }catch{
-        showAlert("Copie impossible. Copie manuelle.");
-      }
+    await setDoc(doc(db,"dayTokens",tokenId),{
+      conciergerieUid: currentUser.uid,
+      prestationId: String(prestationId),
+
+      agentEmail: email,
+      agentName: name,
+      conciergerieName: (conciergerieName?.value || "").trim() || null,
+
+      selectedInterventionKeys: selectedKeys,
+      selectedInterventions,
+      missionTypes,
+      missionSchedules,
+      presta: prestaSnapshot,
+
+      active:true,
+      expiresAt,
+      expiresAtMs,
+      createdAt: serverTimestamp()
     });
 
-    mailtoBtn.addEventListener("click", ()=>{
-      const to = normalizeEmail(agentEmail.value);
-      const name = (agentName.value || "").trim();
-      if(!to) return showAlert("Email agent manquant.");
-      if(!linkBox.value) return showAlert("Génère d’abord les liens.");
+    for(const t of missionTypes){
+      await upsertMissionForToken({ tokenId, email, name, missionType: t });
+    }
 
-      const subject = encodeURIComponent("Mission CleanUp — liens (checklist + photos)");
-      const body = encodeURIComponent(
-        `Bonjour ${name || ""},\n\n` +
-        `Voici tes liens :\n\n` +
-        `${linkBox.value}\n\n` +
-        `⚠️ Les liens (token) expirent sous 24h.\n\n` +
-        `— CleanUp Manager`
+    await updateDoc(doc(db, "users", currentUser.uid), {
+      "onboarding.firstMissionCreated": true,
+      "onboarding.updatedAt": serverTimestamp()
+    });
+
+    for(const t of ALL_TECH_MISSIONS){
+      if(!missionTypes.includes(t)){
+        await removeMissionIfUnlocked(t);
+      }
+    }
+
+    await upsertPhotosMissionForToken({ tokenId });
+
+    const eventPatch = {
+      assignedToEmail: email,
+      assignedToName: name,
+      dayToken: tokenId,
+      missionTypes,
+      missionsInitialized: true,
+      updatedAt: serverTimestamp()
+    };
+
+    const visibleInterventions = (Array.isArray(currentInterventions) ? currentInterventions : []).filter(interventionHasContent);
+    for(const iv of visibleInterventions){
+      eventPatch[`agentLinks.${iv.key}`] = deleteField();
+    }
+
+    for(const ivKey of selectedKeys){
+      eventPatch[`agentLinks.${ivKey}.sentAt`] = serverTimestamp();
+      eventPatch[`agentLinks.${ivKey}.sentToEmail`] = email;
+      eventPatch[`agentLinks.${ivKey}.sentToName`] = name;
+      eventPatch[`agentLinks.${ivKey}.tokenId`] = tokenId;
+    }
+
+    await updateDoc(doc(db,"events",prestationId), eventPatch);
+
+    const base = location.href.split("?")[0];
+
+    const tokenLink =
+      base.replace("intervention.html","agent.html")
+      + `?token=${encodeURIComponent(tokenId)}&prestationId=${encodeURIComponent(prestationId)}`;
+
+    const photosLink =
+      base.replace("intervention.html","agent-photos.html")
+      + `?token=${encodeURIComponent(tokenId)}&prestationId=${encodeURIComponent(prestationId)}`;
+
+    linkBox.value =
+      `Checklist (token 24h):\n${tokenLink}\n\n` +
+      `Photos (token 24h):\n${photosLink}\n\n` +
+      `Interventions envoyées:\n${selectedInterventions.map(iv => `- ${iv.label} (${iv.dateKey || "—"})`).join("\n")}\n\n` +
+      `Missions autorisées:\n${missionTypes.join(", ")}`;
+
+    linkBox.dataset.generated = "1";
+    copyBtn.disabled = false;
+    shareBtn.disabled = false;
+    mailtoBtn.disabled = false;
+
+    showAlert("Liens générés pour les interventions cochées.", true);
+    await load();
+  }
+
+  copyBtn.addEventListener("click", async ()=>{
+    try{
+      await navigator.clipboard.writeText(linkBox.value || "");
+      showAlert("Copié.", true);
+    }catch{
+      showAlert("Copie impossible. Copie manuelle.");
+    }
+  });
+
+  shareBtn.addEventListener("click", async ()=>{
+    const txt = String(linkBox.value || "").trim();
+    if(!txt){
+      showAlert("Génère d’abord les liens.");
+      return;
+    }
+
+    try{
+      if(navigator.share){
+        await navigator.share({
+          title: "Liens mission agent",
+          text: txt
+        });
+        showAlert("Partage ouvert.", true);
+        return;
+      }
+
+      await navigator.clipboard.writeText(txt);
+      showAlert("Partage non dispo ici. Texte copié.", true);
+    }catch(err){
+      if(String(err?.name || "") === "AbortError") return;
+      showAlert("Partage impossible.");
+    }
+  });
+
+  mailtoBtn.addEventListener("click", ()=>{
+    const to = normalizeEmail(agentEmail.value);
+    const name = (agentName.value || "").trim();
+    if(!to) return showAlert("Email agent manquant.");
+    if(!linkBox.value) return showAlert("Génère d’abord les liens.");
+
+    const subject = encodeURIComponent("Mission CleanUp — liens (checklist + photos)");
+    const body = encodeURIComponent(
+      `Bonjour ${name || ""},\n\n` +
+      `Voici tes liens :\n\n` +
+      `${linkBox.value}\n\n` +
+      `⚠️ Les liens (token) expirent sous 24h.\n\n` +
+      `— CleanUp Manager`
+    );
+
+    window.location.href = `mailto:${to}?subject=${subject}&body=${body}`;
+  });
+
+  genLinkBtn.addEventListener("click", async ()=>{
+    genLinkBtn.disabled = true;
+    genLinkBtn.textContent = "…";
+    try{
+      await generateLinks();
+    }catch(err){
+      console.error("GEN_LINKS_ERROR", err);
+      showAlert(
+        "Erreur génération : " +
+        (err?.code || "inconnue") +
+        "\nmessage : " + (err?.message || "—")
       );
+    }finally{
+      genLinkBtn.disabled = false;
+      genLinkBtn.textContent = "Générer liens";
+    }
+  });
 
-      window.location.href = `mailto:${to}?subject=${subject}&body=${body}`;
-    });
+  onAuthStateChanged(auth, async (u)=>{
+    if(!u){
+      location.href = "login.html?role=conciergerie";
+      return;
+    }
 
-    genLinkBtn.addEventListener("click", async ()=>{
-      genLinkBtn.disabled = true;
-      genLinkBtn.textContent = "…";
-      try{
-        await generateLinks();
-      }catch(err){
-        console.error("GEN_LINKS_ERROR", err);
-        showAlert(
-          "Erreur génération : "
-          + (err?.code || "inconnue")
-          + "\nmessage : " + (err?.message || "—")
-        );
-      }finally{
-        genLinkBtn.disabled = false;
-        genLinkBtn.textContent = "Générer liens";
-      }
-    });
+    const ok = await guardConciergerie(u);
+    if(!ok){
+      location.href = "abonnement.html?plan=starter";
+      return;
+    }
 
-    onAuthStateChanged(auth, async (u)=>{
-      if(!u){
-        location.href = "login.html?role=conciergerie";
-        return;
-      }
+    currentUser = u;
 
-      const ok = await guardConciergerie(u);
-      if(!ok){
-        location.href = "abonnement.html?plan=starter";
-        return;
-      }
+    applyBackLink();
+    await loadCompanyName(u);
 
-      currentUser = u;
-
-      applyBackLink();
-      await loadCompanyName(u);
-
-      try{
-        await load();
-      }catch(err){
-        console.error(err);
-        showAlert("Erreur chargement : " + (err?.message || "inconnue"));
-      }
-    });
-  </script>
+    try{
+      await load();
+    }catch(err){
+      console.error(err);
+      showAlert("Erreur chargement : " + (err?.message || "inconnue"));
+    }
+  });
+</script>
 </body>
 </html>

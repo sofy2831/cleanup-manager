@@ -1684,152 +1684,152 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
     openModal(modalMaskSend);
   }
 
-  async function publishToOwner(){
-    hideModalAlert();
-    resetPubSuccess();
+async function publishToOwner(){
+  hideModalAlert();
+  resetPubSuccess();
 
-    if(!currentUser?.uid) return showModalAlert("Session invalide.");
-    if(!modalItem?.id) return showModalAlert("Aucune facture sélectionnée.");
+  if(!currentUser?.uid) return showModalAlert("Session invalide.");
+  if(!modalItem?.id) return showModalAlert("Aucune facture sélectionnée.");
 
-    const d = modalItem.data || {};
-    const invoiceDocId = String(modalItem.id || "").trim();
-    const invNum = String(d.invoiceNumber || "").trim();
+  const d = modalItem.data || {};
+  const invoiceDocId = String(modalItem.id || "").trim();
+  const invNum = String(d.invoiceNumber || "").trim();
 
-    if(!invoiceDocId) return showModalAlert("ID facture manquant.");
-    if(!invNum) return showModalAlert("Facture non émise : crée le numéro avant d’envoyer.");
+  if(!invoiceDocId) return showModalAlert("ID facture manquant.");
+  if(!invNum) return showModalAlert("Facture non émise : crée le numéro avant d’envoyer.");
 
-    const ownerDocId = modalOwnerDocId || getOwnerDocId(d);
-    if(!ownerDocId){
-      return showModalAlert("Envoi impossible : clientOwnerDocId manquant sur cette facture.");
-    }
+  const ownerDocId = modalOwnerDocId || getOwnerDocId(d);
+  if(!ownerDocId){
+    return showModalAlert("Envoi impossible : clientOwnerDocId manquant sur cette facture.");
+  }
 
-    let ownerUid = String(modalOwnerUid || getOwnerUidFast(d) || "").trim();
-    if(!ownerUid){
-      ownerUid = await resolveOwnerUidFromOwnerDoc(ownerDocId);
-    }
-    if(!ownerUid){
-      return showModalAlert("Envoi impossible : ownerUid introuvable (owners.ownerUid).");
-    }
+  let ownerUid = String(modalOwnerUid || getOwnerUidFast(d) || "").trim();
+  if(!ownerUid){
+    ownerUid = await resolveOwnerUidFromOwnerDoc(ownerDocId);
+  }
+  if(!ownerUid){
+    return showModalAlert("Envoi impossible : ownerUid introuvable (owners.ownerUid).");
+  }
 
-    const sendInv = !!chkInvoice.checked;
-    const sendCred = !!chkCredit.checked && !!modalCreditId;
+  const sendInv = !!chkInvoice.checked;
+  const sendCred = !!chkCredit.checked && !!modalCreditId;
 
-    if(!sendInv && !sendCred){
-      return showModalAlert("Choisis au moins un document à envoyer (facture et/ou avoir).");
-    }
+  if(!sendInv && !sendCred){
+    return showModalAlert("Choisis au moins un document à envoyer (facture et/ou avoir).");
+  }
 
-    const invNeeds = sendInv && !modalInvoiceAlreadySent;
-    const credNeeds = sendCred && !modalCreditAlreadySent;
+  const invNeeds = sendInv && !modalInvoiceAlreadySent;
+  const credNeeds = sendCred && !modalCreditAlreadySent;
 
-    if(!invNeeds && !credNeeds){
-      refreshPublishBtnState();
-      return showModalAlert("ℹ️ Déjà publié : rien à republier. (Tu peux préparer l’email.)", true);
-    }
+  if(!invNeeds && !credNeeds){
+    refreshPublishBtnState();
+    return showModalAlert("ℹ️ Déjà publié : rien à republier. (Tu peux préparer l’email.)", true);
+  }
 
-    publishOwnerBtn.disabled = true;
+  publishOwnerBtn.disabled = true;
 
-    try{
-      const msg = String(pubText.value || "").trim();
-      const homeName = String(d.homeName || "").trim();
+  try{
+    const msg = String(pubText.value || "").trim();
+    const homeName = String(d.homeName || "").trim();
 
-      if(invNeeds){
-        await updateDoc(doc(db,"salesDocuments", invoiceDocId), {
-          ownerUid,
-          clientOwnerDocId: ownerDocId,
-          ownerVisible: true,
-          invoiceStatus: "SENT",
-          sentAt: serverTimestamp(),
-          ownerPublishedAt: serverTimestamp(),
-          updatedAt: serverTimestamp()
-        });
-
-        const totalInvTTC = Number.isFinite(Number(d.totalTTC))
-          ? Number(d.totalTTC)
-          : Number(computeTotalsFromLines(d.lines).ttc) || 0;
-
-        try{
-          await upsertRequestForDoc({
-            salesDocId: invoiceDocId,
-            ownerUid,
-            ownerDocId,
-            docType: "invoice",
-            number: invNum,
-            homeName,
-            totalTTC: totalInvTTC,
-            note: msg
-          });
-        }catch(e){
-          console.warn("upsertRequestForDoc invoice failed:", e?.message || e);
-        }
-
-        try{
-          await patchEventAsInvoiced(invoiceDocId, d);
-        }catch(e){
-          console.warn("patchEventAsInvoiced failed:", e?.message || e);
-        }
-      }
-
-      if(credNeeds){
-        const cs = await getDoc(doc(db,"salesDocuments", modalCreditId));
-        if(!cs.exists()) throw new Error("Avoir introuvable (creditDocId).");
-
-        const cd = cs.data() || {};
-        const creditNum = String(cd.creditNumber || "").trim();
-        if(!creditNum) throw new Error("Avoir non émis : numéro d’avoir manquant.");
-
-        await updateDoc(doc(db,"salesDocuments", modalCreditId), {
-          ownerUid,
-          clientOwnerDocId: ownerDocId,
-          ownerVisible: true,
-          creditStatus: "SENT",
-          sentAt: serverTimestamp(),
-          updatedAt: serverTimestamp()
-        });
-
-        const totalCredTTC = Number.isFinite(Number(cd.totalTTC))
-          ? Number(cd.totalTTC)
-          : Number(computeTotalsFromLines(cd.lines).ttc) || 0;
-
-        try{
-          await upsertRequestForDoc({
-            salesDocId: modalCreditId,
-            ownerUid,
-            ownerDocId,
-            docType: "credit",
-            number: creditNum,
-            homeName: String(cd.homeName || homeName || "").trim(),
-            totalTTC: totalCredTTC,
-            note: msg
-          });
-        }catch(e){
-          console.warn("upsertRequestForDoc credit failed:", e?.message || e);
-        }
-
-        modalCreditNumber = creditNum;
-        pubCreditNumberPill.textContent = creditNum || "—";
-      }
-
-      const hint = (invNeeds && credNeeds) ? "Facture + Avoir" : (invNeeds ? "Facture" : "Avoir");
-      showPubSuccess(hint);
-      showModalAlert("✅ Publication effectuée côté propriétaire.", true);
-
-      await loadInvoices(currentUser.uid);
-
-      if(invNeeds) modalInvoiceAlreadySent = true;
-      if(credNeeds) modalCreditAlreadySent = true;
-
-      refreshOwnerPublishUI();
-    }catch(e){
-      console.error("publishToOwner failed", {
-        message: e?.message,
-        code: e?.code,
-        stack: e?.stack
+    if(invNeeds){
+      await updateDoc(doc(db,"salesDocuments", invoiceDocId), {
+        ownerUid,
+        clientOwnerDocId: ownerDocId,
+        ownerVisible: true,
+        invoiceStatus: "SENT",
+        sentAt: serverTimestamp(),
+        ownerPublishedAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
       });
 
-      publishOwnerBtn.disabled = false;
-      showModalAlert("⛔ Erreur publication : " + (e?.message || "inconnue"), false);
+      const totalInvTTC = Number.isFinite(Number(d.totalTTC))
+        ? Number(d.totalTTC)
+        : Number(computeTotalsFromLines(d.lines).ttc) || 0;
+
+      try{
+        await upsertRequestForDoc({
+          salesDocId: invoiceDocId,
+          ownerUid,
+          ownerDocId,
+          docType: "invoice",
+          number: invNum,
+          homeName,
+          totalTTC: totalInvTTC,
+          note: msg
+        });
+      }catch(e){
+        console.warn("upsertRequestForDoc invoice failed:", e?.message || e);
+      }
+
+      try{
+        await patchEventAsInvoiced(invoiceDocId, d);
+      }catch(e){
+        console.warn("patchEventAsInvoiced failed:", e?.message || e);
+      }
     }
+
+    if(credNeeds){
+      const cs = await getDoc(doc(db,"salesDocuments", modalCreditId));
+      if(!cs.exists()) throw new Error("Avoir introuvable (creditDocId).");
+
+      const cd = cs.data() || {};
+      const creditNum = String(cd.creditNumber || "").trim();
+      if(!creditNum) throw new Error("Avoir non émis : numéro d’avoir manquant.");
+
+      await updateDoc(doc(db,"salesDocuments", modalCreditId), {
+        ownerUid,
+        clientOwnerDocId: ownerDocId,
+        ownerVisible: true,
+        creditStatus: "SENT",
+        sentAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+
+      const totalCredTTC = Number.isFinite(Number(cd.totalTTC))
+        ? Number(cd.totalTTC)
+        : Number(computeTotalsFromLines(cd.lines).ttc) || 0;
+
+      try{
+        await upsertRequestForDoc({
+          salesDocId: modalCreditId,
+          ownerUid,
+          ownerDocId,
+          docType: "credit",
+          number: creditNum,
+          homeName: String(cd.homeName || homeName || "").trim(),
+          totalTTC: totalCredTTC,
+          note: msg
+        });
+      }catch(e){
+        console.warn("upsertRequestForDoc credit failed:", e?.message || e);
+      }
+
+      modalCreditNumber = creditNum;
+      pubCreditNumberPill.textContent = creditNum || "—";
+    }
+
+    const hint = (invNeeds && credNeeds) ? "Facture + Avoir" : (invNeeds ? "Facture" : "Avoir");
+    showPubSuccess(hint);
+    showModalAlert("✅ Publication effectuée côté propriétaire.", true);
+
+    await loadInvoices(currentUser.uid);
+
+    if(invNeeds) modalInvoiceAlreadySent = true;
+    if(credNeeds) modalCreditAlreadySent = true;
+
+    refreshOwnerPublishUI();
+  }catch(e){
+    console.error("publishToOwner failed", {
+      message: e?.message,
+      code: e?.code,
+      stack: e?.stack
+    });
+
+    publishOwnerBtn.disabled = false;
+    showModalAlert("⛔ Erreur publication : " + (e?.message || "inconnue"), false);
   }
+}
 
   function renderTotals(filtered){
     if(!filtered.length){
