@@ -1,4 +1,4 @@
-<!-- docs/logements.html (FINAL DEV — quota UX + resend invite + delete allowed if no events/icalEvents + onboarding corrigé) -->
+<!-- docs/logements.html (DEV corrigé — base MAIN + onboarding mini fermable, sans retouche parasite) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -112,6 +112,20 @@
     text-align:center;
     max-width:980px;
     font-weight:900;
+  }
+
+  .badge{
+    margin-top:10px;
+    padding:4px 10px;
+    border-radius:999px;
+    background:#fff;
+    font-size:12px;
+    color:#555;
+    box-shadow:0 3px 10px rgba(0,0,0,.06);
+    text-align:center;
+    max-width:980px;
+    font-weight:900;
+    display:none;
   }
 
   .card{
@@ -341,35 +355,104 @@
   }
   .kv b{ color:#111; }
 
-  .onboarding-panel{
+  .onboarding-mini{
     position:fixed;
-    right:16px;
-    top:140px;
-    width:280px;
+    right:14px;
+    bottom:88px;
+    z-index:70;
+    width:min(320px, calc(100vw - 28px));
     background:#fff;
-    border-radius:18px;
-    padding:16px;
-    box-shadow:0 8px 24px rgba(0,0,0,.08);
-    z-index:50;
     border:1px solid var(--border);
+    border-radius:18px;
+    box-shadow:0 10px 28px rgba(0,0,0,.10);
+    padding:12px 12px 10px;
   }
 
-  .onboarding-title{
-    font-size:14px;
-    font-weight:900;
-    margin-bottom:12px;
+  .onboarding-mini[hidden]{
+    display:none !important;
+  }
+
+  .onboarding-mini-top{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:8px;
+    margin-bottom:8px;
+  }
+
+  .onboarding-mini-title{
+    font-size:13px;
+    font-weight:1000;
     color:#111;
   }
 
-  .onboarding-step{
-    font-size:13px;
-    font-weight:800;
-    padding:8px 0;
-    color:#555;
+  .onboarding-close{
+    border:none;
+    background:#f3ecff;
+    color:#5b45c8;
+    width:28px;
+    height:28px;
+    border-radius:999px;
+    font-size:16px;
+    font-weight:1000;
+    cursor:pointer;
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    line-height:1;
+    box-shadow:0 2px 8px rgba(0,0,0,.06);
   }
 
-  .onboarding-step.done{ color:var(--ok); }
-  .onboarding-step.pending{ color:#666; }
+  .onboarding-mini-steps{
+    display:flex;
+    flex-direction:column;
+    gap:6px;
+  }
+
+  .onboarding-mini-step{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    font-size:12px;
+    font-weight:900;
+    color:#666;
+    padding:7px 9px;
+    border-radius:12px;
+    background:#faf8ff;
+  }
+
+  .onboarding-mini-step.done{
+    color:var(--ok);
+    background:rgba(27,143,77,0.10);
+  }
+
+  .onboarding-mini-step .dot{
+    width:18px;
+    height:18px;
+    border-radius:999px;
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    font-size:11px;
+    font-weight:1000;
+    flex-shrink:0;
+    background:#efe9ff;
+    color:#5b45c8;
+  }
+
+  .onboarding-mini-step.done .dot{
+    background:rgba(27,143,77,0.16);
+    color:var(--ok);
+  }
+
+  @media(max-width:640px){
+    .onboarding-mini{
+      right:10px;
+      left:10px;
+      width:auto;
+      bottom:86px;
+    }
+  }
 
   .bottom-nav{
     position:fixed;
@@ -442,7 +525,13 @@
       <div class="list" id="homesList"></div>
     </div>
 
-    <div id="onboardingPanel" class="onboarding-panel"></div>
+    <aside id="onboardingMini" class="onboarding-mini" hidden aria-label="Onboarding">
+      <div class="onboarding-mini-top">
+        <div class="onboarding-mini-title">Onboarding</div>
+        <button type="button" id="closeOnboardingBtn" class="onboarding-close" aria-label="Masquer l’onboarding">×</button>
+      </div>
+      <div id="onboardingMiniSteps" class="onboarding-mini-steps"></div>
+    </aside>
 
     <nav class="bottom-nav" aria-label="Navigation">
       <a href="planning.html">Planning</a>
@@ -562,12 +651,82 @@
     serverTimestamp, limit
   } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
+  // ===== UI =====
   const homesListEl = document.getElementById("homesList");
   const countLabelEl = document.getElementById("countLabel");
   const searchInputEl = document.getElementById("searchInput");
   const alertBox = document.getElementById("alertBox");
   const companyLine = document.getElementById("companyLine");
-  const onboardingPanel = document.getElementById("onboardingPanel");
+
+  const onboardingMini = document.getElementById("onboardingMini");
+  const onboardingSteps = document.getElementById("onboardingSteps");
+  const onboardingCloseBtn = document.getElementById("onboardingCloseBtn");
+
+  let currentOnboarding = {};
+  let onboardingDismissed = false;
+
+  function renderOnboardingMini(){
+    const steps = [
+      {
+        done: currentOnboarding.firstHomeCreated === true,
+        label: "Premier logement"
+      },
+      {
+        done: currentOnboarding.firstOwnerLinked === true,
+        label: "Propriétaire lié"
+      },
+      {
+        done: currentOnboarding.firstBookingCreated === true,
+        label: "Première réservation"
+      }
+    ];
+
+    const allDone = steps.every(s => s.done);
+    if(onboardingDismissed || allDone){
+      onboardingMini.hidden = true;
+      return;
+    }
+
+    onboardingMini.hidden = false;
+    onboardingSteps.innerHTML = steps.map(step => `
+      <div class="onboarding-step ${step.done ? "done" : ""}">
+        <span>${step.done ? "✓" : "○"}</span>
+        <span>${step.label}</span>
+      </div>
+    `).join("");
+  }
+
+  onboardingCloseBtn?.addEventListener("click", ()=>{
+    onboardingDismissed = true;
+    onboardingMini.hidden = true;
+  });
+
+  async function refreshOnboarding(uid){
+    try{
+      const snap = await getDoc(doc(db, "users", uid));
+      const data = snap.exists() ? (snap.data() || {}) : {};
+      currentOnboarding = (data?.onboarding && typeof data.onboarding === "object")
+        ? data.onboarding
+        : {};
+    }catch(e){
+      currentOnboarding = {};
+    }
+    renderOnboardingMini();
+  }
+
+  async function markOnboarding(uid, field){
+    if(!uid || !field) return;
+    try{
+      await updateDoc(doc(db, "users", uid), {
+        [`onboarding.${field}`]: true,
+        "onboarding.updatedAt": serverTimestamp()
+      });
+      currentOnboarding[field] = true;
+      renderOnboardingMini();
+    }catch(e){
+      console.warn("onboarding update failed:", field, e?.message || e);
+    }
+  }
 
   async function loadCompanyProfile(user){
     try{
@@ -583,12 +742,27 @@
         ""
       ).trim();
 
-      companyLine.textContent = companyName || "Conciergerie";
+      if(companyName){
+        companyLine.textContent = companyName;
+      }else{
+        const cur = (companyLine.textContent || "").trim();
+        if(!cur || cur === "—") companyLine.textContent = "Conciergerie";
+      }
+
+      currentOnboarding = (data?.onboarding && typeof data.onboarding === "object")
+        ? data.onboarding
+        : {};
+      renderOnboardingMini();
+
     }catch(e){
-      companyLine.textContent = "Conciergerie";
+      const cur = (companyLine.textContent || "").trim();
+      if(!cur || cur === "—") companyLine.textContent = "Conciergerie";
+      currentOnboarding = {};
+      renderOnboardingMini();
     }
   }
 
+  // ===== home modal =====
   const modalBackdrop = document.getElementById("modalBackdrop");
   const modalTitle = document.getElementById("modalTitle");
   const addBtn = document.getElementById("addBtn");
@@ -606,6 +780,7 @@
   const homeType = document.getElementById("homeType");
   const saveBtn = document.getElementById("saveBtn");
 
+  // ===== booking modal =====
   const bookingBackdrop = document.getElementById("bookingBackdrop");
   const bookingAlert = document.getElementById("bookingAlert");
   const bookingForm = document.getElementById("bookingForm");
@@ -694,6 +869,7 @@
     return out;
   }
 
+  // ===== abonnement guard =====
   const DEV_ALLOWLIST = new Set([
     "mathildeconciergerie45@gmail.com",
     "s.dumas974@gmail.com"
@@ -714,12 +890,10 @@
       currentUserProfile = data || {};
       currentMaxHomes = Number(currentUserProfile.maxHomes || 0);
       currentHomesCountActive = Number(currentUserProfile.homesCountActive || 0);
-      currentOnboarding = currentUserProfile.onboarding || {};
     }catch(e){
       currentUserProfile = {};
       currentMaxHomes = 0;
       currentHomesCountActive = 0;
-      currentOnboarding = {};
     }
   }
 
@@ -763,14 +937,13 @@
 
     try{
       const data = await getUserProfile(user.uid);
-      const sub = String(data.subscriptionStatus || "").toLowerCase();
-return (data.role === "conciergerie" || data.role === "admin") &&
-       (sub === "active" || sub === "cancel_at_period_end");
+      return (data.role === "conciergerie" || data.role === "admin") && (data.subscriptionStatus === "active");
     }catch(e){
       return false;
     }
   }
 
+  // ===== data =====
   let currentUid = null;
   let allHomes = [];
   let showArchived = false;
@@ -779,10 +952,10 @@ return (data.role === "conciergerie" || data.role === "admin") &&
   let currentUserProfile = null;
   let currentMaxHomes = 0;
   let currentHomesCountActive = 0;
-  let currentOnboarding = {};
 
   function isArchived(h){ return h?.status === "archived"; }
 
+  // ===== owners index =====
   let ownersByEmailLower = new Map();
   let ownersById = new Map();
   let ownerHomeCountById = new Map();
@@ -827,19 +1000,6 @@ return (data.role === "conciergerie" || data.role === "admin") &&
     return ownersByEmailLower.get(emailLower) || null;
   }
 
-  function renderOnboarding(){
-    const firstHomeDone = currentOnboarding.firstHomeCreated === true;
-    const firstOwnerDone = currentOnboarding.firstOwnerLinked === true;
-    const firstBookingDone = currentOnboarding.firstBookingCreated === true;
-
-    onboardingPanel.innerHTML = `
-      <div class="onboarding-title">Onboarding</div>
-      <div class="onboarding-step ${firstHomeDone ? "done" : "pending"}">${firstHomeDone ? "✓" : "○"} Premier logement créé</div>
-      <div class="onboarding-step ${firstOwnerDone ? "done" : "pending"}">${firstOwnerDone ? "✓" : "○"} Propriétaire lié</div>
-      <div class="onboarding-step ${firstBookingDone ? "done" : "pending"}">${firstBookingDone ? "✓" : "○"} Première réservation</div>
-    `;
-  }
-
   async function linkHomeToOwner(homeId, owner){
     if(!homeId || !owner?.id) return;
 
@@ -874,22 +1034,13 @@ return (data.role === "conciergerie" || data.role === "admin") &&
       computeOwnerHomeCounts();
 
       if(ownerUid){
-        try{
-          await updateDoc(doc(db, "users", currentUid), {
-            "onboarding.firstOwnerLinked": true,
-            "onboarding.updatedAt": serverTimestamp()
-          });
-          currentOnboarding.firstOwnerLinked = true;
-        }catch(e){
-          console.warn("onboarding firstOwnerLinked failed:", e);
-        }
+        await markOnboarding(currentUid, "firstOwnerLinked");
       }
 
       showAlert(ownerUid
         ? "✅ Logement associé au propriétaire (compte connecté)."
         : "✅ Logement associé à la fiche propriétaire (compte pas encore accepté).", true);
 
-      renderOnboarding();
       render();
     }catch(err){
       console.error(err);
@@ -934,11 +1085,13 @@ return (data.role === "conciergerie" || data.role === "admin") &&
         ownerEmail: String(o.email || "").trim(),
         ownerFullname: String(o.fullname || "").trim(),
         ownerPhone: String(o.phone || "").trim(),
+
         ownerAddress1: String(addr.street || o.address1 || "").trim(),
         ownerAddress2: String(addr.address2 || o.address2 || "").trim(),
         ownerZip: String(addr.zip || o.zip || "").trim(),
         ownerCity: String(addr.city || o.city || "").trim(),
         ownerCountry: String(addr.country || o.country || "FR").trim(),
+
         updatedAt: serverTimestamp()
       };
 
@@ -975,8 +1128,8 @@ return (data.role === "conciergerie" || data.role === "admin") &&
 
       await loadOwnersIndex();
       await refreshSubscriptionState(currentUid);
-updateAddButtonState();
-renderOnboarding();
+      await refreshOnboarding(currentUid);
+      updateAddButtonState();
       render();
       refreshQuotaVisualMessage();
     }catch(err){
@@ -985,6 +1138,7 @@ renderOnboarding();
     }
   }
 
+  // ===== home modal =====
   function openHomeModalCreate(){
     editingHomeId = null;
     modalTitle.textContent = "Ajouter un logement";
@@ -1023,6 +1177,7 @@ renderOnboarding();
     refreshQuotaVisualMessage();
   }
 
+  // ===== booking modal =====
   function fillBookingHomeSelect(selectedId){
     bookingHomeSelect.innerHTML = "";
     for(const h of allHomes){
@@ -1136,6 +1291,7 @@ renderOnboarding();
   cancelBookingBtn.addEventListener("click", closeBookingModal);
   bookingBackdrop.addEventListener("click", (e)=>{ if(e.target === bookingBackdrop) closeBookingModal(); });
 
+  // ===== render list =====
   function buildInviteUrlForHome(h){
     const p = new URLSearchParams();
     p.set("from", "logements.html");
@@ -1190,6 +1346,9 @@ renderOnboarding();
       return;
     }
 
+    let highlightApplied = false;
+    const hasNeedLink = homes.some(h => !isArchived(h) && !String(h.ownerUid || "").trim());
+
     filtered.forEach(h=>{
       if(String(h.ownerDocId || "").trim()){
         hydrateOwnerSnapshotForHome(h);
@@ -1215,9 +1374,13 @@ renderOnboarding();
         || ""
       );
 
+      if(hasNeedLink && !highlightApplied && !isArchived(h) && !ownerUid){
+        item.classList.add("needs-link");
+        highlightApplied = true;
+      }
+
       const existingOwner = (!ownerDocId && !isArchived(h)) ? getExistingOwnerForHome(h) : null;
       const existingOwnerCount = existingOwner ? (ownerHomeCountById.get(existingOwner.id) || 0) : 0;
-      const existingOwnerHasUid = !!String(existingOwner?.ownerUid || existingOwner?.uid || "").trim();
 
       const statusChip = isArchived(h) ? `<span class="chip">Archivé</span>` : "";
 
@@ -1237,8 +1400,8 @@ renderOnboarding();
       const canBook = !!ownerUid && !isArchived(h);
       const hasOwnerEmail = !!normEmail(ownerEmail);
 
-      const associateBtn = (existingOwner && !ownerUid && !isArchived(h))
-        ? `<button class="mini-btn ok" type="button" data-assoc="${escapeHtml(h.id)}">🔗 Lier</button>`
+      const associateBtn = (existingOwner)
+        ? `<button class="mini-btn ok" type="button" data-assoc="${escapeHtml(h.id)}">🔗 Associer</button>`
         : ``;
 
       let inviteBtn = "";
@@ -1246,10 +1409,6 @@ renderOnboarding();
         inviteBtn = `<span class="mini-btn disabled">Inviter</span>`;
       }else if(ownerUid){
         inviteBtn = `<span class="mini-btn disabled">Compte actif</span>`;
-      }else if(existingOwner){
-        inviteBtn = existingOwnerHasUid
-          ? `<span class="mini-btn disabled">Propriétaire existant</span>`
-          : `<span class="mini-btn disabled">Compte en attente</span>`;
       }else if(!hasOwnerEmail){
         inviteBtn = `<span class="mini-btn disabled" title="Ajoute un email propriétaire dans Modifier">Email requis</span>`;
       }else if(ownerDocId){
@@ -1322,7 +1481,7 @@ renderOnboarding();
         }
 
         const n = ownerHomeCountById.get(ex.id) || 0;
-        if(!confirm(`Lier ce logement au propriétaire existant (${n} logement(s)) ?`)) return;
+        if(!confirm(`Associer ce logement au propriétaire existant (${n} logement(s)) ?`)) return;
 
         await linkHomeToOwner(homeId, ex);
       });
@@ -1436,6 +1595,7 @@ renderOnboarding();
     });
   }
 
+  // ===== modal open/close =====
   addBtn.addEventListener("click", ()=>{
     hideAlert();
     if(!canCreateHome()){
@@ -1448,6 +1608,7 @@ renderOnboarding();
   cancelBtn.addEventListener("click", closeHomeModal);
   modalBackdrop.addEventListener("click", (e)=>{ if(e.target === modalBackdrop) closeHomeModal(); });
 
+  // ===== create / update home =====
   homeForm.addEventListener("submit", async (e)=>{
     e.preventDefault();
     hideAlert();
@@ -1515,36 +1676,27 @@ renderOnboarding();
         await addDoc(collection(db,"homes"), {
           conciergerieUid: user.uid,
           status: "active",
+
           ownerDocId: "",
           ownerUid: "",
           ownerLinkStatus: "NONE",
           pendingOwnerEmail: "",
           pendingInviteToken: "",
+
           createdAt: serverTimestamp(),
           ...payload
         });
 
-        try{
-          await updateDoc(doc(db, "users", user.uid), {
-            "onboarding.firstHomeCreated": true,
-            "onboarding.firstOwnerCreated": true,
-            "onboarding.updatedAt": serverTimestamp()
-          });
-          currentOnboarding.firstHomeCreated = true;
-          currentOnboarding.firstOwnerCreated = true;
-        }catch(onboardingErr){
-          console.warn("onboarding home/owner update failed:", onboardingErr);
-        }
+        await markOnboarding(user.uid, "firstHomeCreated");
 
         closeHomeModal();
         await loadHomes();
 
         if(ownerAccountEmail){
-          const h = allHomes.find(x => normEmail(x.ownerAccountEmail || x.ownerEmail) === ownerAccountEmail && !String(x.ownerUid || "").trim());
           const ex = ownersByEmailLower.get(ownerAccountEmail);
           if(ex){
             const n = ownerHomeCountById.get(ex.id) || 0;
-            showAlert(`✅ Logement créé. Propriétaire déjà existant (${n} logement(s)) → clique “Lier” sur la ligne.`, true);
+            showAlert(`✅ Logement créé. Propriétaire déjà existant (${n} logement(s)) → clique “Associer” sur la ligne.`, true);
           }else{
             showAlert("✅ Logement créé. Maintenant → clique “Inviter” sur la ligne du logement.", true);
           }
@@ -1558,11 +1710,11 @@ renderOnboarding();
     }finally{
       saveBtn.disabled = false;
       saveBtn.style.opacity = "1";
-      renderOnboarding();
       updateAddButtonState();
     }
   });
 
+  // ===== booking dates guard =====
   function compareDateKeys(aKey, bKey){
     const a = parseDateKey(aKey);
     const b = parseDateKey(bKey);
@@ -1593,6 +1745,7 @@ renderOnboarding();
   arrivalDateInput.addEventListener("change", ()=>{ validateBookingDates(true); });
   departureDateInput.addEventListener("change", ()=>{ validateBookingDates(true); });
 
+  // ===== create booking =====
   bookingForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     hideBookingAlert();
@@ -1628,7 +1781,7 @@ renderOnboarding();
         const ex = getExistingOwnerForHome(h);
         if(ex){
           const n = ownerHomeCountById.get(ex.id) || 0;
-          showBookingAlert(`⛔ Owner existant (${n} logement(s)) mais non lié. Clique “Lier” puis fais accepter l’invite.`, false);
+          showBookingAlert(`⛔ Owner existant (${n} logement(s)) mais non lié. Clique “Associer” puis fais accepter l’invite.`, false);
         }else{
           showBookingAlert("⛔ Propriétaire non lié : impossible de créer une réservation. Invite + acceptation d'abord.", false);
         }
@@ -1646,29 +1799,37 @@ renderOnboarding();
       const payloadBase = {
         conciergerieUid: user.uid,
         homeId: String(h.id),
+
         homeName: String(h?.name || "Logement"),
         homeCity: String(h?.homeCity || h?.city || ""),
         homeAddress: String(h?.homeAddress || h?.address || ""),
         homeZip: String(h?.homeZip || h?.zip || ""),
         ownerName: String(h?.ownerName || h?.homeOwner || ""),
         ownerPhone: String(h?.ownerPhone || ""),
+
         ownerDocId: String(ownerDocId || ""),
         ownerUid: String(ownerUid),
+
         ownerAccountEmail: String(h?.ownerAccountEmail || h?.ownerEmail || h?.pendingOwnerEmail || ""),
         ownerAccountName: String(h?.ownerAccountName || h?.ownerFullname || ""),
+
         ownerEmail: String(h?.ownerEmail || h?.ownerAccountEmail || ""),
         ownerFullname: String(h?.ownerFullname || h?.ownerAccountName || ""),
+
         ownerAddress1: String(h?.ownerAddress1 || ""),
         ownerAddress2: String(h?.ownerAddress2 || ""),
         ownerZip: String(h?.ownerZip || ""),
         ownerCity: String(h?.ownerCity || ""),
         ownerCountry: String(h?.ownerCountry || "FR"),
+
         arrivalDateKey: String(aDate),
         departureDateKey: String(dDate),
         arrivalTime: String(aTime),
         departureTime: String(dTime),
+
         dateKey: String(aDate),
         dateKeys: dateKeys.map(String),
+
         meta: String(meta || ""),
         timezone: "Europe/Paris",
         archived: false,
@@ -1678,17 +1839,8 @@ renderOnboarding();
 
       const ref = await addDoc(collection(db, "icalEvents"), payloadBase);
 
-      try{
-        await updateDoc(doc(db, "users", user.uid), {
-          "onboarding.firstBookingCreated": true,
-          "onboarding.updatedAt": serverTimestamp()
-        });
-        currentOnboarding.firstBookingCreated = true;
-      }catch(onboardingErr){
-        console.warn("onboarding booking update failed:", onboardingErr);
-      }
+      await markOnboarding(user.uid, "firstBookingCreated");
 
-      renderOnboarding();
       showBookingAlert("✅ Réservation enregistrée.", true);
 
       const params = new URLSearchParams();
@@ -1705,6 +1857,7 @@ renderOnboarding();
     }
   });
 
+  // ===== events =====
   searchInputEl.addEventListener("input", render);
 
   toggleArchivedBtn.addEventListener("click", ()=>{
@@ -1714,6 +1867,7 @@ renderOnboarding();
     refreshQuotaVisualMessage();
   });
 
+  // ===== init =====
   onAuthStateChanged(auth, async (user)=>{
     await authReady;
 
@@ -1735,3 +1889,4 @@ renderOnboarding();
 </script>
 </body>
 </html>
+  
