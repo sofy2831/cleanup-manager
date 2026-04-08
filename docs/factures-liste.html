@@ -1,4 +1,4 @@
-<!-- docs/factures-liste.html (COMPLET — relevé mensuel via vraie page releve.html + envoi/publication owner + factures+avoirs conservés) -->
+<!-- docs/factures-liste.html (COMPLET — onboarding fermable ajouté, sans retouche parasite) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -40,6 +40,7 @@
       align-items:center;
       padding:12px 12px 24px;
       padding-bottom:88px;
+      position:relative;
     }
 
     .topbar{
@@ -228,6 +229,64 @@
       padding:14px; font-weight:900; color:#555; text-align:center;
     }
 
+    .onboarding-panel{
+      position:fixed;
+      right:16px;
+      top:140px;
+      width:260px;
+      background:#fff;
+      border-radius:18px;
+      padding:16px;
+      box-shadow:0 8px 24px rgba(0,0,0,.08);
+      z-index:50;
+      border:1px solid var(--border);
+    }
+    .onboarding-panel[hidden]{
+      display:none !important;
+    }
+    .onboarding-head{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+      margin-bottom:12px;
+    }
+    .onboarding-title{
+      font-size:14px;
+      font-weight:900;
+      color:#111;
+      margin:0;
+    }
+    .onboarding-close{
+      border:none;
+      background:rgba(122,92,255,0.10);
+      color:#5b45c8;
+      width:30px;
+      height:30px;
+      border-radius:999px;
+      font-size:16px;
+      font-weight:1000;
+      cursor:pointer;
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      box-shadow:0 2px 8px rgba(0,0,0,.06);
+      line-height:1;
+      flex-shrink:0;
+    }
+    .onboarding-step{
+      font-size:13px;
+      font-weight:800;
+      padding:8px 0;
+      color:#555;
+    }
+    .onboarding-step.done{
+      color:var(--ok);
+    }
+    .onboarding-step.pending{
+      color:#666;
+    }
+
     .bottom-nav{
       position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
       display: flex; justify-content: space-around; gap: 6px;
@@ -372,7 +431,6 @@
       font-size:11px; font-weight:1000; color:#4b2cff;
       white-space:nowrap;
     }
-
     .ownerBox{
       margin-top:12px;
       border:1px solid rgba(122,92,255,0.18);
@@ -607,6 +665,15 @@
         width:100%;
       }
     }
+
+    @media(max-width:1120px){
+      .onboarding-panel{
+        position:static;
+        width:100%;
+        max-width:1100px;
+        margin-top:12px;
+      }
+    }
   </style>
 </head>
 
@@ -662,6 +729,14 @@
 
       <div class="alert" id="alertBox"></div>
       <div id="list"></div>
+    </div>
+
+    <div id="facturesOnboardingPanel" class="onboarding-panel" hidden>
+      <div class="onboarding-head">
+        <div class="onboarding-title">Onboarding</div>
+        <button type="button" id="closeFacturesOnboardingBtn" class="onboarding-close" aria-label="Masquer l’onboarding">×</button>
+      </div>
+      <div id="facturesOnboardingSteps"></div>
     </div>
   </div>
 
@@ -901,6 +976,10 @@
 
   const stmtModalAlert = document.getElementById("stmtModalAlert");
 
+  const facturesOnboardingPanel = document.getElementById("facturesOnboardingPanel");
+  const facturesOnboardingSteps = document.getElementById("facturesOnboardingSteps");
+  const closeFacturesOnboardingBtn = document.getElementById("closeFacturesOnboardingBtn");
+
   let currentUser = null;
   let allItems = [];
   let vatEnabled = false;
@@ -916,6 +995,9 @@
   let modalCreditAlreadySent = false;
 
   let stmtOwners = [];
+
+  let currentOnboarding = {};
+  let facturesOnboardingDismissed = false;
 
   function showAlert(msg, ok=false){
     alertBox.style.display = "block";
@@ -960,6 +1042,67 @@
   }
   function normalize(s){ return String(s||"").trim().toLowerCase(); }
 
+  function renderFacturesOnboarding(){
+    const ob = currentOnboarding || {};
+
+    const steps = [
+            {
+        done: ob.firstPaymentRecorded === true,
+        label: "Premier règlement enregistré"
+      }
+    ];
+
+    const allDone = steps.every(step => step.done === true);
+
+    if(facturesOnboardingDismissed || allDone){
+      facturesOnboardingPanel.hidden = true;
+      return;
+    }
+
+    facturesOnboardingPanel.hidden = false;
+    facturesOnboardingSteps.innerHTML = steps.map(step => `
+      <div class="onboarding-step ${step.done ? "done" : "pending"}">
+        ${step.done ? "✓" : "○"} ${esc(step.label)}
+      </div>
+    `).join("");
+  }
+
+  async function refreshFacturesOnboarding(uid){
+    try{
+      const snap = await getDoc(doc(db, "users", uid));
+      const data = snap.exists() ? (snap.data() || {}) : {};
+      currentOnboarding = (data?.onboarding && typeof data.onboarding === "object")
+        ? data.onboarding
+        : {};
+    }catch(e){
+      currentOnboarding = {};
+    }
+    renderFacturesOnboarding();
+  }
+
+  closeFacturesOnboardingBtn?.addEventListener("click", ()=>{
+    facturesOnboardingDismissed = true;
+    facturesOnboardingPanel.hidden = true;
+  });
+
+  function bindOnboardingAutoRefresh(){
+  const refresh = async ()=>{
+    if(!currentUser?.uid) return;
+    await refreshFacturesOnboarding(currentUser.uid);
+  };
+
+  window.addEventListener("focus", refresh);
+
+  document.addEventListener("visibilitychange", ()=>{
+    if(document.visibilityState === "visible"){
+      refresh();
+    }
+  });
+
+  window.addEventListener("pageshow", ()=>{
+    refresh();
+  });
+}
   function fmtMoney(v){
     const n = Number(v);
     if(!Number.isFinite(n)) return "—";
@@ -1120,7 +1263,6 @@
     const ownerEmail = String(x?.clientEmail || x?.ownerEmail || "").trim();
     return { ownerName, ownerEmail };
   }
-
   async function resolveOwnerNameEmail(ownerDocId, fallbackName, fallbackEmail){
     let name = String(fallbackName || "Propriétaire").trim() || "Propriétaire";
     let email = String(fallbackEmail || "").trim();
@@ -2083,6 +2225,8 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
     try{
       await loadProfile(user.uid);
       await loadInvoices(user.uid);
+      await refreshFacturesOnboarding(user.uid);
+      bindOnboardingAutoRefresh();
     }catch(e){
       console.error(e);
       showAlert("⛔ " + (e?.message || "Erreur chargement factures"), false);
