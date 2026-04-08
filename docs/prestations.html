@@ -1867,7 +1867,51 @@
         };
       });
     }
+async function validateMission(row){
+  try{
+    if(!row?.queueId || !row?.eventId || !row?.missionId){
+      showAlert("⛔ Données de validation incomplètes.");
+      return;
+    }
 
+    const progressEl = document.querySelector(`[data-progress="${CSS.escape(row.queueId)}"]`);
+    const itemEl = progressEl?.closest(".item");
+
+    if(progressEl) progressEl.style.display = "block";
+    if(itemEl) itemEl.classList.add("validating");
+
+    const missionRef = doc(db, "events", row.eventId, "missions", row.missionId);
+
+    await updateDoc(missionRef, {
+      status: "VALIDEE",
+      validatedAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    });
+
+    await updateDoc(doc(db, "missionQueue", row.queueId), {
+      status: "VALIDEE",
+      validatedAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    });
+
+    await recalcEventStatus(row.eventId);
+
+    await updateDoc(doc(db, "users", currentUser.uid), {
+      "onboarding.firstProofValidated": true,
+      "onboarding.updatedAt": serverTimestamp()
+    });
+
+    currentOnboarding.firstProofValidated = true;
+
+    showAlert("✅ Mission validée.", true);
+
+    await reloadAllData();
+
+  }catch(err){
+    console.error("validateMission error", err);
+    showAlert("Erreur validation : " + (err?.message || "inconnue"));
+  }
+}
     async function loadInitial(){
       const qEvents = query(
         collection(db,"events"),
