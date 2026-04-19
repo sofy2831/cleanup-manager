@@ -1,5 +1,6 @@
 const { onRequest } = require("firebase-functions/v2/https");
 const { onDocumentWritten } = require("firebase-functions/v2/firestore");
+const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
 
@@ -470,7 +471,182 @@ exports.onAgentWrite = onDocumentWritten(
     await Promise.all([...uids].map((uid) => rebuildStatsFor(uid)));
   }
 );
+// =====================
+// iCal helpers
+// =====================
+function pad2(n) {
+  return n < 10 ? "0" + n : "" + n;
+}
 
+function dateKeyFromDate(d) {
+  return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate());
+}
+
+function timeFromDate(d) {
+  return pad2(d.getHours()) + ":" + pad2(d.getMinutes());
+}
+
+function unfoldIcs(text) {
+  const lines = String(text || "").replace(/\r\n/g, "\n").split("\n");
+  const out = [];
+
+  for (const line of lines) {
+    if (!line) continue;
+
+    if (/^[ \t]/.test(line) && out.length) {
+      out[out.length - 1] += line.slice(1);
+    } else {
+      out.push(line);
+    }
+  }
+
+  return out;
+}
+
+function parseIcsDate(value) {
+  const v = String(value || "").trim();
+  if (!v) return null;
+
+  if (/^\d{8}$/.test(v)) {
+    const y = Number(v.slice(0, 4));
+    const m = Number(v.slice(4, 6)) - 1;
+    const d = Number(v.slice(6, 8));
+    return new Date(y, m, d, 0, 0, 0, 0);
+  }
+
+  const m = v.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(Z)?$/);
+  if (!m) return null;
+
+  const y = Number(m[1]);
+  const mo = Number(m[2]) - 1;
+  const da = Number(m[3]);
+  const hh = Number(m[4]);
+  const mi = Number(m[5]);
+  const ss = Number(m[6]);
+  const isUtc = !!m[7];
+
+  if (isUtc) {
+    return new Date(Date.UTC(y, mo, da, hh, mi, ss));
+  }
+
+  return new Date(y, mo, da, hh, mi, ss);
+}
+
+function parseIcs(text) {
+  const lines = unfoldIcs(text);
+  const events = [];
+  let cur = null;
+
+  for (const line of lines) {
+    if (line === "BEGIN:VEVENT") {
+      cur = {};
+      continue;
+    }
+
+    if (line === "END:VEVENT") {
+      if (cur) events.push(cur);
+      cur = null;
+      continue;
+    }
+
+    if (!cur) continue;
+
+    const idx = line.indexOf(":");
+    if (idx === -1) continue;
+
+    const left = line.slice(0, idx);
+    const val = line.slice(idx + 1);
+    const key = left.split(";")[0].toUpperCase();
+
+    if (key === "UID") cur.uid = val.trim();
+    if (key === "SUMMARY") cur.summary = val.trim();
+    if (key === "LOCATION") cur.location = val.trim();
+
+    if (key === "DTSTART") {
+      cur.dtstartRaw = val.trim();
+      cur.start = parseIcsDate(val.trim());
+    }
+
+    if (key === "DTEND") {
+      cur.dtendRaw = val.trim();
+      cur.end = parseIcsDate(val.trim());
+    }
+  }
+
+  return events.filter((e) => e.start instanceof Date && !isNaN(e.start));
+}
+
+function sanitizeId(s) {
+  return String(s || "")
+    .replace(/[^a-zA-Z0-9_-]/g, "_")
+    .slice(0, 120);
+}
+
+function makeDocId(homeId, icalUid, startKey) {
+  return sanitizeId(homeId) + "__" + sanitizeId(icalUid || "no_uid") + "__" + sanitizeId(startKey || "no_date");
+}
+
+function isAllDayRaw(raw) {
+  return /^\d{8}$/.test(String(raw || "").trim());
+}
+
+function addDaysDate(d, n) {
+  const x = new Date(d.getTime());
+  x.setDate(x.getDate() + n);
+  return x;
+}
+
+function daysBetweenInclusive(fromKey, toKey) {
+  const y1 = Number(fromKey.slice(0, 4));
+  const m1 = Number(fromKey.slice(5, 7)) - 1;
+  const d1 = Number(fromKey.slice(8, 10));
+  const y2 = Number(toKey.slice(0, 4));
+  const m2 = Number(toKey.slice(5, 7)) - 1;
+  const d2 = Number(toKey.slice(8, 10));
+
+  let cur = new Date(y1, m1, d1);
+  const end = new Date(y2, m2, d2);
+  const out = [];
+
+  while (cur <= end) {
+    out.push(dateKeyFromDate(cur));
+    cur = addDaysDate(cur, 1);
+  }
+
+  return out;
+}
+
+async function fetchIcalText(url) {
+  let safeUrl = String(url || "").trim();
+
+  if (/^webcal:\/\//i.test(safeUrl)) {
+    safeUrl = safeUrl.replace(/^webcal:\/\//i, "https://");
+  }
+
+  if (!/^https:\/\//i.test(safeUrl)) {
+    throw new Error("Lien iCal invalide");
+  }
+
+  const response = await fetch(safeUrl, {
+    method: "GET",
+    headers: {
+      "User-Agent": "CleanUpManager/1.0",
+      "Accept": "text/calendar,text/plain,*/*",
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Lecture iCal impossible (HTTP ${response.status})`);
+  }
+
+  const text = await response.text();
+
+  if (!text.includes("BEGIN:VCALENDAR")) {
+    throw new Error("Le contenu récupéré n'est pas un iCal valide");
+  }
+
+  return text;
+}
 // =====================
 // iCal fetch proxy
 // =====================
@@ -530,6 +706,215 @@ exports.fetchIcal = onRequest(
         error: "Impossible de récupérer le lien iCal"
       });
     }
+  }
+);
+
+// =====================
+// iCal scheduled sync
+// =====================
+exports.syncIcalScheduled = onSchedule(
+  {
+    schedule: "every 6 hours",
+    timeZone: "Europe/Paris",
+    region: "europe-west1",
+    timeoutSeconds: 540,
+    memory: "1GiB",
+    retryCount: 0,
+  },
+  async () => {
+    const db = admin.firestore();
+
+    const homesSnap = await db
+      .collection("homes")
+      .where("icalSyncEnabled", "==", true)
+      .get();
+
+    let homesProcessed = 0;
+    let homesOk = 0;
+    let homesError = 0;
+    let totalWritten = 0;
+
+    for (const homeDoc of homesSnap.docs) {
+      homesProcessed++;
+
+      const hd = homeDoc.data() || {};
+      const homeId = homeDoc.id;
+
+      const icalUrl = String(hd.icalUrl || "").trim();
+      const conciergerieUid = String(hd.conciergerieUid || "").trim();
+      const ownerUid = String(hd.ownerUid || "").trim();
+      const ownerDocId = String(hd.ownerDocId || "").trim();
+
+      if (!icalUrl || !conciergerieUid || !ownerUid) {
+        homesError++;
+
+        await homeDoc.ref.set(
+          {
+            icalLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
+            icalLastSyncStatus: "error",
+            icalLastSyncError: "icalUrl ou ownerUid manquant",
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+
+        continue;
+      }
+
+      try {
+        const text = await fetchIcalText(icalUrl);
+        const evs = parseIcs(text);
+
+        const seenDocIds = new Set();
+        let written = 0;
+
+        for (const e of evs) {
+          const startKey = dateKeyFromDate(e.start);
+          const arrivalDateKey = startKey;
+          const arrivalTime = isAllDayRaw(e.dtstartRaw) ? "16:00" : timeFromDate(e.start);
+
+          let departureDateKey = "";
+          let departureTime = "";
+
+          if (e.end instanceof Date && !isNaN(e.end)) {
+            if (isAllDayRaw(e.dtendRaw)) {
+              departureDateKey = dateKeyFromDate(e.end);
+              departureTime = "10:00";
+            } else {
+              departureDateKey = dateKeyFromDate(e.end);
+              departureTime = timeFromDate(e.end);
+            }
+          }
+
+          const dateKeys =
+            departureDateKey && departureDateKey >= arrivalDateKey
+              ? daysBetweenInclusive(arrivalDateKey, departureDateKey)
+              : [arrivalDateKey];
+
+          const tmForId = arrivalTime || "00:00";
+          const uid =
+            e.uid ||
+            (String(e.summary || "no_summary") + "_" + arrivalDateKey + "_" + tmForId);
+
+          const docId = makeDocId(homeId, uid, arrivalDateKey + "_" + tmForId);
+          seenDocIds.add(docId);
+
+          await db.collection("icalEvents").doc(docId).set(
+            {
+              conciergerieUid,
+              ownerUid,
+              ownerDocId,
+
+              homeId,
+              homeName: String(hd.name || "").trim(),
+              homeAddress: String(hd.address || hd.homeAddress || "").trim(),
+              homeZip: String(hd.zip || hd.homeZip || "").trim(),
+              homeCity: String(hd.city || hd.homeCity || "").trim(),
+
+              dateKey: arrivalDateKey,
+              dateKeys,
+
+              arrivalDateKey,
+              arrivalTime,
+              departureDateKey,
+              departureTime,
+
+              summary: String(e.summary || "Réservation").trim(),
+              location: String(e.location || "").trim(),
+              meta: "",
+
+              source: "ical",
+              archived: false,
+
+              icalUid: String(e.uid || "").trim(),
+              icalUrl,
+              startIso: e.start.toISOString(),
+              endIso: (e.end instanceof Date && !isNaN(e.end)) ? e.end.toISOString() : "",
+
+              timezone: "Europe/Paris",
+              syncSource: "scheduled",
+
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            },
+            { merge: true }
+          );
+
+          written++;
+        }
+
+        const oldSnap = await db
+          .collection("icalEvents")
+          .where("homeId", "==", homeId)
+          .where("source", "==", "ical")
+          .get();
+
+        const batch = db.batch();
+        let archivedCount = 0;
+
+        oldSnap.forEach((docSnap) => {
+          if (!seenDocIds.has(docSnap.id)) {
+            batch.set(
+              docSnap.ref,
+              {
+                archived: true,
+                archivedAt: admin.firestore.FieldValue.serverTimestamp(),
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              },
+              { merge: true }
+            );
+            archivedCount++;
+          }
+        });
+
+        if (archivedCount > 0) {
+          await batch.commit();
+        }
+
+        totalWritten += written;
+        homesOk++;
+
+        await homeDoc.ref.set(
+          {
+            icalLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
+            icalLastSyncStatus: "ok",
+            icalLastSyncError: admin.firestore.FieldValue.delete(),
+            icalLastSyncCount: written,
+            icalLastArchivedCount: archivedCount,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+      } catch (err) {
+        homesError++;
+
+        await homeDoc.ref.set(
+          {
+            icalLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
+            icalLastSyncStatus: "error",
+            icalLastSyncError: String(err?.message || "Erreur inconnue"),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+
+        console.error("syncIcalScheduled home error:", {
+          homeId,
+          message: err?.message || err,
+        });
+      }
+    }
+
+    await db.collection("systemLogs").add({
+      type: "ICAL_SCHEDULED_SYNC",
+      homesProcessed,
+      homesOk,
+      homesError,
+      totalWritten,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    return null;
   }
 );
 
