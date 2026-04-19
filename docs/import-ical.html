@@ -296,8 +296,8 @@
   import { auth, db } from "./firebase-init.js";
   import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
   import {
-    collection, query, where, onSnapshot,
-    doc, setDoc, getDoc, serverTimestamp
+    collection, query, where, onSnapshot, getDocs,
+    doc, setDoc, getDoc, updateDoc, serverTimestamp
   } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
   const alertBox = document.getElementById("alertBox");
@@ -345,11 +345,11 @@
     icalUrlEl.value = DEFAULT_ICAL;
   }
 
- if(icalHint && IS_DEV_HOST){
-  icalHint.innerHTML =
-    'Environnement de test détecté.' +
-    '<br>Colle uniquement un vrai lien iCal qui commence par <span class="codeish">https://</span>.';
-}
+  if(icalHint && IS_DEV_HOST){
+    icalHint.innerHTML =
+      'Environnement de test détecté.' +
+      '<br>Colle uniquement un vrai lien iCal qui commence par <span class="codeish">https://</span>.';
+  }
 
   function pad2(n){ return n < 10 ? "0"+n : ""+n; }
   function dateKeyFromDate(d){ return d.getFullYear()+"-"+pad2(d.getMonth()+1)+"-"+pad2(d.getDate()); }
@@ -448,12 +448,10 @@
       return { ok:false, message:"Colle un lien iCal." };
     }
 
-    // Cas fréquent : un utilisateur colle juste le nom du fichier
     if (/\.ics$/i.test(value) && !/^https?:\/\//i.test(value) && !/^webcal:\/\//i.test(value)) {
       return {
         ok:false,
         message:
-          
 `Import impossible.
 
 Tu as collé un fichier .ics, pas un lien iCal.
@@ -465,11 +463,9 @@ Si vous ne trouvez pas le lien, dites-nous sur quelle plateforme est votre logem
 👉 Contact support : <a href="mailto:contact@cleanup-manager.fr?subject=Problème%20lien%20iCal&body=Bonjour,%0A%0AJe n'arrive pas à récupérer mon lien iCal.%0A%0APlateforme:%20(Airbnb%20/%20Booking)%0AAdresse%20du%20logement:%20%0AVille:%20%0A%0AMerci.">
   contact@cleanup-manager.fr
 </a>`
-
       };
     }
 
-    // Accepter webcal:// mais le convertir proprement
     if(/^webcal:\/\//i.test(value)){
       value = value.replace(/^webcal:\/\//i, "https://");
     }
@@ -505,32 +501,33 @@ Si tu as reçu un fichier .ics ou une pièce jointe, ce n’est pas le bon forma
     return { ok:true, url:value };
   }
 
- async function fetchIcs(url){
-  const projectId =
-    location.hostname.includes("cleanup-manager-dev") ||
-    location.hostname.includes("localhost") ||
-    location.hostname.includes("127.0.0.1")
-      ? "cleanup-manager-dev"
-      : "cleanup-manager-d9301";
+  async function fetchIcs(url){
+    const projectId =
+      location.hostname.includes("cleanup-manager-dev") ||
+      location.hostname.includes("localhost") ||
+      location.hostname.includes("127.0.0.1")
+        ? "cleanup-manager-dev"
+        : "cleanup-manager-d9301";
 
-  const proxyUrl = `https://europe-west1-${projectId}.cloudfunctions.net/fetchIcal`;
+    const proxyUrl = `https://europe-west1-${projectId}.cloudfunctions.net/fetchIcal`;
 
-  const res = await fetch(
-    proxyUrl + "?url=" + encodeURIComponent(url),
-    { cache: "no-store" }
-  );
+    const res = await fetch(
+      proxyUrl + "?url=" + encodeURIComponent(url),
+      { cache: "no-store" }
+    );
 
-  if(!res.ok){
-    let msg = "Erreur iCal";
-    try{
-      const data = await res.json();
-      msg = data.error || msg;
-    }catch{}
-    throw new Error(msg);
+    if(!res.ok){
+      let msg = "Erreur iCal";
+      try{
+        const data = await res.json();
+        msg = data.error || msg;
+      }catch{}
+      throw new Error(msg);
+    }
+
+    return await res.text();
   }
 
-  return await res.text();
-}
   function lockButtons(locked){
     [testBtn, syncBtn].forEach(b=>{
       b.disabled = !!locked;
@@ -659,169 +656,198 @@ Si tu as reçu un fichier .ics ou une pièce jointe, ce n’est pas le bon forma
   });
 
   syncBtn.addEventListener("click", async ()=>{
-  hideAlert();
-  hidePreview();
+    hideAlert();
+    hidePreview();
 
-  const home = getSelectedHome();
-  const rawUrl = icalUrlEl.value;
+    const home = getSelectedHome();
+    const rawUrl = icalUrlEl.value;
 
-  if(!currentUser) return showAlert("Pas connecté.");
-  if(!home) return showAlert("Choisis un logement.");
+    if(!currentUser) return showAlert("Pas connecté.");
+    if(!home) return showAlert("Choisis un logement.");
 
-  const check = normalizeAndValidateIcalUrl(rawUrl);
-  if(!check.ok) return showAlert(check.message);
+    const check = normalizeAndValidateIcalUrl(rawUrl);
+    if(!check.ok) return showAlert(check.message);
 
-  const url = check.url;
-  icalUrlEl.value = url;
+    const url = check.url;
+    icalUrlEl.value = url;
 
-  lockButtons(true);
+    lockButtons(true);
 
-  try{
-    const meSnap = await getDoc(doc(db,"users", currentUser.uid));
-    const myRole = meSnap.exists() ? String(meSnap.data()?.role||"").toLowerCase() : "";
-    if(myRole !== "conciergerie" && myRole !== "admin" && myRole !== "staff"){
-      return showAlert("Import iCal réservé aux conciergeries (ou admin/staff).");
-    }
+    try{
+      const meSnap = await getDoc(doc(db,"users", currentUser.uid));
+      const myRole = meSnap.exists() ? String(meSnap.data()?.role||"").toLowerCase() : "";
+      if(myRole !== "conciergerie" && myRole !== "admin" && myRole !== "staff"){
+        return showAlert("Import iCal réservé aux conciergeries (ou admin/staff).");
+      }
 
-    const homeSnap = await getDoc(doc(db,"homes", home.id));
-    if(!homeSnap.exists()){
-      return showAlert("Logement introuvable.");
-    }
+      const homeSnap = await getDoc(doc(db,"homes", home.id));
+      if(!homeSnap.exists()){
+        return showAlert("Logement introuvable.");
+      }
 
-    const hd = homeSnap.data() || {};
-    const ownerUid = String(hd.ownerUid || "").trim();
-    const ownerDocId = String(hd.ownerDocId || "").trim();
+      const hd = homeSnap.data() || {};
+      const ownerUid = String(hd.ownerUid || "").trim();
+      const ownerDocId = String(hd.ownerDocId || "").trim();
 
-    if(!ownerUid){
-      return showAlert("Impossible : logement non rattaché à un propriétaire (ownerUid manquant).");
-    }
+      if(!ownerUid){
+        return showAlert("Impossible : logement non rattaché à un propriétaire (ownerUid manquant).");
+      }
 
-    // Sauvegarde de la config iCal sur le logement
-    await setDoc(doc(db, "homes", home.id), {
-      icalUrl: url,
-      icalSyncEnabled: true,
-      icalUpdatedAt: serverTimestamp(),
-      updatedAt: serverTimestamp()
-    }, { merge: true });
+      await setDoc(doc(db, "homes", home.id), {
+        icalUrl: url,
+        icalSyncEnabled: true,
+        icalUpdatedAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      }, { merge: true });
 
-    const text = await fetchIcs(url);
-    const evs = parseIcs(text);
+      const text = await fetchIcs(url);
+      const evs = parseIcs(text);
 
-    if(!evs.length){
+      if(!evs.length){
+        await setDoc(doc(db, "homes", home.id), {
+          icalLastSyncAt: serverTimestamp(),
+          icalLastSyncStatus: "ok",
+          icalLastSyncCount: 0,
+          icalLastArchivedCount: 0,
+          icalLastSyncError: "",
+          updatedAt: serverTimestamp()
+        }, { merge: true });
+
+        return showAlert("iCal vide : aucun événement à importer.", false);
+      }
+
+      let written = 0;
+      const seenDocIds = new Set();
+
+      for(const e of evs){
+        const startKey = dateKeyFromDate(e.start);
+
+        const arrivalDateKey = startKey;
+        const arrivalTime = isAllDayRaw(e.dtstartRaw) ? "16:00" : timeFromDate(e.start);
+
+        let departureDateKey = "";
+        let departureTime = "";
+
+        if(e.end instanceof Date && !isNaN(e.end)){
+          if(isAllDayRaw(e.dtendRaw)){
+            departureDateKey = dateKeyFromDate(e.end);
+            departureTime = "10:00";
+          }else{
+            departureDateKey = dateKeyFromDate(e.end);
+            departureTime = timeFromDate(e.end);
+          }
+        }
+
+        const dateKeys = (departureDateKey && departureDateKey >= arrivalDateKey)
+          ? daysBetweenInclusive(arrivalDateKey, departureDateKey)
+          : [arrivalDateKey];
+
+        const tmForId = arrivalTime || "00:00";
+        const uid = e.uid || (String(e.summary||"no_summary") + "_" + arrivalDateKey + "_" + tmForId);
+        const docId = makeDocId(home.id, uid, arrivalDateKey + "_" + tmForId);
+
+        seenDocIds.add(docId);
+
+        await setDoc(doc(db,"icalEvents", docId), {
+          conciergerieUid: currentUser.uid,
+          ownerUid,
+          ownerDocId,
+
+          homeId: home.id,
+          homeName: String(hd.name || home.name || "").trim(),
+          homeAddress: String(hd.address || hd.homeAddress || "").trim(),
+          homeZip: String(hd.zip || hd.homeZip || "").trim(),
+          homeCity: String(hd.city || hd.homeCity || "").trim(),
+
+          dateKey: arrivalDateKey,
+          dateKeys,
+
+          arrivalDateKey,
+          arrivalTime,
+          departureDateKey,
+          departureTime,
+
+          summary: String(e.summary || "Réservation").trim(),
+          location: String(e.location || "").trim(),
+          meta: "",
+
+          source: "ical",
+          archived: false,
+
+          icalUid: String(e.uid || "").trim(),
+          icalUrl: url,
+          startIso: e.start.toISOString(),
+          endIso: (e.end instanceof Date && !isNaN(e.end)) ? e.end.toISOString() : "",
+
+          timezone: "Europe/Paris",
+          syncSource: "manual",
+
+          updatedAt: serverTimestamp(),
+          createdAt: serverTimestamp()
+        }, { merge:true });
+
+        written++;
+      }
+
+      const oldSnap = await getDocs(
+        query(
+          collection(db, "icalEvents"),
+          where("conciergerieUid", "==", currentUser.uid),
+          where("homeId", "==", home.id),
+          where("source", "==", "ical")
+        )
+      );
+
+      let archivedCount = 0;
+
+      for(const oldDoc of oldSnap.docs){
+        if(!seenDocIds.has(oldDoc.id)){
+          await updateDoc(doc(db, "icalEvents", oldDoc.id), {
+            archived: true,
+            archivedAt: serverTimestamp(),
+            updatedAt: serverTimestamp()
+          });
+          archivedCount++;
+        }
+      }
+
       await setDoc(doc(db, "homes", home.id), {
         icalLastSyncAt: serverTimestamp(),
         icalLastSyncStatus: "ok",
-        icalLastSyncCount: 0,
+        icalLastSyncCount: written,
+        icalLastArchivedCount: archivedCount,
         icalLastSyncError: "",
         updatedAt: serverTimestamp()
       }, { merge: true });
 
-      return showAlert("iCal vide : aucun événement à importer.", false);
-    }
+      showAlert(`✅ Sync terminé : ${written} réservations importées (ou mises à jour).`, true);
+      showPreview(`OK.
+• Côté conciergerie : visible dans Planning.
+• Côté propriétaire : visible dès que le logement est rattaché (ownerUid OK).
+• Anciennes réservations archivées : ${archivedCount}`);
 
-    let written = 0;
+    }catch(err){
+      console.error(err);
+      const msg = String(err?.message || "inconnue");
 
-    for(const e of evs){
-      const startKey = dateKeyFromDate(e.start);
-
-      const arrivalDateKey = startKey;
-      const arrivalTime = isAllDayRaw(e.dtstartRaw) ? "16:00" : timeFromDate(e.start);
-
-      let departureDateKey = "";
-      let departureTime = "";
-
-      if(e.end instanceof Date && !isNaN(e.end)){
-        if(isAllDayRaw(e.dtendRaw)){
-          departureDateKey = dateKeyFromDate(e.end);
-          departureTime = "10:00";
-        }else{
-          departureDateKey = dateKeyFromDate(e.end);
-          departureTime = timeFromDate(e.end);
+      if(home?.id){
+        try{
+          await setDoc(doc(db, "homes", home.id), {
+            icalLastSyncAt: serverTimestamp(),
+            icalLastSyncStatus: "error",
+            icalLastSyncError: msg,
+            updatedAt: serverTimestamp()
+          }, { merge: true });
+        }catch(e2){
+          console.error("Erreur écriture statut sync:", e2);
         }
       }
 
-      const dateKeys = (departureDateKey && departureDateKey >= arrivalDateKey)
-        ? daysBetweenInclusive(arrivalDateKey, departureDateKey)
-        : [arrivalDateKey];
-
-      const tmForId = arrivalTime || "00:00";
-      const uid = e.uid || (String(e.summary||"no_summary") + "_" + arrivalDateKey + "_" + tmForId);
-      const docId = makeDocId(home.id, uid, arrivalDateKey + "_" + tmForId);
-
-      await setDoc(doc(db,"icalEvents", docId), {
-        conciergerieUid: currentUser.uid,
-        ownerUid,
-        ownerDocId,
-
-        homeId: home.id,
-        homeName: String(hd.name || home.name || "").trim(),
-        homeAddress: String(hd.address || hd.homeAddress || "").trim(),
-        homeZip: String(hd.zip || hd.homeZip || "").trim(),
-        homeCity: String(hd.city || hd.homeCity || "").trim(),
-
-        dateKey: arrivalDateKey,
-        dateKeys,
-
-        arrivalDateKey,
-        arrivalTime,
-        departureDateKey,
-        departureTime,
-
-        summary: String(e.summary || "Réservation").trim(),
-        location: String(e.location || "").trim(),
-        meta: "",
-
-        source: "ical",
-        archived: false,
-
-        icalUid: String(e.uid || "").trim(),
-        icalUrl: url,
-        startIso: e.start.toISOString(),
-        endIso: (e.end instanceof Date && !isNaN(e.end)) ? e.end.toISOString() : "",
-
-        timezone: "Europe/Paris",
-        syncSource: "manual",
-
-        updatedAt: serverTimestamp(),
-        createdAt: serverTimestamp()
-      }, { merge:true });
-
-      written++;
+      showAlert("Erreur sync : " + msg);
+    }finally{
+      lockButtons(false);
     }
-
-    await setDoc(doc(db, "homes", home.id), {
-      icalLastSyncAt: serverTimestamp(),
-      icalLastSyncStatus: "ok",
-      icalLastSyncCount: written,
-      icalLastSyncError: "",
-      updatedAt: serverTimestamp()
-    }, { merge: true });
-
-    showAlert(`✅ Sync terminé : ${written} réservations importées (ou mises à jour).`, true);
-    showPreview("OK.\n• Côté conciergerie : visible dans Planning.\n• Côté propriétaire : visible dès que le logement est rattaché (ownerUid OK).");
-
-  }catch(err){
-    console.error(err);
-    const msg = String(err?.message || "inconnue");
-
-    if(home?.id){
-      try{
-        await setDoc(doc(db, "homes", home.id), {
-          icalLastSyncAt: serverTimestamp(),
-          icalLastSyncStatus: "error",
-          icalLastSyncError: msg,
-          updatedAt: serverTimestamp()
-        }, { merge: true });
-      }catch(e2){
-        console.error("Erreur écriture statut sync:", e2);
-      }
-    }
-
-    showAlert("Erreur sync : " + msg);
-  }finally{
-    lockButtons(false);
-  }
-});
+  });
 
   clearBtn.addEventListener("click", ()=>{
     hideAlert();
