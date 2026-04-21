@@ -1282,23 +1282,28 @@
   }
 
   function isDocAlreadySent(data, kind="INVOICE"){
-    const d = data || {};
-    const ownerVisible = d.ownerVisible === true;
-    const sentAt = !!d.sentAt;
-    if(kind === "INVOICE"){
-      const st = String(d.invoiceStatus || "").toUpperCase().trim();
-      return ownerVisible || sentAt || st === "SENT";
-    }
-    if(kind === "CREDIT"){
-      const st = String(d.creditStatus || "").toUpperCase().trim();
-      return ownerVisible || sentAt || st === "SENT";
-    }
-    return ownerVisible || sentAt;
+  const d = data || {};
+
+  if(kind === "INVOICE"){
+    const st = String(d.invoiceStatus || "").toUpperCase().trim();
+    return !!d.sentAt || st === "SENT";
   }
 
-  function isInvoiceAlreadyPublishedToOwner(d){
-    return d?.ownerVisible === true && !!String(d?.ownerUid || "").trim();
+  if(kind === "CREDIT"){
+    const st = String(d.creditStatus || "").toUpperCase().trim();
+    return !!d.sentAt || st === "SENT";
   }
+
+  return !!d.sentAt;
+}
+
+function isInvoiceAlreadyPublishedToOwner(d){
+  return d?.ownerVisible === true;
+}
+
+function isCreditAlreadyPublishedToOwner(d){
+  return d?.ownerVisible === true;
+}
 
   function buildOwnerInvoiceLink(docId){
     const u = new URL("facture-apercu.html", location.href);
@@ -1448,18 +1453,21 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
   }
 
   async function fetchCreditMetaIfNeeded(creditId){
-    if(!creditId) return { number:"", alreadySent:false };
-    try{
-      const snap = await getDoc(doc(db,"salesDocuments", creditId));
-      if(!snap.exists()) return { number:"", alreadySent:false };
-      const d = snap.data() || {};
-      const number = String(d.creditNumber || "").trim();
-      const alreadySent = isDocAlreadySent(d, "CREDIT");
-      return { number, alreadySent };
-    }catch{
-      return { number:"", alreadySent:false };
-    }
+  if(!creditId) return { number:"", alreadyPublished:false };
+
+  try{
+    const snap = await getDoc(doc(db,"salesDocuments", creditId));
+    if(!snap.exists()) return { number:"", alreadyPublished:false };
+
+    const d = snap.data() || {};
+    const number = String(d.creditNumber || "").trim();
+    const alreadyPublished = isCreditAlreadyPublishedToOwner(d);
+
+    return { number, alreadyPublished };
+  }catch{
+    return { number:"", alreadyPublished:false };
   }
+}
 
   async function copyToClipboard(text){
     try{
@@ -1647,10 +1655,12 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
     modalOwnerDocId = getOwnerDocId(d);
     modalOwnerUid = getOwnerUidFast(d);
 
-    modalInvoiceAlreadySent = isDocAlreadySent(d, "INVOICE");
-    markSentBtn.disabled = modalInvoiceAlreadySent;
-    markSentBtn.title = modalInvoiceAlreadySent ? "Déjà marqué comme envoyé." : "";
+    const invoiceAlreadySentByMail = isDocAlreadySent(d, "INVOICE");
+modalInvoiceAlreadySent = isInvoiceAlreadyPublishedToOwner(d);
 
+markSentBtn.disabled = invoiceAlreadySentByMail;
+markSentBtn.title = invoiceAlreadySentByMail ? "Déjà marqué comme envoyé." : "";
+    
     modalCreditId = getAvoirId(d);
     modalCreditNumber = "";
     modalCreditAlreadySent = false;
@@ -1661,7 +1671,7 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
     if(modalCreditId){
       const creditMeta = await fetchCreditMetaIfNeeded(modalCreditId);
       modalCreditNumber = creditMeta.number || "";
-      modalCreditAlreadySent = !!creditMeta.alreadySent;
+      modalCreditAlreadySent = !!creditMeta.alreadyPublished;
 
       if(modalCreditNumber){
         chkCreditWrap.style.display = "";
@@ -2152,6 +2162,7 @@ async function publishToOwner(){
     try{
       await markInvoiceSent(modalItem.id);
       showSendSuccess("Facture");
+      showModalAlert("✅ Facture marquée comme envoyée par email.", true);
       markSentBtn.disabled = true;
 
       await loadInvoices(currentUser.uid);
@@ -2159,8 +2170,8 @@ async function publishToOwner(){
       const fresh = allItems.find(x => x.id === modalItem.id);
       if(fresh){
         modalItem = { id: fresh.id, data: fresh.data };
-        modalInvoiceAlreadySent = isDocAlreadySent(fresh.data, "INVOICE");
-        refreshOwnerPublishUI();
+        modalInvoiceAlreadySent = isInvoiceAlreadyPublishedToOwner(fresh.data);
+refreshOwnerPublishUI();
       }
     }catch(e){
       console.warn("markInvoiceSent failed:", e?.message || e);
