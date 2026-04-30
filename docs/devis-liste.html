@@ -712,7 +712,26 @@
 
     return true;
   }
+function canEditQuote(d){
+  const status = quoteStatusRaw(d);
 
+  if(status === "ACCEPTED") return false;
+  if(status === "SENT") return false;
+  if(isQuoteAlreadySent(d)) return false;
+  if(isQuoteAlreadyPublishedToOwner(d)) return false;
+
+  return true;
+}
+
+function editDisabledReason(d){
+  const status = quoteStatusRaw(d);
+
+  if(status === "ACCEPTED") return "Modification bloquée : devis accepté.";
+  if(status === "SENT" || isQuoteAlreadySent(d)) return "Modification bloquée : devis déjà envoyé.";
+  if(isQuoteAlreadyPublishedToOwner(d)) return "Modification bloquée : devis publié au propriétaire.";
+
+  return "";
+}
   function deleteDisabledReason(d){
     const status = quoteStatusRaw(d);
 
@@ -1016,7 +1035,17 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
     const canAccept = !isAccepted;
     const deleteAllowed = canDeleteQuote(d);
     const deleteReason = deleteDisabledReason(d);
-
+    const editAllowed = canEditQuote(d);
+const editReason = editDisabledReason(d);
+const canSend = !isAccepted && !isQuoteAlreadyPublishedToOwner(d) && !isQuoteAlreadySent(d);
+const sendReason = isAccepted
+  ? "Envoi bloqué : devis accepté."
+  : isQuoteAlreadyPublishedToOwner(d)
+    ? "Envoi bloqué : devis publié au propriétaire."
+    : isQuoteAlreadySent(d)
+      ? "Envoi bloqué : devis déjà envoyé."
+      : "";
+    
     const card = document.createElement("div");
     card.className = "card";
     card.innerHTML = `
@@ -1032,11 +1061,12 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
                   </div>
       </div>
       <div class="right">
-        <button class="btn primary" data-preview="${esc(id)}" type="button">Aperçu</button>
-        <button class="btn" data-send="${esc(id)}" type="button">Envoyer</button>
-        <button class="btn danger" data-accept="${esc(id)}" type="button" ${canAccept ? "" : `aria-disabled="true"`}>Accepter</button>
-        <button class="btn danger" data-delete="${esc(id)}" type="button" ${deleteAllowed ? "" : `disabled title="${esc(deleteReason)}"`}>Supprimer</button>
-      </div>
+  <button class="btn primary" data-preview="${esc(id)}" type="button">Aperçu</button>
+  <button class="btn" data-edit="${esc(id)}" type="button" ${editAllowed ? "" : `disabled title="${esc(editReason)}"`}>Modifier</button>
+  <button class="btn" data-send="${esc(id)}" type="button" ${canSend ? "" : `disabled title="${esc(sendReason)}"`}>Envoyer</button>
+  <button class="btn danger" data-accept="${esc(id)}" type="button" ${canAccept ? "" : `aria-disabled="true"`}>Accepter</button>
+  <button class="btn danger" data-delete="${esc(id)}" type="button" ${deleteAllowed ? "" : `disabled title="${esc(deleteReason)}"`}>Supprimer</button>
+</div>
     `;
 
     card.querySelector('button[data-preview]')?.addEventListener("click", ()=>{
@@ -1045,9 +1075,20 @@ ${String(conciergerieCompanyName || "").trim() || "Votre conciergerie"}`.trim();
       location.href = u.toString();
     });
 
-    card.querySelector('button[data-send]')?.addEventListener("click", ()=>{
-      openSendModal({ id, data:d });
-    });
+    const editBtn = card.querySelector('button[data-edit]');
+if(editBtn && editAllowed){
+  editBtn.addEventListener("click", ()=>{
+    const u = new URL("devis.html", location.href);
+    u.searchParams.set("docId", id);
+    location.href = u.toString();
+  });
+}
+    const sendBtn = card.querySelector('button[data-send]');
+if(sendBtn && canSend){
+  sendBtn.addEventListener("click", ()=>{
+    openSendModal({ id, data:d });
+  });
+}
 
     const delBtn = card.querySelector('button[data-delete]');
     if(delBtn && deleteAllowed){
