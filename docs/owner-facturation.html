@@ -1,4 +1,4 @@
-<!-- docs/owner-facturation.html (COMPLET — historique salesDocuments + ownerStatements ownerUid + ownerVisible=true + ouverture relevé via releve-apercu.html?statementId=...&owner=1 ) -->
+<!-- docs/owner-facturation.html (ZIP MVP — historique + téléchargement groupé HTML imprimables) -->
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -93,6 +93,14 @@
     .cardTitle{
       display:flex; justify-content:space-between; align-items:center; gap:10px;
       font-size:14px; font-weight:1000;
+      flex-wrap:wrap;
+    }
+    .cardTitleActions{
+      display:flex;
+      align-items:center;
+      justify-content:flex-end;
+      gap:8px;
+      flex-wrap:wrap;
     }
     .tiny{ font-size:12px; color:var(--muted); font-weight:900; line-height:1.35; }
 
@@ -159,6 +167,10 @@
       border-color:transparent; color:#fff;
       box-shadow:0 10px 22px rgba(0,0,0,0.10);
     }
+    .btn:disabled{
+      opacity:.6;
+      cursor:not-allowed;
+    }
 
     .status{
       display:inline-flex;
@@ -200,6 +212,8 @@
       box-shadow:0 10px 22px rgba(0,0,0,0.10);
     }
   </style>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js" defer></script>
 </head>
 
 <body>
@@ -219,7 +233,11 @@
       <section class="card">
         <div class="cardTitle">
           <span>Historique</span>
-          <span class="tiny" id="historyCount">—</span>
+
+          <div class="cardTitleActions">
+            <span class="tiny" id="historyCount">—</span>
+            <button class="btn primary" type="button" id="downloadZipBtn">Télécharger ZIP</button>
+          </div>
         </div>
 
         <div class="alert" id="alertHistory"></div>
@@ -246,6 +264,7 @@
   const historyList   = document.getElementById("historyList");
   const historyCount  = document.getElementById("historyCount");
   const alertHistory  = document.getElementById("alertHistory");
+  const downloadZipBtn = document.getElementById("downloadZipBtn");
 
   const dashboardLink = document.getElementById("dashboardLink");
   const navDashboard  = document.getElementById("navDashboard");
@@ -334,8 +353,8 @@
       return `<span class="status">${esc(v || "—").toLowerCase()}</span>`;
     }
 
-    if(type === "CREDIT"){
-      const v = String(d.creditStatus || d.commercialStatus || "").toUpperCase().trim();
+    if(type === "CREDIT" || type === "CREDIT_NOTE"){
+      const v = String(d.creditStatus || d.avoirStatus || d.commercialStatus || "").toUpperCase().trim();
       if(v === "ISSUED") return `<span class="status ok">émis</span>`;
       if(v === "SENT") return `<span class="status">envoyé</span>`;
       if(v === "CANCELLED") return `<span class="status bad">annulé</span>`;
@@ -350,7 +369,7 @@
     const v = String(t||"").toUpperCase().trim();
     if(v === "QUOTE") return "Devis";
     if(v === "INVOICE") return "Facture";
-    if(v === "CREDIT") return "Avoir";
+    if(v === "CREDIT" || v === "CREDIT_NOTE") return "Avoir";
     return "Document";
   }
 
@@ -392,7 +411,7 @@
     if(type === "QUOTE"){
       return buildOwnerUrl(`devis-apercu.html?docId=${encodeURIComponent(id)}&owner=1`);
     }
-    if(type === "CREDIT"){
+    if(type === "CREDIT" || type === "CREDIT_NOTE"){
       return buildOwnerUrl(`avoir-apercu.html?docId=${encodeURIComponent(id)}&owner=1`);
     }
     return buildOwnerUrl(`facture-apercu.html?docId=${encodeURIComponent(id)}&owner=1`);
@@ -407,8 +426,8 @@
   function renderSalesRow(d){
     const type = docTypeLabel(d.type);
     const number =
-      String(d.invoiceNumber || d.quoteNumber || d.creditNumber || "").trim()
-        ? ("#" + esc(String(d.invoiceNumber || d.quoteNumber || d.creditNumber).trim()))
+      String(d.invoiceNumber || d.quoteNumber || d.creditNumber || d.avoirNumber || d.creditNoteNumber || "").trim()
+        ? ("#" + esc(String(d.invoiceNumber || d.quoteNumber || d.creditNumber || d.avoirNumber || d.creditNoteNumber).trim()))
         : "—";
 
     const home = esc(d.homeName || d.home || "—");
@@ -601,6 +620,249 @@
     navHomes.href      = buildOwnerUrl("owner-homes.html");
     navMessages.href   = buildOwnerUrl("owner-messages.html");
   }
+
+  function safeFileName(s){
+    return String(s || "document")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-zA-Z0-9._-]+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "")
+      .slice(0, 90) || "document";
+  }
+
+  function htmlPage(title, bodyHtml){
+    return `<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>${esc(title)}</title>
+  <style>
+    *{box-sizing:border-box;font-family:Arial,sans-serif;}
+    body{margin:24px;color:#111;}
+    h1{font-size:22px;margin:0 0 12px;}
+    h2{font-size:16px;margin:18px 0 8px;}
+    .box{border:1px solid #ddd;border-radius:12px;padding:12px;margin:10px 0;}
+    .muted{color:#666;font-size:12px;}
+    table{width:100%;border-collapse:collapse;margin-top:12px;}
+    th,td{border-bottom:1px solid #ddd;padding:8px;text-align:left;font-size:12px;}
+    th{background:#f5f5f5;}
+    .right{text-align:right;}
+    @media print{body{margin:10mm;}}
+  </style>
+</head>
+<body>
+${bodyHtml}
+</body>
+</html>`;
+  }
+
+  function salesDocHtml(d){
+    const type = docTypeLabel(d.type);
+    const number = String(d.invoiceNumber || d.quoteNumber || d.creditNumber || d.avoirNumber || d.creditNoteNumber || d.id || "").trim();
+    const date = fmt(d.createdAt || d.updatedAt || d.creditIssuedAt || d.invoiceIssuedAt || d.quoteIssuedAt);
+    const statusText = statusPillForDoc(d).replace(/<[^>]+>/g, "");
+    const lines = Array.isArray(d.lines) ? d.lines : [];
+
+    const body = `
+      <h1>${esc(type)} ${esc(number || "")}</h1>
+      <div class="muted">Document exporté depuis CleanUp Manager.</div>
+
+      <div class="box">
+        <div><b>Date :</b> ${esc(date)}</div>
+        <div><b>Statut :</b> ${esc(statusText)}</div>
+        <div><b>Client :</b> ${esc(d.clientName || d.ownerName || "—")}</div>
+        <div><b>Logement :</b> ${esc(d.homeName || d.home || "—")}</div>
+      </div>
+
+      ${lines.length ? `
+        <h2>Lignes</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Désignation</th>
+              <th class="right">Qté</th>
+              <th class="right">PU</th>
+              <th class="right">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${lines.map(l => `
+              <tr>
+                <td>${esc(l.label || l.description || l.name || "—")}</td>
+                <td class="right">${esc(l.qty ?? l.quantity ?? "—")}</td>
+                <td class="right">${esc(money(l.unitPrice || 0))}</td>
+                <td class="right">${esc(money((Number(l.qty || l.quantity || 0) * Number(l.unitPrice || 0)) || l.total || 0))}</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      ` : ""}
+
+      <h2>Totaux</h2>
+      <div class="box">
+        <div><b>HT :</b> ${esc(money(d.totalHT || 0))}</div>
+        <div><b>TVA :</b> ${esc(money(d.totalTVA || 0))}</div>
+        <div><b>TTC :</b> ${esc(money(d.totalTTC || 0))}</div>
+      </div>
+    `;
+
+    return htmlPage(`${type} ${number}`, body);
+  }
+
+  function statementHtml(d){
+    const period = String(d.periodKey || "").trim() || "—";
+    const items = Array.isArray(d.items) ? d.items : [];
+    const body = `
+      <h1>Relevé de factures ${esc(period)}</h1>
+      <div class="muted">Relevé exporté depuis CleanUp Manager.</div>
+
+      <div class="box">
+        <div><b>Propriétaire :</b> ${esc(d.ownerName || "—")}</div>
+        <div><b>Période :</b> ${esc(d.periodStartKey || "—")} → ${esc(d.periodEndKey || "—")}</div>
+        <div><b>Net TTC :</b> ${esc(money(d?.totals?.netTTC || 0))}</div>
+        <div><b>Réglé :</b> ${esc(money(d?.paymentSummary?.paidTTC || 0))}</div>
+        <div><b>Reste dû :</b> ${esc(money(d?.paymentSummary?.dueTTC || 0))}</div>
+      </div>
+
+      <h2>Détail</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Type</th>
+            <th>N°</th>
+            <th>Date</th>
+            <th>Client</th>
+            <th>Logement</th>
+            <th class="right">TTC</th>
+            <th class="right">Payé</th>
+            <th class="right">À payer</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${items.map(i => {
+            const isCredit = String(i.kind || "").toUpperCase() === "CREDIT";
+            const total = Number(i.totalTTC || 0);
+            const paid = isCredit ? 0 : Number(i.paidAmount || 0);
+            const due = isCredit ? 0 : Math.max(0, total - paid);
+            return `
+              <tr>
+                <td>${isCredit ? "Avoir" : "Facture"}</td>
+                <td>${esc(i.number || "—")}</td>
+                <td>${esc(i.dateKey || "—")}</td>
+                <td>${esc(i.clientName || "—")}</td>
+                <td>${esc(i.homeName || "—")}</td>
+                <td class="right">${isCredit ? "−" : ""}${esc(money(total))}</td>
+                <td class="right">${isCredit ? "—" : esc(money(paid))}</td>
+                <td class="right">${isCredit ? "—" : esc(money(due))}</td>
+              </tr>
+            `;
+          }).join("")}
+        </tbody>
+      </table>
+    `;
+
+    return htmlPage(`Relevé ${period}`, body);
+  }
+
+  function buildIndexHtml(salesDocs, statements){
+    const rowsSales = salesDocs.map(d => {
+      const type = docTypeLabel(d.type);
+      const number = String(d.invoiceNumber || d.quoteNumber || d.creditNumber || d.avoirNumber || d.creditNoteNumber || d.id || "").trim();
+      return `<li>${esc(type)} — ${esc(number || "sans numéro")} — ${esc(money(d.totalTTC || 0))}</li>`;
+    }).join("");
+
+    const rowsStatements = statements.map(d => {
+      return `<li>Relevé — ${esc(d.periodKey || "—")} — ${esc(money(d?.totals?.netTTC || 0))}</li>`;
+    }).join("");
+
+    return htmlPage("Index documents CleanUp Manager", `
+      <h1>Archive documents CleanUp Manager</h1>
+      <div class="muted">Cette archive contient des fichiers HTML imprimables. Pour produire un PDF, ouvrir le fichier puis imprimer en PDF.</div>
+
+      <h2>Documents commerciaux</h2>
+      <ul>${rowsSales || "<li>Aucun</li>"}</ul>
+
+      <h2>Relevés mensuels</h2>
+      <ul>${rowsStatements || "<li>Aucun</li>"}</ul>
+    `);
+  }
+
+  function addFileToZip(zip, folder, filename, html){
+    zip.folder(folder).file(filename, html);
+  }
+
+  async function downloadDocumentsZip(){
+    hideAlert(alertHistory);
+
+    const JSZipCtor = window.JSZip;
+    if(!JSZipCtor){
+      showAlert(alertHistory, "⛔ Librairie ZIP indisponible. Vérifie la connexion ou le chargement JSZip.", false);
+      return;
+    }
+
+    const salesDocs = Array.isArray(currentSalesItems) ? currentSalesItems : [];
+    const statements = Array.isArray(currentStatementItems) ? currentStatementItems : [];
+
+    if(!salesDocs.length && !statements.length){
+      showAlert(alertHistory, "Aucun document à télécharger.", false);
+      return;
+    }
+
+    downloadZipBtn.disabled = true;
+    downloadZipBtn.textContent = "Préparation…";
+
+    try{
+      const zip = new JSZipCtor();
+
+      zip.file("index.html", buildIndexHtml(salesDocs, statements));
+
+      for(const d of salesDocs){
+        const type = String(d.type || "").toUpperCase().trim();
+        const label = docTypeLabel(type);
+        const number = String(d.invoiceNumber || d.quoteNumber || d.creditNumber || d.avoirNumber || d.creditNoteNumber || d.id || "").trim();
+        const filename = `${safeFileName(label)}-${safeFileName(number || d.id)}.html`;
+
+        if(type === "QUOTE"){
+          addFileToZip(zip, "Devis", filename, salesDocHtml(d));
+        }else if(type === "CREDIT" || type === "CREDIT_NOTE"){
+          addFileToZip(zip, "Avoirs", filename, salesDocHtml(d));
+        }else if(type === "INVOICE"){
+          addFileToZip(zip, "Factures", filename, salesDocHtml(d));
+        }else{
+          addFileToZip(zip, "Autres", filename, salesDocHtml(d));
+        }
+      }
+
+      for(const d of statements){
+        const period = String(d.periodKey || d.id || "releve").trim();
+        const filename = `Releve-${safeFileName(period)}.html`;
+        addFileToZip(zip, "Releves", filename, statementHtml(d));
+      }
+
+      const blob = await zip.generateAsync({ type:"blob" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const dateKey = new Date().toISOString().slice(0,10);
+      a.href = url;
+      a.download = `cleanup-documents-${dateKey}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(()=> URL.revokeObjectURL(url), 1000);
+
+      showAlert(alertHistory, "✅ Archive ZIP générée. Les fichiers sont au format HTML imprimable.", true);
+      setTimeout(()=> hideAlert(alertHistory), 2500);
+    }catch(e){
+      console.error(e);
+      showAlert(alertHistory, "⛔ Erreur génération ZIP : " + (e?.message || "inconnue"), false);
+    }finally{
+      downloadZipBtn.disabled = false;
+      downloadZipBtn.textContent = "Télécharger ZIP";
+    }
+  }
+
+  downloadZipBtn.addEventListener("click", downloadDocumentsZip);
 
   onAuthStateChanged(auth, async (user)=>{
     wireOwnerLinks();
