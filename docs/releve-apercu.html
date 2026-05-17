@@ -205,7 +205,7 @@
 
     table{
       width:100%;
-      min-width:760px;
+      min-width:1060px;
       border-collapse:collapse;
       border-radius:12px;
       overflow:hidden;
@@ -246,6 +246,8 @@
     .col-ht{ width:10%; }
     .col-tva{ width:10%; }
     .col-ttc{ width:10%; }
+    .col-paid{ width:10%; }
+    .col-due{ width:10%; }
 
     .tag{
       display:inline-flex;
@@ -311,6 +313,7 @@
     @media print{
       .topbar, button{ display:none !important; }
       body{ background:#fff !important; }
+      .wrap{ padding:0 !important; }
       @page{ margin: 8mm; }
 
       .paper{
@@ -319,6 +322,27 @@
         border-radius:0 !important;
         max-width:none !important;
         padding:0 !important;
+        overflow:visible !important;
+      }
+
+      .tableWrap{
+        overflow:visible !important;
+      }
+
+      table{
+        min-width:0 !important;
+        table-layout:auto !important;
+      }
+
+      thead th,
+      tbody td{
+        font-size:9px !important;
+        padding:5px 4px !important;
+      }
+
+      .tag{
+        font-size:9px !important;
+        padding:3px 6px !important;
       }
 
       .footer{
@@ -425,6 +449,9 @@
               <th class="col-ht right">HT</th>
               <th class="col-tva right">TVA</th>
               <th class="col-ttc right">TTC</th>
+              <th>Statut</th>
+              <th class="col-paid right">Payé</th>
+              <th class="col-due right">À payer</th>
             </tr>
           </thead>
           <tbody id="linesTbody"></tbody>
@@ -467,7 +494,6 @@
     const paidTTC = document.getElementById("paidTTC");
     const dueTTC = document.getElementById("dueTTC");
     const lastPaymentDate = document.getElementById("lastPaymentDate");
-    const noteBlock = document.getElementById("noteBlock");
     const footerBlock = document.getElementById("footerBlock");
 
     let currentUser = null;
@@ -551,78 +577,20 @@
 
     function normalizeBusinessFromSnapshot(docData){
       const snap = docData?.businessSnapshot || docData?.businessProfileSnapshot || {};
+      const addressObj = snap?.address || snap?.companyAddress || snap?.billingAddress || {};
 
-      const addressObj =
-        snap?.address ||
-        snap?.companyAddress ||
-        snap?.billingAddress ||
-        {};
+      const street = pickFirst(addressObj?.street, addressObj?.address1, addressObj?.line1, snap?.street, snap?.address1);
+      const zip = pickFirst(addressObj?.zip, addressObj?.postalCode, snap?.zip, snap?.postalCode);
+      const city = pickFirst(addressObj?.city, snap?.city);
 
-      const street = pickFirst(
-        addressObj?.street,
-        addressObj?.address1,
-        addressObj?.line1,
-        snap?.street,
-        snap?.address1
-      );
+      const companyName = pickFirst(snap?.companyName, snap?.name, docData?.companyName) || "Conciergerie";
+      const logoUrl = pickFirst(snap?.logoUrl, snap?.companyLogoUrl, snap?.logo, snap?.photoUrl);
+      const email = pickFirst(snap?.billingEmail, snap?.email, snap?.contact?.email);
+      const phone = pickFirst(snap?.phone, snap?.contact?.phone);
+      const siret = pickFirst(snap?.siret, snap?.registration?.siret);
+      const ape = pickFirst(snap?.ape, snap?.registration?.ape);
 
-      const zip = pickFirst(
-        addressObj?.zip,
-        addressObj?.postalCode,
-        snap?.zip,
-        snap?.postalCode
-      );
-
-      const city = pickFirst(
-        addressObj?.city,
-        snap?.city
-      );
-
-      const companyName = pickFirst(
-        snap?.companyName,
-        snap?.name,
-        docData?.companyName
-      ) || "Conciergerie";
-
-      const logoUrl = pickFirst(
-        snap?.logoUrl,
-        snap?.companyLogoUrl,
-        snap?.logo,
-        snap?.photoUrl
-      );
-
-      const email = pickFirst(
-        snap?.billingEmail,
-        snap?.email,
-        snap?.contact?.email
-      );
-
-      const phone = pickFirst(
-        snap?.phone,
-        snap?.contact?.phone
-      );
-
-      const siret = pickFirst(
-        snap?.siret,
-        snap?.registration?.siret
-      );
-
-      const ape = pickFirst(
-        snap?.ape,
-        snap?.registration?.ape
-      );
-
-      return {
-        companyName,
-        logoUrl,
-        street,
-        zip,
-        city,
-        email,
-        phone,
-        siret,
-        ape
-      };
+      return { companyName, logoUrl, street, zip, city, email, phone, siret, ape };
     }
 
     async function loadBusinessProfile(uid, docData){
@@ -639,10 +607,7 @@
         snapBiz.siret ||
         snapBiz.ape;
 
-      if(hasEnoughSnapshotData){
-        return snapBiz;
-      }
-
+      if(hasEnoughSnapshotData) return snapBiz;
       if(!uid) return snapBiz;
 
       try{
@@ -733,13 +698,78 @@
     function renderTotals(docData){
       const totals = docData?.totals || {};
       const pay = docData?.paymentSummary || {};
+      const items = Array.isArray(docData?.items) ? docData.items : [];
+
+      let computedPaid = 0;
+      let computedDue = 0;
+
+      for(const l of items){
+        const kind = String(l?.kind || "").toUpperCase().trim();
+        if(kind === "CREDIT") continue;
+
+        const totalTTC = Number(l?.totalTTC || 0);
+        const paidAmount = Number(l?.paidAmount || 0);
+
+        computedPaid += paidAmount;
+        computedDue += Math.max(0, totalTTC - paidAmount);
+      }
 
       invTTC.textContent = money(totals.invoicesTTC || 0);
       credTTC.textContent = money(totals.creditsTTC || 0);
       netTTC.textContent = money(totals.netTTC || 0);
-      paidTTC.textContent = money(pay.paidTTC || 0);
-      dueTTC.textContent = money(pay.dueTTC || 0);
+
+      paidTTC.textContent = money(computedPaid || pay.paidTTC || 0);
+      dueTTC.textContent = money(computedDue || pay.dueTTC || 0);
+
       lastPaymentDate.textContent = fmtDate(pay.lastPaymentDate);
+    }
+
+    async function enrichItemsWithSalesDocuments(docData){
+      const items = Array.isArray(docData?.items) ? docData.items : [];
+
+      const enriched = await Promise.all(items.map(async (item) => {
+        const salesDocId = String(item?.salesDocId || "").trim();
+
+        if(!salesDocId) return item;
+
+        try{
+          const snap = await getDoc(doc(db, "salesDocuments", salesDocId));
+          if(!snap.exists()) return item;
+
+          const salesDoc = snap.data() || {};
+
+          return {
+            ...item,
+            invoiceStatus: salesDoc.invoiceStatus || item.invoiceStatus || "",
+            avoirStatus: salesDoc.avoirStatus || salesDoc.creditStatus || item.avoirStatus || "",
+            paidAmount: Number(salesDoc.paidAmount || item.paidAmount || 0)
+          };
+        }catch(e){
+          console.warn("Erreur lecture salesDocument", salesDocId, e);
+          return item;
+        }
+      }));
+
+      return { ...docData, items: enriched };
+    }
+
+    function badgeStatus(kind, l){
+      if(kind === "CREDIT"){
+        const st = String(l?.avoirStatus || l?.creditStatus || "").toUpperCase().trim();
+        if(st === "CANCELLED") return `<span class="tag credit">Avoir annulé</span>`;
+        return `<span class="tag credit">Avoir</span>`;
+      }
+
+      const st = String(l?.invoiceStatus || "").toUpperCase().trim();
+
+      if(st === "PAID") return `<span class="tag invoice">Payée</span>`;
+      if(st === "CANCELLED") return `<span class="tag credit">Annulée</span>`;
+      if(st === "CREDITED") return `<span class="tag credit">Créditée</span>`;
+      if(st === "SENT") return `<span class="tag invoice">Envoyée</span>`;
+      if(st === "ISSUED") return `<span class="tag invoice">Émise</span>`;
+      if(st === "DRAFT") return `<span class="tag">Brouillon</span>`;
+
+      return `<span class="tag">—</span>`;
     }
 
     function renderLines(docData){
@@ -748,7 +778,7 @@
       if(!items.length){
         linesTbody.innerHTML = `
           <tr>
-            <td colspan="8" class="mut">Aucune ligne</td>
+            <td colspan="11" class="mut">Aucune ligne</td>
           </tr>
         `;
         return;
@@ -758,6 +788,10 @@
         const kind = String(l?.kind || "").toUpperCase().trim();
         const isCredit = kind === "CREDIT";
         const tag = isCredit ? "Avoir" : "Facture";
+
+        const totalTTC = Number(l?.totalTTC || 0);
+        const paidAmount = isCredit ? 0 : Number(l?.paidAmount || 0);
+        const dueAmount = isCredit ? 0 : Math.max(0, totalTTC - paidAmount);
 
         return `
           <tr>
@@ -770,7 +804,10 @@
             <td class="col-home">${esc(l?.homeName || "—")}</td>
             <td class="col-ht right">${isCredit ? "−" : ""}${money(l?.totalHT || 0)}</td>
             <td class="col-tva right">${isCredit ? "−" : ""}${money(l?.totalTVA || 0)}</td>
-            <td class="col-ttc right">${isCredit ? "−" : ""}${money(l?.totalTTC || 0)}</td>
+            <td class="col-ttc right">${isCredit ? "−" : ""}${money(totalTTC)}</td>
+            <td>${badgeStatus(kind, l)}</td>
+            <td class="col-paid right">${isCredit ? "—" : money(paidAmount)}</td>
+            <td class="col-due right">${isCredit ? "—" : money(dueAmount)}</td>
           </tr>
         `;
       }).join("");
@@ -812,7 +849,7 @@
         `Montant réglé : ${money(pay.paidTTC || 0)}`,
         `Reste dû : ${money(pay.dueTTC || 0)}`,
         `Dernier règlement : ${fmtDate(pay.lastPaymentDate)}`
-      ].join("\n");
+      ].join("\\n");
     }
 
     async function shareDoc(){
@@ -874,6 +911,7 @@
         }
 
         currentDoc = await loadStatement(currentStatementId);
+        currentDoc = await enrichItemsWithSalesDocuments(currentDoc);
 
         if(isOwnerView){
           const ownerUid = String(currentDoc?.ownerUid || "").trim();
@@ -915,3 +953,7 @@
   </script>
 </body>
 </html>
+
+path = Path("/mnt/data/releve-apercu.html")
+path.write_text(content, encoding="utf-8")
+print(f"Fichier créé : {path}")

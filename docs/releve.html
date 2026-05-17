@@ -247,7 +247,7 @@
 
     table{
       width:100%;
-      min-width:760px;
+      min-width:1060px;
       border-collapse:collapse;
       background:#fff;
       border-radius:16px;
@@ -359,7 +359,7 @@
       }
 
       table{
-        min-width:700px;
+        min-width:1060px;
       }
     }
 
@@ -728,9 +728,22 @@
       const type = String(d.type || "").toUpperCase().trim();
       const isInv = type === "INVOICE";
       const kind = isInv ? "INVOICE" : "CREDIT";
-      const number = String(isInv ? d.invoiceNumber : d.creditNumber).trim();
+
+      const number = String(
+        isInv
+          ? d.invoiceNumber
+          : (d.creditNumber || d.avoirNumber || d.creditNoteNumber)
+      ).trim();
+
       const dateKey = getDocDateKeySafe(d);
       const totals = getDocTotals(d);
+
+      const totalHT = absMoney(totals.ht);
+      const totalTVA = absMoney(totals.tva);
+      const totalTTC = absMoney(totals.ttc);
+
+      const paidAmount = isInv ? Math.max(0, Number(d.paidAmount || 0)) : 0;
+      const dueAmount = isInv ? Math.max(0, totalTTC - paidAmount) : 0;
 
       return {
         kind,
@@ -739,9 +752,15 @@
         dateKey,
         homeName: String(d.homeName || "").trim(),
         clientName: String(d.clientName || d.ownerName || "").trim(),
-        totalHT: absMoney(totals.ht),
-        totalTVA: absMoney(totals.tva),
-        totalTTC: absMoney(totals.ttc)
+
+        totalHT,
+        totalTVA,
+        totalTTC,
+
+        invoiceStatus: String(d.invoiceStatus || "").trim(),
+        avoirStatus: String(d.avoirStatus || d.creditStatus || "").trim(),
+        paidAmount,
+        dueAmount
       };
     }
 
@@ -809,7 +828,7 @@
       try{
         [inv, cred] = await Promise.all([
           queryDocsByType(currentUser.uid, "INVOICE"),
-          queryDocsByType(currentUser.uid, "CREDIT")
+          queryDocsByType(currentUser.uid, "CREDIT_NOTE")
         ]);
       }catch(e){
         throw new Error("Erreur chargement salesDocuments.");
@@ -822,7 +841,7 @@
 
       cred = cred
         .filter(x => isOwnerMatch(x, ownerUid, ownerDocId))
-        .filter(x => !!String(x.creditNumber || "").trim())
+        .filter(x => !!String(x.creditNumber || x.avoirNumber || x.creditNoteNumber || "").trim())
         .filter(x => isDateInPeriod(getDocDateKeySafe(x), startKey, endKey));
 
       const items = [
@@ -836,7 +855,10 @@
 
       const paymentsSummary = await loadPaymentsSummaryForInvoices(inv);
       const paidTTCValue = Number(paymentsSummary.paidTTC || 0);
-      const dueTTCValue = netTTC - paidTTCValue;
+
+      const dueTTCValue = items
+        .filter(i => i.kind === "INVOICE")
+        .reduce((s,i)=> s + Number(i.dueAmount || 0), 0);
 
       draft = {
         conciergerieUid: currentUser.uid,
@@ -876,6 +898,27 @@
       }
     }
 
+    function badgeStatus(item){
+      const kind = String(item?.kind || "").toUpperCase().trim();
+
+      if(kind === "CREDIT"){
+        const st = String(item?.avoirStatus || "").toUpperCase().trim();
+        if(st === "CANCELLED") return `<span class="tag credit">Avoir annulé</span>`;
+        return `<span class="tag credit">Avoir</span>`;
+      }
+
+      const st = String(item?.invoiceStatus || "").toUpperCase().trim();
+
+      if(st === "PAID") return `<span class="tag invoice">Payée</span>`;
+      if(st === "CANCELLED") return `<span class="tag credit">Annulée</span>`;
+      if(st === "CREDITED") return `<span class="tag credit">Créditée</span>`;
+      if(st === "SENT") return `<span class="tag invoice">Envoyée</span>`;
+      if(st === "ISSUED") return `<span class="tag invoice">Émise</span>`;
+      if(st === "DRAFT") return `<span class="tag">Brouillon</span>`;
+
+      return `<span class="tag">—</span>`;
+    }
+
     function renderDraft(){
       if(!draft || !draft.items.length){
         invTTC.textContent = fmtMoney(0);
@@ -908,6 +951,9 @@
                 <th class="num">HT</th>
                 <th class="num">TVA</th>
                 <th class="num">TTC</th>
+                <th>Statut</th>
+                <th class="num">Payé</th>
+                <th class="num">À payer</th>
               </tr>
             </thead>
             <tbody>
@@ -921,6 +967,9 @@
                   <td class="num">${i.kind === "CREDIT" ? "−" : ""}${esc(fmtMoney(i.totalHT))}</td>
                   <td class="num">${i.kind === "CREDIT" ? "−" : ""}${esc(fmtMoney(i.totalTVA))}</td>
                   <td class="num">${i.kind === "CREDIT" ? "−" : ""}${esc(fmtMoney(i.totalTTC))}</td>
+                  <td>${badgeStatus(i)}</td>
+                  <td class="num">${i.kind === "CREDIT" ? "—" : esc(fmtMoney(i.paidAmount || 0))}</td>
+                  <td class="num">${i.kind === "CREDIT" ? "—" : esc(fmtMoney(i.dueAmount || 0))}</td>
                 </tr>
               `).join("")}
             </tbody>
