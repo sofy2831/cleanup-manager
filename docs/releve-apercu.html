@@ -782,13 +782,32 @@ async function enrichItemsWithSalesDocuments(docData){
   };
 }
     
-    function renderLines(docData){
+    function badgeStatus(kind, l){
+  if(kind === "CREDIT"){
+    const st = String(l?.avoirStatus || l?.creditStatus || "").toUpperCase().trim();
+    if(st === "CANCELLED") return `<span class="tag credit">Avoir annulé</span>`;
+    return `<span class="tag credit">Avoir</span>`;
+  }
+
+  const st = String(l?.invoiceStatus || "").toUpperCase().trim();
+
+  if(st === "PAID") return `<span class="tag invoice">Payée</span>`;
+  if(st === "CANCELLED") return `<span class="tag credit">Annulée</span>`;
+  if(st === "CREDITED") return `<span class="tag credit">Créditée</span>`;
+  if(st === "SENT") return `<span class="tag invoice">Envoyée</span>`;
+  if(st === "ISSUED") return `<span class="tag invoice">Émise</span>`;
+  if(st === "DRAFT") return `<span class="tag">Brouillon</span>`;
+
+  return `<span class="tag">—</span>`;
+}
+
+function renderLines(docData){
   const items = Array.isArray(docData?.items) ? docData.items : [];
 
   if(!items.length){
     linesTbody.innerHTML = `
       <tr>
-        <td colspan="10" class="mut">Aucune ligne</td>
+        <td colspan="11" class="mut">Aucune ligne</td>
       </tr>
     `;
     return;
@@ -799,48 +818,25 @@ async function enrichItemsWithSalesDocuments(docData){
     const isCredit = kind === "CREDIT";
     const tag = isCredit ? "Avoir" : "Facture";
 
-    // récup des paiements ligne par ligne
-    const paid = Number(l?.paidTTC || 0);
-    const total = Number(l?.totalTTC || 0);
-    const due = Math.max(total - paid, 0);
+    const totalTTC = Number(l?.totalTTC || 0);
+    const paidAmount = isCredit ? 0 : Number(l?.paidAmount || 0);
+    const dueAmount = isCredit ? 0 : Math.max(0, totalTTC - paidAmount);
 
     return `
       <tr>
         <td class="col-type">
           <span class="tag ${isCredit ? "credit" : "invoice"}">${esc(tag)}</span>
         </td>
-
         <td class="col-num">${esc(l?.number || "—")}</td>
-
         <td class="col-date">${esc(l?.dateKey || "—")}</td>
-
-        <td class="col-client">
-          ${esc(l?.clientName || "—")}
-        </td>
-
-        <td class="col-home">
-          ${esc(l?.homeName || "—")}
-        </td>
-
-        <td class="col-ht right">
-          ${isCredit ? "−" : ""}${money(l?.totalHT || 0)}
-        </td>
-
-        <td class="col-tva right">
-          ${isCredit ? "−" : ""}${money(l?.totalTVA || 0)}
-        </td>
-
-        <td class="col-ttc right">
-          ${isCredit ? "−" : ""}${money(total)}
-        </td>
-
-        <td class="col-paid right">
-          ${money(paid)}
-        </td>
-
-        <td class="col-due right">
-          ${money(due)}
-        </td>
+        <td class="col-client">${esc(l?.clientName || "—")}</td>
+        <td class="col-home">${esc(l?.homeName || "—")}</td>
+        <td class="col-ht right">${isCredit ? "−" : ""}${money(l?.totalHT || 0)}</td>
+        <td class="col-tva right">${isCredit ? "−" : ""}${money(l?.totalTVA || 0)}</td>
+        <td class="col-ttc right">${isCredit ? "−" : ""}${money(totalTTC)}</td>
+        <td>${badgeStatus(kind, l)}</td>
+        <td class="right">${isCredit ? "—" : money(paidAmount)}</td>
+        <td class="right">${isCredit ? "—" : money(dueAmount)}</td>
       </tr>
     `;
   }).join("");
