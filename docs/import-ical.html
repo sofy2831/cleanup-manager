@@ -247,7 +247,6 @@
     <div class="card">
       <div class="small">
         Objectif : importer les réservations (Airbnb / Booking / autres plateformes) pour alimenter le planning.
-        
         <br><b>Important :</b> seul le compte conciergerie peut importer.
       </div>
 
@@ -277,7 +276,7 @@
       <div class="small" id="icalHint">
         Colle le lien iCal du logement.
         <br>👉 Le lien doit commencer par <span class="codeish">https://</span>
-        <br>👉 CleanUp n'accepte pas les fichiers<span class="codeish">.ics</span> pour la synchronisation automatique.
+        <br>👉 CleanUp n'accepte pas les fichiers <span class="codeish">.ics</span> pour la synchronisation automatique.
       </div>
 
       <div class="help-box">
@@ -304,30 +303,6 @@
   const previewBox = document.getElementById("previewBox");
   const icalHint = document.getElementById("icalHint");
 
-  function showAlert(msg, ok=false){
-    alertBox.style.display = "block";
-    alertBox.classList.toggle("ok", !!ok);
-    alertBox.innerHTML = msg;
-  }
-  function hideAlert(){
-    alertBox.style.display = "none";
-    alertBox.classList.remove("ok");
-    alertBox.textContent = "";
-  }
-  function showPreview(text){
-    previewBox.style.display = "block";
-    previewBox.textContent = text;
-  }
-  function hidePreview(){
-    previewBox.style.display = "none";
-    previewBox.textContent = "";
-  }
-
-  document.getElementById("logoutBtn").addEventListener("click", async ()=>{
-    await signOut(auth);
-    location.href = "index.html";
-  });
-
   const homeSelect = document.getElementById("homeSelect");
   const icalUrlEl = document.getElementById("icalUrl");
   const testBtn = document.getElementById("testBtn");
@@ -341,6 +316,11 @@
 
   const DEFAULT_ICAL = location.origin + "/test.ics";
 
+  let currentUser = null;
+  let homes = [];
+  let homesById = new Map();
+  let unsubHomes = null;
+
   if(IS_DEV_HOST && !icalUrlEl.value){
     icalUrlEl.value = DEFAULT_ICAL;
   }
@@ -348,7 +328,30 @@
   if(icalHint && IS_DEV_HOST){
     icalHint.innerHTML =
       'Environnement de test détecté.' +
-      '<br>Colle uniquement un vrai lien iCal qui commence par <span class="codeish">https://</span>.';
+      '<br>Colle un vrai lien iCal qui commence par <span class="codeish">https://</span>.' +
+      '<br>Pour tester en local/dev, <span class="codeish">/test.ics</span> peut fonctionner si ta Cloud Function l’accepte.';
+  }
+
+  function showAlert(msg, ok=false){
+    alertBox.style.display = "block";
+    alertBox.classList.toggle("ok", !!ok);
+    alertBox.innerHTML = msg;
+  }
+
+  function hideAlert(){
+    alertBox.style.display = "none";
+    alertBox.classList.remove("ok");
+    alertBox.textContent = "";
+  }
+
+  function showPreview(text){
+    previewBox.style.display = "block";
+    previewBox.textContent = text;
+  }
+
+  function hidePreview(){
+    previewBox.style.display = "none";
+    previewBox.textContent = "";
   }
 
   function pad2(n){ return n < 10 ? "0"+n : ""+n; }
@@ -356,7 +359,7 @@
   function timeFromDate(d){ return pad2(d.getHours()) + ":" + pad2(d.getMinutes()); }
 
   function unfoldIcs(text){
-    const lines = text.replace(/\r\n/g,"\n").split("\n");
+    const lines = String(text || "").replace(/\r\n/g,"\n").split("\n");
     const out = [];
     for(const line of lines){
       if(!line) continue;
@@ -403,8 +406,27 @@
       .slice(0, 120);
   }
 
-  function makeDocId(homeId, icalUid, startKey){
-    return sanitizeId(homeId) + "__" + sanitizeId(icalUid || "no_uid") + "__" + sanitizeId(startKey || "no_date");
+  function hashString(s){
+    let h = 0;
+    const str = String(s || "");
+    for(let i = 0; i < str.length; i++){
+      h = ((h << 5) - h) + str.charCodeAt(i);
+      h |= 0;
+    }
+    return Math.abs(h).toString(36);
+  }
+
+  function sourceKeyFromUrl(url){
+    try{
+      const u = new URL(url);
+      return sanitizeId(u.hostname) + "_" + hashString(url);
+    }catch{
+      return "ical_" + hashString(url);
+    }
+  }
+
+  function makeDocId(homeId, sourceKey, icalUid, startKey){
+    return sanitizeId(homeId) + "__" + sanitizeId(sourceKey) + "__" + sanitizeId(icalUid || "no_uid") + "__" + sanitizeId(startKey || "no_date");
   }
 
   function parseIcs(text){
@@ -453,16 +475,13 @@
         ok:false,
         message:
 `Import impossible.
-
 Tu as collé un fichier .ics, pas un lien iCal.
 CleanUp n'accepte pas les fichiers .ics pour la synchronisation automatique.
 
 Il faut un lien internet qui commence par https://
 Si vous ne trouvez pas le lien, dites-nous sur quelle plateforme est votre logement (Airbnb, Booking…).
 
-👉 Contact support : <a href="mailto:contact@cleanup-manager.fr?subject=Problème%20lien%20iCal&body=Bonjour,%0A%0AJe n'arrive pas à récupérer mon lien iCal.%0A%0APlateforme:%20(Airbnb%20/%20Booking)%0AAdresse%20du%20logement:%20%0AVille:%20%0A%0AMerci.">
-  contact@cleanup-manager.fr
-</a>`
+👉 Contact support : <a href="mailto:contact@cleanup-manager.fr?subject=Problème%20lien%20iCal&body=Bonjour,%0A%0AJe n'arrive pas à récupérer mon lien iCal.%0A%0APlateforme:%20(Airbnb%20/%20Booking)%0AAdresse%20du%20logement:%20%0AVille:%20%0A%0AMerci.">contact@cleanup-manager.fr</a>`
       };
     }
 
@@ -486,16 +505,10 @@ Si tu as reçu un fichier .ics ou une pièce jointe, ce n’est pas le bon forma
     try{
       const u = new URL(value);
       if(u.protocol !== "https:"){
-        return {
-          ok:false,
-          message:"Le lien iCal doit commencer par https://"
-        };
+        return { ok:false, message:"Le lien iCal doit commencer par https://" };
       }
     }catch{
-      return {
-        ok:false,
-        message:"Lien iCal invalide. Vérifie le format du lien."
-      };
+      return { ok:false, message:"Lien iCal invalide. Vérifie le format du lien." };
     }
 
     return { ok:true, url:value };
@@ -559,11 +572,6 @@ Si tu as reçu un fichier .ics ou une pièce jointe, ce n’est pas le bon forma
     return out;
   }
 
-  let currentUser = null;
-  let homes = [];
-  let homesById = new Map();
-  let unsubHomes = null;
-
   function getSelectedHome(){
     const id = homeSelect.value;
     return homesById.get(id) || null;
@@ -579,6 +587,7 @@ Si tu as reçu un fichier .ics ou une pièce jointe, ce n’est pas le bon forma
       homeSelect.disabled = true;
       return;
     }
+
     homeSelect.disabled = false;
 
     const opt0 = document.createElement("option");
@@ -607,6 +616,11 @@ Si tu as reçu un fichier .ics ou une pièce jointe, ce n’est pas le bon forma
       (err)=> showAlert("Erreur logements : " + (err?.message || "inconnue"))
     );
   }
+
+  document.getElementById("logoutBtn").addEventListener("click", async ()=>{
+    await signOut(auth);
+    location.href = "index.html";
+  });
 
   onAuthStateChanged(auth, (user)=>{
     if(!user){
@@ -638,7 +652,7 @@ Si tu as reçu un fichier .ics ou une pièce jointe, ce n’est pas le bon forma
       const text = await fetchIcs(url);
       const evs = parseIcs(text);
 
-      const head = `✅ iCal OK\nLogement: ${home.name}\nÉvénements trouvés: ${evs.length}\n`;
+      const head = `✅ iCal OK\nLogement: ${home.name || "Logement"}\nÉvénements trouvés: ${evs.length}\n`;
       const sample = evs.slice(0,5).map(e=>{
         const dk = dateKeyFromDate(e.start);
         const tm = timeFromDate(e.start);
@@ -646,7 +660,7 @@ Si tu as reçu un fichier .ics ou une pièce jointe, ce n’est pas le bon forma
       }).join("\n");
 
       showPreview(head + (sample ? ("\nAperçu:\n" + sample) : "\n(Aucun événement)"));
-      showAlert("Test OK. Si l’aperçu est bon, clique Sync.", true);
+      showAlert("Test OK. Si l’aperçu est bon, clique sur Importer les réservations.", true);
     }catch(err){
       console.error(err);
       showAlert("Erreur iCal : " + (err?.message || "inconnue"));
@@ -668,21 +682,25 @@ Si tu as reçu un fichier .ics ou une pièce jointe, ce n’est pas le bon forma
     const check = normalizeAndValidateIcalUrl(rawUrl);
     if(!check.ok) return showAlert(check.message);
 
-    const url = check.url;
-    icalUrlEl.value = url;
+    const cleanUrl = check.url;
+    const sourceKey = sourceKeyFromUrl(cleanUrl);
+    icalUrlEl.value = cleanUrl;
 
     lockButtons(true);
 
     try{
       const meSnap = await getDoc(doc(db,"users", currentUser.uid));
       const myRole = meSnap.exists() ? String(meSnap.data()?.role||"").toLowerCase() : "";
+
       if(myRole !== "conciergerie" && myRole !== "admin" && myRole !== "staff"){
-        return showAlert("Import iCal réservé aux conciergeries (ou admin/staff).");
+        showAlert("Import iCal réservé aux conciergeries (ou admin/staff).");
+        return;
       }
 
       const homeSnap = await getDoc(doc(db,"homes", home.id));
       if(!homeSnap.exists()){
-        return showAlert("Logement introuvable.");
+        showAlert("Logement introuvable.");
+        return;
       }
 
       const hd = homeSnap.data() || {};
@@ -690,17 +708,23 @@ Si tu as reçu un fichier .ics ou une pièce jointe, ce n’est pas le bon forma
       const ownerDocId = String(hd.ownerDocId || "").trim();
 
       if(!ownerUid){
-        return showAlert("Impossible : logement non rattaché à un propriétaire (ownerUid manquant).");
+        showAlert("Impossible : logement non rattaché à un propriétaire (ownerUid manquant).");
+        return;
       }
 
       await setDoc(doc(db, "homes", home.id), {
-        icalUrl: url,
+        [`icalSources.${sourceKey}`]: {
+          url: cleanUrl,
+          enabled: true,
+          sourceKey: sourceKey,
+          lastSyncAt: serverTimestamp()
+        },
         icalSyncEnabled: true,
         icalUpdatedAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       }, { merge: true });
 
-      const text = await fetchIcs(url);
+      const text = await fetchIcs(cleanUrl);
       const evs = parseIcs(text);
 
       if(!evs.length){
@@ -713,7 +737,8 @@ Si tu as reçu un fichier .ics ou une pièce jointe, ce n’est pas le bon forma
           updatedAt: serverTimestamp()
         }, { merge: true });
 
-        return showAlert("iCal vide : aucun événement à importer.", false);
+        showAlert("iCal vide : aucun événement à importer.", false);
+        return;
       }
 
       let written = 0;
@@ -721,7 +746,6 @@ Si tu as reçu un fichier .ics ou une pièce jointe, ce n’est pas le bon forma
 
       for(const e of evs){
         const startKey = dateKeyFromDate(e.start);
-
         const arrivalDateKey = startKey;
         const arrivalTime = isAllDayRaw(e.dtstartRaw) ? "16:00" : timeFromDate(e.start);
 
@@ -743,15 +767,15 @@ Si tu as reçu un fichier .ics ou une pièce jointe, ce n’est pas le bon forma
           : [arrivalDateKey];
 
         const tmForId = arrivalTime || "00:00";
-        const uid = e.uid || (String(e.summary||"no_summary") + "_" + arrivalDateKey + "_" + tmForId);
-        const docId = makeDocId(home.id, uid, arrivalDateKey + "_" + tmForId);
+        const uid = e.uid || (String(e.summary || "no_summary") + "_" + arrivalDateKey + "_" + tmForId);
+        const docId = makeDocId(home.id, sourceKey, uid, arrivalDateKey + "_" + tmForId);
 
         seenDocIds.add(docId);
 
         await setDoc(doc(db,"icalEvents", docId), {
           conciergerieUid: currentUser.uid,
-          ownerUid,
-          ownerDocId,
+          ownerUid: ownerUid,
+          ownerDocId: ownerDocId,
 
           homeId: home.id,
           homeName: String(hd.name || home.name || "").trim(),
@@ -760,12 +784,12 @@ Si tu as reçu un fichier .ics ou une pièce jointe, ce n’est pas le bon forma
           homeCity: String(hd.city || hd.homeCity || "").trim(),
 
           dateKey: arrivalDateKey,
-          dateKeys,
+          dateKeys: dateKeys,
 
-          arrivalDateKey,
-          arrivalTime,
-          departureDateKey,
-          departureTime,
+          arrivalDateKey: arrivalDateKey,
+          arrivalTime: arrivalTime,
+          departureDateKey: departureDateKey,
+          departureTime: departureTime,
 
           summary: String(e.summary || "Réservation").trim(),
           location: String(e.location || "").trim(),
@@ -775,7 +799,9 @@ Si tu as reçu un fichier .ics ou une pièce jointe, ce n’est pas le bon forma
           archived: false,
 
           icalUid: String(e.uid || "").trim(),
-          icalUrl: url,
+          icalUrl: cleanUrl,
+          icalSourceKey: sourceKey,
+          icalSourceUrl: cleanUrl,
           startIso: e.start.toISOString(),
           endIso: (e.end instanceof Date && !isNaN(e.end)) ? e.end.toISOString() : "",
 
@@ -794,7 +820,8 @@ Si tu as reçu un fichier .ics ou une pièce jointe, ce n’est pas le bon forma
           collection(db, "icalEvents"),
           where("conciergerieUid", "==", currentUser.uid),
           where("homeId", "==", home.id),
-          where("source", "==", "ical")
+          where("source", "==", "ical"),
+          where("icalSourceKey", "==", sourceKey)
         )
       );
 
@@ -820,11 +847,11 @@ Si tu as reçu un fichier .ics ou une pièce jointe, ce n’est pas le bon forma
         updatedAt: serverTimestamp()
       }, { merge: true });
 
-      showAlert(`✅ Sync terminé : ${written} réservations importées (ou mises à jour).`, true);
+      showAlert(`✅ Import terminé : ${written} réservations importées ou mises à jour.`, true);
       showPreview(`OK.
-• Côté conciergerie : visible dans Planning.
-• Côté propriétaire : visible dès que le logement est rattaché (ownerUid OK).
-• Anciennes réservations archivées : ${archivedCount}`);
+• Les imports Airbnb / Booking / autres ne s’écrasent plus.
+• Chaque lien iCal a sa propre clé source.
+• Anciennes réservations archivées pour CE lien uniquement : ${archivedCount}`);
 
     }catch(err){
       console.error(err);
@@ -849,7 +876,7 @@ Si tu as reçu un fichier .ics ou une pièce jointe, ce n’est pas le bon forma
     }
   });
 
-  clearBtn.addEventListener("click", ()=>{
+    clearBtn.addEventListener("click", ()=>{
     hideAlert();
     hidePreview();
     homeSelect.value = "";
