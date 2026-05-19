@@ -682,22 +682,25 @@ Si tu as reçu un fichier .ics ou une pièce jointe, ce n’est pas le bon forma
     const check = normalizeAndValidateIcalUrl(rawUrl);
     if(!check.ok) return showAlert(check.message);
 
-    const url = check.url;
-    const icalSourceKey = sourceKeyFromUrl(url);
-    icalUrlEl.value = url;
+    const cleanUrl = check.url;
+    const sourceKey = sourceKeyFromUrl(cleanUrl);
+    icalUrlEl.value = cleanUrl;
 
     lockButtons(true);
 
     try{
       const meSnap = await getDoc(doc(db,"users", currentUser.uid));
       const myRole = meSnap.exists() ? String(meSnap.data()?.role||"").toLowerCase() : "";
+
       if(myRole !== "conciergerie" && myRole !== "admin" && myRole !== "staff"){
-        return showAlert("Import iCal réservé aux conciergeries (ou admin/staff).");
+        showAlert("Import iCal réservé aux conciergeries (ou admin/staff).");
+        return;
       }
 
       const homeSnap = await getDoc(doc(db,"homes", home.id));
       if(!homeSnap.exists()){
-        return showAlert("Logement introuvable.");
+        showAlert("Logement introuvable.");
+        return;
       }
 
       const hd = homeSnap.data() || {};
@@ -705,14 +708,15 @@ Si tu as reçu un fichier .ics ou une pièce jointe, ce n’est pas le bon forma
       const ownerDocId = String(hd.ownerDocId || "").trim();
 
       if(!ownerUid){
-        return showAlert("Impossible : logement non rattaché à un propriétaire (ownerUid manquant).");
+        showAlert("Impossible : logement non rattaché à un propriétaire (ownerUid manquant).");
+        return;
       }
 
       await setDoc(doc(db, "homes", home.id), {
-        [`icalSources.${icalSourceKey}`]: {
-          url,
+        [`icalSources.${sourceKey}`]: {
+          url: cleanUrl,
           enabled: true,
-          sourceKey: icalSourceKey,
+          sourceKey: sourceKey,
           lastSyncAt: serverTimestamp()
         },
         icalSyncEnabled: true,
@@ -720,7 +724,7 @@ Si tu as reçu un fichier .ics ou une pièce jointe, ce n’est pas le bon forma
         updatedAt: serverTimestamp()
       }, { merge: true });
 
-      const text = await fetchIcs(url);
+      const text = await fetchIcs(cleanUrl);
       const evs = parseIcs(text);
 
       if(!evs.length){
@@ -733,7 +737,8 @@ Si tu as reçu un fichier .ics ou une pièce jointe, ce n’est pas le bon forma
           updatedAt: serverTimestamp()
         }, { merge: true });
 
-        return showAlert("iCal vide : aucun événement à importer.", false);
+        showAlert("iCal vide : aucun événement à importer.", false);
+        return;
       }
 
       let written = 0;
@@ -741,7 +746,6 @@ Si tu as reçu un fichier .ics ou une pièce jointe, ce n’est pas le bon forma
 
       for(const e of evs){
         const startKey = dateKeyFromDate(e.start);
-
         const arrivalDateKey = startKey;
         const arrivalTime = isAllDayRaw(e.dtstartRaw) ? "16:00" : timeFromDate(e.start);
 
@@ -763,15 +767,15 @@ Si tu as reçu un fichier .ics ou une pièce jointe, ce n’est pas le bon forma
           : [arrivalDateKey];
 
         const tmForId = arrivalTime || "00:00";
-        const uid = e.uid || (String(e.summary||"no_summary") + "_" + arrivalDateKey + "_" + tmForId);
-        const docId = makeDocId(home.id, icalSourceKey, uid, arrivalDateKey + "_" + tmForId);
+        const uid = e.uid || (String(e.summary || "no_summary") + "_" + arrivalDateKey + "_" + tmForId);
+        const docId = makeDocId(home.id, sourceKey, uid, arrivalDateKey + "_" + tmForId);
 
         seenDocIds.add(docId);
 
         await setDoc(doc(db,"icalEvents", docId), {
           conciergerieUid: currentUser.uid,
-          ownerUid,
-          ownerDocId,
+          ownerUid: ownerUid,
+          ownerDocId: ownerDocId,
 
           homeId: home.id,
           homeName: String(hd.name || home.name || "").trim(),
@@ -780,12 +784,12 @@ Si tu as reçu un fichier .ics ou une pièce jointe, ce n’est pas le bon forma
           homeCity: String(hd.city || hd.homeCity || "").trim(),
 
           dateKey: arrivalDateKey,
-          dateKeys,
+          dateKeys: dateKeys,
 
-          arrivalDateKey,
-          arrivalTime,
-          departureDateKey,
-          departureTime,
+          arrivalDateKey: arrivalDateKey,
+          arrivalTime: arrivalTime,
+          departureDateKey: departureDateKey,
+          departureTime: departureTime,
 
           summary: String(e.summary || "Réservation").trim(),
           location: String(e.location || "").trim(),
@@ -795,9 +799,9 @@ Si tu as reçu un fichier .ics ou une pièce jointe, ce n’est pas le bon forma
           archived: false,
 
           icalUid: String(e.uid || "").trim(),
-          icalUrl: url,
-          icalSourceKey,
-          icalSourceUrl: url,
+          icalUrl: cleanUrl,
+          icalSourceKey: sourceKey,
+          icalSourceUrl: cleanUrl,
           startIso: e.start.toISOString(),
           endIso: (e.end instanceof Date && !isNaN(e.end)) ? e.end.toISOString() : "",
 
@@ -817,7 +821,7 @@ Si tu as reçu un fichier .ics ou une pièce jointe, ce n’est pas le bon forma
           where("conciergerieUid", "==", currentUser.uid),
           where("homeId", "==", home.id),
           where("source", "==", "ical"),
-          where("icalSourceKey", "==", icalSourceKey)
+          where("icalSourceKey", "==", sourceKey)
         )
       );
 
@@ -845,9 +849,8 @@ Si tu as reçu un fichier .ics ou une pièce jointe, ce n’est pas le bon forma
 
       showAlert(`✅ Import terminé : ${written} réservations importées ou mises à jour.`, true);
       showPreview(`OK.
-• Les imports Airbnb / Booking / autres ne s’écrasent plus : chaque lien a sa clé source.
-• Côté conciergerie : visible dans Planning.
-• Côté propriétaire : visible dès que le logement est rattaché (ownerUid OK).
+• Les imports Airbnb / Booking / autres ne s’écrasent plus.
+• Chaque lien iCal a sa propre clé source.
 • Anciennes réservations archivées pour CE lien uniquement : ${archivedCount}`);
 
     }catch(err){
@@ -873,7 +876,7 @@ Si tu as reçu un fichier .ics ou une pièce jointe, ce n’est pas le bon forma
     }
   });
 
-  clearBtn.addEventListener("click", ()=>{
+    clearBtn.addEventListener("click", ()=>{
     hideAlert();
     hidePreview();
     homeSelect.value = "";
