@@ -880,22 +880,54 @@
     </div>`;
 }
     }
-    async function renderNewsModal(){
-      openSupportModal("Nouveautés", "Historique des améliorations CleanUp.", `<div class="notice">Chargement des nouveautés...</div>`);
-      try{
-        const snap = await getDocs(query(collection(db, "releaseNotes"), where("visible", "==", true), orderBy("publishedAt", "desc"), limit(20)));
-        if(snap.empty){
-          supportModalContent.innerHTML = `<div class="legal-item"><span class="check">✓</span><div class="txt"><strong>Synchronisation iCal renforcée</strong><span>Airbnb et Booking sont séparés par source pour éviter les écrasements.</span></div></div>`;
-          return;
-        }
-        supportModalContent.innerHTML = Array.from(snap.docs).map(d => {
-          const x = d.data() || {};
-          return `<div class="legal-item"><span class="check">✓</span><div class="txt"><strong>${safe(x.title || "Nouveauté")}</strong><span>${safe(x.version || "")} ${x.publishedAt ? "• " + safe(formatDateFR(x.publishedAt)) : ""}</span><span>${safe(x.message || "")}</span></div></div>`;
-        }).join("");
-      }catch(e){
-        supportModalContent.innerHTML = `<div class="legal-item"><span class="check">✓</span><div class="txt"><strong>Synchronisation iCal renforcée</strong><span>Airbnb et Booking sont séparés par source pour éviter les écrasements.</span></div></div><div class="notice"><b>Note :</b> lecture des nouveautés Firestore indisponible pour le moment.</div>`;
-      }
+   async function renderNewsModal(){
+  openSupportModal("Nouveautés", "Historique des améliorations CleanUp.", `<div class="notice">Chargement des nouveautés...</div>`);
+
+  try{
+    const snap = await getDocs(
+      query(
+        collection(db, "releaseNotes"),
+        where("visible", "==", true),
+        limit(20)
+      )
+    );
+
+    if(snap.empty){
+      supportModalContent.innerHTML = `
+        <div class="notice">Aucune nouveauté publiée pour le moment.</div>
+      `;
+      return;
     }
+
+    const rows = snap.docs
+      .map(d => ({ id:d.id, ...(d.data() || {}) }))
+      .sort((a,b) => {
+        const da = a.publishedAt?.toDate ? a.publishedAt.toDate().getTime() : 0;
+        const dbb = b.publishedAt?.toDate ? b.publishedAt.toDate().getTime() : 0;
+        return dbb - da;
+      });
+
+    supportModalContent.innerHTML = rows.map(x => `
+      <div class="legal-item">
+        <span class="check">✓</span>
+        <div class="txt">
+          <strong>${safe(x.title || "Nouveauté")}</strong>
+          <span>${safe(x.version || "")}${x.publishedAt ? " • " + safe(formatDateFR(x.publishedAt)) : ""}</span>
+          <span>${safe(x.message || "")}</span>
+        </div>
+      </div>
+    `).join("");
+
+  }catch(e){
+    console.error("Erreur lecture nouveautés:", e);
+    supportModalContent.innerHTML = `
+      <div class="notice">
+        <b class="errText">Lecture des nouveautés impossible.</b><br>
+        ${safe(e?.message || "")}
+      </div>
+    `;
+  }
+}
     document.querySelectorAll("[data-support-action]").forEach(card => card.addEventListener("click", () => { const action = card.dataset.supportAction; if(action === "suggest") renderSuggestModal(); if(action === "bug") renderBugModal(); if(action === "mySuggestions") renderMySuggestionsModal(); if(action === "news") renderNewsModal(); }));
 
     await authReady;
