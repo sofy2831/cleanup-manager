@@ -166,6 +166,11 @@
     .mini-badge.bad{ color:var(--bad); border-color:rgba(179,38,30,0.25); }
     .mini-badge.warn{ color:var(--warn); border-color:rgba(176,107,0,0.25); }
     .mini-badge.ok{ color:var(--ok); border-color:rgba(27,143,77,0.25); }
+    .mini-badge.new{ color:var(--bad); border-color:rgba(179,38,30,.25); background:rgba(179,38,30,.06); }
+.mini-badge.reviewed{ color:var(--warn); border-color:rgba(176,107,0,.25); background:rgba(176,107,0,.06); }
+.mini-badge.planned{ color:var(--violet-main); border-color:rgba(122,92,255,.25); background:rgba(122,92,255,.06); }
+.mini-badge.done{ color:var(--ok); border-color:rgba(27,143,77,.25); background:rgba(27,143,77,.06); }
+.mini-badge.rejected{ color:#666; border-color:rgba(0,0,0,.12); background:rgba(0,0,0,.04); }
 
     .dot{ width:8px; height:8px; border-radius:50%; background:var(--ok); display:inline-block; margin-right:6px; transform:translateY(-1px); }
 
@@ -858,28 +863,60 @@
       }
     }
     async function renderMySuggestionsModal(){
-      openSupportModal("Mes suggestions", "Suivi des demandes envoyées.", `<div class="notice">Chargement des demandes...</div>`);
-      try{
-        const snap = await getDocs(query(collection(db, "supportRequests"), where("conciergerieUid", "==", currentUid), orderBy("createdAt", "desc"), limit(20)));
-        if(snap.empty){ supportModalContent.innerHTML = `<div class="notice">Aucune suggestion ou demande enregistrée pour le moment.</div>`; return; }
-        supportModalContent.innerHTML = Array.from(snap.docs).map(d => {
-          const x = d.data() || {};
-          const st = String(x.status || "new");
-          const label = st === "new" ? "Nouveau" : st === "reviewed" ? "À l’étude" : st === "planned" ? "Prévu" : st === "done" ? "Terminé" : st === "rejected" ? "Non retenu" : st;
-          return `<div class="legal-item"><span class="check">✓</span><div class="txt"><strong>${safe(x.title || "Demande")}</strong><span>${safe(x.category || x.type || "")} • ${safe(label)}</span><span>${safe(x.message || "")}</span></div></div>`;
-        }).join("");
-      }catch(e){
-  console.error("Erreur renderMySuggestionsModal :", e);
-  console.error("Code :", e?.code);
-  console.error("Message :", e?.message);
+  openSupportModal("Mes suggestions", "Suivi des demandes envoyées.", `<div class="notice">Chargement des demandes...</div>`);
 
-  supportModalContent.innerHTML =
-    `<div class="notice">
-      <b class="errText">Lecture Firestore impossible.</b><br>
-      ${safe(e?.message || "")}
-    </div>`;
-}
+  function supportStatusMeta(st){
+    st = String(st || "new");
+    if(st === "new") return { label:"Nouveau", cls:"new" };
+    if(st === "reviewed") return { label:"À l’étude", cls:"reviewed" };
+    if(st === "planned") return { label:"Prévu", cls:"planned" };
+    if(st === "done") return { label:"Terminé", cls:"done" };
+    if(st === "rejected") return { label:"Non retenu", cls:"rejected" };
+    return { label:st, cls:"" };
+  }
+
+  try{
+    const snap = await getDocs(query(
+      collection(db, "supportRequests"),
+      where("conciergerieUid", "==", currentUid),
+      orderBy("createdAt", "desc"),
+      limit(20)
+    ));
+
+    if(snap.empty){
+      supportModalContent.innerHTML = `<div class="notice">Aucune suggestion ou demande enregistrée pour le moment.</div>`;
+      return;
     }
+
+    supportModalContent.innerHTML = Array.from(snap.docs).map(d => {
+      const x = d.data() || {};
+      const meta = supportStatusMeta(x.status);
+      const typeLabel = String(x.type || "") === "bug" ? "Bug" : "Fonctionnalité";
+
+      return `
+        <div class="legal-item">
+          <span class="check">✓</span>
+          <div class="txt">
+            <strong>${safe(x.title || "Demande")}</strong>
+            <span>
+              <span class="mini-badge ${safe(meta.cls)}">${safe(meta.label)}</span>
+              ${safe(typeLabel)} • ${safe(x.category || "")}
+            </span>
+            <span>${safe(x.message || "")}</span>
+          </div>
+        </div>
+      `;
+    }).join("");
+
+  }catch(e){
+    console.error("Erreur renderMySuggestionsModal :", e);
+    supportModalContent.innerHTML =
+      `<div class="notice">
+        <b class="errText">Lecture Firestore impossible.</b><br>
+        ${safe(e?.message || "")}
+      </div>`;
+  }
+}
    async function renderNewsModal(){
   openSupportModal("Nouveautés", "Historique des améliorations CleanUp.", `<div class="notice">Chargement des nouveautés...</div>`);
 
