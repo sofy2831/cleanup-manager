@@ -144,8 +144,8 @@ const SHOP_SHIPPING_AMOUNT_CENTS = 490;      // 4,90 €
 const ALLOWED_ORIGINS = [
   "https://cleanup-manager.fr",
   "https://www.cleanup-manager.fr",
-  "https://sofy2831.github.io",
-  "https://cleanup-manager-d9301.web.app",
+ "https://sofy2831.github.io",
+"https://cleanup-manager-d9301.web.app",
   "https://cleanup-manager-d9301.firebaseapp.com",
 
   "https://dev.cleanup-manager.fr",
