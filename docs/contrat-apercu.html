@@ -180,11 +180,41 @@
 
     function nl2brSafe(value){ return esc(value || "").replaceAll("\n", "<br>"); }
 
+    function formatDateFrFromAny(x){
+      if(!x) return "";
+      let iso = "";
+      if(typeof x === "string") iso = x.slice(0,10);
+      else if(x.toDate) iso = x.toDate().toISOString().slice(0,10);
+      else if(typeof x.seconds === "number") iso = new Date(x.seconds * 1000).toISOString().slice(0,10);
+      if(!iso) return "";
+      const parts = iso.split("-");
+      return parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : iso;
+    }
+
     function signatureMeta(d){
+      const bs = d.businessSnapshot || {};
+      const ownerCity = d.ownerSignaturePlace || d.clientAddress?.city || d.ownerCity || d.homeCity || d.signaturePlace || "____________________";
+      const conciergerieCity = d.conciergerieSignaturePlace || bs.address?.city || d.homeCity || d.signaturePlace || "____________________";
+      const date = formatDateFrFromAny(d.signatureDate) || d.signatureDate || "____ / ____ / ______";
       return {
-        place: String(d.signaturePlace || d.homeCity || d.businessSnapshot?.address?.city || "____________________").trim(),
-        date: String(d.signatureDate || "____ / ____ / ______").trim()
+        ownerPlace: String(ownerCity).trim(),
+        conciergeriePlace: String(conciergerieCity).trim(),
+        date: String(date).trim()
       };
+    }
+
+    function signatureLine(role, d){
+      if(role === "conciergerie" && d.signedByConciergerie === true){
+        const name = d.conciergerieSignatureName || d.businessSnapshot?.companyName || "la conciergerie";
+        const when = formatDateFrFromAny(d.conciergerieSignedAt) || signatureMeta(d).date;
+        return `Signature : signé électroniquement par ${esc(name)}${when ? " le " + esc(when) : ""}`;
+      }
+      if(role === "owner" && d.signedByOwner === true){
+        const name = d.ownerSignatureName || d.clientName || d.ownerName || "le propriétaire";
+        const when = formatDateFrFromAny(d.ownerSignedAt) || signatureMeta(d).date;
+        return `Signature : signé électroniquement par ${esc(name)}${when ? " le " + esc(when) : ""}`;
+      }
+      return 'Signature précédée de la mention « Lu et approuvé » :';
     }
 
     function renderGeneralTermsFromData(cg, d){
@@ -208,8 +238,8 @@
         ${articles.map((a, i) => `<h2>${i + 1}. ${esc(a.title || "Article")}</h2><p>${nl2brSafe(a.body || "")}</p>`).join("\n")}
         <div class="note">Ces conditions générales sont éditées et validées par la conciergerie sous sa seule responsabilité. CleanUp Manager intervient uniquement comme outil de génération et de mise en forme, et n’est pas partie au contrat conclu entre la conciergerie et le propriétaire.</div>
         <div class="signature">
-          <div class="sigBox">Propriétaire<br><br>Fait à : ${esc(sig.place)}<br>Date : ${esc(sig.date)}<br><br>Signature :</div>
-          <div class="sigBox">Conciergerie<br><br>Fait à : ${esc(sig.place)}<br>Date : ${esc(sig.date)}<br><br>Signature :</div>
+          <div class="sigBox">Propriétaire<br><br>Fait à : ${esc(sig.ownerPlace)}<br>Date : ${esc(sig.date)}<br><br>${signatureLine("owner", d)}</div>
+          <div class="sigBox">Conciergerie<br><br>Fait à : ${esc(sig.conciergeriePlace)}<br>Date : ${esc(sig.date)}<br><br>${signatureLine("conciergerie", d)}</div>
         </div>`;
     }
 
@@ -233,9 +263,13 @@
         target.querySelectorAll("script,.print,button").forEach(el => el.remove());
         const brand = target.querySelector(".brandText");
         if(brand) brand.textContent = d.businessSnapshot?.companyName || "Conciergerie";
-        target.querySelectorAll(".sigBox").forEach(box => {
+        target.querySelectorAll(".sigBox").forEach((box, idx) => {
           const sig = signatureMeta(d);
-          box.innerHTML = box.innerHTML.replace(/Date\s*:\s*____\s*\/\s*____\s*\/\s*______/g, `Fait à : ${esc(sig.place)}<br>Date : ${esc(sig.date)}`);
+          const isOwner = idx === 0 || box.textContent.toLowerCase().includes("propriétaire");
+          const place = isOwner ? sig.ownerPlace : sig.conciergeriePlace;
+          const line = isOwner ? signatureLine("owner", d) : signatureLine("conciergerie", d);
+          box.innerHTML = box.innerHTML.replace(/Date\s*:\s*____\s*\/\s*____\s*\/\s*______/g, `Fait à : ${esc(place)}<br>Date : ${esc(sig.date)}`);
+          box.innerHTML = box.innerHTML.replace(/Signature\s*:/g, line);
         });
       }catch(e){
         console.error(e);
@@ -312,8 +346,8 @@
       setText("disputeTerms", d.disputeTerms);
 
       const sig = signatureMeta(d);
-      $("signConciergerie").innerHTML = `<strong>La conciergerie</strong><br><br>Fait à : ${esc(sig.place)}<br>Date : ${esc(sig.date)}<br><br>Signature précédée de la mention « Lu et approuvé » :`;
-      $("signOwner").innerHTML = `<strong>Le propriétaire</strong><br><br>Fait à : ${esc(sig.place)}<br>Date : ${esc(sig.date)}<br><br>Signature précédée de la mention « Lu et approuvé » :`;
+      $("signConciergerie").innerHTML = `<strong>La conciergerie</strong><br><br>Fait à : ${esc(sig.conciergeriePlace)}<br>Date : ${esc(sig.date)}<br><br>${signatureLine("conciergerie", d)}`;
+      $("signOwner").innerHTML = `<strong>Le propriétaire</strong><br><br>Fait à : ${esc(sig.ownerPlace)}<br>Date : ${esc(sig.date)}<br><br>${signatureLine("owner", d)}`;
 
       const cgUrl = d.generalTermsUrl || "conditions-generales-conciergerie.html";
       setText("generalTermsBox", d.generalTermsAccepted === false
