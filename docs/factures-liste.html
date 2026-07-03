@@ -1701,6 +1701,69 @@ markSentBtn.title = invoiceAlreadySentByMail ? "Déjà marqué comme envoyé." :
     openModal(modalMaskSend);
   }
 
+async function createBillingThreadMessage({
+  ownerUid,
+  ownerDocId,
+  invoiceDocId,
+  creditDocId = "",
+  invoiceNumber = "",
+  creditNumber = "",
+  message = "",
+  homeName = "",
+  amount = 0
+}){
+  const hasInvoice = !!invoiceDocId && !!invoiceNumber;
+  const hasCredit = !!creditDocId && !!creditNumber;
+
+  const threadId = hasInvoice
+    ? `bill_${invoiceDocId}`
+    : `bill_${creditDocId}`;
+
+  const subject = hasInvoice && hasCredit
+    ? `Facture ${invoiceNumber} + avoir ${creditNumber}`
+    : hasInvoice
+      ? `Facture ${invoiceNumber}`
+      : `Avoir ${creditNumber}`;
+
+  const fallbackText = `${subject} disponible dans votre espace propriétaire.`;
+  const text = String(message || "").trim() || fallbackText;
+
+  await setDoc(doc(db, "threads", threadId), {
+    type: "billing",
+    subject,
+    conciergerieUid: currentUser.uid,
+    ownerUid,
+    ownerDocId,
+    salesDocId: invoiceDocId || creditDocId,
+    invoiceDocId,
+    creditDocId,
+    invoiceNumber,
+    creditNumber,
+    homeName: String(homeName || "").trim(),
+    totalTTC: Number(amount) || 0,
+    lastMessage: text,
+    lastMessageAt: serverTimestamp(),
+    unreadForOwner: 1,
+    unreadForConciergerie: 0,
+    updatedAt: serverTimestamp(),
+    createdAt: serverTimestamp()
+  }, { merge:true });
+
+  await setDoc(doc(db, "threads", threadId, "messages", `msg_${Date.now()}`), {
+    type: "billing",
+    senderRole: "conciergerie",
+    senderUid: currentUser.uid,
+    text,
+    invoiceDocId,
+    creditDocId,
+    invoiceNumber,
+    creditNumber,
+    invoiceUrl: invoiceDocId ? buildOwnerInvoiceLink(invoiceDocId) : "",
+    creditUrl: creditDocId ? new URL(`avoir-apercu.html?docId=${encodeURIComponent(creditDocId)}&owner=1`, location.href).toString() : "",
+    createdAt: serverTimestamp()
+  });
+}
+  
 async function publishToOwner(){
   hideModalAlert();
   resetPubSuccess();
