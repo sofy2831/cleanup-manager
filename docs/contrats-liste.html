@@ -51,7 +51,85 @@ async function loadProfile(uid){const s=await getDoc(doc(db,'users',uid));const 
 async function loadContracts(uid){hideAlert();const qy=query(collection(db,'contracts'),where('conciergerieUid','==',uid),orderBy('createdAt','desc'),limit(400));const snap=await getDocs(qy);allItems=snap.docs.map(s=>({id:s.id,data:s.data()||{}}));applyFilters()}
 async function resolveOwnerUid(ownerDocId){try{const s=await getDoc(doc(db,'owners',ownerDocId));return s.exists()?String((s.data()||{}).ownerUid||(s.data()||{}).userUid||'').trim():''}catch{return''}}
 function openSendModal(it){modalItem=it;const d=it.data||{};$('modalTitle').textContent=`Envoyer — ${contractNo(d)}`;$('mClient').textContent=d.clientName||d.ownerName||'—';$('mEmail').textContent=d.clientEmail||d.ownerEmail||'—';$('mContract').textContent=contractNo(d);$('sendText').textContent=buildEmail(d);$('pubText').value='';$('modalAlert').style.display='none';$('sendModal').style.display='flex'}
-async function publishOwner(){if(!modalItem)return;const d=modalItem.data||{},id=modalItem.id;let ownerDocId=getOwnerDocId(d),ownerUid=getOwnerUid(d);if(!ownerUid)ownerUid=await resolveOwnerUid(ownerDocId);if(!ownerDocId||!ownerUid){return modalMsg('ownerUid / ownerDocId manquant.',false)}try{await updateDoc(doc(db,'contracts',id),{ownerDocId,ownerUid,ownerVisible:true,contractStatus:'SENT',sentAt:serverTimestamp(),ownerPublishedAt:serverTimestamp(),updatedAt:serverTimestamp()});await setDoc(doc(db,'requests',`contract_${id}`),{type:'contract',status:'sent',conciergerieUid:currentUser.uid,ownerUid,ownerDocId,contractId:id,number:contractNo(d),note:String($('pubText').value||''),updatedAt:serverTimestamp(),createdAt:serverTimestamp()},{merge:true});modalMsg('✅ Contrat publié côté propriétaire.',true);await loadContracts(currentUser.uid)}catch(e){modalMsg('⛔ '+(e?.message||'Erreur publication'),false)}}function modalMsg(m,ok){$('modalAlert').style.display='block';$('modalAlert').classList.toggle('ok',!!ok);$('modalAlert').textContent=m}
+async function publishOwner(){
+  if(!modalItem) return;
+
+  const d = modalItem.data || {};
+  const id = modalItem.id;
+
+  let ownerDocId = getOwnerDocId(d);
+  let ownerUid = getOwnerUid(d);
+
+  if(!ownerUid) ownerUid = await resolveOwnerUid(ownerDocId);
+
+  if(!ownerDocId || !ownerUid){
+    return modalMsg("ownerUid / ownerDocId manquant.", false);
+  }
+
+  const note = String($("pubText").value || "").trim();
+  const number = contractNo(d);
+  const threadId = `contract_${id}`;
+  const nowText = note || `Votre contrat ${number} est disponible dans votre espace propriétaire.`;
+
+  try{
+    await updateDoc(doc(db, "contracts", id), {
+      ownerDocId,
+      ownerUid,
+      ownerVisible: true,
+      contractStatus: "SENT",
+      sentAt: serverTimestamp(),
+      ownerPublishedAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    });
+
+    await setDoc(doc(db, "requests", `contract_${id}`), {
+      type: "contract",
+      status: "sent",
+      conciergerieUid: currentUser.uid,
+      ownerUid,
+      ownerDocId,
+      contractId: id,
+      number,
+      note,
+      updatedAt: serverTimestamp(),
+      createdAt: serverTimestamp()
+    }, { merge:true });
+
+    await setDoc(doc(db, "threads", threadId), {
+      type: "contract",
+      subject: `Contrat ${number}`,
+      conciergerieUid: currentUser.uid,
+      ownerUid,
+      ownerDocId,
+      contractId: id,
+      lastMessage: nowText,
+      lastMessageAt: serverTimestamp(),
+      unreadForOwner: 1,
+      unreadForConciergerie: 0,
+      updatedAt: serverTimestamp(),
+      createdAt: serverTimestamp()
+    }, { merge:true });
+
+    await setDoc(doc(db, "threads", threadId, "messages", `msg_${Date.now()}`), {
+      type: "contract",
+      senderRole: "conciergerie",
+      senderUid: currentUser.uid,
+      text: nowText,
+      contractId: id,
+      contractNumber: number,
+      contractUrl: buildOwnerLink(id),
+      createdAt: serverTimestamp()
+    });
+
+    modalMsg("✅ Contrat publié côté propriétaire + message interne envoyé.", true);
+    await loadContracts(currentUser.uid);
+
+  }catch(e){
+    console.error(e);
+    modalMsg("⛔ " + (e?.message || "Erreur publication"), false);
+  }
+}
+  function modalMsg(m,ok){$('modalAlert').style.display='block';$('modalAlert').classList.toggle('ok',!!ok);$('modalAlert').textContent=m}
 $('closeModalBtn').onclick=()=>$('sendModal').style.display='none';$('sendModal').onclick=e=>{if(e.target===$('sendModal'))$('sendModal').style.display='none'};$('publishBtn').onclick=publishOwner;$('copyLinkBtn').onclick=async()=>{if(!modalItem)return;await navigator.clipboard?.writeText(buildOwnerLink(modalItem.id));modalMsg('✅ Lien copié.',true)};$('emailBtn').onclick=()=>{if(!modalItem)return;const d=modalItem.data||{};location.href=`mailto:${encodeURIComponent(d.clientEmail||d.ownerEmail||'')}?subject=${encodeURIComponent('Contrat '+contractNo(d))}&body=${encodeURIComponent(buildEmail(d))}`};$('shareBtn').onclick=async()=>{if(!modalItem)return;const d=modalItem.data||{};const text=buildEmail(d);if(navigator.share)await navigator.share({title:'Contrat '+contractNo(d),text});else{await navigator.clipboard?.writeText(text);modalMsg('✅ Texte copié.',true)}};$('markSentBtn').onclick=async()=>{if(!modalItem)return;await updateDoc(doc(db,'contracts',modalItem.id),{contractStatus:'SENT',sentAt:serverTimestamp(),updatedAt:serverTimestamp()});modalMsg('✅ Contrat marqué envoyé.',true);await loadContracts(currentUser.uid)};
 $('clearBtn').onclick=()=>{$('searchInput').value='';$('filterStatus').value='ALL';applyFilters()};$('refreshBtn').onclick=async()=>{await loadContracts(currentUser.uid);showAlert('✅ Liste rafraîchie.',true);setTimeout(hideAlert,1200)};$('searchInput').oninput=applyFilters;$('filterStatus').onchange=applyFilters;
 onAuthStateChanged(auth,async user=>{if(!user){location.href='login.html?role=conciergerie';return}currentUser=user;try{await loadProfile(user.uid);await loadContracts(user.uid)}catch(e){console.error(e);showAlert('⛔ '+(e?.message||'Erreur chargement contrats'))}});
