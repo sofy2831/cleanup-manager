@@ -1715,7 +1715,7 @@ async function createBillingThreadMessage({
   const hasInvoice = !!invoiceDocId && !!invoiceNumber;
   const hasCredit = !!creditDocId && !!creditNumber;
 
- const threadId = `t_${currentUser.uid}_${ownerDocId}`;
+  const threadId = `t_${currentUser.uid}_${ownerDocId}`;
 
   const subject = hasInvoice && hasCredit
     ? `Facture ${invoiceNumber} + avoir ${creditNumber}`
@@ -1732,35 +1732,49 @@ async function createBillingThreadMessage({
     modalItem?.data?.clientEmail || modalItem?.data?.ownerEmail || ""
   );
 
-  await setDoc(doc(db, "threads", threadId), {
-    type: "billing",
-    subject,
+  const tRef = doc(db, "threads", threadId);
+  const tSnap = await getDoc(tRef);
 
-    conciergerieUid: currentUser.uid,
-    ownerUid,
-    ownerDocId,
+  if(tSnap.exists()){
+    await setDoc(tRef, {
+      lastText: text,
+      lastAt: serverTimestamp(),
+      unreadForOwner: 1,
+      unreadForConciergerie: 0,
+      updatedAt: serverTimestamp()
+    }, { merge:true });
+  }else{
+    await setDoc(tRef, {
+      type: "billing",
+      subject,
 
-    ownerName: ownerMeta.name || "Propriétaire",
-    ownerEmailLower: String(ownerMeta.email || "").trim().toLowerCase(),
+      conciergerieUid: currentUser.uid,
+      ownerUid,
+      ownerDocId,
 
-    salesDocId: invoiceDocId || creditDocId,
-    invoiceDocId,
-    creditDocId,
-    invoiceNumber,
-    creditNumber,
+      ownerName: ownerMeta.name || "Propriétaire",
+      ownerEmailLower: String(ownerMeta.email || "").trim().toLowerCase(),
 
-    homeName: String(homeName || "").trim(),
-    totalTTC: Number(amount) || 0,
+      salesDocId: invoiceDocId || creditDocId,
+      invoiceDocId,
+      creditDocId,
+      invoiceNumber,
+      creditNumber,
 
-    lastText: text,
-    lastAt: serverTimestamp(),
+      homeName: String(homeName || "").trim(),
+      totalTTC: Number(amount) || 0,
 
-    unreadForOwner: 1,
-    unreadForConciergerie: 0,
+      lastText: text,
+      lastAt: serverTimestamp(),
 
-    updatedAt: serverTimestamp(),
-    createdAt: serverTimestamp()
-  }, { merge:true });
+      unreadForOwner: 1,
+      unreadForConciergerie: 0,
+
+      closed: false,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    }, { merge:true });
+  }
 
   await setDoc(doc(db, "threads", threadId, "messages", `msg_${Date.now()}`), {
     text,
@@ -1770,7 +1784,6 @@ async function createBillingThreadMessage({
     senderUid: currentUser.uid
   });
 }
-  
 async function publishToOwner(){
   hideModalAlert();
   resetPubSuccess();
