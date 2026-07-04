@@ -155,50 +155,70 @@ async function publishOwner(){
       updatedAt: serverTimestamp()
     });
 
-    await setDoc(doc(db, "requests", `contract_${id}`), {
-      type: "contract",
-      status: "sent",
-      conciergerieUid: currentUser.uid,
-      ownerUid,
-      ownerDocId,
-      contractId: id,
-      number,
-      note,
-      updatedAt: serverTimestamp(),
-      createdAt: serverTimestamp()
-    }, { merge:true });
+    // IMPORTANT : on tente la request, mais si les rules la bloquent,
+    // on ne bloque PAS la messagerie.
+    try{
+      await setDoc(doc(db, "requests", `contract_${id}`), {
+        type: "contract",
+        status: "sent",
+        conciergerieUid: currentUser.uid,
+        ownerUid,
+        ownerDocId,
+        contractId: id,
+        number,
+        note,
+        updatedAt: serverTimestamp(),
+        createdAt: serverTimestamp()
+      }, { merge:true });
+    }catch(e){
+      console.warn("Request contrat ignorée :", e?.message || e);
+    }
 
-    await setDoc(doc(db, "threads", threadId), {
-  type: "owner",
-  subject: `Contrat ${number}`,
+    const tRef = doc(db, "threads", threadId);
+    const tSnap = await getDoc(tRef);
 
-  conciergerieUid: currentUser.uid,
-  ownerUid,
-  ownerDocId,
+    if(tSnap.exists()){
+      await updateDoc(tRef, {
+        lastText: nowText,
+        lastAt: serverTimestamp(),
+        unreadForOwner: 1,
+        unreadForConciergerie: 0,
+        updatedAt: serverTimestamp()
+      });
+    }else{
+      await setDoc(tRef, {
+        type: "owner",
+        subject: `Contrat ${number}`,
 
-  ownerName: String(d.clientName || d.ownerName || "Propriétaire").trim(),
-  ownerEmailLower: String(d.clientEmail || d.ownerEmail || "").trim().toLowerCase(),
+        conciergerieUid: currentUser.uid,
+        ownerUid,
+        ownerDocId,
 
-  contractId: id,
-  contractNumber: number,
+        ownerName: String(d.clientName || d.ownerName || "Propriétaire").trim(),
+        ownerEmailLower: String(d.clientEmail || d.ownerEmail || "").trim().toLowerCase(),
 
-  lastText: nowText,
-  lastAt: serverTimestamp(),
+        contractId: id,
+        contractNumber: number,
 
-  unreadForOwner: 1,
-  unreadForConciergerie: 0,
+        lastText: nowText,
+        lastAt: serverTimestamp(),
 
-  updatedAt: serverTimestamp(),
-  createdAt: serverTimestamp()
-}, { merge:true });
+        unreadForOwner: 1,
+        unreadForConciergerie: 0,
+
+        closed: false,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      }, { merge:true });
+    }
 
     await setDoc(doc(db, "threads", threadId, "messages", `msg_${Date.now()}`), {
-  text: nowText,
-  at: serverTimestamp(),
-  createdAt: serverTimestamp(),
-  senderRole: "CONCIERGERIE",
-  senderUid: currentUser.uid
-});
+      text: nowText,
+      at: serverTimestamp(),
+      createdAt: serverTimestamp(),
+      senderRole: "CONCIERGERIE",
+      senderUid: currentUser.uid
+    });
 
     modalMsg("✅ Contrat publié côté propriétaire + message interne envoyé.", true);
     await loadContracts(currentUser.uid);
