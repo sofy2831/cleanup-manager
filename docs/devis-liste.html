@@ -104,20 +104,53 @@
   function requestIdForQuote(quoteDocId){ return `quote_${String(quoteDocId||"").trim()}`; }
   async function upsertRequestForQuote({ quoteDocId, ownerUid, ownerDocId, number, homeName, totalTTC, note }){ const ref=doc(db,"requests",requestIdForQuote(quoteDocId)); const exists=await getDoc(ref); const base={ type:"billing", status:"sent", conciergerieUid:currentUser.uid, ownerUid, ownerDocId, docType:"quote", salesDocId:quoteDocId, quoteDocId, number:String(number||"").trim(), homeName:String(homeName||"").trim(), totalTTC:Number(totalTTC)||0, note:String(note||"").trim(), updatedAt:serverTimestamp() }; await setDoc(ref, exists.exists()?base:{...base,createdAt:serverTimestamp()}, {merge:true}); }
 
-  async function createQuoteThreadMessage({ ownerUid, ownerDocId, quoteDocId, quoteNumber, message, homeName, amount }){
-    const threadId=`quote_${quoteDocId}`;
-    const subject=`Devis ${quoteNumber}`;
-    const fallbackText=`${subject} disponible dans votre espace propriétaire.`;
-    const text=String(message||"").trim()||fallbackText;
-    const tRef=doc(db,"threads",threadId);
-    const tSnap=await getDoc(tRef);
-    if(tSnap.exists()){
-      await setDoc(tRef,{ lastAt:serverTimestamp(), lastText:text, unreadForOwner:1, unreadForConciergerie:0, updatedAt:serverTimestamp() },{merge:true});
-    }else{
-      await setDoc(tRef,{ type:"quote", subject, conciergerieUid:currentUser.uid, ownerUid, ownerDocId, quoteDocId, quoteNumber, homeName:String(homeName||"").trim(), totalTTC:Number(amount)||0, lastAt:serverTimestamp(), lastText:text, unreadForOwner:1, unreadForConciergerie:0, closed:false, createdAt:serverTimestamp(), updatedAt:serverTimestamp() },{merge:true});
-    }
-    await setDoc(doc(db,"threads",threadId,"messages",`msg_${Date.now()}`),{ kind:"text", type:"quote", senderRole:"CONCIERGERIE", senderUid:currentUser.uid, text, quoteDocId, quoteNumber, quoteUrl:buildOwnerQuoteLink(quoteDocId), createdAt:serverTimestamp() });
-  }
+ async function createQuoteThreadMessage({ ownerUid, ownerDocId, quoteDocId, quoteNumber, message, homeName, amount }){
+  const threadId = `t_${currentUser.uid}_${ownerDocId}`;
+  const subject = `Devis ${quoteNumber}`;
+  const fallbackText = `${subject} disponible dans votre espace propriétaire.`;
+  const text = String(message || "").trim() || fallbackText;
+
+  const ownerMeta = await resolveOwnerNameEmail(
+    ownerDocId,
+    modalQuote?.data?.clientDisplayName || modalQuote?.data?.clientName || modalQuote?.data?.ownerName || "Propriétaire",
+    modalQuote?.data?.clientEmail || modalQuote?.data?.ownerEmail || ""
+  );
+
+  await setDoc(doc(db, "threads", threadId), {
+    type: "quote",
+    subject,
+
+    conciergerieUid: currentUser.uid,
+    ownerUid,
+    ownerDocId,
+
+    ownerName: ownerMeta.name || "Propriétaire",
+    ownerEmailLower: String(ownerMeta.email || "").trim().toLowerCase(),
+
+    quoteDocId,
+    quoteNumber,
+    homeName: String(homeName || "").trim(),
+    totalTTC: Number(amount) || 0,
+
+    lastAt: serverTimestamp(),
+    lastText: text,
+
+    unreadForOwner: 1,
+    unreadForConciergerie: 0,
+
+    closed: false,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp()
+  }, { merge:true });
+
+  await setDoc(doc(db, "threads", threadId, "messages", `msg_${Date.now()}`), {
+    text,
+    at: serverTimestamp(),
+    createdAt: serverTimestamp(),
+    senderRole: "CONCIERGERIE",
+    senderUid: currentUser.uid
+  });
+}
 
   function resetSendSuccess(){ sendSuccessHint.textContent="—"; sendSuccessBar.style.display="none"; }
   function showSendSuccess(hint){ sendSuccessHint.textContent=String(hint||"OK").trim()||"OK"; sendSuccessBar.style.display="flex"; }
