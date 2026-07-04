@@ -248,10 +248,9 @@
       return u.toString();
     }
 
-   async function upsertInternalMessageForStatement(stId){
+async function upsertInternalMessageForStatement(stId){
   const tid = threadIdForOwner(draft.conciergerieUid, draft.ownerDocId);
   const mid = messageIdForStatement(stId);
-  const statementLink = buildOwnerStatementLink(stId);
 
   const messageText = [
     `Nouveau relevé de factures disponible : ${draft.periodKey}.`,
@@ -261,30 +260,43 @@
     `Reste dû : ${fmtMoney(draft.paymentSummary?.dueTTC || 0)}`
   ].join("\n");
 
-  await setDoc(doc(db, "threads", tid), {
-    type: "billing_statement",
-    subject: `Relevé de factures ${draft.periodKey}`,
+  const tRef = doc(db, "threads", tid);
+  const tSnap = await getDoc(tRef);
 
-    conciergerieUid: draft.conciergerieUid,
-    ownerUid: draft.ownerUid,
-    ownerDocId: draft.ownerDocId,
+  if(tSnap.exists()){
+    await updateDoc(tRef, {
+      lastText: messageText,
+      lastAt: serverTimestamp(),
+      unreadForOwner: 1,
+      unreadForConciergerie: 0,
+      updatedAt: serverTimestamp()
+    });
+  }else{
+    await setDoc(tRef, {
+      type: "billing_statement",
+      subject: `Relevé de factures ${draft.periodKey}`,
 
-    ownerName: draft.ownerName || "Propriétaire",
-    ownerEmailLower: String(draft.ownerEmail || "").trim().toLowerCase(),
+      conciergerieUid: draft.conciergerieUid,
+      ownerUid: draft.ownerUid,
+      ownerDocId: draft.ownerDocId,
 
-    statementId: stId,
-    periodKey: draft.periodKey,
+      ownerName: draft.ownerName || "Propriétaire",
+      ownerEmailLower: String(draft.ownerEmail || "").trim().toLowerCase(),
 
-    lastText: messageText,
-    lastAt: serverTimestamp(),
+      statementId: stId,
+      periodKey: draft.periodKey,
 
-    unreadForOwner: 1,
-    unreadForConciergerie: 0,
+      lastText: messageText,
+      lastAt: serverTimestamp(),
 
-    closed: false,
-    updatedAt: serverTimestamp(),
-    createdAt: serverTimestamp()
-  }, { merge:true });
+      unreadForOwner: 1,
+      unreadForConciergerie: 0,
+
+      closed: false,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    });
+  }
 
   await setDoc(doc(db, "threads", tid, "messages", mid), {
     text: messageText,
@@ -292,9 +304,8 @@
     createdAt: serverTimestamp(),
     senderRole: "CONCIERGERIE",
     senderUid: draft.conciergerieUid
-  }, { merge:true });
+  });
 }
-
     async function publishStatement(){
       hideAlert();
       if(!draft) return showAlert("Aucun relevé à publier.");
