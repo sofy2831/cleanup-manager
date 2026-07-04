@@ -248,51 +248,52 @@
       return u.toString();
     }
 
-    async function upsertInternalMessageForStatement(stId){
-      const tid = threadIdForOwner(draft.conciergerieUid, draft.ownerUid);
-      const mid = messageIdForStatement(stId);
-      const statementLink = buildOwnerStatementLink(stId);
-      const messageText = [
-        `Nouveau relevé de factures disponible : ${draft.periodKey}.`,
-        `Factures TTC : ${fmtMoney(draft.totals.invoicesTTC)}`,
-        `Avoirs TTC : ${fmtMoney(draft.totals.creditsTTC)}`,
-        `Net TTC : ${fmtMoney(draft.totals.netTTC)}`,
-        `Reste dû : ${fmtMoney(draft.paymentSummary?.dueTTC || 0)}`
-      ].join("\n");
+   async function upsertInternalMessageForStatement(stId){
+  const tid = threadIdForOwner(draft.conciergerieUid, draft.ownerDocId);
+  const mid = messageIdForStatement(stId);
+  const statementLink = buildOwnerStatementLink(stId);
 
-      await setDoc(doc(db, "threads", tid), {
-        type: "owner",
-        conciergerieUid: draft.conciergerieUid,
-        ownerUid: draft.ownerUid,
-        ownerDocId: draft.ownerDocId,
-        ownerName: draft.ownerName,
-        ownerEmail: draft.ownerEmail,
-        subject: `Relevé de factures ${draft.periodKey}`,
-        lastMessage: messageText,
-        lastMessageAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-        unreadForOwner: 1,
-        unreadForConciergerie: 0,
-        statementId: stId
-      }, { merge:true });
+  const messageText = [
+    `Nouveau relevé de factures disponible : ${draft.periodKey}.`,
+    `Factures TTC : ${fmtMoney(draft.totals.invoicesTTC)}`,
+    `Avoirs TTC : ${fmtMoney(draft.totals.creditsTTC)}`,
+    `Net TTC : ${fmtMoney(draft.totals.netTTC)}`,
+    `Reste dû : ${fmtMoney(draft.paymentSummary?.dueTTC || 0)}`
+  ].join("\n");
 
-      await setDoc(doc(db, "threads", tid, "messages", mid), {
-        type: "billing_statement",
-        senderRole: "conciergerie",
-        senderUid: draft.conciergerieUid,
-        recipientRole: "owner",
-        recipientUid: draft.ownerUid,
-        conciergerieUid: draft.conciergerieUid,
-        ownerUid: draft.ownerUid,
-        ownerDocId: draft.ownerDocId,
-        text: messageText,
-        statementId: stId,
-        periodKey: draft.periodKey,
-        url: statementLink,
-        readByOwner: false,
-        createdAt: serverTimestamp()
-      }, { merge:true });
-    }
+  await setDoc(doc(db, "threads", tid), {
+    type: "billing_statement",
+    subject: `Relevé de factures ${draft.periodKey}`,
+
+    conciergerieUid: draft.conciergerieUid,
+    ownerUid: draft.ownerUid,
+    ownerDocId: draft.ownerDocId,
+
+    ownerName: draft.ownerName || "Propriétaire",
+    ownerEmailLower: String(draft.ownerEmail || "").trim().toLowerCase(),
+
+    statementId: stId,
+    periodKey: draft.periodKey,
+
+    lastText: messageText,
+    lastAt: serverTimestamp(),
+
+    unreadForOwner: 1,
+    unreadForConciergerie: 0,
+
+    closed: false,
+    updatedAt: serverTimestamp(),
+    createdAt: serverTimestamp()
+  }, { merge:true });
+
+  await setDoc(doc(db, "threads", tid, "messages", mid), {
+    text: messageText,
+    at: serverTimestamp(),
+    createdAt: serverTimestamp(),
+    senderRole: "CONCIERGERIE",
+    senderUid: draft.conciergerieUid
+  }, { merge:true });
+}
 
     async function publishStatement(){
       hideAlert();
