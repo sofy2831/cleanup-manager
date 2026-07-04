@@ -85,7 +85,7 @@
     async function copyToClipboard(text){try{await navigator.clipboard.writeText(String(text||""));return true;}catch{try{const ta=document.createElement("textarea");ta.value=String(text||"");document.body.appendChild(ta);ta.select();document.execCommand("copy");document.body.removeChild(ta);return true;}catch{return false;}}}
     async function markCreditSent(docId){await updateDoc(doc(db,"salesDocuments",docId),{creditStatus:"SENT",sentAt:serverTimestamp(),updatedAt:serverTimestamp()});}
     function requestIdForSalesDoc(id){return `bill_${String(id||"").trim()}`;} async function upsertRequestForDoc({salesDocId,ownerUid,ownerDocId,docType,number,homeName,totalTTC,note}){const rRef=doc(db,"requests",requestIdForSalesDoc(salesDocId)); const exists=await getDoc(rRef); const payload={type:"billing",status:"sent",conciergerieUid:currentUser.uid,ownerUid,ownerDocId,docType,salesDocId,number:String(number||"").trim(),homeName:String(homeName||"").trim(),totalTTC:Number(totalTTC)||0,note:String(note||"").trim(),updatedAt:serverTimestamp()}; await setDoc(rRef,exists.exists()?payload:{...payload,createdAt:serverTimestamp()},{merge:true});}
-    async function createBillingThreadMessage({
+   async function createBillingThreadMessage({
   ownerUid,
   ownerDocId,
   creditDocId,
@@ -105,33 +105,47 @@
     modalCredit?.data?.clientEmail || modalCredit?.data?.ownerEmail || ""
   );
 
-  await setDoc(doc(db, "threads", threadId), {
-    type: "billing",
-    subject,
+  const tRef = doc(db, "threads", threadId);
+  const tSnap = await getDoc(tRef);
 
-    conciergerieUid: currentUser.uid,
-    ownerUid,
-    ownerDocId,
+  if(tSnap.exists()){
+    await setDoc(tRef, {
+      lastText: text,
+      lastAt: serverTimestamp(),
+      unreadForOwner: 1,
+      unreadForConciergerie: 0,
+      updatedAt: serverTimestamp()
+    }, { merge:true });
+  }else{
+    await setDoc(tRef, {
+      type: "billing",
+      subject,
 
-    ownerName: ownerMeta.name || "Propriétaire",
-    ownerEmailLower: String(ownerMeta.email || "").trim().toLowerCase(),
+      conciergerieUid: currentUser.uid,
+      ownerUid,
+      ownerDocId,
 
-    salesDocId: creditDocId,
-    creditDocId,
-    creditNumber,
+      ownerName: ownerMeta.name || "Propriétaire",
+      ownerEmailLower: String(ownerMeta.email || "").trim().toLowerCase(),
 
-    homeName: String(homeName || "").trim(),
-    totalTTC: Number(amount) || 0,
+      salesDocId: creditDocId,
+      creditDocId,
+      creditNumber,
 
-    lastText: text,
-    lastAt: serverTimestamp(),
+      homeName: String(homeName || "").trim(),
+      totalTTC: Number(amount) || 0,
 
-    unreadForOwner: 1,
-    unreadForConciergerie: 0,
+      lastText: text,
+      lastAt: serverTimestamp(),
 
-    updatedAt: serverTimestamp(),
-    createdAt: serverTimestamp()
-  }, { merge:true });
+      unreadForOwner: 1,
+      unreadForConciergerie: 0,
+
+      closed: false,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    }, { merge:true });
+  }
 
   await setDoc(doc(db, "threads", threadId, "messages", `msg_${Date.now()}`), {
     text,
