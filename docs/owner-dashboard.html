@@ -231,6 +231,12 @@
           <span>🧾 Facturation</span>
           <span class="count" id="countBill">0</span>
         </a>
+
+        <a class="btn" id="contractsLink" href="owner-contrats.html">
+  <span>📄 Contrats</span>
+  <span class="count" id="countContracts">0</span>
+</a>
+        
       </div>
     </section>
   </div>
@@ -252,6 +258,8 @@
   const alertsLine = document.getElementById("alertsLine");
   const countMsg = document.getElementById("countMsg");
   const countBill = document.getElementById("countBill");
+  const countContracts = document.getElementById("countContracts");
+const contractsLink = document.getElementById("contractsLink");
 
   const profileBtn = document.getElementById("profileBtn");
   const supportBtn = document.getElementById("supportBtn");
@@ -280,6 +288,7 @@
   planningLink.href = withToken("owner-planning.html");
   messagesLink.href = withToken("owner-messages.html");
   billingLink.href = withToken("owner-facturation.html");
+  contractsLink.href = withToken("owner-contrats.html");
 
   dashLink.href = withToken("owner-dashboard.html");
   navPlanning.href = withToken("owner-planning.html");
@@ -289,14 +298,17 @@
   let unsubThreads = null;
   let unsubSalesDocs = null;
   let unsubOwnerStatements = null;
+  let unsubContracts = null;
 
   let gotThreadsOnce = false;
   let gotSalesDocsOnce = false;
   let gotOwnerStatementsOnce = false;
+  let gotContractsOnce = false;
 
   let lastUnreadMsg = 0;
   let lastSalesDocsCount = 0;
   let lastOwnerStatementsCount = 0;
+  let lastContractsCount = 0;
 
   let currentOwnerName = "";
   let currentUserEmail = "";
@@ -324,17 +336,49 @@
 
     setCount(countMsg, lastUnreadMsg);
     setCount(countBill, billingTotal);
+    setCount(countContracts, lastContractsCount);
 
-    if(!(gotThreadsOnce && gotSalesDocsOnce && gotOwnerStatementsOnce)){
+    if(!(gotThreadsOnce && gotSalesDocsOnce && gotOwnerStatementsOnce && gotContractsOnce)){
       alertsLine.textContent = "Chargement…";
       return;
     }
 
     alertsLine.textContent =
       `💬 Messages non lus : ${Number(lastUnreadMsg || 0)}\n` +
-      `🧾 Documents : ${billingTotal}`;
+      `🧾 Documents : ${billingTotal}\n` +
+`📄 Contrats : ${Number(lastContractsCount || 0)}`;
   }
 
+function stopContracts(){
+  try{ if(unsubContracts) unsubContracts(); }catch(_){}
+  unsubContracts = null;
+}
+
+function startContractsBadge(ownerUid, conciergerieUid){
+  stopContracts();
+
+  gotContractsOnce = false;
+  lastContractsCount = 0;
+
+  const qContracts = query(
+    collection(db, "contracts"),
+    where("ownerUid", "==", String(ownerUid)),
+    where("conciergerieUid", "==", String(conciergerieUid)),
+    where("ownerVisible", "==", true)
+  );
+
+  unsubContracts = onSnapshot(qContracts, (snap)=>{
+    lastContractsCount = snap.size || 0;
+    gotContractsOnce = true;
+    refreshBadges();
+  }, (err)=>{
+    console.warn("contracts badge listener:", err?.code, err?.message || err);
+    lastContractsCount = 0;
+    gotContractsOnce = true;
+    refreshBadges();
+  });
+}
+  
   function stopThreads(){
     try{ if(unsubThreads) unsubThreads(); }catch(_){}
     unsubThreads = null;
@@ -440,6 +484,7 @@ Vous pouvez joindre des captures d’écran ou des photos à votre email.
 
   function startBillingBadge(ownerUid, conciergerieUid){
     stopBilling();
+    stopContracts();
 
     gotSalesDocsOnce = false;
     gotOwnerStatementsOnce = false;
@@ -487,6 +532,8 @@ Vous pouvez joindre des captures d’écran ou des photos à votre email.
   document.getElementById("logoutBtn").addEventListener("click", async ()=>{
     stopThreads();
     stopBilling();
+    stopContracts();
+    
     try{ await signOut(auth); }catch(e){ console.warn("signOut:", e?.message || e); }
     try{ localStorage.removeItem("cm_auth"); }catch(_){}
     location.replace(withToken("login.html?role=proprietaire"));
@@ -509,6 +556,7 @@ Vous pouvez joindre des captures d’écran ou des photos à votre email.
       if(role !== "proprietaire"){
         stopThreads();
         stopBilling();
+        stopContracts();
         location.replace(withToken("login.html?role=proprietaire"));
         return;
       }
@@ -517,6 +565,7 @@ Vous pouvez joindre des captures d’écran ou des photos à votre email.
       if(!link.ok){
         stopThreads();
         stopBilling();
+        stopContracts();
         location.replace(withToken("profil-proprietaire.html?self=1"));
         return;
       }
@@ -537,6 +586,7 @@ Vous pouvez joindre des captures d’écran ou des photos à votre email.
 
       startUnreadThreadsListener(user.uid, link.conciergerieUid);
       startBillingBadge(user.uid, link.conciergerieUid);
+      startContractsBadge(user.uid, link.conciergerieUid);
 
       refreshBadges();
     }catch(e){
@@ -551,6 +601,7 @@ Vous pouvez joindre des captures d’écran ou des photos à votre email.
   window.addEventListener("beforeunload", ()=>{
     stopThreads();
     stopBilling();
+    stopContracts();
   });
 </script>
 </body>

@@ -988,6 +988,7 @@
 
   let currentUser = null;
   let allItems = [];
+  let creditsByInvoiceId = new Map();
   let vatEnabled = false;
   let vatRate = 0;
   let conciergerieCompanyName = "Conciergerie";
@@ -1185,7 +1186,7 @@
     const s = String(display||"").toUpperCase().trim();
     if(s === "PAID") return { txt:"PAYÉE", cls:"ok" };
     if(s === "CANCELLED") return { txt:"ANNULÉE", cls:"bad" };
-    if(s === "CREDITED") return { txt:"CRÉDITÉE", cls:"warn" };
+    if(s === "CREDITED") return { txt:"ÉMISE", cls:"" };
     if(s === "SENT") return { txt:"ENVOYÉE", cls:"" };
     if(s === "ISSUED") return { txt:"ÉMISE", cls:"" };
     if(s === "DRAFT") return { txt:"BROUILLON", cls:"" };
@@ -1700,6 +1701,89 @@ markSentBtn.title = invoiceAlreadySentByMail ? "Déjà marqué comme envoyé." :
     openModal(modalMaskSend);
   }
 
+async function createBillingThreadMessage({
+  ownerUid,
+  ownerDocId,
+  invoiceDocId,
+  creditDocId = "",
+  invoiceNumber = "",
+  creditNumber = "",
+  message = "",
+  homeName = "",
+  amount = 0
+}){
+  const hasInvoice = !!invoiceDocId && !!invoiceNumber;
+  const hasCredit = !!creditDocId && !!creditNumber;
+
+  const threadId = `t_${currentUser.uid}_${ownerDocId}`;
+
+  const subject = hasInvoice && hasCredit
+    ? `Facture ${invoiceNumber} + avoir ${creditNumber}`
+    : hasInvoice
+      ? `Facture ${invoiceNumber}`
+      : `Avoir ${creditNumber}`;
+
+  const fallbackText = `${subject} disponible dans votre espace propriétaire.`;
+  const text = String(message || "").trim() || fallbackText;
+
+  const ownerMeta = await resolveOwnerNameEmail(
+    ownerDocId,
+    modalItem?.data?.clientName || modalItem?.data?.ownerName || "Propriétaire",
+    modalItem?.data?.clientEmail || modalItem?.data?.ownerEmail || ""
+  );
+
+  const tRef = doc(db, "threads", threadId);
+  const tSnap = await getDoc(tRef);
+
+  if(tSnap.exists()){
+    await setDoc(tRef, {
+      lastText: text,
+      lastAt: serverTimestamp(),
+      unreadForOwner: 1,
+      unreadForConciergerie: 0,
+      updatedAt: serverTimestamp()
+    }, { merge:true });
+  }else{
+    await setDoc(tRef, {
+      type: "billing",
+      subject,
+
+      conciergerieUid: currentUser.uid,
+      ownerUid,
+      ownerDocId,
+
+      ownerName: ownerMeta.name || "Propriétaire",
+      ownerEmailLower: String(ownerMeta.email || "").trim().toLowerCase(),
+
+      salesDocId: invoiceDocId || creditDocId,
+      invoiceDocId,
+      creditDocId,
+      invoiceNumber,
+      creditNumber,
+
+      homeName: String(homeName || "").trim(),
+      totalTTC: Number(amount) || 0,
+
+      lastText: text,
+      lastAt: serverTimestamp(),
+
+      unreadForOwner: 1,
+      unreadForConciergerie: 0,
+
+      closed: false,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    }, { merge:true });
+  }
+
+  await setDoc(doc(db, "threads", threadId, "messages", `msg_${Date.now()}`), {
+    text,
+    at: serverTimestamp(),
+    createdAt: serverTimestamp(),
+    senderRole: "CONCIERGERIE",
+    senderUid: currentUser.uid
+  });
+}
 async function publishToOwner(){
   hideModalAlert();
   resetPubSuccess();
@@ -1775,7 +1859,7 @@ async function publishToOwner(){
           note: msg
         });
       }catch(e){
-        console.warn("upsertRequestForDoc invoice failed:", e?.message || e);
+       console.warn("upsertRequestForDoc invoice skipped:", e?.message || e); 
       }
 
       try{
@@ -1824,7 +1908,19 @@ async function publishToOwner(){
       modalCreditNumber = creditNum;
       pubCreditNumberPill.textContent = creditNum || "—";
     }
-
+    await createBillingThreadMessage({
+  ownerUid,
+  ownerDocId,
+  invoiceDocId: invNeeds ? invoiceDocId : "",
+  creditDocId: credNeeds ? modalCreditId : "",
+  invoiceNumber: invNeeds ? invNum : "",
+  creditNumber: credNeeds ? modalCreditNumber : "",
+  message: msg,
+  homeName,
+  amount: invNeeds
+    ? (Number.isFinite(Number(d.totalTTC)) ? Number(d.totalTTC) : Number(computeTotalsFromLines(d.lines).ttc) || 0)
+    : 0
+});
     const hint = (invNeeds && credNeeds) ? "Facture + Avoir" : (invNeeds ? "Facture" : "Avoir");
     showPubSuccess(hint);
     showModalAlert("✅ Publication effectuée côté propriétaire.", true);
@@ -1891,8 +1987,13 @@ async function publishToOwner(){
     const hasNum = !!String(d?.invoiceNumber || "").trim();
     const isDraft = isDraftInvoice(d);
 
-    const avoirId = getAvoirId(d);
-    const avoirActive = !!avoirId;
+    const creditLinked = creditsByInvoiceId.get(id) || null;
+const avoirId = getAvoirId(d) || String(creditLinked?.id || "").trim();
+const avoirActive = !!avoirId;
+const avoirData = creditLinked?.data || {};
+const avoirNumber = String(avoirData.creditNumber || avoirData.avoirNumber || "").trim();
+const avoirTotal = Number(avoirData.totalTTC || 0);
+    
 
     const allowReglement = hasNum && !["CANCELLED","CREDITED"].includes(getInvoiceStatusRaw(d));
     const allowCreateAvoir = hasNum && getInvoiceStatusRaw(d) !== "CANCELLED" && !avoirActive;
@@ -1916,13 +2017,17 @@ async function publishToOwner(){
           <span class="num">FACTURE N° ${esc(invNum)}</span>
           <span class="statusPill ${esc(st.cls)}">${esc(st.txt)}</span>
           ${isInvoiceAlreadyPublishedToOwner(d) ? `<span class="statusPill ok">PROPRIETAIRE</span>` : ``}
-          ${avoirActive ? `<span class="statusPill warn">AVOIR</span>` : ``}
+          ${avoirActive ? `<span class="statusPill warn">AVOIR EMIS</span>` : ``}
         </div>
 
         <div class="meta">
           <div><span class="mut">Client :</span> ${esc(client)}${email ? ` <span class="mut">•</span> ${esc(email)}` : ""}</div>
           <div><span class="mut">Date :</span> ${esc(created)} <span class="mut">•</span> <span class="mut">Total :</span> ${esc(fmtMoney(totals.ttc))}</div>
           <div><span class="mut">Logement :</span> ${esc(home)} <span class="mut">•</span> <span class="mut">Période :</span> ${esc(period)}</div>
+         ${avoirActive ? `
+  <div><span class="mut">Facture :</span> ${esc(invNum)} <span class="mut">•</span> ${esc(fmtMoney(totals.ttc))}</div>
+  <div><span class="mut">Avoir :</span> ${esc(avoirNumber || "Avoir")} <span class="mut">•</span> -${esc(fmtMoney(Math.abs(avoirTotal)))}</div>
+` : ``}
           ${!ownerDocId ? `<div style="color:#b3261e;"><span class="mut" style="color:#b3261e;">Envoi impossible :</span> clientOwnerDocId manquant</div>` : ``}
         </div>
       </div>
@@ -1933,7 +2038,7 @@ async function publishToOwner(){
         <a class="btn" href="reglement.html?docId=${encodeURIComponent(id)}" ${allowReglement ? "" : `aria-disabled="true"`}>Règlement</a>
         ${allowCreateAvoir ? `<a class="btn danger" href="${creerAvoirHref}">Avoir</a>` : ``}
         ${allowRedo ? `<a class="btn danger" href="${redoHref}">Recréer</a>` : ``}
-        ${avoirActive ? `<a class="btn danger" href="${ouvrirAvoirHref}">Ouvrir avoir</a>` : ``}
+       ${avoirActive ? `<a class="btn danger" href="avoir-apercu.html?docId=${encodeURIComponent(avoirId)}">Aperçu avoir</a>` : ``}
       </div>
     `;
 
@@ -2004,6 +2109,31 @@ async function publishToOwner(){
     }
   }
 
+async function loadCreditsForInvoices(uid){
+  creditsByInvoiceId = new Map();
+
+  const qCred = query(
+    collection(db, "salesDocuments"),
+    where("conciergerieUid", "==", uid),
+    where("type", "==", "CREDIT"),
+    where("listable", "==", true),
+    limit(400)
+  );
+
+  const snap = await getDocs(qCred);
+
+  snap.forEach(s => {
+    const d = s.data() || {};
+    const invId = String(d.fromInvoiceDocId || d.invoiceDocId || "").trim();
+    if(!invId) return;
+
+    creditsByInvoiceId.set(invId, {
+      id: s.id,
+      data: d
+    });
+  });
+}
+  
   async function loadInvoices(uid){
     hideAlert();
     listEl.innerHTML = "";
@@ -2024,6 +2154,8 @@ async function publishToOwner(){
       data: (d.data() || {})
     }));
 
+    await loadCreditsForInvoices(uid);
+    
     applyFilters();
   }
 

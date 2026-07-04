@@ -216,7 +216,7 @@
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
       doc, getDoc, setDoc, addDoc, updateDoc, collection,
-      query, orderBy, limit, onSnapshot, serverTimestamp, increment
+     query, orderBy, limit, onSnapshot, serverTimestamp, increment, getDocs
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const alertBox = document.getElementById("alertBox");
@@ -301,7 +301,7 @@
         if(us.exists()){
           const u = us.data() || {};
           const n = String(
-            u.companyName || u.displayName || u.fullname || u.name || ""
+            u.businessProfile?.companyName || u.companyName || u.displayName || u.fullname || u.name || ""
           ).trim();
           return n || "Votre conciergerie";
         }
@@ -324,42 +324,50 @@
       }
     }
 
-    async function ensureThread(){
-      if(!conciergerieUid || !ownerDocId){
-        throw new Error("Profil incomplet (conciergerieUid/ownerDocId manquant).");
-      }
-      if(threadId) return threadId;
+  async function ensureThread(){
+  if(!conciergerieUid || !ownerDocId){
+    throw new Error("Profil incomplet (conciergerieUid/ownerDocId manquant).");
+  }
 
-      const tid = stableThreadId(conciergerieUid, ownerDocId);
-      const tRef = doc(db,"threads", tid);
-      const snap = await getDoc(tRef);
+  if(threadId) return threadId;
 
-      if(!snap.exists()){
-        const meta = await loadOwnerMeta(ownerDocId);
+  const tid = stableThreadId(conciergerieUid, ownerDocId);
+  const tRef = doc(db, "threads", tid);
 
-        await setDoc(tRef, {
-          conciergerieUid,
-          ownerDocId,
-          ownerUid: currentUser.uid,
+  threadId = tid;
 
-          ownerName: meta.ownerName,
-          ownerEmailLower: meta.ownerEmailLower,
+  try{
+    await updateDoc(tRef, {
+      updatedAt: serverTimestamp()
+    });
+  }catch(e){
+    const meta = await loadOwnerMeta(ownerDocId);
 
-          homeCount: 0,
-          homeNames: [],
+    await setDoc(tRef, {
+      conciergerieUid,
+      ownerDocId,
+      ownerUid: currentUser.uid,
 
-          lastText: "",
-          lastAt: serverTimestamp(),
-          createdAt: serverTimestamp(),
-          unreadForConciergerie: 0,
-          unreadForOwner: 0,
-          closed: false
-        }, { merge:true });
-      }
+      ownerName: meta.ownerName,
+      ownerEmailLower: meta.ownerEmailLower,
 
-      threadId = tid;
-      return tid;
-    }
+      homeCount: 0,
+      homeNames: [],
+
+      lastText: "",
+      lastAt: serverTimestamp(),
+
+      unreadForConciergerie: 0,
+      unreadForOwner: 0,
+
+      closed: false,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    });
+  }
+
+  return tid;
+}
 
     function renderMessage(m){
       const role = String(m.senderRole || "").toUpperCase().trim();
@@ -367,7 +375,7 @@
 
       const div = document.createElement("div");
       div.className = "msg" + (isMe ? " me" : "");
-      const meta = `${isMe ? "Moi" : "Conciergerie"} • ${fmtTs(m.at)}`;
+      const meta = `${isMe ? "Moi" : "Conciergerie"} • ${fmtTs(m.at || m.createdAt)}`;
 
       const text = String(m.text || "").trim();
 
@@ -378,44 +386,55 @@
       return div;
     }
 
-    async function subscribeMessages(){
-      if(unsubMessages) unsubMessages();
+  function renderMessagesSnapshot(snap){
+  chatBox.innerHTML = "";
 
-      const tid = await ensureThread();
-
-      const q = query(
-        collection(db, "threads", tid, "messages"),
-        orderBy("at","asc"),
-        limit(300)
-      );
-
-      unsubMessages = onSnapshot(q, async (snap)=>{
-        chatBox.innerHTML = "";
-      if(snap.empty){
-  chatBox.innerHTML = `
-    <div class="emptyState">
-      <div class="emptyStateTitle">Aucun message pour le moment</div>
-      <div class="emptyStateText">
-        Envoyez votre premier message pour démarrer l’échange avec votre conciergerie.<br>
-        Vous pouvez aussi transmettre vos liens iCal si vos logements sont déjà diffusés sur une plateforme.
+  if(snap.empty){
+    chatBox.innerHTML = `
+      <div class="emptyState">
+        <div class="emptyStateTitle">Aucun message pour le moment</div>
+        <div class="emptyStateText">
+          Envoyez votre premier message pour démarrer l’échange avec votre conciergerie.<br>
+          Vous pouvez aussi transmettre vos liens iCal si vos logements sont déjà diffusés sur une plateforme.
+        </div>
       </div>
-    </div>
-  `;
-}else{
-          snap.forEach(d=>{
-            chatBox.appendChild(renderMessage(d.data() || {}));
-          });
-        }
+    `;
+  }else{
+    snap.forEach(d=>{
+      chatBox.appendChild(renderMessage(d.data() || {}));
+    });
+  }
 
-        try{ await updateDoc(doc(db,"threads", tid), { unreadForOwner: 0 }); }catch(_){}
+  chatBox.scrollTop = chatBox.scrollHeight + 9999;
+}
+    
+   async function subscribeMessages(){
+  if(unsubMessages) unsubMessages();
 
-        chatBox.scrollTop = chatBox.scrollHeight + 9999;
-      }, (err)=>{
-        showAlert("Erreur messages : " + (err?.message || "inconnue"));
-      });
-    }
+  const tid = await ensureThread();
 
-    sendBtn.onclick = async ()=>{
+  const q = query(
+    collection(db, "threads", tid, "messages"),
+    orderBy("at", "asc"),
+    limit(300)
+  );
+
+  try{
+    const firstSnap = await getDocs(q);
+    renderMessagesSnapshot(firstSnap);
+
+    unsubMessages = onSnapshot(q, (snap)=>{
+      renderMessagesSnapshot(snap);
+    }, (err)=>{
+      showAlert("Erreur messages : " + (err?.message || "inconnue"));
+    });
+
+  }catch(err){
+    showAlert("Erreur messages : " + (err?.message || "inconnue"));
+  }
+}
+ 
+         sendBtn.onclick = async ()=>{
       hideAlert();
       const text = String(msgInput.value || "").trim();
       if(!text) return;
@@ -424,18 +443,20 @@
       try{
         const tid = await ensureThread();
 
-        await addDoc(collection(db,"threads", tid, "messages"), {
-          text,
-          at: serverTimestamp(),
-          senderRole: "PROPRIETAIRE",
-          senderUid: currentUser.uid
-        });
+       await addDoc(collection(db,"threads", tid, "messages"), {
+  text,
+  at: serverTimestamp(),
+  createdAt: serverTimestamp(),
+  senderRole: "PROPRIETAIRE",
+  senderUid: currentUser.uid
+}); 
 
-        await updateDoc(doc(db,"threads", tid), {
-          lastAt: serverTimestamp(),
-          lastText: text,
-          unreadForConciergerie: increment(1)
-        });
+ await updateDoc(doc(db,"threads", tid), {
+  lastAt: serverTimestamp(),
+  lastText: text,
+  unreadForConciergerie: increment(1),
+  updatedAt: serverTimestamp()
+});
 
         msgInput.value = "";
       }catch(e){

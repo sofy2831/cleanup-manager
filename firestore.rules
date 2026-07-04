@@ -179,7 +179,7 @@ service cloud.firestore {
           "businessProfile",
           // (optionnel) si tu l'utilises ailleurs
           "homesCountActive",
-   			 "onboarding"
+   			  "onboarding"
         ];
       }
 
@@ -497,13 +497,14 @@ service cloud.firestore {
       }
 
       function allowedThreadUpdateKeys() {
-        return [
-          "lastAt","lastText",
-          "unreadForConciergerie","unreadForOwner",
-          "closed",
-          "updatedAt"
-        ];
-      }
+  return [
+    "lastAt","lastText",
+    "lastMessageAt","lastMessage",
+    "unreadForConciergerie","unreadForOwner",
+    "closed",
+    "updatedAt"
+  ];
+}
 
       function threadCreateHasCoreFields() {
         return (request.resource.data.conciergerieUid is string) && request.resource.data.conciergerieUid != ""
@@ -557,12 +558,13 @@ service cloud.firestore {
           && request.resource.data.senderUid == myUid()
           && (request.resource.data.senderRole in ["CONCIERGERIE","PROPRIETAIRE"])
           && (
-            (
-              (request.resource.data.at is timestamp)
-              && (request.resource.data.text is string)
-              && request.resource.data.text.size() > 0
-              && request.resource.data.keys().hasOnly(["text","at","senderRole","senderUid"])
-            )
+           (
+  (request.resource.data.at is timestamp)
+  && (request.resource.data.createdAt is timestamp)
+  && (request.resource.data.text is string)
+  && request.resource.data.text.size() > 0
+  && request.resource.data.keys().hasOnly(["text","at","createdAt","senderRole","senderUid"])
+)
             ||
             (
               (request.resource.data.kind in ["text","photos"])
@@ -592,31 +594,58 @@ service cloud.firestore {
 
     match /events/{eventId} {
 
-      allow create: if signedIn()
-        && (request.resource.data.conciergerieUid is string)
-        && request.resource.data.conciergerieUid == myUid();
+  allow get: if
+    ("dayToken" in resource.data)
+    && (resource.data.dayToken is string)
+    && resource.data.dayToken.size() > 0
+    && tokenIsActiveById(resource.data.dayToken)
+    && tokenMatchesEvent(resource.data.dayToken, eventId);
 
-      allow read: if signedIn() && (
-        ((resource.data.conciergerieUid is string) && resource.data.conciergerieUid == myUid())
-        || ((resource.data.ownerUid is string) && resource.data.ownerUid == myUid())
-        || ((resource.data.homeId is string) && homeBelongsToOwner(resource.data.homeId))
-      );
+  allow create: if signedIn()
+    && (request.resource.data.conciergerieUid is string)
+    && request.resource.data.conciergerieUid == myUid();
 
-      allow update, delete: if signedIn()
-        && (resource.data.conciergerieUid is string)
-        && resource.data.conciergerieUid == myUid();
+  allow read: if signedIn() && (
+    ((resource.data.conciergerieUid is string) && resource.data.conciergerieUid == myUid())
+    || ((resource.data.ownerUid is string) && resource.data.ownerUid == myUid())
+    || ((resource.data.homeId is string) && homeBelongsToOwner(resource.data.homeId))
+  );
 
-      // token-only update (agent)
-      allow update: if
+  allow update, delete: if signedIn()
+    && (resource.data.conciergerieUid is string)
+    && resource.data.conciergerieUid == myUid();
+
+  // token-only update agent
+  allow update: if
+    (
+      (
         ("dayToken" in resource.data)
         && (resource.data.dayToken is string)
         && resource.data.dayToken.size() > 0
         && tokenIsActiveById(resource.data.dayToken)
         && tokenMatchesEvent(resource.data.dayToken, eventId)
-        && request.resource.data.diff(resource.data).changedKeys().hasOnly([
-          "opStatus","updatedAt","proofPhotosTotal","proofPhotosAtMs","proofToken"
-        ]);
+      )
+      ||
+      (
+        ("proofToken" in request.resource.data)
+        && (request.resource.data.proofToken is string)
+        && request.resource.data.proofToken.size() > 0
+        && tokenIsActiveById(request.resource.data.proofToken)
+        && tokenMatchesEvent(request.resource.data.proofToken, eventId)
+      )
+    )
+    && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+      "opStatus",
+      "status",
+      "updatedAt",
+      "proofPhotosTotal",
+      "proofPhotosAtMs",
+      "proofToken",
+      "dayToken",
+      "agentFinishedAt"
+    ]);
 
+  
       match /missions/{missionId} {
 
         function isConciergerieOfEvent() {
@@ -855,7 +884,7 @@ allow delete: if signedIn()
         && (request.resource.data.ownerDocId is string)
         && request.resource.data.ownerDocId != ""
         && (request.resource.data.type is string)
-        && request.resource.data.type in ["billing", "billing_statement"];
+        && request.resource.data.type in ["billing", "billing_statement", "contract"];
 
       allow update: if signedIn()
         && (resource.data.conciergerieUid is string)
@@ -1117,6 +1146,71 @@ match /releaseNotes/{id} {
     );
 
   allow create, update, delete: if isAdminOrStaff();
+}
+
+// =========================================================
+// CONTRAT
+// =========================================================
+
+match /contracts/{contractId} {
+
+  allow read: if request.auth != null
+    && (
+      request.auth.uid == resource.data.conciergerieUid
+      || (
+        request.auth.uid == resource.data.ownerUid
+        && resource.data.ownerVisible == true
+      )
+    );
+
+  allow create: if request.auth != null
+    && request.auth.uid == request.resource.data.conciergerieUid;
+
+  allow update: if request.auth != null
+    && (
+      request.auth.uid == resource.data.conciergerieUid
+
+      ||
+
+      (
+        request.auth.uid == resource.data.ownerUid
+        && resource.data.ownerVisible == true
+        && request.resource.data.diff(resource.data).changedKeys()
+          .hasOnly([
+            "signedByOwner",
+            "ownerSignedAt",
+            "ownerSignedByUid",
+            "ownerSignatureName",
+            "ownerSignatureText",
+            "contractStatus",
+            "signedAt",
+            "updatedAt"
+          ])
+        && request.resource.data.signedByOwner == true
+        && request.resource.data.ownerSignedByUid == request.auth.uid
+      )
+    );
+
+  allow delete: if request.auth != null
+    && request.auth.uid == resource.data.conciergerieUid;
+}
+
+// =========================================================
+// CONDITIONS GENERALES
+// =========================================================
+
+match /generalTerms/{userId} {
+
+  // La conciergerie lit/modifie ses propres CG
+  allow get, create, update: if signedIn()
+    && myUid() == userId;
+
+  // Le propriétaire peut lire les CG de sa conciergerie
+  allow get: if signedIn()
+    && myConciergerieUid() == userId;
+
+  allow list: if false;
+  allow delete: if false;
 }
     // =========================================================
     // DEFAULT DENY
