@@ -14,8 +14,10 @@
     .page{ min-height:100vh; padding:14px 12px; display:flex; justify-content:center; }
     .wrap{ width:100%; max-width:1000px; }
     .topbar{ display:flex; justify-content:space-between; gap:10px; margin-bottom:10px; flex-wrap:wrap; position:sticky; top:0; z-index:20; padding:8px 0; background:rgba(248,244,255,.86); backdrop-filter:blur(6px); }
+    .topbarRight{ display:flex; gap:10px; flex-wrap:wrap; }
     .btn{ display:inline-flex; align-items:center; justify-content:center; gap:8px; padding:9px 12px; border-radius:999px; background:#fff; border:2px solid var(--violet); color:var(--violet); text-decoration:none; font-weight:1000; font-size:12px; box-shadow:0 3px 10px rgba(0,0,0,.06); cursor:pointer; white-space:nowrap; }
     .primary{ background:linear-gradient(90deg,var(--violet),var(--violet2)); border-color:transparent; color:#fff; }
+    button:disabled{ opacity:.6; cursor:not-allowed; }
     .sheet{ background:#fff; border:1px solid var(--border); border-radius:22px; box-shadow:var(--shadow); padding:26px; }
     .header{ display:flex; justify-content:space-between; gap:16px; border-bottom:1px solid rgba(0,0,0,.08); padding-bottom:16px; margin-bottom:18px; }
     .logo{ width:58px; height:58px; border-radius:14px; border:2px solid var(--border); display:flex; align-items:center; justify-content:center; color:var(--violet); font-weight:1000; overflow:hidden; background:#fff; }
@@ -51,7 +53,7 @@
     .cgPage .signature{ display:grid; grid-template-columns:1fr 1fr; gap:18px; margin-top:26px; }
     .cgPage .sigBox{ border:1px solid var(--border); border-radius:16px; background:#fff; padding:14px; min-height:120px; font-size:13px; font-weight:850; }
     .cgFallback{ font-size:13px; font-weight:800; line-height:1.55; border:1px solid rgba(0,0,0,.08); border-radius:14px; padding:14px; background:#fff; }
-    @media(max-width:720px){ .header,.grid,.sign{ grid-template-columns:1fr; display:grid; } .servicesGrid{ grid-template-columns:1fr; } .topbar{ flex-direction:column; } .btn{ width:100%; } .sheet{ padding:16px; } .cgPage .top{ flex-direction:column; } .cgPage .signature{ grid-template-columns:1fr; } }
+    @media(max-width:720px){ .header,.grid,.sign{ grid-template-columns:1fr; display:grid; } .servicesGrid{ grid-template-columns:1fr; } .topbar{ flex-direction:column; } .topbarRight{ flex-direction:column; } .btn{ width:100%; } .sheet{ padding:16px; } .cgPage .top{ flex-direction:column; } .cgPage .signature{ grid-template-columns:1fr; } }
     @media print{ body{ background:#fff; } .topbar,.alert{ display:none!important; } .page{ padding:0; } .wrap{ max-width:none; } .sheet{ box-shadow:none; border:none; border-radius:0; padding:0; } .grid{ display:grid!important; grid-template-columns:1fr 1fr!important; gap:12px!important; } .header{ display:flex!important; flex-direction:row!important; justify-content:space-between!important; } .sign{ display:grid!important; grid-template-columns:1fr 1fr!important; } .servicesGrid{ display:grid!important; grid-template-columns:1fr 1fr!important; } .section,.box,.signBox{ break-inside:avoid; page-break-inside:avoid; } .cgPage{ margin-top:0; padding-top:0; border-top:0; page-break-before:always; break-before:page; } .cgPage .doc{ box-shadow:none!important; border:0!important; border-radius:0!important; padding:0!important; } .cgPage p,.cgPage li{ font-size:12px; } .cgPage h1{ font-size:21px; } .cgPage h2{ break-after:avoid; } .cgPage .sigBox{ break-inside:avoid; } }
   </style>
 </head>
@@ -59,7 +61,10 @@
   <div class="page"><div class="wrap">
     <div class="topbar">
       <a class="btn" id="backBtn" href="contrats-liste.html">← Retour</a>
-      <button class="btn primary" type="button" onclick="window.print()">Imprimer / PDF</button>
+      <div class="topbarRight">
+        <button class="btn primary" type="button" id="ownerSignBtn" style="display:none;">Signer le contrat</button>
+        <button class="btn primary" type="button" onclick="window.print()">Imprimer / PDF</button>
+      </div>
     </div>
     <div class="alert" id="alertBox"></div>
     <div class="sheet">
@@ -87,12 +92,13 @@
   <script type="module">
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-    import { doc, getDoc } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import { doc, getDoc, updateDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const $ = id => document.getElementById(id);
     const qs = new URLSearchParams(location.search);
     const docId = String(qs.get("docId") || "").trim();
     const isDraft = qs.get("draft") === "1";
+    const isOwnerView = qs.get("owner") === "1";
     let contractData = null;
     let currentUser = null;
 
@@ -133,14 +139,6 @@
     function show(msg){ $("alertBox").style.display = "block"; $("alertBox").textContent = msg; }
     function setText(id, value){ $(id).textContent = String(value || "").trim() || "—"; }
     function setHtml(id, html){ $(id).innerHTML = html || "—"; }
-
-    function statusLabel(s){
-      const st = String(s || "DRAFT").toUpperCase().trim();
-      if(st === "SIGNED") return { txt:"SIGNÉ", cls:"ok" };
-      if(st === "SENT") return { txt:"ENVOYÉ", cls:"" };
-      if(st === "ARCHIVED") return { txt:"ARCHIVÉ", cls:"warn" };
-      return { txt:"BROUILLON", cls:"warn" };
-    }
 
     function formatAddress(addr){
       if(!addr || typeof addr !== "object") return "";
@@ -192,9 +190,15 @@
     function setBackButton(){
       const backBtn = $("backBtn");
       const returnUrl = sessionStorage.getItem("contractReturnUrl");
+      const token = String(qs.get("token") || "").trim();
 
-      // IMPORTANT : ce bouton ne modifie jamais Firestore.
-      // Aucun updateDoc ici. Le statut SENT doit uniquement être posé par l'action réelle d'envoi/publication.
+      if(isOwnerView){
+        const u = new URL("owner-contrats.html", location.href);
+        if(token) u.searchParams.set("token", token);
+        backBtn.href = u.pathname + (u.search ? u.search : "");
+        backBtn.textContent = "← Mes contrats";
+        return;
+      }
       if(returnUrl){
         backBtn.href = returnUrl;
         backBtn.textContent = "← Retour modification";
@@ -214,6 +218,53 @@
       backBtn.textContent = "← Contrats";
     }
 
+    async function signOwnerContract(){
+      if(!docId || isDraft) return;
+
+      const d = contractData || {};
+
+      if(d.signedByOwner === true){
+        show("✅ Contrat déjà signé côté propriétaire.");
+        return;
+      }
+
+      if(!confirm("Signer électroniquement ce contrat ?")) return;
+
+      try{
+        const ownerName = d.clientName || d.ownerName || currentUser?.displayName || currentUser?.email || "le propriétaire";
+        const nextStatus = d.signedByConciergerie === true ? "SIGNED" : "SENT";
+
+        const payload = {
+          signedByOwner: true,
+          ownerSignedAt: serverTimestamp(),
+          ownerSignedByUid: currentUser.uid,
+          ownerSignatureName: ownerName,
+          ownerSignatureText: "Je reconnais avoir lu et accepté le présent contrat ainsi que les Conditions Générales de Prestations qui y sont annexées.",
+          contractStatus: nextStatus,
+          updatedAt: serverTimestamp()
+        };
+
+        if(nextStatus === "SIGNED"){
+          payload.signedAt = serverTimestamp();
+        }
+
+        await updateDoc(doc(db, "contracts", docId), payload);
+
+        contractData = {
+          ...contractData,
+          signedByOwner: true,
+          ownerSignatureName: ownerName,
+          contractStatus: nextStatus
+        };
+
+        renderContract();
+        show("✅ Contrat signé électroniquement.");
+      }catch(e){
+        console.error(e);
+        show("⛔ " + (e?.message || "Erreur signature propriétaire"));
+      }
+    }
+
     function renderGeneralTermsFromData(cg, d){
       const bs = d.businessSnapshot || {};
       const company = cg.companyName || bs.companyName || "Conciergerie";
@@ -231,7 +282,6 @@
       const d = contractData || {};
       const termsUid = String(d.conciergerieUid || d.ownerUid || currentUser?.uid || "").trim();
 
-      // 1) CG personnalisées Firestore : generalTerms/{uid}
       if(termsUid){
         try{
           const customSnap = await getDoc(doc(db, "generalTerms", termsUid));
@@ -242,7 +292,6 @@
         }catch(e){ console.warn("CG personnalisées indisponibles, fallback modèle standard:", e?.message || e); }
       }
 
-      // 2) Fichier HTML standard local
       try{
         const safeUrl = String(url || "conditions-generales-conciergerie.html").trim() || "conditions-generales-conciergerie.html";
         const res = await fetch(safeUrl, { cache:"no-store" });
@@ -264,7 +313,6 @@
         return;
       }catch(e){ console.warn("Fichier CG standard indisponible, fallback inline:", e?.message || e); }
 
-      // 3) Fallback HTML standard intégré : jamais de “chargement impossible”
       target.innerHTML = renderGeneralTermsFromData(DEFAULT_GENERAL_TERMS, d);
     }
 
@@ -273,7 +321,7 @@
       const bs = d.businessSnapshot || {};
       $("docTitle").textContent = d.title || "Contrat de prestation de conciergerie";
       $("docSub").textContent = `N° ${d.contractNumber || "Brouillon"} • ${durationLabel(d)}`;
-       
+
       setBackButton();
       setHtml("businessBox", [`<strong>${esc(bs.companyName || "Conciergerie")}</strong>`, formatAddress(bs.address || {}), bs.billingEmail ? esc(bs.billingEmail) : "", bs.phone ? esc(bs.phone) : "", bs.registration?.siret ? esc("SIRET " + bs.registration.siret) : "", bs.registration?.ape ? esc("APE " + bs.registration.ape) : ""].filter(Boolean).join("<br>"));
       setHtml("clientBox", [`<strong>${esc(d.clientName || d.ownerName || "—")}</strong>`, formatClientAddress(d), d.clientEmail || d.ownerEmail ? esc(d.clientEmail || d.ownerEmail) : "", d.clientPhone || d.ownerPhone ? esc(d.clientPhone || d.ownerPhone) : ""].filter(Boolean).join("<br>"));
@@ -291,16 +339,48 @@
       if(dep) keysParts.push(`Caution : ${dep}`);
       if(d.keysTerms) keysParts.push(d.keysTerms);
       setText("keysTerms", keysParts.join("\n\n"));
-      setText("inventoryTerms", d.inventoryTerms); setText("insuranceTerms", d.insuranceTerms); setText("damageTerms", d.damageTerms); setText("contractorsTerms", d.contractorsTerms); setText("forceMajeureTerms", d.forceMajeureTerms); setText("dataTerms", d.dataTerms); setText("terminationTerms", d.terminationTerms); setText("amendmentTerms", d.amendmentTerms); setText("disputeTerms", d.disputeTerms);
+      setText("inventoryTerms", d.inventoryTerms);
+      setText("insuranceTerms", d.insuranceTerms);
+      setText("damageTerms", d.damageTerms);
+      setText("contractorsTerms", d.contractorsTerms);
+      setText("forceMajeureTerms", d.forceMajeureTerms);
+      setText("dataTerms", d.dataTerms);
+      setText("terminationTerms", d.terminationTerms);
+      setText("amendmentTerms", d.amendmentTerms);
+      setText("disputeTerms", d.disputeTerms);
+
       const sig = signatureMeta(d);
       $("signConciergerie").innerHTML = `<strong>La conciergerie</strong><br><br>Fait à : ${esc(sig.conciergeriePlace)}<br>Date : ${esc(sig.date)}<br><br>${signatureLine("conciergerie", d)}`;
       $("signOwner").innerHTML = `<strong>Le propriétaire</strong><br><br>Fait à : ${esc(sig.ownerPlace)}<br>Date : ${esc(sig.date)}<br><br>${signatureLine("owner", d)}`;
+
       const cgUrl = String(d.generalTermsUrl || "conditions-generales-conciergerie.html").trim() || "conditions-generales-conciergerie.html";
       setText("generalTermsBox", d.generalTermsAccepted === false ? "☐ Conditions générales de prestations non acceptées." : `☑ ${d.generalTermsLabel || "Conditions Générales de Prestations - Version 1.0 du 01/07/2026"}\nDocument associé : ${cgUrl}\nLes conditions générales sont reproduites intégralement à la suite du présent contrat. Elles constituent une annexe acceptée par la signature du contrat principal.`);
       const annexes = Array.isArray(d.annexesSelected) ? d.annexesSelected : [];
       setText("annexesBox", annexes.length ? "• " + annexes.join("\n• ") : "Aucune annexe sélectionnée.");
       $("servicesGrid").innerHTML = serviceLabels(d.servicesSelected).map(x => `<div class="serviceItem">${esc(x)}</div>`).join("");
-      if(bs.logoUrl){ $("logoImg").src = bs.logoUrl; $("logoImg").style.display = "block"; $("logoFallback").style.display = "none"; } else { $("logoImg").style.display = "none"; $("logoFallback").style.display = "block"; }
+
+      if(bs.logoUrl){
+        $("logoImg").src = bs.logoUrl;
+        $("logoImg").style.display = "block";
+        $("logoFallback").style.display = "none";
+      }else{
+        $("logoImg").style.display = "none";
+        $("logoFallback").style.display = "block";
+      }
+
+      const ownerSignBtn = $("ownerSignBtn");
+      if(ownerSignBtn){
+        ownerSignBtn.style.display = isOwnerView && !isDraft ? "inline-flex" : "none";
+        if(d.signedByOwner === true){
+          ownerSignBtn.textContent = "Contrat déjà signé";
+          ownerSignBtn.disabled = true;
+        }else{
+          ownerSignBtn.textContent = "Signer le contrat";
+          ownerSignBtn.disabled = false;
+          ownerSignBtn.onclick = signOwnerContract;
+        }
+      }
+
       loadGeneralTermsHtml(cgUrl);
     }
 
@@ -321,7 +401,7 @@
 
     onAuthStateChanged(auth, async user => {
       currentUser = user;
-      if(!user){ location.href = "login.html?role=conciergerie"; return; }
+      if(!user){ location.href = isOwnerView ? "login.html?role=proprietaire" : "login.html?role=conciergerie"; return; }
       try{ await loadContract(); }
       catch(e){ console.error(e); show("⛔ " + (e?.message || "Erreur chargement contrat")); }
     });
