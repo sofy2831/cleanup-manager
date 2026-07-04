@@ -85,7 +85,62 @@
     async function copyToClipboard(text){try{await navigator.clipboard.writeText(String(text||""));return true;}catch{try{const ta=document.createElement("textarea");ta.value=String(text||"");document.body.appendChild(ta);ta.select();document.execCommand("copy");document.body.removeChild(ta);return true;}catch{return false;}}}
     async function markCreditSent(docId){await updateDoc(doc(db,"salesDocuments",docId),{creditStatus:"SENT",sentAt:serverTimestamp(),updatedAt:serverTimestamp()});}
     function requestIdForSalesDoc(id){return `bill_${String(id||"").trim()}`;} async function upsertRequestForDoc({salesDocId,ownerUid,ownerDocId,docType,number,homeName,totalTTC,note}){const rRef=doc(db,"requests",requestIdForSalesDoc(salesDocId)); const exists=await getDoc(rRef); const payload={type:"billing",status:"sent",conciergerieUid:currentUser.uid,ownerUid,ownerDocId,docType,salesDocId,number:String(number||"").trim(),homeName:String(homeName||"").trim(),totalTTC:Number(totalTTC)||0,note:String(note||"").trim(),updatedAt:serverTimestamp()}; await setDoc(rRef,exists.exists()?payload:{...payload,createdAt:serverTimestamp()},{merge:true});}
-    async function createBillingThreadMessage({ownerUid,ownerDocId,creditDocId,creditNumber,message,homeName,amount}){const threadId=`bill_${creditDocId}`; const subject=`Avoir ${creditNumber}`; const fallback=`${subject} disponible dans votre espace propriétaire.`; const text=String(message||"").trim()||fallback; await setDoc(doc(db,"threads",threadId),{type:"billing",subject,conciergerieUid:currentUser.uid,ownerUid,ownerDocId,salesDocId:creditDocId,creditDocId,creditNumber,homeName:String(homeName||"").trim(),totalTTC:Number(amount)||0,lastText:text,lastAt:serverTimestamp(),lastMessage:text,lastMessageAt:serverTimestamp(),unreadForOwner:1,unreadForConciergerie:0,updatedAt:serverTimestamp(),createdAt:serverTimestamp()},{merge:true}); await setDoc(doc(db,"threads",threadId,"messages",`msg_${Date.now()}`),{kind:"text",type:"billing",senderRole:"CONCIERGERIE",senderUid:currentUser.uid,text,creditDocId,creditNumber,creditUrl:buildOwnerCreditLink(creditDocId),createdAt:serverTimestamp()});}
+    async function createBillingThreadMessage({
+  ownerUid,
+  ownerDocId,
+  creditDocId,
+  creditNumber,
+  message,
+  homeName,
+  amount
+}){
+  const threadId = `t_${currentUser.uid}_${ownerDocId}`;
+  const subject = `Avoir ${creditNumber}`;
+  const fallback = `${subject} disponible dans votre espace propriétaire.`;
+  const text = String(message || "").trim() || fallback;
+
+  const ownerMeta = await resolveOwnerNameEmail(
+    ownerDocId,
+    modalCredit?.data?.clientName || modalCredit?.data?.ownerName || "Propriétaire",
+    modalCredit?.data?.clientEmail || modalCredit?.data?.ownerEmail || ""
+  );
+
+  await setDoc(doc(db, "threads", threadId), {
+    type: "billing",
+    subject,
+
+    conciergerieUid: currentUser.uid,
+    ownerUid,
+    ownerDocId,
+
+    ownerName: ownerMeta.name || "Propriétaire",
+    ownerEmailLower: String(ownerMeta.email || "").trim().toLowerCase(),
+
+    salesDocId: creditDocId,
+    creditDocId,
+    creditNumber,
+
+    homeName: String(homeName || "").trim(),
+    totalTTC: Number(amount) || 0,
+
+    lastText: text,
+    lastAt: serverTimestamp(),
+
+    unreadForOwner: 1,
+    unreadForConciergerie: 0,
+
+    updatedAt: serverTimestamp(),
+    createdAt: serverTimestamp()
+  }, { merge:true });
+
+  await setDoc(doc(db, "threads", threadId, "messages", `msg_${Date.now()}`), {
+    text,
+    at: serverTimestamp(),
+    createdAt: serverTimestamp(),
+    senderRole: "CONCIERGERIE",
+    senderUid: currentUser.uid
+  });
+}
     async function hydrateOwnerBox(d){const ownerDocId=getOwnerDocId(d); if(!ownerDocId){ownerBox.style.display="none";return;} ownerBox.style.display="block"; const meta=await resolveOwnerNameEmail(ownerDocId,String(d?.clientName||d?.ownerName||"Propriétaire"),String(d?.clientEmail||d?.ownerEmail||"")); oName.textContent=meta.name||"—"; oEmail.textContent=meta.email||"—"; oHome.textContent=String(d?.homeName||d?.homeAddress||"—").trim()||"—"; const link=getLinkedInvoiceInfo(d); oInvoice.textContent=link.fromInv||(link.fromDocId?`#${link.fromDocId.slice(0,6)}`:"—");}
     function refreshOwnerPublishUI(d){const ownerDocId=getOwnerDocId(d); if(!ownerDocId){ownerBox.style.display="none";return;} ownerBox.style.display="block"; const already=isCreditAlreadyPublishedToOwner(d); ownerPublishState.textContent=already?"déjà publié":"prêt"; ownerPublishState.style.borderColor=already?"rgba(27,143,77,.25)":"rgba(122,92,255,.25)"; ownerPublishState.style.background=already?"rgba(27,143,77,.06)":"rgba(122,92,255,.06)"; ownerPublishState.style.color=already?"#0f5f31":"#4b2cff"; ownerHint.textContent=already?"Déjà publié : l’avoir est visible dans le dashboard du client / propriétaire.":"Publier rend l’avoir visible dans le dashboard du client / propriétaire."; publishOwnerBtn.disabled=already; copyOwnerLinkBtn.disabled=false;}
     async function publishToOwner(){hideModalAlert();resetPubSuccess(); if(!currentUser?.uid)return showModalAlert("Session invalide."); if(!modalCredit?.id)return showModalAlert("Aucun avoir sélectionné."); const d=modalCredit.data||{}, creditDocId=modalCredit.id, creditNum=getCreditNumber(d); if(!creditNum)return showModalAlert("Avoir non émis : numéro d’avoir manquant."); const ownerDocId=modalOwnerDocId||getOwnerDocId(d); if(!ownerDocId)return showModalAlert("Publication impossible : clientOwnerDocId manquant sur cet avoir."); let ownerUid=String(modalOwnerUid||getOwnerUidFast(d)||"").trim(); if(!ownerUid)ownerUid=await resolveOwnerUidFromOwnerDoc(ownerDocId); if(!ownerUid)return showModalAlert("Publication impossible : ownerUid introuvable (owners.ownerUid)."); if(isCreditAlreadyPublishedToOwner(d)){refreshOwnerPublishUI(d);showPubSuccess("Avoir");return showModalAlert("ℹ️ Déjà publié côté propriétaire.",true);} publishOwnerBtn.disabled=true; try{const msg=String(pubText.value||"").trim(), homeName=String(d.homeName||"").trim(), total=Math.abs(Number.isFinite(Number(d.totalTTC))?Number(d.totalTTC):Number(computeTotals(d).ttc)||0); await updateDoc(doc(db,"salesDocuments",creditDocId),{ownerUid,clientOwnerDocId:ownerDocId,ownerVisible:true,creditStatus:"SENT",sentAt:serverTimestamp(),ownerPublishedAt:serverTimestamp(),updatedAt:serverTimestamp()}); try{await upsertRequestForDoc({salesDocId:creditDocId,ownerUid,ownerDocId,docType:"credit",number:creditNum,homeName,totalTTC:total,note:msg});}catch(e){console.warn("upsertRequestForDoc credit failed:",e?.message||e);} await createBillingThreadMessage({ownerUid,ownerDocId,creditDocId,creditNumber:creditNum,message:msg,homeName,amount:total}); showPubSuccess("Avoir"); showModalAlert("✅ Publication effectuée côté propriétaire.",true); await loadCredits(currentUser.uid); const fresh=allItems.find(x=>x.id===creditDocId); if(fresh){modalCredit={id:fresh.id,data:fresh.data};modalCreditAlreadyPublished=true;await hydrateOwnerBox(fresh.data);refreshOwnerPublishUI(fresh.data);}}catch(e){console.error(e);publishOwnerBtn.disabled=false;showModalAlert("⛔ Erreur publication : "+(e?.message||"inconnue"));}}
