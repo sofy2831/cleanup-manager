@@ -989,6 +989,7 @@
   let currentUser = null;
   let allItems = [];
   let creditsByInvoiceId = new Map();
+  let statementsByOwnerMonth = new Map();
   let vatEnabled = false;
   let vatRate = 0;
   let conciergerieCompanyName = "Conciergerie";
@@ -1227,6 +1228,67 @@
     if(x?.createdAtMs) return fmtDateFR(new Date(Number(x.createdAtMs)));
     if(x?.snapAtMs) return fmtDateFR(new Date(Number(x.snapAtMs)));
     return "—";
+  }
+
+  function toDateFromAny(x){
+    try{
+      if(!x) return null;
+      if(x?.toDate?.()) return x.toDate();
+      if(typeof x?.seconds === "number") return new Date(x.seconds * 1000);
+      if(x instanceof Date && !isNaN(x.getTime())) return x;
+      if(typeof x === "number" && Number.isFinite(x) && x > 0) return new Date(x);
+      const d = new Date(x);
+      return isNaN(d.getTime()) ? null : d;
+    }catch{
+      return null;
+    }
+  }
+
+  function dateKeyFromAny(x){
+    const d = toDateFromAny(x);
+    if(!d) return "";
+    return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
+  }
+
+  function getInvoiceDateKey(d){
+    const direct = String(d?.docDateKey || d?.invoiceDateKey || d?.dateKey || "").trim();
+    if(/^\d{4}-\d{2}-\d{2}$/.test(direct)) return direct;
+
+    const issueDate = String(d?.invoiceDate || d?.date || "").trim();
+    if(/^\d{4}-\d{2}-\d{2}/.test(issueDate)) return issueDate.slice(0,10);
+
+    return dateKeyFromAny(d?.createdAt)
+      || dateKeyFromAny(Number(d?.createdAtMs || 0))
+      || dateKeyFromAny(Number(d?.snapAtMs || 0));
+  }
+
+  function getInvoicePeriodKey(d){
+    const explicit = String(d?.periodKey || d?.statementPeriodKey || "").trim();
+    if(/^\d{4}-\d{2}$/.test(explicit)) return explicit;
+
+    const dateKey = getInvoiceDateKey(d);
+    return /^\d{4}-\d{2}-\d{2}$/.test(dateKey) ? dateKey.slice(0,7) : "";
+  }
+
+  function statementMapKey(ownerDocId, periodKey){
+    return `${String(ownerDocId || "").trim()}__${String(periodKey || "").trim()}`;
+  }
+
+  function statementPublishedDate(st){
+    return toDateFromAny(st?.publishedAt) || toDateFromAny(st?.updatedAt) || toDateFromAny(st?.createdAt);
+  }
+
+  function fmtStatementDate(st){
+    const d = statementPublishedDate(st);
+    if(!d) return "";
+    return d.toLocaleString("fr-FR");
+  }
+
+  function getStatementForInvoice(d){
+    const ownerDocId = getOwnerDocId(d);
+    const periodKey = getInvoicePeriodKey(d);
+    if(!ownerDocId || !periodKey) return null;
+    return statementsByOwnerMonth.get(statementMapKey(ownerDocId, periodKey)) || null;
   }
 
   function getAvoirId(x){
@@ -1977,6 +2039,7 @@ async function publishToOwner(){
     const created = getCreatedAt(d);
     const totals = computeTotals(d);
     const st = badgeForStatus(getInvoiceStatusDisplay(d));
+    const statement = getStatementForInvoice(d);
 
     const home = String(d?.homeName || "—").trim();
     const period = (d?.arrivalDateKey || d?.departureDateKey)
@@ -2023,6 +2086,7 @@ const avoirTotal = Number(avoirData.totalTTC || 0);
         <div class="meta">
           <div><span class="mut">Client :</span> ${esc(client)}${email ? ` <span class="mut">•</span> ${esc(email)}` : ""}</div>
           <div><span class="mut">Date :</span> ${esc(created)} <span class="mut">•</span> <span class="mut">Total :</span> ${esc(fmtMoney(totals.ttc))}</div>
+          ${statement ? `<div><span class="mut">Relevé :</span> ${esc(statement.periodKey || getInvoicePeriodKey(d))} envoyé${fmtStatementDate(statement) ? ` le ${esc(fmtStatementDate(statement))}` : ""}</div>` : ``}
           <div><span class="mut">Logement :</span> ${esc(home)} <span class="mut">•</span> <span class="mut">Période :</span> ${esc(period)}</div>
          ${avoirActive ? `
   <div><span class="mut">Facture :</span> ${esc(invNum)} <span class="mut">•</span> ${esc(fmtMoney(totals.ttc))}</div>
@@ -2109,6 +2173,43 @@ const avoirTotal = Number(avoirData.totalTTC || 0);
     }
   }
 
+async function loadPublishedStatementsForInvoices(uid){
+  statementsByOwnerMonth = new Map();
+
+  try{
+    const qStmt = query(
+      collection(db, "ownerStatements"),
+      where("conciergerieUid", "==", uid),
+      limit(500)
+    );
+
+    const snap = await getDocs(qStmt);
+
+    snap.forEach(s => {
+      const d = s.data() || {};
+      const ownerVisible = d.ownerVisible === true || !!d.publishedAt;
+      if(!ownerVisible) return;
+
+      const ownerDocId = String(d.ownerDocId || "").trim();
+      const periodKey = String(d.periodKey || "").trim();
+      if(!ownerDocId || !periodKey) return;
+
+      const key = statementMapKey(ownerDocId, periodKey);
+      const current = statementsByOwnerMonth.get(key);
+
+      const currentDate = statementPublishedDate(current);
+      const nextDate = statementPublishedDate(d);
+
+      if(!current || (nextDate && (!currentDate || nextDate > currentDate))){
+        statementsByOwnerMonth.set(key, { id:s.id, ...d });
+      }
+    });
+  }catch(e){
+    console.warn("Relevés publiés indisponibles :", e?.message || e);
+    statementsByOwnerMonth = new Map();
+  }
+}
+
 async function loadCreditsForInvoices(uid){
   creditsByInvoiceId = new Map();
 
@@ -2155,6 +2256,7 @@ async function loadCreditsForInvoices(uid){
     }));
 
     await loadCreditsForInvoices(uid);
+    await loadPublishedStatementsForInvoices(uid);
     
     applyFilters();
   }
