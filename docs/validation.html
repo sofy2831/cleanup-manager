@@ -333,7 +333,7 @@
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
-      collectionGroup, query, where, orderBy, getDocs,
+      collection, collectionGroup, query, where, orderBy, getDocs,
       doc, updateDoc, getDoc, serverTimestamp
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
@@ -497,7 +497,17 @@ Agent : ${esc(r.assignedToName || "—")}${r.assignedToEmail ? " • " + esc(r.a
               updatedAt: serverTimestamp()
             });
 
-            await tryPromoteEventToBonAFacturer(eventId);
+            const queueRef = doc(db, "missionQueue", `${eventId}_${String(missionId || "").toUpperCase()}`);
+            const queueSnap = await getDoc(queueRef);
+            if(queueSnap.exists()){
+              await updateDoc(queueRef, {
+                status: "VALIDEE",
+                validatedAt: serverTimestamp(),
+                updatedAt: serverTimestamp()
+              });
+            }
+
+            await tryPromoteEventToRealisee(eventId);
 
             showToast("✅ Mission validée.", true);
             await load();
@@ -519,35 +529,65 @@ Agent : ${esc(r.assignedToName || "—")}${r.assignedToEmail ? " • " + esc(r.a
       }
     }
 
-    async function tryPromoteEventToBonAFacturer(eventId){
-      // ✅ BON_A_FACTURER si chaque mission est VALIDEE OU NON_REQUISE
+    async function tryPromoteEventToRealisee(eventId){
+      // Une prestation devient REALISEE uniquement lorsque toutes les missions
+      // réellement attendues pour cet event sont VALIDEE (ou NON_REQUISE).
       try{
         const eRef = doc(db, "events", eventId);
         const eSnap = await getDoc(eRef);
         if(!eSnap.exists()) return;
+
         const e = eSnap.data() || {};
         if(e.conciergerieUid !== currentUser.uid) return;
 
-        const ids = ["CHECKIN","MENAGE","CHECKOUT"];
-        let allOk = true;
+        const businessIds = new Set(["CHECKIN","MENAGE","CHECKOUT","LINGE","MAINTENANCE","KITS"]);
 
+        // Source prioritaire : missionTypes enregistré par intervention.html.
+        let ids = Array.isArray(e.missionTypes)
+          ? e.missionTypes
+              .map(x => String(x || "").toUpperCase().trim())
+              .filter(x => businessIds.has(x))
+          : [];
+
+        ids = [...new Set(ids)];
+
+        // Compatibilité avec d'anciens events sans missionTypes : on lit les
+        // missions métier existantes dans la sous-collection (PHOTOS exclue).
+        if(!ids.length){
+          const mSnap = await getDocs(collection(db, "events", eventId, "missions"));
+          ids = mSnap.docs
+            .map(d => String(d.id || d.data()?.missionId || d.data()?.type || "").toUpperCase().trim())
+            .filter(x => businessIds.has(x));
+          ids = [...new Set(ids)];
+        }
+
+        if(!ids.length) return;
+
+        let allOk = true;
         for(const mid of ids){
-          const mSnap = await getDoc(doc(db, "events", eventId, "missions", mid));
-          if(!mSnap.exists()){ allOk = false; break; }
-          const m = mSnap.data() || {};
-          const st = (m.status || "").toUpperCase();
-          if(st !== "VALIDEE" && st !== "NON_REQUISE"){ allOk = false; break; }
+          const oneMission = await getDoc(doc(db, "events", eventId, "missions", mid));
+          if(!oneMission.exists()){
+            allOk = false;
+            break;
+          }
+
+          const st = String(oneMission.data()?.status || "").toUpperCase().trim();
+          if(st !== "VALIDEE" && st !== "NON_REQUISE"){
+            allOk = false;
+            break;
+          }
         }
 
         if(allOk){
           await updateDoc(eRef, {
-            status: "BON_A_FACTURER",
+            status: "REALISEE",
+            opStatus: "REALISEE",
             statusUpdatedAt: serverTimestamp(),
             updatedAt: serverTimestamp()
           });
         }
-      }catch{
-        // silencieux
+      }catch(err){
+        console.error("tryPromoteEventToRealisee", err);
       }
     }
 
@@ -572,6 +612,7 @@ Agent : ${esc(r.assignedToName || "—")}${r.assignedToEmail ? " • " + esc(r.a
 
         await updateDoc(doc(db, "events", redoTarget.eventId), {
           status: "EN_COURS",
+          opStatus: "EN_COURS",
           statusUpdatedAt: serverTimestamp(),
           updatedAt: serverTimestamp()
         });
