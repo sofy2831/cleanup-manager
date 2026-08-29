@@ -324,6 +324,20 @@
     return getParam("token");
   }
 
+  const consultMode = getParam("consult") === "1";
+  const consultOwnerDocId = getParam("ownerDocId");
+  let targetOwnerUid = "";
+  let currentConciergerieUid = "";
+
+  function consultUrl(page){
+    if(!consultMode) return withToken(page);
+    const p = new URLSearchParams();
+    p.set("consult","1");
+    p.set("ownerDocId", consultOwnerDocId);
+    p.set("returnTo","clients");
+    return `${page}?${p.toString()}`;
+  }
+
   function withToken(url){
     const token = getToken();
     if(!token) return url;
@@ -450,7 +464,7 @@
       <div class="row">
         <span></span>
         <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;">
-          ${openHref ? `<a class="btn" href="${esc(openHref)}">Ouvrir</a>` : `<span class="tiny">—</span>`}
+          ${consultMode ? `<span class="tiny">Consultation</span>` : (openHref ? `<a class="btn" href="${esc(openHref)}">Ouvrir</a>` : `<span class="tiny">—</span>`)}
         </div>
       </div>
     `;
@@ -481,7 +495,7 @@
       <div class="row">
         <span></span>
         <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;">
-          ${openHref ? `<a class="btn" href="${esc(openHref)}">Ouvrir</a>` : `<span class="tiny">—</span>`}
+          ${consultMode ? `<span class="tiny">Consultation</span>` : (openHref ? `<a class="btn" href="${esc(openHref)}">Ouvrir</a>` : `<span class="tiny">—</span>`)}
         </div>
       </div>
     `;
@@ -551,8 +565,8 @@
     const qsSales = query(
       collection(db, "salesDocuments"),
       where("ownerUid", "==", uid),
-      where("ownerVisible", "==", true),
-      orderBy("createdAt", "desc")
+      where("conciergerieUid", "==", String(currentConciergerieUid)),
+      where("ownerVisible", "==", true)
     );
 
     unsubSales = onSnapshot(qsSales, (snap)=>{
@@ -563,13 +577,7 @@
       const msg = String(err?.message || "");
       const low = msg.toLowerCase();
 
-      if(low.includes("index")){
-        showAlert(
-          alertHistory,
-          "⛔ Index Firestore manquant.\nCrée l’index composite : salesDocuments (ownerUid ASC, ownerVisible ASC, createdAt DESC).\nPuis recharge.",
-          false
-        );
-      }else if(low.includes("permission")){
+      if(low.includes("permission")){
         showAlert(
           alertHistory,
           "⛔ Permission refusée sur salesDocuments.\nRule attendue : lecture owner autorisée si ownerUid == auth.uid ET ownerVisible == true.",
@@ -583,8 +591,8 @@
     const qsStatements = query(
       collection(db, "ownerStatements"),
       where("ownerUid", "==", uid),
-      where("ownerVisible", "==", true),
-      orderBy("publishedAt", "desc")
+      where("conciergerieUid", "==", String(currentConciergerieUid)),
+      where("ownerVisible", "==", true)
     );
 
     unsubStatements = onSnapshot(qsStatements, (snap)=>{
@@ -595,13 +603,7 @@
       const msg = String(err?.message || "");
       const low = msg.toLowerCase();
 
-      if(low.includes("index")){
-        showAlert(
-          alertHistory,
-          "⛔ Index Firestore manquant.\nCrée l’index composite : ownerStatements (ownerUid ASC, ownerVisible ASC, publishedAt DESC).\nPuis recharge.",
-          false
-        );
-      }else if(low.includes("permission")){
+      if(low.includes("permission")){
         showAlert(
           alertHistory,
           "⛔ Permission refusée sur ownerStatements.\nRule attendue : lecture owner autorisée si ownerUid == auth.uid ET ownerVisible == true.",
@@ -614,11 +616,15 @@
   }
 
   function wireOwnerLinks(){
-    dashboardLink.href = buildOwnerUrl("owner-dashboard.html");
-    navDashboard.href  = buildOwnerUrl("owner-dashboard.html");
-    navPlanning.href   = buildOwnerUrl("owner-planning.html");
-    navHomes.href      = buildOwnerUrl("owner-homes.html");
-    navMessages.href   = buildOwnerUrl("owner-messages.html");
+    dashboardLink.href = consultUrl("owner-dashboard.html");
+    navDashboard.href  = consultUrl("owner-dashboard.html");
+    navPlanning.href   = consultUrl("owner-planning.html");
+    navHomes.href      = consultUrl("owner-homes.html");
+    navMessages.href   = consultUrl("owner-messages.html");
+
+    if(consultMode){
+      dashboardLink.textContent = "← Espace propriétaire";
+    }
   }
 
   function safeFileName(s){
@@ -865,18 +871,53 @@ ${bodyHtml}
   downloadZipBtn.addEventListener("click", downloadDocumentsZip);
 
   onAuthStateChanged(auth, async (user)=>{
-    wireOwnerLinks();
-
     if(!user){
-      location.href = buildOwnerUrl("login.html?role=proprietaire");
+      location.replace(consultMode ? "login.html?role=conciergerie" : withToken("login.html?role=proprietaire"));
       return;
     }
 
-    const g = await guardOwnerProfile(user);
-    if(!g.ok) return;
+    try{
+      const us = await getDoc(doc(db,"users", user.uid));
+      const ud = us.exists() ? (us.data() || {}) : {};
+      const role = String(ud.role || "").toLowerCase().trim();
 
-    resetUnreadBilling();
-    listenSalesHistory(user.uid);
+      let ownerUidForRead = user.uid;
+
+      if(consultMode){
+        if(role !== "conciergerie" && role !== "admin"){
+          throw new Error("Accès consultation réservé à la conciergerie.");
+        }
+        if(!consultOwnerDocId) throw new Error("ownerDocId manquant.");
+
+        const os = await getDoc(doc(db,"owners", consultOwnerDocId));
+        if(!os.exists()) throw new Error("Propriétaire introuvable.");
+
+        const od = os.data() || {};
+        currentConciergerieUid = String(od.conciergerieUid || "").trim();
+        targetOwnerUid = String(od.uid || "").trim();
+
+        if(!currentConciergerieUid || !targetOwnerUid) throw new Error("Lien propriétaire incomplet.");
+        if(role !== "admin" && currentConciergerieUid !== user.uid){
+          throw new Error("Accès refusé à ce propriétaire.");
+        }
+
+        ownerUidForRead = targetOwnerUid;
+      }else{
+        if(role !== "proprietaire") throw new Error("Compte propriétaire requis.");
+
+        const guard = await guardOwnerProfile(user);
+        if(!guard.ok) return;
+
+        currentConciergerieUid = String(ud.conciergerieUid || "").trim();
+        ownerUidForRead = user.uid;
+      }
+
+      wireOwnerLinks();
+      listenSalesHistory(ownerUidForRead);
+    }catch(e){
+      console.error(e);
+      showAlert(alertHistory, "⛔ " + (e?.message || "Erreur chargement facturation"), false);
+    }
   });
 
   window.addEventListener("focus", ()=> resetUnreadBilling());

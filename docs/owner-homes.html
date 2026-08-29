@@ -160,15 +160,15 @@
 <div class="page">
 
   <div class="topbar">
-    <a class="pill" href="owner-dashboard.html">← Dashboard</a>
+    <a class="pill" id="backBtn" href="owner-dashboard.html">← Dashboard</a>
     <!-- pas de déconnexion ici (déjà dans dashboard) -->
   </div>
 
   <div class="wrap">
 
     <div class="card">
-      <h1>Mes logements</h1>
-      <div class="subtitle">Seuls tes logements rattachés sont visibles ici.</div>
+      <h1 id="pageTitle">Mes logements</h1>
+      <div class="subtitle" id="pageSubtitle">Seuls tes logements rattachés sont visibles ici.</div>
 
       <div class="alert" id="alertBox"></div>
 
@@ -184,10 +184,10 @@
 </div>
 
 <nav class="bottom-nav" aria-label="Navigation propriétaire">
-  <a href="owner-dashboard.html">Dashboard</a>
-  <a href="owner-planning.html">Planning</a>
-  <a class="active" href="owner-homes.html">Logements</a>
-  <a href="owner-messages.html">Messages</a>
+  <a id="navDash" href="owner-dashboard.html">Dashboard</a>
+  <a id="navPlanning" href="owner-planning.html">Planning</a>
+  <a id="navHomes" class="active" href="owner-homes.html">Logements</a>
+  <a id="navMessages" href="owner-messages.html">Messages</a>
 </nav>
 
 <script type="module">
@@ -201,6 +201,39 @@ import {
 const homesList = document.getElementById("homesList");
 const emptyHomes = document.getElementById("emptyHomes");
 const alertBox = document.getElementById("alertBox");
+const backBtn = document.getElementById("backBtn");
+const pageTitle = document.getElementById("pageTitle");
+const pageSubtitle = document.getElementById("pageSubtitle");
+const navDash = document.getElementById("navDash");
+const navPlanning = document.getElementById("navPlanning");
+const navHomes = document.getElementById("navHomes");
+const navMessages = document.getElementById("navMessages");
+
+const params = new URLSearchParams(location.search);
+const consultMode = params.get("consult") === "1";
+const consultOwnerDocId = (params.get("ownerDocId") || "").trim();
+let targetOwnerUid = "";
+
+function consultUrl(page){
+  if(!consultMode) return page;
+  const p = new URLSearchParams();
+  p.set("consult","1");
+  p.set("ownerDocId", consultOwnerDocId);
+  p.set("returnTo","clients");
+  return `${page}?${p.toString()}`;
+}
+
+if(consultMode){
+  backBtn.textContent = "← Espace propriétaire";
+  backBtn.href = consultUrl("owner-dashboard.html");
+  pageTitle.textContent = "Logements du propriétaire";
+  pageSubtitle.textContent = "Mode consultation conciergerie — lecture seule.";
+  navDash.href = consultUrl("owner-dashboard.html");
+  navPlanning.href = consultUrl("owner-planning.html");
+  navHomes.href = consultUrl("owner-homes.html");
+  // Messages sera activé quand owner-messages.html aura été adapté.
+  navMessages.style.display = "none";
+}
 
 function showAlert(msg, ok=false){
   alertBox.style.display="block";
@@ -225,16 +258,49 @@ function esc(s){
 let unsubHomes = null;
 
 async function loadOwnerContext(user){
-  // source de vérité = users/{uid}
   try{
     const us = await getDoc(doc(db,"users", user.uid));
     const ud = us.exists() ? (us.data()||{}) : {};
-    const ownerDocId = String(ud.ownerDocId || "").trim();
-    const conciergerieUid = String(ud.conciergerieUid || "").trim();
+    const role = String(ud.role || "").toLowerCase().trim();
 
-    return { ownerDocId, conciergerieUid };
-  }catch(_){
-    return { ownerDocId:"", conciergerieUid:"" };
+    if(consultMode){
+      if(role !== "conciergerie" && role !== "admin"){
+        throw new Error("Accès consultation réservé à la conciergerie.");
+      }
+      if(!consultOwnerDocId){
+        throw new Error("ownerDocId manquant.");
+      }
+
+      const os = await getDoc(doc(db,"owners", consultOwnerDocId));
+      if(!os.exists()) throw new Error("Propriétaire introuvable.");
+
+      const od = os.data() || {};
+      const linkedConciergerieUid = String(od.conciergerieUid || "").trim();
+      const ownerUid = String(od.uid || "").trim();
+
+      if(!linkedConciergerieUid || !ownerUid){
+        throw new Error("Lien propriétaire incomplet.");
+      }
+      if(role !== "admin" && linkedConciergerieUid !== user.uid){
+        throw new Error("Accès refusé à ce propriétaire.");
+      }
+
+      targetOwnerUid = ownerUid;
+      return { ownerDocId: consultOwnerDocId, conciergerieUid: linkedConciergerieUid };
+    }
+
+    if(role !== "proprietaire"){
+      throw new Error("Compte propriétaire requis.");
+    }
+
+    targetOwnerUid = user.uid;
+    return {
+      ownerDocId: String(ud.ownerDocId || "").trim(),
+      conciergerieUid: String(ud.conciergerieUid || "").trim()
+    };
+  }catch(e){
+    console.error(e);
+    return { ownerDocId:"", conciergerieUid:"", error:e };
   }
 }
 
@@ -252,7 +318,7 @@ function subscribeHomes(user, ctx){
       )
     : query(
         collection(db,"homes"),
-        where("ownerUid","==", user.uid)
+        where("ownerUid","==", targetOwnerUid || user.uid)
       );
 
   unsubHomes = onSnapshot(qHomes, (snap)=>{
@@ -294,15 +360,20 @@ function subscribeHomes(user, ctx){
 
 onAuthStateChanged(auth, async (user)=>{
   if(!user){
-    location.href="login.html?role=proprietaire";
+    location.href = consultMode ? "login.html?role=conciergerie" : "login.html?role=proprietaire";
     return;
   }
 
   const ctx = await loadOwnerContext(user);
 
-  // si pas rattaché, on reste clean côté UI
   if(!ctx.ownerDocId || !ctx.conciergerieUid){
-    showAlert("Ton compte n’est pas encore rattaché à une conciergerie. Va dans Messages pour demander le rattachement.", false);
+    showAlert(
+      consultMode
+        ? "Accès consultation impossible : " + (ctx.error?.message || "lien propriétaire invalide.")
+        : "Ton compte n’est pas encore rattaché à une conciergerie.",
+      false
+    );
+    return;
   }
 
   subscribeHomes(user, ctx);

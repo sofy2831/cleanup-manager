@@ -251,12 +251,12 @@
 <body>
 <div class="page">
   <div class="topbar">
-    <a class="pill" href="owner-dashboard.html#planning">← Dashboard</a>
+    <a class="pill" id="backBtn" href="owner-dashboard.html#planning">← Dashboard</a>
   </div>
 
   <div class="wrap">
     <div class="card">
-      <h1>Planning</h1>
+      <h1 id="pageTitle">Planning</h1>
       <div class="subtitle" id="subtitleLine">—</div>
 
       <div class="row">
@@ -308,10 +308,10 @@
 </div>
 
 <nav class="bottom-nav" aria-label="Navigation propriétaire">
-  <a href="owner-dashboard.html">Dashboard</a>
-  <a class="active" href="owner-planning.html">Planning</a>
-  <a href="owner-homes.html">Logements</a>
-  <a href="owner-messages.html">Messages</a>
+  <a id="navDash" href="owner-dashboard.html">Dashboard</a>
+  <a id="navPlanning" class="active" href="owner-planning.html">Planning</a>
+  <a id="navHomes" href="owner-homes.html">Logements</a>
+  <a id="navMessages" href="owner-messages.html">Messages</a>
 </nav>
 
 <script type="module">
@@ -368,6 +368,7 @@ function extractLineLabels(e){
 }
 
 /* UI */
+const urlParams = new URLSearchParams(location.search);
 const homeSelect   = document.getElementById("homeSelect");
 const rangeSelect  = document.getElementById("rangeSelect");
 const subtitleLine = document.getElementById("subtitleLine");
@@ -380,6 +381,33 @@ const calTitle     = document.getElementById("calTitle");
 const calGrid      = document.getElementById("calGrid");
 const prevMonthBtn = document.getElementById("prevMonthBtn");
 const nextMonthBtn = document.getElementById("nextMonthBtn");
+const backBtn = document.getElementById("backBtn");
+const navDash = document.getElementById("navDash");
+const navPlanning = document.getElementById("navPlanning");
+const navHomes = document.getElementById("navHomes");
+const navMessages = document.getElementById("navMessages");
+
+const consultMode = urlParams.get("consult") === "1";
+const consultOwnerDocId = (urlParams.get("ownerDocId") || "").trim();
+let targetOwnerUid = "";
+
+function consultUrl(page){
+  if(!consultMode) return page;
+  const p = new URLSearchParams();
+  p.set("consult","1");
+  p.set("ownerDocId", consultOwnerDocId);
+  p.set("returnTo","clients");
+  return `${page}?${p.toString()}`;
+}
+
+if(consultMode){
+  backBtn.textContent = "← Espace propriétaire";
+  backBtn.href = consultUrl("owner-dashboard.html");
+  navDash.href = consultUrl("owner-dashboard.html");
+  navPlanning.href = consultUrl("owner-planning.html");
+  navHomes.href = consultUrl("owner-homes.html");
+  navMessages.style.display = "none";
+}
 
 function showAlert(msg, ok=false){
   alertBox.style.display="block";
@@ -424,7 +452,6 @@ viewMonth = new Date(viewMonth.getFullYear(), viewMonth.getMonth(), 1);
 
 /* Selected day */
 const todayKey = toKey(new Date());
-const urlParams = new URLSearchParams(location.search);
 let selectedKey =
   (urlParams.get("dateKey") || "").trim()
   || (localStorage.getItem("owner_planning_selectedKey") || "").trim()
@@ -756,9 +783,12 @@ function listenIcalForOwner(){
   stopIcalListener();
   if(!currentUser) return;
 
+  const ownerUidForRead = String(targetOwnerUid || currentUser.uid);
+
   const qIcal = query(
     collection(db,"icalEvents"),
-    where("ownerUid","==", String(currentUser.uid))
+    where("ownerUid","==", ownerUidForRead),
+    where("conciergerieUid","==", String(conciergerieUid))
   );
 
   unsubIcal = onSnapshot(qIcal, (snap)=>{
@@ -766,7 +796,7 @@ function listenIcalForOwner(){
 
     snap.forEach(docSnap=>{
       const data = docSnap.data() || {};
-      if(String(data.ownerUid||"") !== String(currentUser.uid)) return; // parano
+      if(String(data.ownerUid||"") !== ownerUidForRead) return; // contrôle cible
      if(data.archived === true) return;
 
       icalMap.set(docSnap.id,{ id: docSnap.id, ...data });
@@ -824,6 +854,7 @@ function listenEventsByHomeIds(){
   for(const ids of chunks){
     const qEvents = query(
       collection(db,"events"),
+      where("conciergerieUid","==", String(conciergerieUid)),
       where("homeId","in", ids),
       where("dateKey", ">=", minKey),
       where("dateKey", "<=", maxKey),
@@ -877,7 +908,7 @@ function listenHomesForOwner(){
       )
     : query(
         collection(db,"homes"),
-        where("ownerUid","==", String(currentUser.uid))
+        where("ownerUid","==", String(targetOwnerUid || currentUser.uid))
       );
 
   unsubHomes = onSnapshot(qh, (snap)=>{
@@ -922,7 +953,7 @@ nextMonthBtn.addEventListener("click", ()=>{
 /* Boot */
 onAuthStateChanged(auth, async (user)=>{
   if(!user){
-    location.href="login.html?role=proprietaire";
+    location.href = consultMode ? "login.html?role=conciergerie" : "login.html?role=proprietaire";
     return;
   }
   currentUser = user;
@@ -930,12 +961,52 @@ onAuthStateChanged(auth, async (user)=>{
   try{
     const us = await getDoc(doc(db,"users", user.uid));
     const ud = us.exists() ? (us.data()||{}) : {};
-    ownerDocId = String(ud.ownerDocId || "").trim();
-    conciergerieUid = String(ud.conciergerieUid || "").trim();
-  }catch(_){}
+    const role = String(ud.role || "").toLowerCase().trim();
+
+    if(consultMode){
+      if(role !== "conciergerie" && role !== "admin"){
+        throw new Error("Accès consultation réservé à la conciergerie.");
+      }
+      if(!consultOwnerDocId){
+        throw new Error("ownerDocId manquant.");
+      }
+
+      const os = await getDoc(doc(db,"owners", consultOwnerDocId));
+      if(!os.exists()) throw new Error("Propriétaire introuvable.");
+
+      const od = os.data() || {};
+      ownerDocId = consultOwnerDocId;
+      conciergerieUid = String(od.conciergerieUid || "").trim();
+      targetOwnerUid = String(od.uid || "").trim();
+
+      if(!conciergerieUid || !targetOwnerUid){
+        throw new Error("Lien propriétaire incomplet.");
+      }
+      if(role !== "admin" && conciergerieUid !== user.uid){
+        throw new Error("Accès refusé à ce propriétaire.");
+      }
+    }else{
+      if(role !== "proprietaire"){
+        throw new Error("Compte propriétaire requis.");
+      }
+      ownerDocId = String(ud.ownerDocId || "").trim();
+      conciergerieUid = String(ud.conciergerieUid || "").trim();
+      targetOwnerUid = user.uid;
+    }
+  }catch(e){
+    console.error(e);
+    showAlert(
+      consultMode
+        ? "Accès consultation impossible : " + (e?.message || "erreur")
+        : "⚠️ Compte propriétaire non rattaché.",
+      false
+    );
+    return;
+  }
 
   if(!ownerDocId || !conciergerieUid){
-    showAlert("⚠️ Compte pas encore rattaché (ownerDocId/conciergerieUid). Va sur Profil puis Enregistrer.", false);
+    showAlert("⚠️ Compte pas encore rattaché (ownerDocId/conciergerieUid).", false);
+    return;
   }else{
     hideAlert();
   }

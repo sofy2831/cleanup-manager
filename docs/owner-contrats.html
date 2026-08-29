@@ -46,9 +46,12 @@
     const ownerBadge=document.getElementById("ownerBadge"),alertBox=document.getElementById("alertBox"),listEl=document.getElementById("list"),filterStatus=document.getElementById("filterStatus"),searchInput=document.getElementById("searchInput"),refreshBtn=document.getElementById("refreshBtn");
     const backBtn=document.getElementById("backBtn"),messagesBtn=document.getElementById("messagesBtn"),navDashboard=document.getElementById("navDashboard"),navPlanning=document.getElementById("navPlanning"),navHomes=document.getElementById("navHomes"),navMessages=document.getElementById("navMessages");
     const params=new URLSearchParams(location.search),token=String(params.get("token")||"").trim();
-    let currentUser=null,currentOwnerDocId="",currentConciergerieUid="",allContracts=[],conciergerieName="";
+    const consultMode=params.get("consult")==="1";
+    const consultOwnerDocId=String(params.get("ownerDocId")||"").trim();
+    let currentUser=null,currentOwnerDocId="",currentConciergerieUid="",targetOwnerUid="",allContracts=[],conciergerieName="";
     function withToken(url){if(!token)return url;const u=new URL(url,location.href);u.searchParams.set("token",token);return u.pathname+"?"+u.searchParams.toString()}
-    backBtn.href=withToken("owner-dashboard.html");messagesBtn.href=withToken("owner-messages.html");navDashboard.href=withToken("owner-dashboard.html");navPlanning.href=withToken("owner-planning.html");navHomes.href=withToken("owner-homes.html");navMessages.href=withToken("owner-messages.html");
+    function consultUrl(page){if(!consultMode)return withToken(page);const p=new URLSearchParams();p.set("consult","1");p.set("ownerDocId",consultOwnerDocId);p.set("returnTo","clients");return `${page}?${p.toString()}`}
+    backBtn.href=consultUrl("owner-dashboard.html");messagesBtn.href=consultUrl("owner-messages.html");navDashboard.href=consultUrl("owner-dashboard.html");navPlanning.href=consultUrl("owner-planning.html");navHomes.href=consultUrl("owner-homes.html");navMessages.href=consultUrl("owner-messages.html");if(consultMode){backBtn.textContent="← Espace propriétaire";}
     function esc(s){return String(s||"").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#039;")}
     function showAlert(msg){alertBox.style.display="block";alertBox.textContent=msg}function hideAlert(){alertBox.style.display="none";alertBox.textContent=""}function normalize(s){return String(s||"").trim().toLowerCase()}
     function fmtDate(x){if(!x)return"—";try{if(x?.toDate?.())return x.toDate().toLocaleDateString("fr-FR");const s=String(x).trim();if(/^\d{4}-\d{2}-\d{2}$/.test(s)){const[y,m,d]=s.split("-");return `${d}/${m}/${y}`}const d=new Date(s);if(!isNaN(d.getTime()))return d.toLocaleDateString("fr-FR");return"—"}catch{return"—"}}
@@ -57,12 +60,47 @@
     function matchesFilter(item){const f=String(filterStatus.value||"ALL").toUpperCase();if(f==="ALL")return true;return String(item.contractStatus||"DRAFT").toUpperCase()===f}
     function matchesSearch(item){const q=normalize(searchInput.value);if(!q)return true;const hay=[item.contractNumber,item.title,item.homeName,item.homeAddress,item.clientName,item.businessSnapshot?.companyName,conciergerieName].filter(Boolean).join(" ").toLowerCase();return hay.includes(q)}
     function getFiltered(){return allContracts.filter(x=>matchesFilter(x)&&matchesSearch(x))}
-    function renderList(){const rows=getFiltered();listEl.innerHTML="";if(!rows.length){const empty=document.createElement("div");empty.className="empty";empty.textContent="Aucun contrat visible pour le moment.";listEl.appendChild(empty);return}rows.forEach(c=>{const st=statusMeta(c.contractStatus),title=String(c.title||"Contrat de prestation de conciergerie").trim(),number=String(c.contractNumber||"—").trim(),home=String(c.homeName||"Contrat général").trim(),business=String(c.businessSnapshot?.companyName||conciergerieName||"Conciergerie").trim();const u=new URL("contrat-apercu.html",location.href);u.searchParams.set("docId",c.id);u.searchParams.set("owner","1");if(token)u.searchParams.set("token",token);const card=document.createElement("div");card.className="card";card.innerHTML=`<div class="left"><div class="row1"><span class="num">${esc(title)}</span><span class="status ${esc(st.cls)}">${esc(st.txt)}</span></div><div class="meta"><div><span class="mut">N° :</span> ${esc(number)}</div><div><span class="mut">Conciergerie :</span> ${esc(business)}</div><div><span class="mut">Logement :</span> ${esc(home)}</div><div><span class="mut">Période :</span> ${esc(periodLabel(c))}</div></div></div><div class="right"><a class="btn primary" href="${u.pathname+"?"+u.searchParams.toString()}">Aperçu</a></div>`;listEl.appendChild(card)})}
+    function renderList(){const rows=getFiltered();listEl.innerHTML="";if(!rows.length){const empty=document.createElement("div");empty.className="empty";empty.textContent="Aucun contrat visible pour le moment.";listEl.appendChild(empty);return}rows.forEach(c=>{const st=statusMeta(c.contractStatus),title=String(c.title||"Contrat de prestation de conciergerie").trim(),number=String(c.contractNumber||"—").trim(),home=String(c.homeName||"Contrat général").trim(),business=String(c.businessSnapshot?.companyName||conciergerieName||"Conciergerie").trim();const u=new URL("contrat-apercu.html",location.href);u.searchParams.set("docId",c.id);u.searchParams.set("owner","1");if(token)u.searchParams.set("token",token);const card=document.createElement("div");card.className="card";card.innerHTML=`<div class="left"><div class="row1"><span class="num">${esc(title)}</span><span class="status ${esc(st.cls)}">${esc(st.txt)}</span></div><div class="meta"><div><span class="mut">N° :</span> ${esc(number)}</div><div><span class="mut">Conciergerie :</span> ${esc(business)}</div><div><span class="mut">Logement :</span> ${esc(home)}</div><div><span class="mut">Période :</span> ${esc(periodLabel(c))}</div></div></div><div class="right">${consultMode ? `<span class="status">Consultation</span>` : `<a class="btn primary" href="${u.pathname+"?"+u.searchParams.toString()}">Aperçu</a>`}</div>`;listEl.appendChild(card)})}
     async function loadConciergerieName(uid){try{if(!uid)return"";const snap=await getDoc(doc(db,"users",uid));const d=snap.exists()?(snap.data()||{}):{};return String(d?.businessProfile?.companyName||d?.companyName||"").trim()}catch{return""}}
-    async function loadContracts(){hideAlert();listEl.innerHTML='<div class="empty">Chargement des contrats…</div>';const qContracts=query(collection(db,"contracts"),where("ownerUid","==",String(currentUser.uid)),where("conciergerieUid","==",String(currentConciergerieUid)),where("ownerVisible","==",true),orderBy("updatedAt","desc"),limit(100));const snap=await getDocs(qContracts);allContracts=snap.docs.map(s=>({id:s.id,...(s.data()||{})}));renderList()}
-    async function initUser(user){currentUser=user;const us=await getDoc(doc(db,"users",user.uid));const ud=us.exists()?(us.data()||{}):{};const role=String(ud.role||"").toLowerCase().trim();if(role!=="proprietaire"){location.replace(withToken("login.html?role=proprietaire"));return}currentOwnerDocId=String(ud.ownerDocId||"").trim();currentConciergerieUid=String(ud.conciergerieUid||"").trim();if(!currentOwnerDocId||!currentConciergerieUid){location.replace(withToken("profil-proprietaire.html?self=1"));return}const name=String(ud.fullname||ud.displayName||user.email||"Propriétaire").trim();conciergerieName=await loadConciergerieName(currentConciergerieUid);ownerBadge.textContent=`${name}${conciergerieName?" • "+conciergerieName:""}`;await loadContracts()}
+    async function loadContracts(){hideAlert();listEl.innerHTML='<div class="empty">Chargement des contrats…</div>';const qContracts=query(collection(db,"contracts"),where("ownerUid","==",String(targetOwnerUid||currentUser.uid)),where("conciergerieUid","==",String(currentConciergerieUid)),where("ownerVisible","==",true),orderBy("updatedAt","desc"),limit(100));const snap=await getDocs(qContracts);allContracts=snap.docs.map(s=>({id:s.id,...(s.data()||{})}));renderList()}
+    async function initUser(user){
+      currentUser=user;
+      const us=await getDoc(doc(db,"users",user.uid));
+      const ud=us.exists()?(us.data()||{}):{};
+      const role=String(ud.role||"").toLowerCase().trim();
+
+      let name="Propriétaire";
+
+      if(consultMode){
+        if(role!=="conciergerie" && role!=="admin") throw new Error("Accès consultation réservé à la conciergerie.");
+        if(!consultOwnerDocId) throw new Error("ownerDocId manquant.");
+
+        const os=await getDoc(doc(db,"owners",consultOwnerDocId));
+        if(!os.exists()) throw new Error("Propriétaire introuvable.");
+        const od=os.data()||{};
+
+        currentOwnerDocId=consultOwnerDocId;
+        currentConciergerieUid=String(od.conciergerieUid||"").trim();
+        targetOwnerUid=String(od.uid||"").trim();
+        name=String(od.fullname||od.displayName||od.name||"Propriétaire").trim();
+
+        if(!currentConciergerieUid||!targetOwnerUid) throw new Error("Lien propriétaire incomplet.");
+        if(role!=="admin" && currentConciergerieUid!==user.uid) throw new Error("Accès refusé à ce propriétaire.");
+      }else{
+        if(role!=="proprietaire"){location.replace(withToken("login.html?role=proprietaire"));return}
+        currentOwnerDocId=String(ud.ownerDocId||"").trim();
+        currentConciergerieUid=String(ud.conciergerieUid||"").trim();
+        targetOwnerUid=user.uid;
+        if(!currentOwnerDocId||!currentConciergerieUid){location.replace(withToken("profil-proprietaire.html?self=1"));return}
+        name=String(ud.fullname||ud.displayName||user.email||"Propriétaire").trim();
+      }
+
+      conciergerieName=await loadConciergerieName(currentConciergerieUid);
+      ownerBadge.textContent=`${name}${conciergerieName?" • "+conciergerieName:""}`;
+      await loadContracts();
+    }
     filterStatus.addEventListener("change",renderList);searchInput.addEventListener("input",renderList);refreshBtn.addEventListener("click",async()=>{try{await loadContracts()}catch(e){console.error(e);showAlert("⛔ "+(e?.message||"Erreur chargement contrats"))}});
-    onAuthStateChanged(auth,async user=>{if(!user){location.replace(withToken("login.html?role=proprietaire"));return}try{await initUser(user)}catch(e){console.error(e);showAlert("⛔ "+(e?.message||"Erreur chargement contrats"));listEl.innerHTML=""}});
+    onAuthStateChanged(auth,async user=>{if(!user){location.replace(consultMode?"login.html?role=conciergerie":withToken("login.html?role=proprietaire"));return}try{await initUser(user)}catch(e){console.error(e);showAlert("⛔ "+(e?.message||"Erreur chargement contrats"));listEl.innerHTML=""}});
   </script>
 </body>
 </html>
