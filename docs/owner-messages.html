@@ -260,17 +260,36 @@
     // token passthrough (si tu l’utilises)
     const params = new URLSearchParams(location.search);
     const token = (params.get("token") || "").trim();
+    const consultMode = params.get("consult") === "1";
+    const consultOwnerDocId = (params.get("ownerDocId") || "").trim();
+    let targetOwnerUid = "";
+
+    function consultUrl(page){
+      if(!consultMode) return withToken(page);
+      const p = new URLSearchParams();
+      p.set("consult","1");
+      p.set("ownerDocId", consultOwnerDocId);
+      p.set("returnTo","clients");
+      return `${page}?${p.toString()}`;
+    }
     function withToken(url){
       if(!token) return url;
       const u = new URL(url, location.href);
       u.searchParams.set("token", token);
       return u.pathname + "?" + u.searchParams.toString();
     }
-    backBtn.href = withToken("owner-dashboard.html");
-    navDash.href = withToken("owner-dashboard.html");
-    navPlanning.href = withToken("owner-planning.html");
-    navHomes.href = withToken("owner-homes.html");
-    navMessages.href = withToken("owner-messages.html");
+    backBtn.href = consultUrl("owner-dashboard.html");
+    navDash.href = consultUrl("owner-dashboard.html");
+    navPlanning.href = consultUrl("owner-planning.html");
+    navHomes.href = consultUrl("owner-homes.html");
+    navMessages.href = consultUrl("owner-messages.html");
+
+    if(consultMode){
+      backBtn.textContent = "← Espace propriétaire";
+      document.querySelector(".subtitle").textContent = "Messages — consultation conciergerie";
+      document.querySelector(".cardTitle > span:first-child").textContent = "Conversation propriétaire ↔ conciergerie";
+      document.querySelector(".composer").style.display = "none";
+    }
 
     let currentUser = null;
     let ownerDocId = "";
@@ -325,49 +344,50 @@
     }
 
   async function ensureThread(){
-  if(!conciergerieUid || !ownerDocId){
-    throw new Error("Profil incomplet (conciergerieUid/ownerDocId manquant).");
+    if(!conciergerieUid || !ownerDocId){
+      throw new Error("Profil incomplet (conciergerieUid/ownerDocId manquant).");
+    }
+
+    if(threadId) return threadId;
+
+    const tid = stableThreadId(conciergerieUid, ownerDocId);
+    const tRef = doc(db, "threads", tid);
+    threadId = tid;
+
+    // En consultation conciergerie : lecture seule absolue.
+    // On ne crée pas le thread et on ne touche pas à updatedAt.
+    if(consultMode){
+      const ts = await getDoc(tRef);
+      return ts.exists() ? tid : "";
+    }
+
+    try{
+      await updateDoc(tRef, {
+        updatedAt: serverTimestamp()
+      });
+    }catch(e){
+      const meta = await loadOwnerMeta(ownerDocId);
+
+      await setDoc(tRef, {
+        conciergerieUid,
+        ownerDocId,
+        ownerUid: currentUser.uid,
+        ownerName: meta.ownerName,
+        ownerEmailLower: meta.ownerEmailLower,
+        homeCount: 0,
+        homeNames: [],
+        lastText: "",
+        lastAt: serverTimestamp(),
+        unreadForConciergerie: 0,
+        unreadForOwner: 0,
+        closed: false,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+    }
+
+    return tid;
   }
-
-  if(threadId) return threadId;
-
-  const tid = stableThreadId(conciergerieUid, ownerDocId);
-  const tRef = doc(db, "threads", tid);
-
-  threadId = tid;
-
-  try{
-    await updateDoc(tRef, {
-      updatedAt: serverTimestamp()
-    });
-  }catch(e){
-    const meta = await loadOwnerMeta(ownerDocId);
-
-    await setDoc(tRef, {
-      conciergerieUid,
-      ownerDocId,
-      ownerUid: currentUser.uid,
-
-      ownerName: meta.ownerName,
-      ownerEmailLower: meta.ownerEmailLower,
-
-      homeCount: 0,
-      homeNames: [],
-
-      lastText: "",
-      lastAt: serverTimestamp(),
-
-      unreadForConciergerie: 0,
-      unreadForOwner: 0,
-
-      closed: false,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp()
-    });
-  }
-
-  return tid;
-}
 
     function renderMessage(m){
       const role = String(m.senderRole || "").toUpperCase().trim();
@@ -412,6 +432,15 @@
   if(unsubMessages) unsubMessages();
 
   const tid = await ensureThread();
+
+  if(!tid){
+    chatBox.innerHTML = `
+      <div class="emptyState">
+        <div class="emptyStateTitle">Aucune conversation</div>
+        <div class="emptyStateText">Aucun échange n’existe encore avec ce propriétaire.</div>
+      </div>`;
+    return;
+  }
 
   const q = query(
     collection(db, "threads", tid, "messages"),
@@ -474,24 +503,47 @@
     });
 
     onAuthStateChanged(auth, async (user)=>{
-      if(!user){ location.href = withToken("login.html?role=proprietaire"); return; }
+      if(!user){
+        location.href = consultMode ? "login.html?role=conciergerie" : withToken("login.html?role=proprietaire");
+        return;
+      }
       currentUser = user;
 
       try{
         const us = await getDoc(doc(db,"users", user.uid));
         const ud = us.exists() ? (us.data()||{}) : {};
+        const role = String(ud.role || "").toLowerCase().trim();
 
-        ownerDocId = String(ud.ownerDocId || "").trim();
-        conciergerieUid = String(ud.conciergerieUid || "").trim();
+        if(consultMode){
+          if(role !== "conciergerie" && role !== "admin"){
+            throw new Error("Accès consultation réservé à la conciergerie.");
+          }
+          if(!consultOwnerDocId) throw new Error("ownerDocId manquant.");
+
+          const os = await getDoc(doc(db,"owners", consultOwnerDocId));
+          if(!os.exists()) throw new Error("Propriétaire introuvable.");
+
+          const od = os.data() || {};
+          ownerDocId = consultOwnerDocId;
+          conciergerieUid = String(od.conciergerieUid || "").trim();
+          targetOwnerUid = String(od.uid || "").trim();
+
+          if(!conciergerieUid || !targetOwnerUid) throw new Error("Lien propriétaire incomplet.");
+          if(role !== "admin" && conciergerieUid !== user.uid){
+            throw new Error("Accès refusé à ce propriétaire.");
+          }
+        }else{
+          if(role !== "proprietaire") throw new Error("Compte propriétaire requis.");
+          ownerDocId = String(ud.ownerDocId || "").trim();
+          conciergerieUid = String(ud.conciergerieUid || "").trim();
+          targetOwnerUid = user.uid;
+        }
 
         if(!ownerDocId || !conciergerieUid){
-          showAlert("Profil incomplet : ownerDocId ou conciergerieUid manquant dans users/{uid}.");
-          conciergerieNameEl.textContent = "—";
-          return;
+          throw new Error("ownerDocId ou conciergerieUid manquant.");
         }
 
         conciergerieNameEl.textContent = await loadConciergerieName(conciergerieUid);
-
         threadId = "";
         await subscribeMessages();
       }catch(e){
