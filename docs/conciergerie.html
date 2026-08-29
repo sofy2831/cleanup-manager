@@ -366,6 +366,26 @@
     .support-card strong{ font-size:13px; font-weight:1000; line-height:1.25; }
     .support-card span{ font-size:11.5px; line-height:1.35; color:#666; font-weight:700; }
 
+    .support-card.news-card{ position:relative; }
+    .news-unread-badge{
+      position:absolute;
+      top:10px;
+      right:10px;
+      min-width:24px;
+      height:24px;
+      padding:0 7px;
+      border-radius:999px;
+      display:none;
+      align-items:center;
+      justify-content:center;
+      background:linear-gradient(90deg,var(--violet-main),var(--violet-dark));
+      color:#fff !important;
+      font-size:11px !important;
+      font-weight:1000 !important;
+      line-height:1;
+      box-shadow:0 6px 14px rgba(98,56,255,.28);
+    }
+
     .modalBack{
       position:fixed;
       inset:0;
@@ -540,7 +560,11 @@
       <div class="support-card" data-support-action="suggest"><strong>💡 Suggérer une fonctionnalité</strong><span>Contrôle manquant, export à ajouter, amélioration métier ou idée de module.</span></div>
       <div class="support-card" data-support-action="mySuggestions"><strong>📊 Mes suggestions</strong><span>Retrouvez vos demandes et leur statut.</span></div>
       <div class="support-card" data-support-action="bug"><strong>🐞 Signaler un problème</strong><span>Bug, erreur d’analyse, écriture discutable ou problème d’affichage.</span></div>
-      <div class="support-card" data-support-action="news"><strong>🆕 Nouveautés</strong><span>Historique réel des améliorations et prochaines mises à jour.</span></div>
+      <div class="support-card news-card" data-support-action="news">
+        <strong>🆕 Nouveautés</strong>
+        <span>Historique réel des améliorations et prochaines mises à jour.</span>
+        <span class="news-unread-badge" id="newsUnreadBadge" aria-label="Nouveautés non lues">1</span>
+      </div>
     </section>
 
     <aside class="onboarding-panel" id="onboardingPanel" aria-label="Premiers pas">
@@ -639,6 +663,7 @@
     const supportModalTitle = document.getElementById("supportModalTitle");
     const supportModalSubtitle = document.getElementById("supportModalSubtitle");
     const supportModalContent = document.getElementById("supportModalContent");
+    const newsUnreadBadge = document.getElementById("newsUnreadBadge");
     const shareIndispensablesBtn = document.getElementById("shareIndispensablesBtn");
     const shareIndispensablesModal = document.getElementById("shareIndispensablesModal");
     const closeShareIndispensablesBtn = document.getElementById("closeShareIndispensablesBtn");
@@ -914,6 +939,60 @@
       }
     });
 
+    const NEWS_SEEN_KEY = "cleanup_release_notes_seen_v1";
+
+    function getSeenReleaseNotes(){
+      try{
+        const raw = localStorage.getItem(NEWS_SEEN_KEY);
+        const arr = raw ? JSON.parse(raw) : [];
+        return new Set(Array.isArray(arr) ? arr.map(String) : []);
+      }catch(_){
+        return new Set();
+      }
+    }
+
+    function releaseNoteKey(x){
+      if(x?.id) return String(x.id);
+      const version = String(x?.version || "").trim();
+      const published = x?.publishedAt?.toMillis ? x.publishedAt.toMillis() : "";
+      return `${version}|${published}`;
+    }
+
+    function markReleaseNotesSeen(rows){
+      try{
+        const seen = getSeenReleaseNotes();
+        rows.forEach(x => seen.add(releaseNoteKey(x)));
+        localStorage.setItem(NEWS_SEEN_KEY, JSON.stringify(Array.from(seen).slice(-100)));
+      }catch(_){}
+      if(newsUnreadBadge) newsUnreadBadge.style.display = "none";
+    }
+
+    async function refreshNewsUnreadBadge(){
+      if(!newsUnreadBadge) return;
+      try{
+        const snap = await getDocs(query(
+          collection(db, "releaseNotes"),
+          where("visible", "==", true),
+          limit(20)
+        ));
+        const seen = getSeenReleaseNotes();
+        const unread = snap.docs
+          .map(d => ({ id:d.id, ...(d.data() || {}) }))
+          .filter(x => !seen.has(releaseNoteKey(x)))
+          .length;
+
+        if(unread > 0){
+          newsUnreadBadge.textContent = unread > 9 ? "9+" : String(unread);
+          newsUnreadBadge.style.display = "inline-flex";
+        }else{
+          newsUnreadBadge.style.display = "none";
+        }
+      }catch(e){
+        console.warn("Badge nouveautés indisponible :", e);
+        newsUnreadBadge.style.display = "none";
+      }
+    }
+
     function openSupportModal(title, subtitle, html){ supportModalTitle.textContent = title; supportModalSubtitle.textContent = subtitle; supportModalContent.innerHTML = html; supportModal.style.display = "flex"; }
     function closeSupportModal(){ supportModal.style.display = "none"; supportModalContent.innerHTML = ""; }
     closeSupportModalBtn.addEventListener("click", closeSupportModal);
@@ -1053,6 +1132,8 @@
       </div>
     `).join("");
 
+    markReleaseNotesSeen(rows);
+
   }catch(e){
     console.error("Erreur lecture nouveautés:", e);
     supportModalContent.innerHTML = `
@@ -1083,6 +1164,7 @@
       currentUserData = guard.data || null;
       renderSubscriptionCompact(guard.data || {});
       renderOnboardingPanel(currentUserData || {});
+      await refreshNewsUnreadBadge();
       try{
         let statsResult = await loadStatsConciergerie(user.uid);
         if(!statsResult?.stats){ statsResult = await loadStatsFallback(user.uid); showAlert("⚠️ Statistiques agrégées absentes. Affichage en mode secours.", false); }
