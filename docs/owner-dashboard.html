@@ -137,6 +137,29 @@
       gap:10px;
     }
 
+    .consultNotice{
+      width:100%;
+      max-width:980px;
+      margin-top:10px;
+      padding:10px 12px;
+      border-radius:14px;
+      background:#fff;
+      border-left:5px solid var(--violet-main);
+      box-shadow:0 3px 10px rgba(0,0,0,.06);
+      font-size:12px;
+      font-weight:900;
+      color:#444;
+      display:none;
+    }
+
+    body.consult-mode .consultNotice{ display:block; }
+    body.consult-mode .bottom-nav{ display:none !important; }
+    body.consult-mode .ownerNavDisabled{
+      pointer-events:none;
+      opacity:.62;
+      cursor:default;
+    }
+
     .count{
       min-width:26px;
       height:22px;
@@ -209,6 +232,10 @@
     <div class="ownerName" id="ownerNameLine">—</div>
   </div>
 
+  <div class="consultNotice" id="consultNotice">
+    👁 Mode consultation conciergerie — affichage du dashboard propriétaire en lecture seule.
+  </div>
+
   <div class="badge" id="alertsLine">Chargement…</div>
 
   <div class="wrap">
@@ -237,7 +264,7 @@
   <span class="count" id="countContracts">0</span>
 </a>
         
-        <a class="btn" href="https://conciergerie45.cleanup-manager.fr/les-indispensables-du-proprietaire.html" target="_blank" rel="noopener">
+        <a class="btn" id="toolsLink" href="https://conciergerie45.cleanup-manager.fr/les-indispensables-du-proprietaire.html" target="_blank" rel="noopener">
           <span>🧰 Les indispensables du propriétaire</span>
           <span>↗</span>
         </a>
@@ -265,6 +292,9 @@
   const countBill = document.getElementById("countBill");
   const countContracts = document.getElementById("countContracts");
 const contractsLink = document.getElementById("contractsLink");
+  const toolsLink = document.getElementById("toolsLink");
+  const logoutBtn = document.getElementById("logoutBtn");
+  const consultNotice = document.getElementById("consultNotice");
 
   const profileBtn = document.getElementById("profileBtn");
   const supportBtn = document.getElementById("supportBtn");
@@ -281,6 +311,10 @@ const contractsLink = document.getElementById("contractsLink");
   const params = new URLSearchParams(location.search);
   const token = (params.get("token") || "").trim();
 
+  const consultMode = params.get("consult") === "1";
+  const consultOwnerDocId = (params.get("ownerDocId") || "").trim();
+  const returnTo = (params.get("returnTo") || "").trim();
+
   function withToken(url){
     if(!token) return url;
     const u = new URL(url, location.href);
@@ -288,17 +322,95 @@ const contractsLink = document.getElementById("contractsLink");
     return u.pathname + "?" + u.searchParams.toString();
   }
 
-  profileBtn.href = withToken("profil-proprietaire.html?self=1");
-  homesLink.href = withToken("owner-homes.html");
-  planningLink.href = withToken("owner-planning.html");
-  messagesLink.href = withToken("owner-messages.html");
-  billingLink.href = withToken("owner-facturation.html");
-  contractsLink.href = withToken("owner-contrats.html");
+  function stopAllListeners(){
+    stopThreads();
+    stopBilling();
+    stopContracts();
+  }
 
-  dashLink.href = withToken("owner-dashboard.html");
-  navPlanning.href = withToken("owner-planning.html");
-  navHomes.href = withToken("owner-homes.html");
-  navMessages.href = withToken("owner-messages.html");
+  function applyConsultationUI(){
+    if(!consultMode) return;
+
+    document.body.classList.add("consult-mode");
+
+    profileBtn.textContent = "← Retour aux clients";
+    profileBtn.href = returnTo === "clients" ? "clients.html" : "clients.html";
+
+    supportBtn.style.display = "none";
+    logoutBtn.style.display = "none";
+    if(toolsLink) toolsLink.style.display = "none";
+
+    [homesLink, planningLink, messagesLink, billingLink, contractsLink].forEach(el=>{
+      if(!el) return;
+      el.classList.add("ownerNavDisabled");
+      el.setAttribute("aria-disabled","true");
+      el.removeAttribute("href");
+      el.title = "Navigation désactivée en mode consultation";
+    });
+  }
+
+  async function loadConsultedOwner(currentUser, currentUserDoc){
+    const role = String(currentUserDoc?.role || "").toLowerCase().trim();
+    if(role !== "conciergerie" && role !== "admin"){
+      throw new Error("Accès consultation réservé à la conciergerie.");
+    }
+
+    if(!consultOwnerDocId){
+      throw new Error("ownerDocId manquant.");
+    }
+
+    const ownerSnap = await getDoc(doc(db, "owners", consultOwnerDocId));
+    if(!ownerSnap.exists()){
+      throw new Error("Propriétaire introuvable.");
+    }
+
+    const ownerData = ownerSnap.data() || {};
+    const linkedConciergerieUid = String(ownerData.conciergerieUid || "").trim();
+    const ownerUid = String(ownerData.uid || "").trim();
+
+    if(!linkedConciergerieUid || !ownerUid){
+      throw new Error("Lien propriétaire incomplet.");
+    }
+
+    // Sécurité applicative : une conciergerie ne peut consulter que ses propres propriétaires.
+    if(role !== "admin" && linkedConciergerieUid !== currentUser.uid){
+      throw new Error("Accès refusé : ce propriétaire n’est pas rattaché à cette conciergerie.");
+    }
+
+    currentOwnerDocId = consultOwnerDocId;
+    currentConciergerieUid = linkedConciergerieUid;
+    currentOwnerName = String(
+      ownerData.fullname || ownerData.displayName || ownerData.name || "Propriétaire"
+    ).trim();
+    currentUserEmail = String(ownerData.email || "").trim();
+
+    ownerNameLine.textContent = currentOwnerName;
+    alertsLine.textContent = "Chargement…";
+
+    await loadConciergerieName(linkedConciergerieUid);
+
+    startUnreadThreadsListener(ownerUid, linkedConciergerieUid);
+    startBillingBadge(ownerUid, linkedConciergerieUid);
+    startContractsBadge(ownerUid, linkedConciergerieUid);
+
+    refreshBadges();
+  }
+
+  if(!consultMode){
+    profileBtn.href = withToken("profil-proprietaire.html?self=1");
+    homesLink.href = withToken("owner-homes.html");
+    planningLink.href = withToken("owner-planning.html");
+    messagesLink.href = withToken("owner-messages.html");
+    billingLink.href = withToken("owner-facturation.html");
+    contractsLink.href = withToken("owner-contrats.html");
+
+    dashLink.href = withToken("owner-dashboard.html");
+    navPlanning.href = withToken("owner-planning.html");
+    navHomes.href = withToken("owner-homes.html");
+    navMessages.href = withToken("owner-messages.html");
+  }
+
+  applyConsultationUI();
 
   let unsubThreads = null;
   let unsubSalesDocs = null;
@@ -534,7 +646,7 @@ Vous pouvez joindre des captures d’écran ou des photos à votre email.
     });
   }
 
-  document.getElementById("logoutBtn").addEventListener("click", async ()=>{
+  logoutBtn.addEventListener("click", async ()=>{
     stopThreads();
     stopBilling();
     stopContracts();
@@ -549,7 +661,11 @@ Vous pouvez joindre des captures d’écran ou des photos à votre email.
 
   onAuthStateChanged(auth, async (user)=>{
     if(!user){
-      location.replace(withToken("login.html?role=proprietaire"));
+      if(consultMode){
+        location.replace("login.html?role=conciergerie");
+      }else{
+        location.replace(withToken("login.html?role=proprietaire"));
+      }
       return;
     }
 
@@ -557,20 +673,27 @@ Vous pouvez joindre des captures d’écran ou des photos à votre email.
       const us = await getDoc(doc(db, "users", user.uid));
       const ud = us.exists() ? (us.data() || {}) : {};
 
+      // ================================
+      // MODE CONSULTATION CONCIERGERIE
+      // ================================
+      if(consultMode){
+        await loadConsultedOwner(user, ud);
+        return;
+      }
+
+      // ================================
+      // MODE NORMAL PROPRIETAIRE
+      // ================================
       const role = String(ud.role || "").toLowerCase().trim();
       if(role !== "proprietaire"){
-        stopThreads();
-        stopBilling();
-        stopContracts();
+        stopAllListeners();
         location.replace(withToken("login.html?role=proprietaire"));
         return;
       }
 
       const link = hardRequireOwnerLinked(ud);
       if(!link.ok){
-        stopThreads();
-        stopBilling();
-        stopContracts();
+        stopAllListeners();
         location.replace(withToken("profil-proprietaire.html?self=1"));
         return;
       }
@@ -596,17 +719,24 @@ Vous pouvez joindre des captures d’écran ou des photos à votre email.
       refreshBadges();
     }catch(e){
       console.error(e);
+      stopAllListeners();
+
       gotThreadsOnce = true;
       gotSalesDocsOnce = true;
       gotOwnerStatementsOnce = true;
-      alertsLine.textContent = "⛔ Erreur dashboard (users/rules). Va sur Mon profil puis Enregistrer.";
+      gotContractsOnce = true;
+
+      if(consultMode){
+        ownerNameLine.textContent = "Consultation impossible";
+        alertsLine.textContent = "⛔ " + (e?.message || "Accès propriétaire refusé.");
+      }else{
+        alertsLine.textContent = "⛔ Erreur dashboard (users/rules). Va sur Mon profil puis Enregistrer.";
+      }
     }
   });
 
   window.addEventListener("beforeunload", ()=>{
-    stopThreads();
-    stopBilling();
-    stopContracts();
+    stopAllListeners();
   });
 </script>
 </body>
