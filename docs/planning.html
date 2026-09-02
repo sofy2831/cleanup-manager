@@ -116,7 +116,7 @@ import { collection, query, where, orderBy, limit, getDocs, doc, getDoc, updateD
 const $ = id => document.getElementById(id);
 const companyLine=$("companyLine"),alertBox=$("alertBox"),refreshBtn=$("refreshBtn"),monthLabel=$("monthLabel"),calendarGrid=$("calendarGrid"),prevMonthBtn=$("prevMonthBtn"),nextMonthBtn=$("nextMonthBtn"),todayBtn=$("todayBtn"),dayTitle=$("dayTitle"),dayCount=$("dayCount"),dayList=$("dayList"),planningSearch=$("planningSearch"),planningFilter=$("planningFilter"),homeFilter=$("homeFilter"),ownerFilter=$("ownerFilter"),viewCalendarBtn=$("viewCalendarBtn"),viewListBtn=$("viewListBtn"),calendarPanel=$("calendarPanel"),modalBack=$("modalBack"),closeModalBtn=$("closeModalBtn"),modalTitle=$("modalTitle"),modalBody=$("modalBody"),modalFoot=$("modalFoot"),dashLink=$("dashLink"),icalLink=$("icalLink"),planningOnboardingPanel=$("planningOnboardingPanel"),planningOnboardingSteps=$("planningOnboardingSteps"),planningOnboardingCloseBtn=$("planningOnboardingCloseBtn"),businessFlowBox=$("businessFlowBox"),businessFlowToggle=$("businessFlowToggle"),businessFlowToggleText=$("businessFlowToggleText");
 
-let planningOnboardingDismissed=false,currentUser=null,myRole="",viewYear=(new Date()).getFullYear(),viewMonth=(new Date()).getMonth(),selectedDateKey=toDateKey(new Date()),allEvents=[],eventsByDate=new Map(),allBookings=[],bookingsByDate=new Map(),currentView="CALENDAR",searchText="",filterMode="ALL",selectedHomeId="",selectedOwner="";
+let planningOnboardingDismissed=false,currentUser=null,myRole="",viewYear=(new Date()).getFullYear(),viewMonth=(new Date()).getMonth(),selectedDateKey=toDateKey(new Date()),allEvents=[],eventsByDate=new Map(),allBookings=[],bookingsByDate=new Map(),ownerMetaByDocId=new Map(),ownerMetaByUid=new Map(),currentView="CALENDAR",searchText="",filterMode="ALL",selectedHomeId="",selectedOwner="";
 
 function showAlert(msg,ok=false){alertBox.style.display="block";alertBox.classList.toggle("ok",!!ok);alertBox.textContent=msg}
 function hideAlert(){alertBox.style.display="none";alertBox.classList.remove("ok");alertBox.textContent=""}
@@ -170,6 +170,32 @@ function preferBooking(next,prev){if(!prev)return next;const ns=String(next.ical
 async function assertConciergerieRole(){const s=await getDoc(doc(db,"users",currentUser.uid));const role=s.exists()?String(s.data()?.role||"").toLowerCase():"";myRole=role;if(!["conciergerie","admin","staff"].includes(role)){showAlert("⛔ Accès refusé : compte non conciergerie (role users/{uid}).");throw new Error("ROLE_DENIED")}}
 async function loadConciergerieName(){let societe="";try{const s=await getDoc(doc(db,"conciergeries",currentUser.uid));if(s.exists()){const d=s.data()||{};societe=safeStr(d.raisonSociale||d.societe||d.company||d.companyName||d.name)}}catch{}if(!societe){try{const s=await getDoc(doc(db,"users",currentUser.uid));if(s.exists()){const d=s.data()||{};societe=safeStr(d?.businessProfile?.companyName||d.raisonSociale||d.societe||d.company||d.companyName||d.name)}}catch{}}companyLine.textContent=societe||"Conciergerie"}
 
+async function loadOwnerDirectory(){
+  ownerMetaByDocId=new Map();
+  ownerMetaByUid=new Map();
+  try{
+    const snap=await getDocs(query(
+      collection(db,"owners"),
+      where("conciergerieUid","==",currentUser.uid),
+      limit(1000)
+    ));
+    snap.forEach(ds=>{
+      const d=ds.data()||{};
+      const meta={
+        ownerDocId:ds.id,
+        uid:String(d.uid||"").trim(),
+        name:String(d.fullname||d.displayName||d.name||"").trim(),
+        email:String(d.email||"").trim(),
+        phone:String(d.phone||"").trim()
+      };
+      ownerMetaByDocId.set(ds.id,meta);
+      if(meta.uid)ownerMetaByUid.set(meta.uid,meta);
+    });
+  }catch(err){
+    console.warn("Owner directory indisponible :",err);
+  }
+}
+
 async function loadBookingsForMonth(){
   allBookings=[];bookingsByDate=new Map();
   const {startKey,endKey}=monthRangeKeys(viewYear,viewMonth),wideStartKey=addDaysToKey(startKey,-45),wideEndKey=addDaysToKey(endKey,45);
@@ -187,7 +213,11 @@ async function loadBookingsForMonth(){
     if(!monthKeys.length)continue;
     const obj={
       id:b.id,conciergerieUid:b.conciergerieUid||"",homeId:(b.homeId||"").toString(),homeName:(b.homeName||"Logement").toString(),homeZip:(b.homeZip||b.zip||"").toString(),homeCity:(b.homeCity||b.city||"").toString(),homeAddress:(b.homeAddress||b.address||"").toString(),
-      ownerEmail:(b.ownerEmail||"").toString(),ownerName:(b.ownerName||"").toString(),ownerPhone:(b.ownerPhone||"").toString(),agentName:(b.agentName||"").toString(),agentEmail:(b.agentEmail||"").toString().toLowerCase(),meta:(b.meta||b.summary||"").toString(),
+      ownerDocId:(b.ownerDocId||"").toString(),ownerUid:(b.ownerUid||"").toString(),
+      ownerEmail:(b.ownerEmail||ownerMetaByDocId.get(String(b.ownerDocId||""))?.email||ownerMetaByUid.get(String(b.ownerUid||""))?.email||"").toString(),
+      ownerName:(b.ownerName||ownerMetaByDocId.get(String(b.ownerDocId||""))?.name||ownerMetaByUid.get(String(b.ownerUid||""))?.name||"").toString(),
+      ownerPhone:(b.ownerPhone||ownerMetaByDocId.get(String(b.ownerDocId||""))?.phone||ownerMetaByUid.get(String(b.ownerUid||""))?.phone||"").toString(),
+      agentName:(b.agentName||"").toString(),agentEmail:(b.agentEmail||"").toString().toLowerCase(),meta:(b.meta||b.summary||"").toString(),
       source:(b.source||"import").toString(),dateKeys:monthKeys,arrivalDateKey:(b.arrivalDateKey||b.dateKey||(monthKeys[0]||"")).toString(),departureDateKey:(b.departureDateKey||(monthKeys[monthKeys.length-1]||"")).toString(),arrivalTime:(b.arrivalTime||"").toString(),departureTime:(b.departureTime||"").toString(),timezone:(b.timezone||"Europe/Paris").toString(),
       icalUid:(b.icalUid||"").toString(),icalUrl:(b.icalUrl||b.icalSourceUrl||"").toString(),icalSourceUrl:(b.icalSourceUrl||b.icalUrl||"").toString(),icalSourceKey:(b.icalSourceKey||"").toString(),icalPlatform:(b.icalPlatform||"").toString(),createdAt:b.createdAt||null,updatedAt:b.updatedAt||null
     };
@@ -224,7 +254,7 @@ function renderMainPanel(){if(currentView==="LIST"){renderListMode();calendarPan
 function syncViewButtons(){viewCalendarBtn.classList.toggle("active",currentView==="CALENDAR");viewListBtn.classList.toggle("active",currentView==="LIST")}
 function renderAll(){populateFilterSelects();renderCalendar();renderMainPanel();syncViewButtons();rewriteNavLinks()}
 function focusIfNeeded(){const urlDate=getParam("date");if(parseDateKey(urlDate))selectedDateKey=urlDate;const bid=getParam("bookingId");if(!bid)return;let found=(bookingsByDate.get(selectedDateKey)||[]).find(x=>x.id===bid)||allBookings.find(x=>x.id===bid);if(found){selectedDateKey=(found.dateKeys&&found.dateKeys[0])?found.dateKeys[0]:selectedDateKey;setFocusParams(selectedDateKey,bid)}renderCalendar();renderMainPanel();rewriteNavLinks();const el=document.querySelector(`[data-booking-item="${CSS.escape(bid)}"]`);if(el){el.classList.add("focused");el.scrollIntoView({behavior:"smooth",block:"center"});setTimeout(()=>el.classList.remove("focused"),1800)}}
-async function loadAllForMonth(){hideAlert();await assertConciergerieRole();await loadConciergerieName();await loadEventsForMonth();await loadBookingsForMonth();renderAll();focusIfNeeded();rewriteNavLinks()}
+async function loadAllForMonth(){hideAlert();await assertConciergerieRole();await loadConciergerieName();await loadOwnerDirectory();await loadEventsForMonth();await loadBookingsForMonth();renderAll();focusIfNeeded();rewriteNavLinks()}
 prevMonthBtn.addEventListener("click",()=>{const d=new Date(viewYear,viewMonth,1);d.setMonth(d.getMonth()-1);viewYear=d.getFullYear();viewMonth=d.getMonth();selectedDateKey=toDateKey(new Date(viewYear,viewMonth,1));setFocusParams(selectedDateKey,"");loadAllForMonth().catch(e=>{if(String(e?.message||"")!=="ROLE_DENIED")showAlert("Erreur chargement mois : "+(e?.message||"inconnue"))})});
 nextMonthBtn.addEventListener("click",()=>{const d=new Date(viewYear,viewMonth,1);d.setMonth(d.getMonth()+1);viewYear=d.getFullYear();viewMonth=d.getMonth();selectedDateKey=toDateKey(new Date(viewYear,viewMonth,1));setFocusParams(selectedDateKey,"");loadAllForMonth().catch(e=>{if(String(e?.message||"")!=="ROLE_DENIED")showAlert("Erreur chargement mois : "+(e?.message||"inconnue"))})});
 todayBtn.addEventListener("click",()=>{const now=new Date();viewYear=now.getFullYear();viewMonth=now.getMonth();selectedDateKey=toDateKey(now);setFocusParams(selectedDateKey,"");loadAllForMonth().catch(e=>{if(String(e?.message||"")!=="ROLE_DENIED")showAlert("Erreur chargement : "+(e?.message||"inconnue"))})});
