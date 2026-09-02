@@ -135,6 +135,23 @@ function opLabel(st){const s=normalizeOpStatus(st);return s==="A_VALIDER"?"À VA
 function opBadgeClass(st){const s=normalizeOpStatus(st);return s==="A_VALIDER"?"blue":s==="REALISEE"?"ok":s==="ANNULEE"?"bad":""}
 function iniClassByStatus(st){return opBadgeClass(st)}
 function dotClassForIcal(source){return String(source||"").toLowerCase()==="manual"?"manual":"ical"}
+function detectIcalPlatform(platform,url){
+  const p=String(platform||"").toLowerCase().trim();
+  if(["airbnb","booking","abritel"].includes(p))return p;
+  const u=String(url||"").toLowerCase();
+  if(u.includes("airbnb"))return"airbnb";
+  if(u.includes("booking"))return"booking";
+  if(u.includes("abritel")||u.includes("vrbo")||u.includes("homeaway"))return"abritel";
+  return"ical";
+}
+function platformBadgeMeta(b){
+  if(String(b?.source||"").toLowerCase()==="manual")return{label:"MANUEL",cls:"blue"};
+  const p=detectIcalPlatform(b?.icalPlatform,b?.icalUrl||b?.icalSourceUrl);
+  if(p==="airbnb")return{label:"Airbnb",cls:"orange"};
+  if(p==="booking")return{label:"Booking",cls:"blue"};
+  if(p==="abritel")return{label:"Abritel",cls:""};
+  return{label:"iCAL",cls:""};
+}
 function periodLabel(o){const a=safeStr(o?.arrivalDateKey||o?.arrivalDate||o?.checkinDate||""),b=safeStr(o?.departureDateKey||o?.departureDate||o?.checkoutDate||"");if(a&&b)return`${fmtFRDateKey(a)} → ${fmtFRDateKey(b)}`;if(a)return`À partir du ${fmtFRDateKey(a)}`;if(b)return`Jusqu’au ${fmtFRDateKey(b)}`;return"—"}
 function getParam(name){return new URLSearchParams(location.search).get(name)||""}
 function setFocusParams(dateKey,bookingId){const p=new URLSearchParams(location.search);if(dateKey)p.set("date",dateKey);if(bookingId)p.set("bookingId",bookingId);else p.delete("bookingId");history.replaceState(null,"",`planning.html?${p.toString()}`)}
@@ -172,7 +189,7 @@ async function loadBookingsForMonth(){
       id:b.id,conciergerieUid:b.conciergerieUid||"",homeId:(b.homeId||"").toString(),homeName:(b.homeName||"Logement").toString(),homeZip:(b.homeZip||b.zip||"").toString(),homeCity:(b.homeCity||b.city||"").toString(),homeAddress:(b.homeAddress||b.address||"").toString(),
       ownerEmail:(b.ownerEmail||"").toString(),ownerName:(b.ownerName||"").toString(),ownerPhone:(b.ownerPhone||"").toString(),agentName:(b.agentName||"").toString(),agentEmail:(b.agentEmail||"").toString().toLowerCase(),meta:(b.meta||b.summary||"").toString(),
       source:(b.source||"import").toString(),dateKeys:monthKeys,arrivalDateKey:(b.arrivalDateKey||b.dateKey||(monthKeys[0]||"")).toString(),departureDateKey:(b.departureDateKey||(monthKeys[monthKeys.length-1]||"")).toString(),arrivalTime:(b.arrivalTime||"").toString(),departureTime:(b.departureTime||"").toString(),timezone:(b.timezone||"Europe/Paris").toString(),
-      icalUid:(b.icalUid||"").toString(),icalUrl:(b.icalUrl||b.icalSourceUrl||"").toString(),icalSourceKey:(b.icalSourceKey||"").toString(),createdAt:b.createdAt||null,updatedAt:b.updatedAt||null
+      icalUid:(b.icalUid||"").toString(),icalUrl:(b.icalUrl||b.icalSourceUrl||"").toString(),icalSourceUrl:(b.icalSourceUrl||b.icalUrl||"").toString(),icalSourceKey:(b.icalSourceKey||"").toString(),icalPlatform:(b.icalPlatform||"").toString(),createdAt:b.createdAt||null,updatedAt:b.updatedAt||null
     };
     const k=bookingStayKey(obj);dedupMap.set(k,preferBooking(obj,dedupMap.get(k)));
   }
@@ -194,9 +211,9 @@ function bookingPasses(b){const le=findLinkedEventsForBooking(b);if(filterMode==
 function getFilteredBookingsByDate(k){return(bookingsByDate.get(k)||[]).filter(bookingPasses)}
 function getFilteredEventsByDate(k){return eventsByDate.get(k)||[]}
 function renderPlanningOnboarding(){const bs=currentView==="LIST"?allBookings.filter(bookingPasses):getFilteredBookingsByDate(selectedDateKey);const hasBooking=bs.length>0,hasPresta=bs.some(b=>findLinkedEventsForBooking(b).length>0);if(planningOnboardingDismissed||(hasBooking&&hasPresta)){planningOnboardingPanel.hidden=true;planningOnboardingSteps.innerHTML="";return}planningOnboardingPanel.hidden=false;planningOnboardingSteps.innerHTML=[{done:hasBooking,label:"Réservation présente"},{done:hasPresta,label:"Créer une prestation"}].map(s=>`<div class="onboarding-step ${s.done?"done":"pending"}">${s.done?"✓":"○"} ${esc(s.label)}</div>`).join("")}
-function getFilteredMonthRows(){return allBookings.filter(bookingPasses).map(b=>{const le=findLinkedEventsForBooking(b),pi=le.length?` • ${le.length} prestation(s)`:` • Sans prestation`;return{dateKey:b.arrivalDateKey||(Array.isArray(b.dateKeys)?b.dateKeys[0]:""),groupLabel:`${b.homeName||"Logement"}${b.homeCity?" — "+b.homeCity:""}`,badge:String(b.source||"").toLowerCase()==="manual"?"MANUEL":"iCAL",badgeClass:String(b.source||"").toLowerCase()==="manual"?"blue":"",title:`${b.homeName||"Logement"}${b.homeCity?" — "+b.homeCity:""}`,sub:`Séjour • ${periodLabel(b)}${pi}`,ref:b}}).sort((a,b)=>`${a.groupLabel}|${a.dateKey}`.localeCompare(`${b.groupLabel}|${b.dateKey}`,"fr"))}
+function getFilteredMonthRows(){return allBookings.filter(bookingPasses).map(b=>{const le=findLinkedEventsForBooking(b),pi=le.length?` • ${le.length} prestation(s)`:` • Sans prestation`,pb=platformBadgeMeta(b);return{dateKey:b.arrivalDateKey||(Array.isArray(b.dateKeys)?b.dateKeys[0]:""),groupLabel:`${b.homeName||"Logement"}${b.homeCity?" — "+b.homeCity:""}`,badge:pb.label,badgeClass:pb.cls,title:`${b.homeName||"Logement"}${b.homeCity?" — "+b.homeCity:""}`,sub:`Séjour • ${periodLabel(b)}${pi}`,ref:b}}).sort((a,b)=>`${a.groupLabel}|${a.dateKey}`.localeCompare(`${b.groupLabel}|${b.dateKey}`,"fr"))}
 function openBookingEdit(b){const p=new URLSearchParams();p.set("bookingId",b.id);p.set("mode","edit");p.set("returnTo","planning");p.set("returnDate",selectedDateKey);p.set("returnBookingId",b.id);location.href=`logements.html?${p.toString()}`}
-function openBookingDetail(b){modalTitle.textContent="Détails de la réservation";modalBody.innerHTML=`<div><b>Logement</b> : ${esc(b.homeName||"—")}</div><div><b>Adresse</b> : ${esc(b.homeAddress||"—")}</div><div><b>CP</b> : ${esc(b.homeZip||"—")} • <b>Ville</b> : ${esc(b.homeCity||"—")}</div><div><b>Propriétaire</b> : ${esc(b.ownerName||"—")}</div>${b.ownerPhone?`<div><b>Téléphone propriétaire</b> : ${esc(b.ownerPhone)}</div>`:""}<div><b>Arrivée</b> : ${esc(b.arrivalDateKey||"—")} • ${esc(b.arrivalTime||"—")}</div><div><b>Départ</b> : ${esc(b.departureDateKey||"—")} • ${esc(b.departureTime||"—")}</div>${b.meta?`<div><b>Note</b> : ${esc(b.meta)}</div>`:""}`;modalFoot.innerHTML="";setFocusParams(selectedDateKey,b.id);modalBack.style.display="flex"}
+function openBookingDetail(b){modalTitle.textContent="Détails de la réservation";modalBody.innerHTML=`<div><b>Logement</b> : ${esc(b.homeName||"—")}</div><div><b>Adresse</b> : ${esc(b.homeAddress||"—")}</div><div><b>CP</b> : ${esc(b.homeZip||"—")} • <b>Ville</b> : ${esc(b.homeCity||"—")}</div><div><b>Propriétaire</b> : ${esc(b.ownerName||"—")}</div>${b.ownerPhone?`<div><b>Téléphone propriétaire</b> : ${esc(b.ownerPhone)}</div>`:""}<div><b>Plateforme</b> : ${esc(platformBadgeMeta(b).label)}</div><div><b>Arrivée</b> : ${esc(b.arrivalDateKey||"—")} • ${esc(b.arrivalTime||"—")}</div><div><b>Départ</b> : ${esc(b.departureDateKey||"—")} • ${esc(b.departureTime||"—")}</div>${b.meta?`<div><b>Note</b> : ${esc(b.meta)}</div>`:""}`;modalFoot.innerHTML="";setFocusParams(selectedDateKey,b.id);modalBack.style.display="flex"}
 async function deleteBooking(b){if(!b?.id)return;if(String(b.source||"").toLowerCase()!=="manual")return showAlert("Réservation iCal importée : suppression interdite. (lecture seule)");if(!confirm("Supprimer définitivement cette réservation ?"))return;await deleteDoc(doc(db,"icalEvents",b.id));showAlert("✅ Réservation supprimée.",true);await loadAllForMonth()}
 async function archiveBooking(b){if(!b?.id)return;if(String(b.source||"").toLowerCase()!=="manual")return showAlert("Réservation iCal importée : archivage interdit. (lecture seule)");if(!confirm("Archiver cette réservation ?"))return;await updateDoc(doc(db,"icalEvents",b.id),{archived:true,archivedAt:serverTimestamp(),updatedAt:serverTimestamp()});showAlert("✅ Réservation archivée.",true);await loadAllForMonth()}
 function buildMonthCells(y,m){const first=new Date(y,m,1),last=new Date(y,m+1,0),fd=(first.getDay()+6)%7,dim=last.getDate(),prevLast=new Date(y,m,0).getDate(),cells=[];for(let i=0;i<fd;i++)cells.push({date:new Date(y,m-1,(prevLast-fd+1)+i),inMonth:false});for(let d=1;d<=dim;d++)cells.push({date:new Date(y,m,d),inMonth:true});while(cells.length%7!==0)cells.push({date:new Date(y,m,dim+(cells.length-(fd+dim))+1),inMonth:false});return cells}
