@@ -470,31 +470,30 @@
       let societe = "";
 
       try{
-        const cSnap = await getDoc(doc(db, "conciergeries", uid));
-        if(cSnap.exists()){
+        const [cSnap, uSnap] = await Promise.all([
+          getDoc(doc(db, "conciergeries", uid)).catch(()=>null),
+          getDoc(doc(db, "users", uid)).catch(()=>null)
+        ]);
+
+        if(cSnap?.exists()){
           const d = cSnap.data() || {};
           societe = String(
             d.raisonSociale || d.societe || d.company || d.companyName || d.name || ""
           ).trim();
         }
-      }catch(e){}
 
-      if(!societe){
-        try{
-          const uSnap = await getDoc(doc(db, "users", uid));
-          if(uSnap.exists()){
-            const d = uSnap.data() || {};
-            societe = String(
-              d?.businessProfile?.companyName ||
-              d.companyLine ||
-              d.compagnyLine ||     // typo legacy
-              d.raisonSociale || d.societe || d.company || d.companyName || d.name ||
-              d.nomSociete ||
-              ""
-            ).trim();
-          }
-        }catch(e){}
-      }
+        if(!societe && uSnap?.exists()){
+          const d = uSnap.data() || {};
+          societe = String(
+            d?.businessProfile?.companyName ||
+            d.companyLine ||
+            d.compagnyLine ||
+            d.raisonSociale || d.societe || d.company || d.companyName || d.name ||
+            d.nomSociete ||
+            ""
+          ).trim();
+        }
+      }catch(e){}
 
       subtitleLine.textContent = societe || "—";
       emailLine.textContent = "Gestion de propriétaires";
@@ -588,26 +587,38 @@
           const clientDocId = "c_owner_" + ownerDocId;
           const exists = clientsByKey.get(ownerDocId);
 
-          pushOp((batch)=>{
-            const ref = doc(db,"clients", clientDocId);
-            batch.set(ref, {
-              conciergerieUid: currentUser.uid,
-              clientKey: ownerDocId,
-              ownerDocId: ownerDocId,
-              ownerUid: String(o.uid || "").trim(),
-              displayName: fullName || (exists?.displayName || ""),
-              email: email || (exists?.email || ""),
-              phone: phone || (exists?.phone || ""),
-              address1: address1 || (exists?.address1 || ""),
-              address2: address2 || (exists?.address2 || ""),
-              zip: zip || (exists?.zip || ""),
-              city: city || (exists?.city || ""),
-              country: country || (exists?.country || "FR"),
-              status: String(o.status || ""),
-              updatedAt: serverTimestamp(),
-              createdAt: exists?.createdAt || serverTimestamp()
-            }, { merge:true });
-          });
+          const desiredClient = {
+            conciergerieUid: currentUser.uid,
+            clientKey: ownerDocId,
+            ownerDocId: ownerDocId,
+            ownerUid: String(o.uid || "").trim(),
+            displayName: fullName || (exists?.displayName || ""),
+            email: email || (exists?.email || ""),
+            phone: phone || (exists?.phone || ""),
+            address1: address1 || (exists?.address1 || ""),
+            address2: address2 || (exists?.address2 || ""),
+            zip: zip || (exists?.zip || ""),
+            city: city || (exists?.city || ""),
+            country: country || (exists?.country || "FR"),
+            status: String(o.status || "")
+          };
+
+          const clientNeedsSync = !exists || [
+            "conciergerieUid","clientKey","ownerDocId","ownerUid",
+            "displayName","email","phone","address1","address2",
+            "zip","city","country","status"
+          ].some(k => String(exists?.[k] ?? "") !== String(desiredClient[k] ?? ""));
+
+          if(clientNeedsSync){
+            pushOp((batch)=>{
+              const ref = doc(db,"clients", clientDocId);
+              batch.set(ref, {
+                ...desiredClient,
+                updatedAt: serverTimestamp(),
+                createdAt: exists?.createdAt || serverTimestamp()
+              }, { merge:true });
+            });
+          }
 
           const homes = homesByOwnerDocId.get(ownerDocId) || [];
           for(const h of homes){
@@ -973,18 +984,32 @@
 
     async function reloadAll(){
       hideAlert();
+      countLine.textContent = "Chargement…";
 
-      await loadClientsCollection();
-      await loadOwners();
-      await loadHomes();
+      // Les 3 lectures sont indépendantes : on les lance en parallèle.
+      await Promise.all([
+        loadClientsCollection(),
+        loadOwners(),
+        loadHomes()
+      ]);
 
-      const syncRes = await syncOwnersToClientsAndHomes();
-      if(syncRes?.error){
-        showAlert("⚠️ Sync partielle : " + (syncRes.error?.message || "erreur") + "\nLa liste s’affiche quand même.", false);
-      }
-
-      await loadClientsCollection();
+      // Affichage immédiat : le client n'attend plus la synchronisation Firestore.
       render();
+
+      // Synchronisation en arrière-plan, uniquement si des données ont réellement changé.
+      syncOwnersToClientsAndHomes().then(async (syncRes)=>{
+        if(syncRes?.error){
+          showAlert("⚠️ Sync partielle : " + (syncRes.error?.message || "erreur") + "\nLa liste reste utilisable.", false);
+          return;
+        }
+
+        if(Number(syncRes?.commits || 0) > 0){
+          await loadClientsCollection();
+          render();
+        }
+      }).catch((err)=>{
+        console.warn("sync background:", err?.message || err);
+      });
     }
 
     refreshBtn.addEventListener("click", reloadAll);
@@ -1007,4 +1032,3 @@
   </script>
 </body>
 </html>
-
