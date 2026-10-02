@@ -109,7 +109,7 @@
     }
 
     label{ display:block; font-size:12px; font-weight:900; color:#333; margin-bottom:6px; }
-    input, textarea{
+    input, textarea, select{
       width:100%;
       border:1px solid rgba(0,0,0,0.10);
       border-radius:14px;
@@ -120,6 +120,7 @@
       background:#fff;
     }
     textarea{ min-height:110px; resize:vertical; }
+    select{ width:100%; border:1px solid rgba(0,0,0,0.10); border-radius:14px; padding:11px 12px; font-size:13px; font-weight:800; outline:none; background:#fff; }
 
     .footerActions{
       margin-top:12px;
@@ -157,6 +158,14 @@
         </div>
 
         <div class="form">
+          <div>
+            <label for="customerType">Type de client *</label>
+            <select id="customerType">
+              <option value="INDIVIDUAL">Particulier</option>
+              <option value="PROFESSIONAL">Professionnel</option>
+            </select>
+          </div>
+
           <div>
             <label for="displayName">Nom / Société *</label>
             <input id="displayName" placeholder="Ex: Dupont Jean / SCI Bleu Azur" />
@@ -197,12 +206,17 @@
             <input id="city" placeholder="Toulouse" />
           </div>
 
-          <div>
-            <label for="siret">SIRET (optionnel)</label>
+          <div class="professionalField">
+            <label for="siret">SIRET (professionnel)</label>
             <input id="siret" placeholder="14 chiffres" />
           </div>
 
-          <div>
+          <div class="professionalField">
+            <label for="ape">APE (professionnel)</label>
+            <input id="ape" placeholder="Ex. 6820A" />
+          </div>
+
+          <div class="professionalField">
             <label for="vat">TVA (optionnel)</label>
             <input id="vat" placeholder="FR..." />
           </div>
@@ -232,6 +246,7 @@
   const saveBtn = document.getElementById("saveBtn");
 
   // Inputs
+  const customerType = document.getElementById("customerType");
   const displayName = document.getElementById("displayName");
   const email = document.getElementById("email");
   const phone = document.getElementById("phone");
@@ -241,6 +256,7 @@
   const city = document.getElementById("city");
   const country = document.getElementById("country");
   const siret = document.getElementById("siret");
+  const ape = document.getElementById("ape");
   const vat = document.getElementById("vat");
   const notes = document.getElementById("notes");
 
@@ -272,7 +288,20 @@
     return u.pathname + "?" + u.searchParams.toString();
   }
 
+  function setCustomerTypeUI(){
+    const isPro = customerType.value === "PROFESSIONAL";
+    document.querySelectorAll(".professionalField").forEach(el=>{
+      el.style.display = isPro ? "" : "none";
+    });
+  }
+
+  customerType.addEventListener("change", setCustomerTypeUI);
+
   function applyData(data){
+    const savedType = safeStr(data.customerType || data.clientType || "").toUpperCase();
+    customerType.value = savedType === "PROFESSIONAL" || (!savedType && (data.siret || data.ape || data.vat))
+      ? "PROFESSIONAL"
+      : "INDIVIDUAL";
     displayName.value = safeStr(data.fullname || data.displayName || "");
     phone.value = safeStr(data.phone || "");
     address1.value = safeStr(data.address1 || "");
@@ -281,12 +310,15 @@
     city.value = safeStr(data.city || "");
     country.value = safeStr(data.country || "FR");
     siret.value = safeStr(data.siret || "");
+    ape.value = safeStr(data.ape || "");
     vat.value = safeStr(data.vat || "");
     notes.value = safeStr(data.notes || "");
+    setCustomerTypeUI();
   }
 
   function serialize(){
     return {
+      customerType: customerType.value === "PROFESSIONAL" ? "PROFESSIONAL" : "INDIVIDUAL",
       fullname: (displayName.value || "").trim(),
       phone: (phone.value || "").trim(),
       address1: (address1.value || "").trim(),
@@ -294,8 +326,9 @@
       zip: (zip.value || "").trim(),
       city: (city.value || "").trim(),
       country: ((country.value || "FR").trim() || "FR"),
-      siret: (siret.value || "").trim(),
-      vat: (vat.value || "").trim(),
+      siret: customerType.value === "PROFESSIONAL" ? (siret.value || "").replace(/\s+/g,"").trim() : "",
+      ape: customerType.value === "PROFESSIONAL" ? (ape.value || "").trim().toUpperCase() : "",
+      vat: customerType.value === "PROFESSIONAL" ? (vat.value || "").trim() : "",
       notes: (notes.value || "").trim(),
     };
   }
@@ -362,6 +395,14 @@
       showAlert("⛔ Nom / Société obligatoire.");
       return;
     }
+    if(p.customerType === "PROFESSIONAL" && p.siret && !/^\d{14}$/.test(p.siret)){
+      showAlert("⛔ SIRET invalide : 14 chiffres attendus.");
+      return;
+    }
+    if(p.customerType === "PROFESSIONAL" && p.ape && !/^[0-9]{4}[A-Z]$/i.test(p.ape)){
+      showAlert("⛔ APE invalide : format attendu type 6820A.");
+      return;
+    }
 
     const uid = currentUser.uid;
     const emailLower = normEmail(currentUser.email || email.value || "");
@@ -386,6 +427,7 @@
       ownerDocId,
       conciergerieUid,
 
+      customerType: p.customerType,
       fullname: p.fullname,
       phone: p.phone,
       address1: p.address1,
@@ -394,6 +436,7 @@
       city: p.city,
       country: p.country,
       siret: p.siret,
+      ape: p.ape,
       vat: p.vat,
       notes: p.notes,
 
@@ -418,6 +461,7 @@
 
       email: (currentUser.email || email.value || "").trim(),
       emailLower,
+      customerType: p.customerType,
       fullname: p.fullname,
       phone: p.phone,
       address1: p.address1,
@@ -426,6 +470,7 @@
       city: p.city,
       country: p.country,
       siret: p.siret,
+      ape: p.ape,
       vat: p.vat,
       notes: p.notes,
 
