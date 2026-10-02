@@ -152,6 +152,7 @@
     }
 
     .sheet{
+      position:relative;
       background:var(--card);
       border:1px solid var(--line);
       border-radius:24px;
@@ -160,6 +161,33 @@
       min-height:calc(100vh - 170px);
       display:flex;
       flex-direction:column;
+    }
+
+    .paid-watermark{
+      display:none;
+      position:absolute;
+      left:50%;
+      top:46%;
+      transform:translate(-50%,-50%) rotate(-28deg);
+      z-index:8;
+      pointer-events:none;
+      user-select:none;
+      text-align:center;
+      color:rgba(27,143,77,.16);
+      border:6px solid rgba(27,143,77,.14);
+      border-radius:18px;
+      padding:16px 28px;
+      font-size:3.1rem;
+      font-weight:900;
+      letter-spacing:.08em;
+      line-height:1.05;
+      white-space:nowrap;
+    }
+    .paid-watermark small{
+      display:block;
+      margin-top:8px;
+      font-size:.9rem;
+      letter-spacing:.03em;
     }
 
     .top-grid{
@@ -638,6 +666,10 @@
     <div class="alert" id="alertBox"></div>
 
     <article class="sheet" id="paper">
+      <div class="paid-watermark" id="paidWatermark" aria-hidden="true">
+        FACTURE ACQUITTÉE
+        <small id="paidWatermarkDate"></small>
+      </div>
       <section class="top-grid">
         <div class="panel">
           <div class="logo-wrap">
@@ -669,7 +701,7 @@
       </section>
 
       <section class="section">
-        <h2 class="section-title">Logement & période</h2>
+        <h2 class="section-title">Lieu du bien / chantier & période</h2>
         <div class="single-box">
           <div id="homeBlock" class="meta"></div>
         </div>
@@ -777,6 +809,8 @@
     const businessBlock = document.getElementById("businessBlock");
     const clientBlock = document.getElementById("clientBlock");
     const homeBlock = document.getElementById("homeBlock");
+    const paidWatermark = document.getElementById("paidWatermark");
+    const paidWatermarkDate = document.getElementById("paidWatermarkDate");
     const linesTbody = document.getElementById("linesTbody");
 
     const totalHtLabel = document.getElementById("totalHtLabel");
@@ -1268,9 +1302,38 @@
 
       const lines = [];
       lines.push(`<div><b>Adresse</b> : ${esc(addr || "—")}</div>`);
-      lines.push(`<div><b>Période</b> : ${esc(getStayPeriod(d))}</div>`);
+      const period = getStayPeriod(d);
+      if(period && period !== "—"){
+        lines.push(`<div><b>Période</b> : ${esc(period)}</div>`);
+      }
 
       homeBlock.innerHTML = lines.join("");
+    }
+
+    function renderPaidWatermark(d){
+      const total = Number(d?.totalTTC ?? d?.totals?.ttc ?? 0) || 0;
+      const paid = Number(d?.paidAmount ?? 0) || 0;
+      const status = String(d?.invoiceStatus || "").toUpperCase();
+      const paymentStatus = String(d?.paymentStatus || "").toUpperCase();
+      const fullyPaid = status === "PAID" || paymentStatus === "PAID" || (total > 0 && paid >= total - 0.005);
+
+      if(!fullyPaid){
+        paidWatermark.style.display = "none";
+        paidWatermarkDate.textContent = "";
+        return;
+      }
+
+      const rawDate = d?.invoicePaidAt || d?.lastPaymentDate || d?.lastPaymentAt || null;
+      let dt = null;
+      if(rawDate?.toDate) dt = rawDate.toDate();
+      else if(rawDate instanceof Date) dt = rawDate;
+      else if(rawDate) {
+        const parsed = new Date(rawDate);
+        if(!Number.isNaN(parsed.getTime())) dt = parsed;
+      }
+
+      paidWatermarkDate.textContent = dt ? `Payée le ${ddmmyyyy(dt)}` : "";
+      paidWatermark.style.display = "block";
     }
 
         function renderLines(d, fallbackProfile){
@@ -1454,6 +1517,7 @@
       renderBusinessBlock(d, fallbackProfile);
       renderClientBlock(ownerFromOwners, homeFallback, d);
       renderHomeBlock(d);
+      renderPaidWatermark(d);
       renderLines(d, fallbackProfile);
       renderTotals(d, fallbackProfile);
       renderRefs(d);
