@@ -1220,18 +1220,23 @@
   async function upsertMissionForToken({ tokenId, email, name, missionType }){
     const mRef = doc(db, "events", prestationId, "missions", missionType);
 
-    let locked = false;
+    let existing = null;
     try{
       const mSnap = await getDoc(mRef);
-      if(mSnap.exists()){
-        locked = !!(mSnap.data()?.locked);
-      }
+      if(mSnap.exists()) existing = mSnap.data() || {};
     }catch(err){
       console.error("Lecture mission impossible avant création", missionType, err);
       throw err;
     }
 
-    if(locked) return;
+    // Un nouveau lien agent doit toujours porter le nouveau token.
+    // Une ancienne mission verrouillée/en attente peut provenir d'un test ou
+    // d'un précédent lien expiré : on la réassigne proprement.
+    // En revanche une mission déjà VALIDEE reste définitive.
+    const existingStatus = String(existing?.status || "").toUpperCase().trim();
+    if(existingStatus === "VALIDEE"){
+      throw new Error("MISSION_DEJA_VALIDEE:" + missionType);
+    }
 
     const sched = computeScheduleForMission(currentEvent, missionType);
 
@@ -1407,12 +1412,23 @@
     // Vérification stricte : ne jamais annoncer un lien valide si une mission
     // attendue n'existe pas réellement dans Firestore.
     const missionDocsMissing = [];
+    const missionTokenMismatch = [];
     for(const t of missionTypes){
       const checkSnap = await getDoc(doc(db, "events", prestationId, "missions", t));
-      if(!checkSnap.exists()) missionDocsMissing.push(t);
+      if(!checkSnap.exists()){
+        missionDocsMissing.push(t);
+        continue;
+      }
+      const md = checkSnap.data() || {};
+      if(String(md.dayToken || "") !== String(tokenId)){
+        missionTokenMismatch.push(t);
+      }
     }
     if(missionDocsMissing.length){
       throw new Error("MISSION_DOCS_NOT_CREATED:" + missionDocsMissing.join(","));
+    }
+    if(missionTokenMismatch.length){
+      throw new Error("MISSION_TOKEN_MISMATCH:" + missionTokenMismatch.join(","));
     }
 
     await setDoc(doc(db,"dayTokens",tokenId), {
