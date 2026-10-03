@@ -1226,8 +1226,9 @@
       if(mSnap.exists()){
         locked = !!(mSnap.data()?.locked);
       }
-    }catch{
-      locked = false;
+    }catch(err){
+      console.error("Lecture mission impossible avant création", missionType, err);
+      throw err;
     }
 
     if(locked) return;
@@ -1402,6 +1403,22 @@
     for(const t of missionTypes){
       await upsertMissionForToken({ tokenId, email, name, missionType: t });
     }
+
+    // Vérification stricte : ne jamais annoncer un lien valide si une mission
+    // attendue n'existe pas réellement dans Firestore.
+    const missionDocsMissing = [];
+    for(const t of missionTypes){
+      const checkSnap = await getDoc(doc(db, "events", prestationId, "missions", t));
+      if(!checkSnap.exists()) missionDocsMissing.push(t);
+    }
+    if(missionDocsMissing.length){
+      throw new Error("MISSION_DOCS_NOT_CREATED:" + missionDocsMissing.join(","));
+    }
+
+    await setDoc(doc(db,"dayTokens",tokenId), {
+      missionDocsReady: true,
+      missionDocsCheckedAt: serverTimestamp()
+    }, { merge:true });
 
     await updateDoc(doc(db, "users", currentUser.uid), {
       "onboarding.firstMissionCreated": true,
