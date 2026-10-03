@@ -300,15 +300,9 @@
       const q = String(searchInput.value || "").trim().toLowerCase();
       threadList.innerHTML = "";
 
-      const sorted = allThreads.slice().sort((a,b)=>{
-       const ta = a.lastMessageAt?.seconds ?? 0;
-      const tb = b.lastMessageAt?.seconds ?? 0;
-        return tb - ta;
-      });
-
-      const filtered = !q ? sorted : sorted.filter(t=>{
+      const filtered = !q ? allThreads : allThreads.filter(t=>{
         const hay = [
-          t.ownerName, t.ownerEmailLower, t.lastMessage,
+          t.ownerName, t.ownerEmailLower, t.lastMessage, t.lastText,
           t.ownerDocId
         ].filter(Boolean).join(" ").toLowerCase();
         return hay.includes(q);
@@ -319,11 +313,14 @@
         return;
       }
 
+      const fragment = document.createDocumentFragment();
+
       for(const t of filtered){
         const unread = Number(t.unreadForConciergerie || 0);
         const ownerName = String(t.ownerName || "Propriétaire").trim();
-        const last = String(t.lastMessage || "").trim();
-        const date = t.lastMessageAt ? fmtTs(t.lastMessageAt) : "—";
+        const last = String(t.lastMessage || t.lastText || "").trim();
+        const messageDate = t.lastMessageAt || t.lastAt || null;
+        const date = messageDate ? fmtTs(messageDate) : "—";
 
         const meta = [
           Number(t.homeCount || 0) ? `${Number(t.homeCount)} logement(s)` : "",
@@ -348,26 +345,31 @@
           </div>
         `;
 
-        threadList.appendChild(row);
+        fragment.appendChild(row);
       }
+      threadList.appendChild(fragment);
     }
 
-    searchInput.addEventListener("input", render);
+    let searchRenderTimer = null;
+    searchInput.addEventListener("input", ()=>{
+      clearTimeout(searchRenderTimer);
+      searchRenderTimer = setTimeout(render, 120);
+    });
 
     onAuthStateChanged(auth, async (user)=>{
       if(!user){ location.href = "login.html?role=conciergerie"; return; }
       currentUser = user;
 
-      await loadCompanyName(user.uid);
+      // Affiche immédiatement la messagerie : le nom de la conciergerie
+      // est secondaire et ne doit pas bloquer l'écoute des conversations.
+      companyLine.textContent = "Conciergerie";
 
       if(unsub) unsub();
       allThreads = [];
       render();
-
       hideAlert();
 
-      // Charge tous les fils de la conciergerie.
-      // Le tri par date est déjà effectué dans render().
+      // Lance tout de suite l'écoute des fils.
       const q = query(
         collection(db,"threads"),
         where("conciergerieUid","==", user.uid)
@@ -375,6 +377,11 @@
 
       unsub = onSnapshot(q, (snap)=>{
         allThreads = snap.docs.map(d=>({ id:d.id, ...(d.data()||{}) }));
+        allThreads.sort((a,b)=>{
+          const ta = a.lastMessageAt?.seconds ?? a.lastAt?.seconds ?? 0;
+          const tb = b.lastMessageAt?.seconds ?? b.lastAt?.seconds ?? 0;
+          return tb - ta;
+        });
         render();
       }, (err)=>{
         const m = String(err?.message || "inconnue");
@@ -384,6 +391,9 @@
           showAlert("Erreur lecture threads : " + m, false);
         }
       });
+
+      // Chargement secondaire non bloquant.
+      loadCompanyName(user.uid).catch(()=>{});
     });
   </script>
 </body>

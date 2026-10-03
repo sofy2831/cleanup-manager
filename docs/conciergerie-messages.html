@@ -147,7 +147,7 @@
 <script type="module">
 import { auth, db } from "./firebase-init.js";
 import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-import { collection, query, where, orderBy, limit, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+import { collection, query, where, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
 const alertBox = document.getElementById("alertBox");
 const threadsList = document.getElementById("threadsList");
@@ -209,9 +209,7 @@ hintLine.style.display = "none";
 
   const q = query(
     collection(db,"threads"),
-    where("conciergerieUid","==", String(user.uid)),
-   orderBy("lastMessageAt","desc"),
-    limit(200)
+    where("conciergerieUid","==", String(user.uid))
   );
 
   unsub = onSnapshot(q, (snap)=>{
@@ -223,11 +221,20 @@ hintLine.style.display = "none";
       return;
     }
 
-    snap.forEach(d=>{
-      const t = d.data() || {};
+    const fragment = document.createDocumentFragment();
+
+    const threads = snap.docs
+      .map(d=>({ id:d.id, ...(d.data() || {}) }))
+      .sort((a,b)=>{
+        const ta = a.lastMessageAt?.seconds ?? a.lastAt?.seconds ?? 0;
+        const tb = b.lastMessageAt?.seconds ?? b.lastAt?.seconds ?? 0;
+        return tb - ta;
+      });
+
+    threads.forEach(t=>{
       const ownerName = String(t.ownerName || "Propriétaire").trim();
-      const lastText = String(t.lastMessage || "").trim();
-      const lastAt = fmtTs(t.lastMessageAt);
+      const lastText = String(t.lastMessage || t.lastText || "").trim();
+      const lastAt = fmtTs(t.lastMessageAt || t.lastAt);
       const unread = Number(t.unreadForConciergerie || 0);
 
       const row = document.createElement("div");
@@ -245,11 +252,13 @@ hintLine.style.display = "none";
 
       row.addEventListener("click", ()=>{
         // ouvre la conversation
-        location.href = `conciergerie-message.html?threadId=${encodeURIComponent(d.id)}`;
+        location.href = `conciergerie-message.html?threadId=${encodeURIComponent(t.id)}`;
       });
 
-      threadsList.appendChild(row);
+      fragment.appendChild(row);
     });
+
+    threadsList.appendChild(fragment);
   }, (err)=>{
     console.error(err);
     showAlert("Erreur chargement threads : " + (err?.message || "inconnue"));

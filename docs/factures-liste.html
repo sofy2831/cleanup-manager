@@ -2273,9 +2273,11 @@ const avoirTotal = Number(avoirData.totalTTC || 0);
       return;
     }
 
+    const fragment = document.createDocumentFragment();
     for(const it of filtered){
-      listEl.appendChild(renderItem(it.id, it.data));
+      fragment.appendChild(renderItem(it.id, it.data));
     }
+    listEl.appendChild(fragment);
   }
 
   function applyFilters(){
@@ -2391,8 +2393,10 @@ async function loadCreditsForInvoices(uid){
       data: (d.data() || {})
     }));
 
-    await loadCreditsForInvoices(uid);
-    await loadPublishedStatementsForInvoices(uid);
+    await Promise.all([
+      loadCreditsForInvoices(uid),
+      loadPublishedStatementsForInvoices(uid)
+    ]);
     
     applyFilters();
   }
@@ -2599,7 +2603,11 @@ refreshOwnerPublishUI();
     }
   });
 
-  searchInput.addEventListener("input", applyFilters);
+  let searchRenderTimer = null;
+  searchInput.addEventListener("input", ()=>{
+    clearTimeout(searchRenderTimer);
+    searchRenderTimer = setTimeout(applyFilters, 120);
+  });
   filterStatus.addEventListener("change", applyFilters);
 
   onAuthStateChanged(auth, async (user)=>{
@@ -2609,15 +2617,26 @@ refreshOwnerPublishUI();
     }
     currentUser = user;
 
+    // Le profil est secondaire : une indisponibilité ponctuelle de Firestore
+    // ne doit pas empêcher l'affichage des factures.
     try{
       await loadProfile(user.uid);
+    }catch(e){
+      console.warn("Profil indisponible, chargement des factures poursuivi :", e?.message || e);
+      pageTitleEl.textContent = conciergerieCompanyName;
+      companyBadge.textContent = conciergerieCompanyName;
+    }
+
+    try{
       await loadInvoices(user.uid);
-      await refreshFacturesOnboarding(user.uid);
-      bindOnboardingAutoRefresh();
     }catch(e){
       console.error(e);
       showAlert("⛔ " + (e?.message || "Erreur chargement factures"), false);
     }
+
+    // Onboarding masqué : chargement secondaire et non bloquant.
+    refreshFacturesOnboarding(user.uid).catch(()=>{});
+    bindOnboardingAutoRefresh();
   });
 </script>
 </body>
