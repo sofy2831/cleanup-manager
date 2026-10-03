@@ -1208,7 +1208,9 @@
     agentName.value = e.assignedToName || "";
     agentEmail.value = e.assignedToEmail || "";
 
-    await loadPhotosByMission();
+    // Les photos sont secondaires : on les charge sans bloquer l'affichage
+    // de la page Intervention.
+    loadPhotosByMission().catch(err => console.warn("Photos non bloquantes", err));
 
     const hasLinks = !!String(linkBox.dataset.generated || "").trim();
     shareBtn.disabled = !hasLinks;
@@ -1220,17 +1222,23 @@
   async function upsertMissionForToken({ tokenId, email, name, missionType }){
     const mRef = doc(db, "events", prestationId, "missions", missionType);
 
-    let locked = false;
+    let existing = null;
     try{
       const mSnap = await getDoc(mRef);
-      if(mSnap.exists()){
-        locked = !!(mSnap.data()?.locked);
-      }
-    }catch{
-      locked = false;
+      if(mSnap.exists()) existing = mSnap.data() || {};
+    }catch(err){
+      console.error("Lecture mission impossible avant création", missionType, err);
+      throw err;
     }
 
-    if(locked) return;
+    // Un nouveau lien agent doit toujours porter le nouveau token.
+    // Une ancienne mission verrouillée/en attente peut provenir d'un test ou
+    // d'un précédent lien expiré : on la réassigne proprement.
+    // En revanche une mission déjà VALIDEE reste définitive.
+    const existingStatus = String(existing?.status || "").toUpperCase().trim();
+    if(existingStatus === "VALIDEE"){
+      throw new Error("MISSION_DEJA_VALIDEE:" + missionType);
+    }
 
     const sched = computeScheduleForMission(currentEvent, missionType);
 
@@ -1403,6 +1411,33 @@
       await upsertMissionForToken({ tokenId, email, name, missionType: t });
     }
 
+    // Vérification stricte : ne jamais annoncer un lien valide si une mission
+    // attendue n'existe pas réellement dans Firestore.
+    const missionDocsMissing = [];
+    const missionTokenMismatch = [];
+    for(const t of missionTypes){
+      const checkSnap = await getDoc(doc(db, "events", prestationId, "missions", t));
+      if(!checkSnap.exists()){
+        missionDocsMissing.push(t);
+        continue;
+      }
+      const md = checkSnap.data() || {};
+      if(String(md.dayToken || "") !== String(tokenId)){
+        missionTokenMismatch.push(t);
+      }
+    }
+    if(missionDocsMissing.length){
+      throw new Error("MISSION_DOCS_NOT_CREATED:" + missionDocsMissing.join(","));
+    }
+    if(missionTokenMismatch.length){
+      throw new Error("MISSION_TOKEN_MISMATCH:" + missionTokenMismatch.join(","));
+    }
+
+    await setDoc(doc(db,"dayTokens",tokenId), {
+      missionDocsReady: true,
+      missionDocsCheckedAt: serverTimestamp()
+    }, { merge:true });
+
     await updateDoc(doc(db, "users", currentUser.uid), {
       "onboarding.firstMissionCreated": true,
       "onboarding.updatedAt": serverTimestamp()
@@ -1530,16 +1565,36 @@
       return;
     }
 
-    const ok = await guardConciergerie(u);
-    if(!ok){
+    // Une seule lecture de users/{uid} au lieu de deux lectures successives.
+    let userData = null;
+    try{
+      const uSnap = await getDoc(doc(db, "users", u.uid));
+      if(!uSnap.exists()){
+        location.href = "abonnement.html?plan=starter";
+        return;
+      }
+      userData = uSnap.data() || {};
+      const sub = String(userData.subscriptionStatus || "").toLowerCase();
+      const ok = (userData.role === "conciergerie" || userData.role === "admin")
+        && (sub === "active" || sub === "cancel_at_period_end");
+      if(!ok){
+        location.href = "abonnement.html?plan=starter";
+        return;
+      }
+    }catch(err){
+      console.error("Lecture profil impossible", err);
       location.href = "abonnement.html?plan=starter";
       return;
     }
 
     currentUser = u;
-
     applyBackLink();
-    await loadCompanyName(u);
+
+    // Le nom de la conciergerie vient du document déjà lu.
+    const company = (userData?.businessProfile?.companyName || "").trim() || "Conciergerie";
+    companyLine.textContent = company;
+    helloLine.textContent = "Bonjour,";
+    if(!String(conciergerieName.value || "").trim()) conciergerieName.value = company;
 
     try{
       await load();
