@@ -318,8 +318,21 @@
       for(const t of filtered){
         const unread = Number(t.unreadForConciergerie || 0);
         const ownerName = String(t.ownerName || "Propriétaire").trim();
-        const last = String(t.lastMessage || t.lastText || "").trim();
-        const messageDate = t.lastMessageAt || t.lastAt || null;
+        // Compatibilité avec les deux schémas de threads : on affiche le texte
+        // associé à l'horodatage réellement le plus récent.
+        const lastMessageAtMs = t.lastMessageAt?.toMillis?.() || 0;
+        const lastAtMs = t.lastAt?.toMillis?.() || 0;
+        const useLastText = lastAtMs > lastMessageAtMs;
+
+        const last = String(
+          useLastText
+            ? (t.lastText || t.lastMessage || "")
+            : (t.lastMessage || t.lastText || "")
+        ).trim();
+
+        const messageDate = useLastText
+          ? (t.lastAt || t.lastMessageAt || null)
+          : (t.lastMessageAt || t.lastAt || null);
         const date = messageDate ? fmtTs(messageDate) : "—";
 
         const meta = [
@@ -378,8 +391,14 @@
       unsub = onSnapshot(q, (snap)=>{
         allThreads = snap.docs.map(d=>({ id:d.id, ...(d.data()||{}) }));
         allThreads.sort((a,b)=>{
-          const ta = a.lastMessageAt?.seconds ?? a.lastAt?.seconds ?? 0;
-          const tb = b.lastMessageAt?.seconds ?? b.lastAt?.seconds ?? 0;
+          const ta = Math.max(
+            a.lastMessageAt?.toMillis?.() || 0,
+            a.lastAt?.toMillis?.() || 0
+          );
+          const tb = Math.max(
+            b.lastMessageAt?.toMillis?.() || 0,
+            b.lastAt?.toMillis?.() || 0
+          );
           return tb - ta;
         });
         render();
