@@ -803,7 +803,23 @@
       return fmtDateFR(x?.invoiceIssuedDate || x?.invoiceIssuedAt || x?.createdAt || x?.createdAtMs || x?.snapAtMs);
     }
     function getDueDate(x){
-      return fmtDateFR(x?.invoiceDueDate || x?.dueDate || null);
+      // Même logique que facture-apercu.html : date d'émission + délai de paiement.
+      // Une échéance explicite enregistrée reste prioritaire.
+      const explicit = fmtDateFR(x?.invoiceDueDate || x?.dueDate || null);
+      if(explicit !== "—") return explicit;
+
+      const issued = getIssuedDate(x);
+      const match = issued.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+      if(!match) return "—"; // Ne pas inventer de date si l'émission manque.
+      const day = Number(match[1]), month = Number(match[2]), year = Number(match[3]);
+      const date = new Date(year, month - 1, day);
+      if(date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) return "—";
+
+      const term = String(x?.invoicePaymentTerm || "RECEPTION").toUpperCase().trim();
+      const daysByTerm = { RECEPTION:0, "8J":8, "15J":15, "30J":30, "45J":45 };
+      if(!Object.prototype.hasOwnProperty.call(daysByTerm, term)) return "—";
+      date.setDate(date.getDate() + daysByTerm[term]);
+      return date.toLocaleDateString("fr-FR");
     }
 
     function renderTotals(filtered){
