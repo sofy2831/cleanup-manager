@@ -430,6 +430,10 @@
           <span class="badge" id="scopeHint" style="margin-left:auto;">Filtre : Aucun</span>
         </div>
 
+        <div class="scopeBar" style="margin-top:12px" aria-label="Mode de présentation">
+          <button class="btn primary" id="modeInvoice" type="button">Par facture</button>
+          <button class="btn" id="modeClient" type="button">Par client</button>
+        </div>
         <div class="toolbar">
           <select class="select" id="filterScope">
             <option value="DUE_ONLY">À relancer (non soldées)</option>
@@ -554,7 +558,7 @@
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
-      collection, query, where, limit, getDocs, doc, getDoc, updateDoc, serverTimestamp, orderBy, Timestamp
+      collection, query, where, limit, getDocs, doc, getDoc, updateDoc, serverTimestamp, orderBy, Timestamp, writeBatch
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const helloLine = document.getElementById("helloLine");
@@ -601,6 +605,10 @@
     const markSentBtn = document.getElementById("markSentBtn");
 
     let all = [];
+    let displayMode = "INVOICE";
+    let groupSelection = [];
+    let groupKind = "RELANCE";
+    let groupLevel = 1;
     let currentUid = "";
     let vatCfg = { enabled:false, rate:0 };
 
@@ -827,6 +835,8 @@
       modalMaskText.setAttribute("aria-hidden","true");
       textBlock.textContent="—";
       markSentBtn.style.display="none";
+      markSentBtn.removeAttribute("data-group");
+      groupSelection=[];
       markSentBtn.removeAttribute("data-docid");
       markSentBtn.removeAttribute("data-kind");
       markSentBtn.removeAttribute("data-level");
@@ -1075,6 +1085,41 @@ ${pro ? proClauseL44110().trimEnd() : ""}`.trim();
     }
 
     markSentBtn.addEventListener("click", async ()=>{
+      if(markSentBtn.getAttribute("data-group")==="true"){
+        if(!groupSelection.length)return;
+        const selected=groupSelection.map(id=>all.find(x=>x.id===id)).filter(Boolean);
+        if(!selected.length)return;
+        try{
+          markSentBtn.disabled=true;
+          const batch=writeBatch(db);
+          const now=serverTimestamp();
+          const sharedId="GRP-"+Date.now();
+          for(const x of selected){
+            const patch={"recouvrement.updatedAt":now,"recouvrement.lastGroupRef":sharedId};
+            if(groupKind==="MED"){
+              patch["recouvrement.miseEnDemeureAt"]=now;
+              patch["recouvrement.nextAction"]="INJONCTION";
+              patch["recouvrement.nextActionAt"]=tsPlusDays(MED_DELAY_DAYS);
+            }else{
+              const n=groupLevel;
+              patch["recouvrement.relanceLevel"]=n;
+              patch[`recouvrement.relance${n}At`]=now;
+              patch["recouvrement.nextAction"]=n===1?"RELANCE_2":n===2?"RELANCE_3":"MED";
+              patch["recouvrement.nextActionAt"]=tsPlusDays(RELANCE_GAP_DAYS);
+            }
+            batch.update(doc(db,"salesDocuments",x.id),patch);
+          }
+          await batch.commit();
+          for(const x of selected){
+            const snap=await getDoc(doc(db,"salesDocuments",x.id));
+            if(snap.exists())all=all.map(z=>z.id===x.id?{id:x.id,...snap.data()}:z);
+          }
+          closeTextModal();renderScopeButtons();render();
+          showAlert("Démarche groupée enregistrée sur "+selected.length+" facture(s). Référence : "+sharedId,true);
+        }catch(e){showAlert("Erreur enregistrement groupé : "+(e?.message||e));}
+        finally{markSentBtn.disabled=false;}
+        return;
+      }
       const docId = markSentBtn.getAttribute("data-docid");
       const kind = markSentBtn.getAttribute("data-kind"); // RELANCE | MED
       const level = Number(markSentBtn.getAttribute("data-level")||0);
@@ -1126,6 +1171,8 @@ ${pro ? proClauseL44110().trimEnd() : ""}`.trim();
       }
 
       markSentBtn.style.display = isActionable(invoice) ? "" : "none";
+      markSentBtn.removeAttribute("data-group");
+      groupSelection=[];
       markSentBtn.setAttribute("data-docid", invoice.id);
       markSentBtn.setAttribute("data-kind", (kind === "MED") ? "MED" : "RELANCE");
       markSentBtn.setAttribute("data-level", String(level||0));
@@ -1179,7 +1226,95 @@ ${pro ? proClauseL44110().trimEnd() : ""}`.trim();
       setTimeScope(timeScope === "TODAY" ? "NONE" : "TODAY");
     });
 
+    const modeInvoice = document.getElementById("modeInvoice");
+    const modeClient = document.getElementById("modeClient");
+    modeInvoice.addEventListener("click",()=>{displayMode="INVOICE";render();});
+    modeClient.addEventListener("click",()=>{displayMode="CLIENT";render();});
+
+    function clientKey(x){
+      // Priorité à l'identifiant stable, puis au courriel. Ne jamais grouper les clients inconnus.
+      const id = String(x.clientId || x.customerId || x.ownerId || "").trim();
+      if(id) return "id:"+id;
+      const email = normalizeEmail(x.clientEmail || "");
+      if(email) return "mail:"+email;
+      const name = String(x.clientName || "").trim().toLocaleLowerCase("fr-FR");
+      return name ? "nom:"+name : "isolé:"+x.id;
+    }
+    function getClientGroups(filtered){
+      const groups = new Map();
+      for(const x of filtered){
+        const key=clientKey(x);
+        if(!groups.has(key)) groups.set(key,[]);
+        groups.get(key).push(x);
+      }
+      return [...groups.values()].sort((a,b)=>String(a[0].clientName||"").localeCompare(String(b[0].clientName||""),"fr"));
+    }
+    function groupRows(invoices){
+      return invoices.map(x=>`<tr><td>${esc(getInvoiceNumber(x))}</td><td>${esc(getIssuedDate(x))}</td><td>${esc(getDueDate(x))}</td><td class="right">${fmtMoney(getDueAmount(x))}</td></tr>`).join("");
+    }
+    function renderClientGroups(filtered){
+      for(const invoices of getClientGroups(filtered)){
+        const due=invoices.reduce((s,x)=>s+getDueAmount(x),0);
+        const name=String(invoices[0].clientName||invoices[0].ownerName||"Client non renseigné");
+        const card=document.createElement("div");
+        card.className="card";
+        const groupId="group_"+Math.random().toString(36).slice(2);
+        card.innerHTML=`<div class="row" style="margin-top:0"><div><b>${esc(name)}</b><div class="mini">${invoices.length} facture(s) • Reste dû : <b>${fmtMoney(due)}</b></div></div><div class="actionsBar" style="width:auto"><button class="btn" data-group-action="statement">Relevé PDF</button><button class="btn primary" data-group-action="relance">Relance groupée</button><button class="btn danger" data-group-action="med">Mise en demeure groupée</button></div></div>
+        <div style="overflow-x:auto;margin-top:12px"><table><thead><tr><th>Facture</th><th>Émise</th><th>Échéance</th><th class="right">Reste dû</th><th>Sélection</th></tr></thead><tbody>${invoices.map(x=>`<tr><td>${esc(getInvoiceNumber(x))}</td><td>${esc(getIssuedDate(x))}</td><td>${esc(getDueDate(x))}</td><td class="right">${fmtMoney(getDueAmount(x))}</td><td><input type="checkbox" data-group-invoice="${esc(x.id)}" ${isActionable(x)?"checked":"disabled"} aria-label="Sélectionner ${esc(getInvoiceNumber(x))}"></td></tr>`).join("")}</tbody></table></div>`;
+        card.addEventListener("click",async e=>{
+          const btn=e.target.closest("button[data-group-action]");if(!btn)return;
+          const chosen=[...card.querySelectorAll("input[data-group-invoice]:checked")].map(el=>all.find(x=>x.id===el.dataset.groupInvoice)).filter(Boolean);
+          if(!chosen.length){showAlert("Sélectionne au moins une facture non soldée.");return;}
+          if(btn.dataset.groupAction==="statement") { printGroupStatement(chosen);return; }
+          if(chosen.some(x=>getDueDate(x)==="—")){showAlert("Attention : certaines échéances ne sont pas renseignées. Vérifie leur exigibilité avant tout envoi.");}
+          await showGroupModal(btn.dataset.groupAction==="med"?"MED":"RELANCE",chosen);
+        });
+        listBox.appendChild(card);
+      }
+    }
+    function groupText(kind, invoices, level){
+      const name=String(invoices[0].clientName||"Madame, Monsieur").trim();
+      const total=fmtMoney(invoices.reduce((s,x)=>s+getDueAmount(x),0));
+      const detail=invoices.map(x=>`- Facture ${getInvoiceNumber(x)} du ${getIssuedDate(x)}${getDueDate(x)!=="—"?", échéance "+getDueDate(x):""} : ${fmtMoney(getDueAmount(x))}`).join("\n");
+      const heading=kind==="MED"?"Mise en demeure de payer":`Relance ${level} de paiement`;
+      const intro=kind==="MED"?`Par la présente, nous vous mettons en demeure de régler les factures suivantes :`:`Sauf erreur de notre part, les factures suivantes présentent un solde restant dû :`;
+      const end=kind==="MED"?`Nous vous demandons de régler la somme de ${total} sous ${MED_DELAY_DAYS} jours à compter de la réception de cette mise en demeure. À défaut, nous nous réservons le droit d'engager les démarches de recouvrement appropriées.`:`Nous vous remercions de procéder au règlement de ${total}, ou de nous indiquer votre date de paiement. Si vous avez déjà réglé ces factures, merci de ne pas tenir compte de ce rappel.`;
+      return `Objet : ${heading} – ${invoices.length} facture(s)\n\n${name},\n\n${intro}\n\n${detail}\n\nTotal restant dû : ${total}\n\n${end}\n\nCordialement,\nService Comptabilité`;
+    }
+    async function showGroupModal(kind,invoices){
+      groupSelection=invoices.map(x=>x.id);groupKind=kind;
+      groupLevel=Math.min(3,Math.max(1,...invoices.map(x=>getRelanceLevel(x)+1)));
+      const emailSet=[...new Set(invoices.map(x=>normalizeEmail(x.clientEmail||"")).filter(Boolean))];
+      const email=emailSet.length===1?emailSet[0]:"";
+      const title=kind==="MED"?"Mise en demeure groupée":`Relance groupée ${groupLevel}`;
+      const body=groupText(kind,invoices,groupLevel);
+      modalTitleText.textContent=title;
+      modalSubtitleText.textContent=`${invoices.length} facture(s) sélectionnée(s)`;
+      kvClient.textContent=invoices[0].clientName||"—";
+      kvEmail.textContent=email||"À vérifier (adresses différentes ou absentes)";
+      kvInv.textContent=invoices.map(getInvoiceNumber).join(", ");
+      kvDue.textContent=fmtMoney(invoices.reduce((s,x)=>s+getDueAmount(x),0));
+      kvDueDate.textContent="Voir échéances dans le relevé";
+      kvType.textContent=invoices.every(isProClient)?"PRO":invoices.some(isProClient)?"Mixte — vérifier":"PARTICULIER";
+      textBlock.textContent=body;
+      openEmailBtn.href=email?makeMailto(email,title,body):"#";
+      openEmailBtn.setAttribute("aria-disabled",email?"false":"true");
+      markSentBtn.style.display="";
+      markSentBtn.removeAttribute("data-docid");
+      markSentBtn.setAttribute("data-group","true");
+      openTextModal();
+    }
+    function printGroupStatement(invoices){
+      const name=invoices[0].clientName||"Client";
+      const total=invoices.reduce((s,x)=>s+getDueAmount(x),0);
+      const win=window.open("","_blank");
+      if(!win){showAlert("Autorise les fenêtres contextuelles pour générer le relevé PDF.");return;}
+      win.document.write(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Relevé de créances</title><style>body{font:14px Arial,sans-serif;margin:45px;color:#222}h1{font-size:24px}table{width:100%;border-collapse:collapse;margin-top:24px}td,th{padding:10px;border-bottom:1px solid #ddd;text-align:left}.right{text-align:right}footer{margin-top:35px;color:#555}</style></head><body><h1>Relevé de créances</h1><p>Client : <b>${esc(name)}</b></p><p>Établi le ${new Date().toLocaleDateString("fr-FR")}</p><table><thead><tr><th>Facture</th><th>Date d'émission</th><th>Échéance</th><th class="right">Solde dû</th></tr></thead><tbody>${groupRows(invoices)}</tbody></table><h2 style="text-align:right">Total restant dû : ${fmtMoney(total)}</h2><footer>Document récapitulatif — les factures originales conservent leur valeur et leur suivi propres.</footer></body></html>`);
+      win.document.close();win.focus();setTimeout(()=>win.print(),350);
+    }
     function render(){
+      modeInvoice.classList.toggle("primary",displayMode==="INVOICE");
+      modeClient.classList.toggle("primary",displayMode==="CLIENT");
       const filtered = getFiltered();
       renderTotals(filtered);
 
@@ -1198,6 +1333,7 @@ ${pro ? proClauseL44110().trimEnd() : ""}`.trim();
         return;
       }
 
+      if(displayMode==="CLIENT"){renderClientGroups(filtered);return;}
       for(const x of filtered){
         const invNum = getInvoiceNumber(x);
         const issued = getIssuedDate(x);
