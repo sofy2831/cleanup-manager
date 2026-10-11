@@ -540,6 +540,8 @@
 
         <div class="copyRow">
           <a class="btn" id="openEmailBtn" href="#" target="_blank" rel="noopener">✉️ Ouvrir email</a>
+          <a class="btn" id="ownerEmailBtn" href="#" style="display:none;">✉️ Email propriétaire</a>
+          <button class="btn primary" id="publishGroupOwnerBtn" type="button" style="display:none;">Partager dans l’espace propriétaire</button>
           <button class="btn danger" id="markSentBtn" type="button" style="display:none;">Marquer comme envoyé</button>
         </div>
       </div>
@@ -558,7 +560,7 @@
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
-      collection, query, where, limit, getDocs, doc, getDoc, updateDoc, serverTimestamp, orderBy, Timestamp, writeBatch
+      collection, query, where, limit, getDocs, doc, getDoc, updateDoc, setDoc, serverTimestamp, orderBy, Timestamp, writeBatch
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const helloLine = document.getElementById("helloLine");
@@ -603,6 +605,9 @@
 
     const openEmailBtn = document.getElementById("openEmailBtn");
     const markSentBtn = document.getElementById("markSentBtn");
+    const ownerEmailBtn = document.getElementById("ownerEmailBtn");
+    const publishGroupOwnerBtn = document.getElementById("publishGroupOwnerBtn");
+    let groupOwnerTarget = null;
 
     let all = [];
     let displayMode = "INVOICE";
@@ -853,6 +858,9 @@
       markSentBtn.style.display="none";
       markSentBtn.removeAttribute("data-group");
       groupSelection=[];
+      groupOwnerTarget=null;
+      ownerEmailBtn.style.display="none";
+      publishGroupOwnerBtn.style.display="none";
       markSentBtn.removeAttribute("data-docid");
       markSentBtn.removeAttribute("data-kind");
       markSentBtn.removeAttribute("data-level");
@@ -1288,6 +1296,49 @@ ${pro ? proClauseL44110().trimEnd() : ""}`.trim();
         listBox.appendChild(card);
       }
     }
+    // Même résolution propriétaire que factures-liste.html : association par ownerDocId.
+    async function resolveGroupOwner(invoices){
+      const ids=[...new Set(invoices.map(x=>String(x.clientOwnerDocId||x.ownerDocId||x.clientOwnerId||"").trim()))];
+      if(ids.length!==1 || !ids[0]) return null;
+      const ownerDocId=ids[0];
+      const snap=await getDoc(doc(db,"owners",ownerDocId));
+      if(!snap.exists()) return null;
+      const o=snap.data()||{};
+      const ownerUid=String(o.ownerUid||o.userUid||"").trim();
+      if(!ownerUid) return null;
+      return {ownerDocId,ownerUid,email:String(o.email||"").trim(),name:String(o.fullname||o.displayName||o.name||invoices[0].clientName||"Propriétaire").trim()};
+    }
+    async function publishGroupToOwner(){
+      const target=groupOwnerTarget;
+      const invoices=groupSelection.map(id=>all.find(x=>x.id===id)).filter(Boolean);
+      if(!target||!invoices.length) return showAlert("Propriétaire non associé aux factures sélectionnées.");
+      const kind=groupKind;
+      const subject=kind==="MED"?"Mise en demeure groupée":`Relance groupée ${groupLevel}`;
+      const body=groupText(kind,invoices,groupLevel);
+      const total=invoices.reduce((v,x)=>v+getDueAmount(x),0);
+      const ref="RECO-"+Date.now();
+      if(!confirm(`Publier ${subject.toLowerCase()} dans l’espace de ${target.name} pour ${fmtMoney(total)} ?`)) return;
+      publishGroupOwnerBtn.disabled=true;
+      try{
+        const threadId=`t_${currentUid}_${target.ownerDocId}`;
+        const threadRef=doc(db,"threads",threadId);
+        const old=await getDoc(threadRef);
+        const fields={lastText:body,lastAt:serverTimestamp(),unreadForOwner:1,unreadForConciergerie:0,updatedAt:serverTimestamp()};
+        if(!old.exists()) Object.assign(fields,{
+          type:"billing",subject,conciergerieUid:currentUid,ownerUid:target.ownerUid,ownerDocId:target.ownerDocId,
+          ownerName:target.name,ownerEmailLower:target.email.toLowerCase(),closed:false,createdAt:serverTimestamp()
+        });
+        await setDoc(threadRef,fields,{merge:true});
+        await setDoc(doc(db,"threads",threadId,"messages",`msg_${Date.now()}_${Math.random().toString(36).slice(2,8)}`),{
+          text:body,at:serverTimestamp(),createdAt:serverTimestamp(),senderRole:"CONCIERGERIE",senderUid:currentUid,
+          recouvrementGroupRef:ref,recouvrementKind:kind,invoiceDocIds:invoices.map(x=>x.id),invoiceNumbers:invoices.map(getInvoiceNumber),totalDue:total
+        });
+        showAlert("Publication effectuée dans la messagerie du propriétaire. Les relances ne sont pas marquées comme envoyées par email.",true);
+        publishGroupOwnerBtn.textContent="✓ Partagé avec le propriétaire";
+        publishGroupOwnerBtn.disabled=true;
+      }catch(e){showAlert("Erreur partage propriétaire : "+(e?.message||e));publishGroupOwnerBtn.disabled=false;}
+    }
+    publishGroupOwnerBtn.addEventListener("click",publishGroupToOwner);
     function groupText(kind, invoices, level){
       const name=String(invoices[0].clientName||"Madame, Monsieur").trim();
       const total=fmtMoney(invoices.reduce((s,x)=>s+getDueAmount(x),0));
@@ -1318,7 +1369,24 @@ ${pro ? proClauseL44110().trimEnd() : ""}`.trim();
       markSentBtn.style.display="";
       markSentBtn.removeAttribute("data-docid");
       markSentBtn.setAttribute("data-group","true");
+      groupOwnerTarget=null;
+      ownerEmailBtn.style.display="none";
+      publishGroupOwnerBtn.style.display="none";
+      publishGroupOwnerBtn.disabled=false;
+      publishGroupOwnerBtn.textContent="Partager dans l’espace propriétaire";
       openTextModal();
+      try{
+        const target=await resolveGroupOwner(invoices);
+        if(groupSelection.join("|")!==invoices.map(x=>x.id).join("|")) return;
+        groupOwnerTarget=target;
+        if(target){
+          ownerEmailBtn.style.display="inline-flex";
+          ownerEmailBtn.href=target.email?makeMailto(target.email,title,body):"#";
+          ownerEmailBtn.setAttribute("aria-disabled",target.email?"false":"true");
+          publishGroupOwnerBtn.style.display="inline-flex";
+        }
+      }catch(e){console.warn("Résolution propriétaire indisponible",e);}
+
     }
     function printGroupStatement(invoices){
       const name=invoices[0].clientName||"Client";
