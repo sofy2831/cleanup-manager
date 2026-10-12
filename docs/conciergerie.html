@@ -487,11 +487,18 @@
 
     <div class="alert" id="alertBox"></div>
 
+    <section class="card" style="width:100%;max-width:980px;margin-top:16px" aria-label="Alertes réservations">
+      <h2>Alertes réservations</h2>
+      <p>Notifications automatiques par email, avec choix des logements concernés.</p>
+      <button class="cta" id="openReservationAlertsBtn" type="button">Configurer les alertes</button>
+    </section>
     <div class="grid">
       <div class="card"><h2>Planning</h2><p>Calendrier • logements • réservations.</p><a class="cta" href="planning.html">Commencer par le planning</a></div>
       <div class="card"><h2>Production</h2><p>Interventions • agents • photos.</p><a class="cta" href="prestations.html">Production</a></div>
       <div class="card"><h2>Comptabilité</h2><p>Ventes • journaux • suivi & recouvrement.</p><a class="cta" href="compta.html">Comptabilité</a></div>
-      <div class="card"><h2>Boutique</h2><p>Catalogue kits / consommables (préparation commande).</p><button class="cta cta-disabled" type="button" disabled aria-disabled="true">Bientôt disponible</button></div>
+      <!-- Boutique temporairement masquée ; réactiver en retirant ce commentaire.
+<div class="card"><h2>Boutique</h2><p>Catalogue kits / consommables (préparation commande).</p><button class="cta cta-disabled" type="button" disabled aria-disabled="true">Bientôt disponible</button></div>
+-->
 
       <div class="card">
         <h2>Les indispensables du propriétaire</h2>
@@ -619,6 +626,21 @@
     </div>
   </div>
 
+  <div class="modalBack" id="reservationAlertsModal" role="dialog" aria-modal="true" aria-labelledby="reservationAlertsTitle">
+    <div class="modal">
+      <div class="modalHead"><div><div class="modalTitle" id="reservationAlertsTitle">Alertes réservations</div><div class="modalSubtitle">Choisissez les alertes et les logements concernés.</div></div><button class="xBtn" id="closeReservationAlertsBtn" type="button" aria-label="Fermer">✕</button></div>
+      <div style="display:grid;gap:12px;font-size:13px">
+        <label><input type="checkbox" id="alertNewIcal"> Nouvelle réservation iCal</label>
+        <label><input type="checkbox" id="alertTomorrow"> Rappel la veille de l’arrivée (iCal et manuelle)</label>
+        <label><input type="checkbox" id="alertUrgent"> Réservation de dernière minute (arrivée dans moins de 24 h)</label>
+        <strong>Logements concernés</strong>
+        <label><input type="checkbox" id="alertAllHomes"> Tous les logements actifs, y compris les futurs</label>
+        <div id="alertHomesList" style="display:grid;gap:8px;max-height:220px;overflow:auto;padding:8px;border:1px solid var(--border);border-radius:12px"></div>
+        <div id="alertSettingsMessage" role="status" style="font-size:12px"></div>
+        <button class="cta" id="saveReservationAlertsBtn" type="button">Enregistrer les préférences</button>
+      </div>
+    </div>
+  </div>
   <script type="module">
     import { auth, db, authReady } from "./firebase-init.js";
     import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
@@ -678,6 +700,62 @@
     const isDevHost = host === "localhost" || host.startsWith("127.") || host === "dev.cleanup-manager.fr" || host === "cleanup-manager-dev.web.app" || host === "cleanup-manager-dev.firebaseapp.com";
     const FUNCTIONS_BASE = isDevHost ? "https://api-vj4z6nnbiq-ew.a.run.app" : "https://europe-west1-cleanup-manager-d9301.cloudfunctions.net/api";
 
+    const alertModal = document.getElementById("reservationAlertsModal");
+    const alertMsg = document.getElementById("alertSettingsMessage");
+    let alertHomes = [];
+    const defaultAlerts = { newIcal:true, tomorrow:true, urgent:true, allHomes:true, homeIds:[] };
+    function closeAlerts(){ alertModal.style.display = "none"; }
+    document.getElementById("closeReservationAlertsBtn").addEventListener("click", closeAlerts);
+    alertModal.addEventListener("click", e => { if(e.target === alertModal) closeAlerts(); });
+    document.getElementById("alertAllHomes").addEventListener("change", e => {
+      document.querySelectorAll(".reservation-alert-home").forEach(x => { x.disabled=e.target.checked; });
+    });
+    document.getElementById("openReservationAlertsBtn").addEventListener("click", async () => {
+      if(!currentUid) return;
+      alertMsg.textContent = "Chargement des logements…";
+      alertModal.style.display = "flex";
+      try {
+        const [us, hs] = await Promise.all([
+          getDoc(doc(db,"users",currentUid)),
+          getDocs(query(collection(db,"homes"),where("conciergerieUid","==",currentUid)))
+        ]);
+        const settings = {...defaultAlerts, ...(us.data()?.reservationEmailAlerts || {})};
+        alertHomes = hs.docs.filter(d => !["archived","inactive"].includes(String(d.data().status||"active").toLowerCase()))
+          .map(d => ({id:d.id, name:String(d.data().name || d.data().homeName || d.data().title || d.id)}))
+          .sort((a,b)=>a.name.localeCompare(b.name,"fr"));
+        document.getElementById("alertNewIcal").checked = settings.newIcal !== false;
+        document.getElementById("alertTomorrow").checked = settings.tomorrow !== false;
+        document.getElementById("alertUrgent").checked = settings.urgent !== false;
+        document.getElementById("alertAllHomes").checked = settings.allHomes !== false;
+        const list = document.getElementById("alertHomesList");
+        list.replaceChildren();
+        for(const home of alertHomes){
+          const label=document.createElement("label");
+          const check=document.createElement("input"); check.type="checkbox"; check.className="reservation-alert-home"; check.value=home.id;
+          check.checked = settings.allHomes !== false || (Array.isArray(settings.homeIds) && settings.homeIds.includes(home.id));
+          check.disabled = settings.allHomes !== false;
+          label.append(check, document.createTextNode(" "+home.name)); list.append(label);
+        }
+        if(!alertHomes.length) list.textContent="Aucun logement actif trouvé.";
+        alertMsg.textContent="";
+      } catch(e){ alertMsg.textContent="Impossible de charger les logements : "+e.message; }
+    });
+    document.getElementById("saveReservationAlertsBtn").addEventListener("click", async () => {
+      if(!currentUid) return;
+      const btn=document.getElementById("saveReservationAlertsBtn"); btn.disabled=true;
+      const allHomes=document.getElementById("alertAllHomes").checked;
+      const homeIds=[...document.querySelectorAll(".reservation-alert-home:checked")].map(x=>x.value);
+      try {
+        await updateDoc(doc(db,"users",currentUid), { reservationEmailAlerts:{
+          newIcal:document.getElementById("alertNewIcal").checked,
+          tomorrow:document.getElementById("alertTomorrow").checked,
+          urgent:document.getElementById("alertUrgent").checked,
+          allHomes, homeIds:allHomes?[]:homeIds
+        }});
+        alertMsg.textContent="Préférences enregistrées.";
+      } catch(e){ alertMsg.textContent="Enregistrement impossible : "+e.message; }
+      finally {btn.disabled=false;}
+    });
     let currentUid = "";
     let currentUserData = null;
     let lastRec = { today:0, late:0 };

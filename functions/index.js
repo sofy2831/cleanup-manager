@@ -11,6 +11,7 @@ admin.initializeApp();
 // =====================
 const STRIPE_SECRET = defineSecret("STRIPE_SECRET");
 const STRIPE_WEBHOOK_SECRET = defineSecret("STRIPE_WEBHOOK_SECRET");
+const BREVO_API_KEY = defineSecret("BREVO_API_KEY");
 
 // =====================
 // Environnement projet
@@ -719,7 +720,7 @@ exports.fetchIcal = onRequest(
 // =====================
 exports.syncIcalScheduled = onSchedule(
   {
-    schedule: "every 6 hours",
+    schedule: "every 30 minutes",
     timeZone: "Europe/Paris",
     region: "europe-west1",
     timeoutSeconds: 540,
@@ -804,7 +805,9 @@ exports.syncIcalScheduled = onSchedule(
           const docId = makeDocId(homeId, uid, arrivalDateKey + "_" + tmForId);
           seenDocIds.add(docId);
 
-          await db.collection("icalEvents").doc(docId).set(
+          const eventRef = db.collection("icalEvents").doc(docId);
+          const existingEvent = await eventRef.get();
+          await eventRef.set(
             {
               conciergerieUid,
               ownerUid,
@@ -840,7 +843,9 @@ exports.syncIcalScheduled = onSchedule(
               syncSource: "scheduled",
 
               updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-              createdAt: admin.firestore.FieldValue.serverTimestamp(),
+              ...(!existingEvent.exists ? {
+                createdAt: admin.firestore.FieldValue.serverTimestamp(),
+              } : {}),
             },
             { merge: true }
           );
@@ -922,6 +927,113 @@ exports.syncIcalScheduled = onSchedule(
     return null;
   }
 );
+
+
+// =====================
+// Alertes Brevo iCal (DEV uniquement)
+// =====================
+function dateKeyFromParis(date) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Paris", year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(date);
+}
+function nextParisDayKey() {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/Paris", year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(new Date());
+  const obj = Object.fromEntries(parts.map(p => [p.type, p.value]));
+  const utc = Date.UTC(Number(obj.year), Number(obj.month) - 1, Number(obj.day) + 1);
+  return new Date(utc).toISOString().slice(0, 10);
+}
+function htmlSafe(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[c]);
+}
+async function sendBrevoIcalMail(email, subject, lines) {
+  const response = await fetch("https://api.brevo.com/v3/smtp/email", {
+    method: "POST",
+    headers: { "api-key": BREVO_API_KEY.value(), "Content-Type": "application/json", "accept": "application/json" },
+    body: JSON.stringify({
+      sender: { name: "CleanUp Manager", email: "contact@cleanup-manager.fr" },
+      to: [{ email }], subject,
+      htmlContent: `<html><body><p>${lines.map(htmlSafe).join("<br>")}</p></body></html>`,
+      textContent: lines.join("\n"),
+    }),
+  });
+  if (!response.ok) throw new Error(`Brevo HTTP ${response.status}: ${(await response.text()).slice(0, 300)}`);
+  return response.json();
+}
+
+// Traitement séparé : une panne Brevo ne bloque jamais la synchronisation iCal.
+// Le verrou Firestore empêche deux exécutions simultanées d'envoyer deux fois.
+exports.sendIcalAlertsScheduled = onSchedule({
+  schedule: "every 30 minutes", timeZone: "Europe/Paris", region: "europe-west1",
+  timeoutSeconds: 540, memory: "512MiB", retryCount: 0, secrets: [BREVO_API_KEY],
+}, async () => {
+  if (!IS_DEV_PROJECT) { console.log("Alertes Brevo désactivées hors DEV"); return; }
+  const db = admin.firestore();
+  const now = new Date();
+  const today = dateKeyFromParis(now);
+  const tomorrow = nextParisDayKey();
+  const snap = await db.collection("icalEvents").where("archived", "==", false).get();
+  const users = new Map();
+  let sent = 0, failed = 0;
+  for (const doc of snap.docs) {
+    const e = doc.data() || {};
+    const source = String(e.source || "").toLowerCase();
+    if (!e.conciergerieUid || !["ical", "manual"].includes(source)) continue;
+    const uid = String(e.conciergerieUid);
+    if (!users.has(uid)) {
+      const u = await db.collection("users").doc(uid).get();
+      users.set(uid, u.exists ? u.data() || {} : {});
+    }
+    const user = users.get(uid);
+    const prefs = user.reservationEmailAlerts || {};
+    if (prefs.allHomes === false && !(Array.isArray(prefs.homeIds) && prefs.homeIds.includes(String(e.homeId || "")))) continue;
+    const types = [];
+    if (source === "ical" && prefs.newIcal !== false && e.alertNewPending === true && e.arrivalDateKey >= today) types.push("new");
+    if (prefs.tomorrow !== false && e.arrivalDateKey === tomorrow) types.push("j1");
+    // Une réservation de dernière minute : uniquement si elle vient d'être détectée.
+    // Le champ alertNewPending est posé par la synchronisation iCal ; pour les
+    // réservations manuelles, il n'y a pas d'alerte de création.
+    if (source === "ical" && prefs.urgent !== false && e.alertNewPending === true) {
+      const key = String(e.arrivalDateKey || "");
+      const time = /^\d{2}:\d{2}$/.test(String(e.arrivalTime || "")) ? e.arrivalTime : "00:00";
+      const local = new Date(`${key}T${time}:00`);
+      // Évaluation calendaire prudente : une arrivée aujourd'hui est urgente ;
+      // pour demain, la comparaison exacte nécessite le fuseau Europe/Paris.
+      if (key === today || (key === tomorrow && time <= new Intl.DateTimeFormat("fr-FR", {timeZone:"Europe/Paris",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).format(now))) types.push("urgent");
+    }
+    for (const type of types) {
+      const alertId = `${doc.id}_${type}_${type === "j1" ? tomorrow : "v1"}`;
+      const ref = db.collection("icalEmailAlerts").doc(alertId);
+      const claimed = await db.runTransaction(async tx => {
+        if ((await tx.get(ref)).exists) return false;
+        tx.create(ref, {eventId:doc.id, type, status:"processing", claimedAt:admin.firestore.FieldValue.serverTimestamp()});
+        return true;
+      });
+      if (!claimed) continue;
+      try {
+        const email = String(user.email || "").trim();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error("Email conciergerie manquant/invalide");
+        const title = type === "new" ? "Nouvelle réservation iCal" : type === "urgent" ? "Réservation de dernière minute" : "Arrivée prévue demain";
+        const subject = `${title} – ${String(e.homeName || "Logement")}`;
+        const lines = [title, `Logement : ${e.homeName || e.homeId || "-"}`,
+          `Arrivée : ${e.arrivalDateKey || "-"} ${e.arrivalTime || ""}`,
+          `Départ : ${e.departureDateKey || "-"} ${e.departureTime || ""}`,
+          `Source : ${source === "ical" ? "calendrier iCal" : "réservation manuelle"}`];
+        const result = await sendBrevoIcalMail(email, subject, lines);
+        await ref.set({status:"sent", sentAt:admin.firestore.FieldValue.serverTimestamp(), recipient:email, brevoMessageId:result.messageId || ""}, {merge:true});
+        if (type === "new") await doc.ref.set({alertNewPending:false}, {merge:true});
+        sent++;
+      } catch(error) {
+        failed++;
+        await ref.set({status:"failed",error:String(error.message||error).slice(0,500),failedAt:admin.firestore.FieldValue.serverTimestamp()},{merge:true});
+        console.error("Brevo reservation alert failed",doc.id,type,error);
+      }
+    }
+  }
+  console.log("Brevo reservation alerts",{sent,failed});
+});
 
 // =====================
 // API
