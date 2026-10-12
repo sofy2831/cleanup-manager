@@ -11,6 +11,7 @@ admin.initializeApp();
 // =====================
 const STRIPE_SECRET = defineSecret("STRIPE_SECRET");
 const STRIPE_WEBHOOK_SECRET = defineSecret("STRIPE_WEBHOOK_SECRET");
+const BREVO_API_KEY = defineSecret("BREVO_API_KEY");
 
 // =====================
 // Environnement projet
@@ -926,6 +927,99 @@ exports.syncIcalScheduled = onSchedule(
     return null;
   }
 );
+
+
+// =====================
+// Alertes Brevo iCal (DEV uniquement)
+// =====================
+function dateKeyFromParis(date) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Paris", year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(date);
+}
+function nextParisDayKey() {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/Paris", year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(new Date());
+  const obj = Object.fromEntries(parts.map(p => [p.type, p.value]));
+  const utc = Date.UTC(Number(obj.year), Number(obj.month) - 1, Number(obj.day) + 1);
+  return new Date(utc).toISOString().slice(0, 10);
+}
+function htmlSafe(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[c]);
+}
+async function sendBrevoIcalMail(email, subject, lines) {
+  const response = await fetch("https://api.brevo.com/v3/smtp/email", {
+    method: "POST",
+    headers: { "api-key": BREVO_API_KEY.value(), "Content-Type": "application/json", "accept": "application/json" },
+    body: JSON.stringify({
+      sender: { name: "CleanUp Manager", email: "contact@cleanup-manager.fr" },
+      to: [{ email }], subject,
+      htmlContent: `<html><body><p>${lines.map(htmlSafe).join("<br>")}</p></body></html>`,
+      textContent: lines.join("\n"),
+    }),
+  });
+  if (!response.ok) throw new Error(`Brevo HTTP ${response.status}: ${(await response.text()).slice(0, 300)}`);
+  return response.json();
+}
+
+// Traitement séparé : une panne Brevo ne bloque jamais la synchronisation iCal.
+// Le verrou Firestore empêche deux exécutions simultanées d'envoyer deux fois.
+exports.sendIcalAlertsScheduled = onSchedule({
+  schedule: "every 30 minutes", timeZone: "Europe/Paris", region: "europe-west1",
+  timeoutSeconds: 540, memory: "512MiB", retryCount: 0, secrets: [BREVO_API_KEY],
+}, async () => {
+  if (!IS_DEV_PROJECT) { console.log("Alertes Brevo désactivées hors DEV"); return; }
+  const db = admin.firestore();
+  const tomorrow = nextParisDayKey();
+  const today = dateKeyFromParis(new Date());
+  const snap = await db.collection("icalEvents").where("archived", "==", false).get();
+  let sent = 0, failed = 0;
+  const emailCache = new Map();
+  for (const doc of snap.docs) {
+    const e = doc.data() || {};
+    if (e.source !== "ical" || !e.conciergerieUid) continue;
+    const types = [];
+    if (e.alertNewPending === true && e.arrivalDateKey >= today) types.push("new");
+    if (e.arrivalDateKey === tomorrow) types.push("j1");
+    for (const type of types) {
+      const alertId = `${doc.id}_${type}_${type === "j1" ? tomorrow : "v1"}`;
+      const ref = db.collection("icalEmailAlerts").doc(alertId);
+      const claimed = await db.runTransaction(async tx => {
+        const current = await tx.get(ref);
+        if (current.exists) return false;
+        tx.create(ref, { eventId: doc.id, type, status: "processing", claimedAt: admin.firestore.FieldValue.serverTimestamp() });
+        return true;
+      });
+      if (!claimed) continue;
+      try {
+        const uid = String(e.conciergerieUid);
+        if (!emailCache.has(uid)) {
+          const user = await db.collection("users").doc(uid).get();
+          const u = user.exists ? user.data() || {} : {};
+          emailCache.set(uid, String(u.email || "").trim());
+        }
+        const email = emailCache.get(uid);
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error("Email conciergerie manquant/invalide");
+        const title = type === "new" ? "Nouvelle réservation iCal" : "Arrivée prévue demain";
+        const subject = `${title} – ${String(e.homeName || "Logement")}`;
+        const lines = [title, `Logement : ${e.homeName || e.homeId || "-"}`,
+          `Arrivée : ${e.arrivalDateKey || "-"} ${e.arrivalTime || ""}`,
+          `Départ : ${e.departureDateKey || "-"} ${e.departureTime || ""}`,
+          `Source : calendrier iCal`, `Référence : ${doc.id}`];
+        const result = await sendBrevoIcalMail(email, subject, lines);
+        await ref.set({ status: "sent", sentAt: admin.firestore.FieldValue.serverTimestamp(), recipient: email, brevoMessageId: result.messageId || "" }, { merge: true });
+        if (type === "new") await doc.ref.set({ alertNewPending: false }, { merge: true });
+        sent++;
+      } catch (error) {
+        failed++;
+        await ref.set({ status: "failed", error: String(error.message || error).slice(0, 500), failedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+        console.error("Brevo iCal alert failed", doc.id, type, error);
+      }
+    }
+  }
+  console.log("Brevo iCal alerts", { sent, failed });
+});
 
 // =====================
 // API
