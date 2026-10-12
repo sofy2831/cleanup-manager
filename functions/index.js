@@ -971,54 +971,68 @@ exports.sendIcalAlertsScheduled = onSchedule({
 }, async () => {
   if (!IS_DEV_PROJECT) { console.log("Alertes Brevo désactivées hors DEV"); return; }
   const db = admin.firestore();
+  const now = new Date();
+  const today = dateKeyFromParis(now);
   const tomorrow = nextParisDayKey();
-  const today = dateKeyFromParis(new Date());
   const snap = await db.collection("icalEvents").where("archived", "==", false).get();
+  const users = new Map();
   let sent = 0, failed = 0;
-  const emailCache = new Map();
   for (const doc of snap.docs) {
     const e = doc.data() || {};
-    if (e.source !== "ical" || !e.conciergerieUid) continue;
+    const source = String(e.source || "").toLowerCase();
+    if (!e.conciergerieUid || !["ical", "manual"].includes(source)) continue;
+    const uid = String(e.conciergerieUid);
+    if (!users.has(uid)) {
+      const u = await db.collection("users").doc(uid).get();
+      users.set(uid, u.exists ? u.data() || {} : {});
+    }
+    const user = users.get(uid);
+    const prefs = user.reservationEmailAlerts || {};
+    if (prefs.allHomes === false && !(Array.isArray(prefs.homeIds) && prefs.homeIds.includes(String(e.homeId || "")))) continue;
     const types = [];
-    if (e.alertNewPending === true && e.arrivalDateKey >= today) types.push("new");
-    if (e.arrivalDateKey === tomorrow) types.push("j1");
+    if (source === "ical" && prefs.newIcal !== false && e.alertNewPending === true && e.arrivalDateKey >= today) types.push("new");
+    if (prefs.tomorrow !== false && e.arrivalDateKey === tomorrow) types.push("j1");
+    // Une réservation de dernière minute : uniquement si elle vient d'être détectée.
+    // Le champ alertNewPending est posé par la synchronisation iCal ; pour les
+    // réservations manuelles, il n'y a pas d'alerte de création.
+    if (source === "ical" && prefs.urgent !== false && e.alertNewPending === true) {
+      const key = String(e.arrivalDateKey || "");
+      const time = /^\d{2}:\d{2}$/.test(String(e.arrivalTime || "")) ? e.arrivalTime : "00:00";
+      const local = new Date(`${key}T${time}:00`);
+      // Évaluation calendaire prudente : une arrivée aujourd'hui est urgente ;
+      // pour demain, la comparaison exacte nécessite le fuseau Europe/Paris.
+      if (key === today || (key === tomorrow && time <= new Intl.DateTimeFormat("fr-FR", {timeZone:"Europe/Paris",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).format(now))) types.push("urgent");
+    }
     for (const type of types) {
       const alertId = `${doc.id}_${type}_${type === "j1" ? tomorrow : "v1"}`;
       const ref = db.collection("icalEmailAlerts").doc(alertId);
       const claimed = await db.runTransaction(async tx => {
-        const current = await tx.get(ref);
-        if (current.exists) return false;
-        tx.create(ref, { eventId: doc.id, type, status: "processing", claimedAt: admin.firestore.FieldValue.serverTimestamp() });
+        if ((await tx.get(ref)).exists) return false;
+        tx.create(ref, {eventId:doc.id, type, status:"processing", claimedAt:admin.firestore.FieldValue.serverTimestamp()});
         return true;
       });
       if (!claimed) continue;
       try {
-        const uid = String(e.conciergerieUid);
-        if (!emailCache.has(uid)) {
-          const user = await db.collection("users").doc(uid).get();
-          const u = user.exists ? user.data() || {} : {};
-          emailCache.set(uid, String(u.email || "").trim());
-        }
-        const email = emailCache.get(uid);
+        const email = String(user.email || "").trim();
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error("Email conciergerie manquant/invalide");
-        const title = type === "new" ? "Nouvelle réservation iCal" : "Arrivée prévue demain";
+        const title = type === "new" ? "Nouvelle réservation iCal" : type === "urgent" ? "Réservation de dernière minute" : "Arrivée prévue demain";
         const subject = `${title} – ${String(e.homeName || "Logement")}`;
         const lines = [title, `Logement : ${e.homeName || e.homeId || "-"}`,
           `Arrivée : ${e.arrivalDateKey || "-"} ${e.arrivalTime || ""}`,
           `Départ : ${e.departureDateKey || "-"} ${e.departureTime || ""}`,
-          `Source : calendrier iCal`, `Référence : ${doc.id}`];
+          `Source : ${source === "ical" ? "calendrier iCal" : "réservation manuelle"}`];
         const result = await sendBrevoIcalMail(email, subject, lines);
-        await ref.set({ status: "sent", sentAt: admin.firestore.FieldValue.serverTimestamp(), recipient: email, brevoMessageId: result.messageId || "" }, { merge: true });
-        if (type === "new") await doc.ref.set({ alertNewPending: false }, { merge: true });
+        await ref.set({status:"sent", sentAt:admin.firestore.FieldValue.serverTimestamp(), recipient:email, brevoMessageId:result.messageId || ""}, {merge:true});
+        if (type === "new") await doc.ref.set({alertNewPending:false}, {merge:true});
         sent++;
-      } catch (error) {
+      } catch(error) {
         failed++;
-        await ref.set({ status: "failed", error: String(error.message || error).slice(0, 500), failedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-        console.error("Brevo iCal alert failed", doc.id, type, error);
+        await ref.set({status:"failed",error:String(error.message||error).slice(0,500),failedAt:admin.firestore.FieldValue.serverTimestamp()},{merge:true});
+        console.error("Brevo reservation alert failed",doc.id,type,error);
       }
     }
   }
-  console.log("Brevo iCal alerts", { sent, failed });
+  console.log("Brevo reservation alerts",{sent,failed});
 });
 
 // =====================
