@@ -845,6 +845,7 @@ exports.syncIcalScheduled = onSchedule(
               updatedAt: admin.firestore.FieldValue.serverTimestamp(),
               ...(!existingEvent.exists ? {
                 createdAt: admin.firestore.FieldValue.serverTimestamp(),
+                alertNewPending: arrivalDateKey >= dateKeyFromParis(new Date()),
               } : {}),
             },
             { merge: true }
@@ -930,7 +931,7 @@ exports.syncIcalScheduled = onSchedule(
 
 
 // =====================
-// Alertes Brevo iCal (DEV uniquement)
+// Alertes Brevo réservations (DEV et production)
 // =====================
 function dateKeyFromParis(date) {
   return new Intl.DateTimeFormat("en-CA", {
@@ -969,7 +970,6 @@ exports.sendIcalAlertsScheduled = onSchedule({
   schedule: "every 30 minutes", timeZone: "Europe/Paris", region: "europe-west1",
   timeoutSeconds: 540, memory: "512MiB", retryCount: 0, secrets: [BREVO_API_KEY],
 }, async () => {
-  if (!IS_DEV_PROJECT) { console.log("Alertes Brevo désactivées hors DEV"); return; }
   const db = admin.firestore();
   const now = new Date();
   const today = dateKeyFromParis(now);
@@ -1023,7 +1023,9 @@ exports.sendIcalAlertsScheduled = onSchedule({
           `Source : ${source === "ical" ? "calendrier iCal" : "réservation manuelle"}`];
         const result = await sendBrevoIcalMail(email, subject, lines);
         await ref.set({status:"sent", sentAt:admin.firestore.FieldValue.serverTimestamp(), recipient:email, brevoMessageId:result.messageId || ""}, {merge:true});
-        if (type === "new") await doc.ref.set({alertNewPending:false}, {merge:true});
+        if (type === "new" || (type === "urgent" && prefs.newIcal === false)) {
+          await doc.ref.set({alertNewPending:false}, {merge:true});
+        }
         sent++;
       } catch(error) {
         failed++;
