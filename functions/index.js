@@ -719,7 +719,7 @@ exports.fetchIcal = onRequest(
 // =====================
 exports.syncIcalScheduled = onSchedule(
   {
-    schedule: "every 6 hours",
+    schedule: "every 30 minutes",
     timeZone: "Europe/Paris",
     region: "europe-west1",
     timeoutSeconds: 540,
@@ -804,7 +804,9 @@ exports.syncIcalScheduled = onSchedule(
           const docId = makeDocId(homeId, uid, arrivalDateKey + "_" + tmForId);
           seenDocIds.add(docId);
 
-          await db.collection("icalEvents").doc(docId).set(
+          const eventRef = db.collection("icalEvents").doc(docId);
+          const existingEvent = await eventRef.get();
+          await eventRef.set(
             {
               conciergerieUid,
               ownerUid,
@@ -840,7 +842,9 @@ exports.syncIcalScheduled = onSchedule(
               syncSource: "scheduled",
 
               updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-              createdAt: admin.firestore.FieldValue.serverTimestamp(),
+              ...(!existingEvent.exists ? {
+                createdAt: admin.firestore.FieldValue.serverTimestamp(),
+              } : {}),
             },
             { merge: true }
           );
