@@ -1941,7 +1941,11 @@ exports.marketingStatsCleanup = onRequest(
     if (!token) return res.status(401).json({ error: "Connexion requise" });
     try {
       const decoded = await admin.auth().verifyIdToken(token, true);
-      if (decoded.admin !== true && decoded.superadmin !== true) {
+      // Droit indépendant du rôle métier « conciergerie ».
+      // Le UID vient exclusivement du jeton Firebase vérifié.
+      const userDoc = await admin.firestore().collection("users").doc(decoded.uid).get();
+      const marketingAuthorized = userDoc.exists && userDoc.data()?.marketingStatsAdmin === true;
+      if (decoded.admin !== true && decoded.superadmin !== true && !marketingAuthorized) {
         return res.status(403).json({ error: "Accès administrateur requis" });
       }
       const snap = await admin.firestore().collection("marketingCleanup").limit(1000).get();
