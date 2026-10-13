@@ -1884,3 +1884,81 @@ if (
     return res.status(404).json({ error: "Not found", path });
   }
 );
+
+
+// =====================
+// Prospection CleanUp — collecte et tableau administrateur
+// =====================
+const MARKETING_EVENTS_CLEANUP = Object.freeze({
+  page_view: "pageViews",
+  demo_view: "demoViews",
+  signup_click: "signupClicks",
+  indispensables_click: "indispensablesClicks",
+});
+
+function marketingSafeLabel(value, fallback) {
+  const text = String(value || "").trim().slice(0, 90);
+  return /^[a-zA-Z0-9À-ÿ _.-]{1,90}$/.test(text) ? text : fallback;
+}
+
+// Endpoint public : uniquement des compteurs anonymes (aucun email, IP ni UID).
+exports.trackMarketingCleanup = onRequest(
+  { region: "europe-west1", cors: ALLOWED_ORIGINS },
+  async (req, res) => {
+    if (req.method === "OPTIONS") return res.status(204).send("");
+    if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+    const origin = req.get("origin") || "";
+    if (!ALLOWED_ORIGINS.includes(origin)) return res.status(403).json({ error: "Origin not allowed" });
+    const body = ensureJsonBody(req);
+    const field = MARKETING_EVENTS_CLEANUP[String(body.event || "")];
+    if (!field) return res.status(400).json({ error: "Unknown event" });
+    const source = marketingSafeLabel(body.src, "direct");
+    const campaign = marketingSafeLabel(body.camp, "sans-campagne");
+    const key = Buffer.from(JSON.stringify([source, campaign])).toString("base64url");
+    try {
+      await admin.firestore().collection("marketingCleanup").doc(key).set({
+        product: "cleanup", source, campaign,
+        [field]: admin.firestore.FieldValue.increment(1),
+        lastActivity: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+      return res.status(200).json({ ok: true });
+    } catch (error) {
+      console.error("trackMarketingCleanup", error);
+      return res.status(500).json({ error: "Tracking unavailable" });
+    }
+  }
+);
+
+// Endpoint privé : accès via custom claim Firebase admin/superadmin.
+exports.marketingStatsCleanup = onRequest(
+  { region: "europe-west1", cors: ALLOWED_ORIGINS },
+  async (req, res) => {
+    if (req.method === "OPTIONS") return res.status(204).send("");
+    if (req.method !== "GET") return res.status(405).json({ error: "Method not allowed" });
+    const origin = req.get("origin") || "";
+    if (!ALLOWED_ORIGINS.includes(origin)) return res.status(403).json({ error: "Origin not allowed" });
+    const token = /^Bearer (.+)$/i.exec(req.get("authorization") || "")?.[1];
+    if (!token) return res.status(401).json({ error: "Connexion requise" });
+    try {
+      const decoded = await admin.auth().verifyIdToken(token, true);
+      if (decoded.admin !== true && decoded.superadmin !== true) {
+        return res.status(403).json({ error: "Accès administrateur requis" });
+      }
+      const snap = await admin.firestore().collection("marketingCleanup").limit(1000).get();
+      const rows = snap.docs.map(doc => {
+        const v = doc.data();
+        return {
+          product: "cleanup", source: v.source || "direct", campaign: v.campaign || "sans-campagne",
+          pageViews: v.pageViews || 0, demoViews: v.demoViews || 0,
+          signupClicks: v.signupClicks || 0, indispensablesClicks: v.indispensablesClicks || 0,
+          freeSignups: v.freeSignups || 0, paidSubscriptions: v.paidSubscriptions || 0,
+          lastActivity: v.lastActivity?.toDate?.().toISOString() || null,
+        };
+      });
+      return res.json({ rows });
+    } catch (error) {
+      console.error("marketingStatsCleanup", error);
+      return res.status(401).json({ error: "Authentification invalide" });
+    }
+  }
+);
