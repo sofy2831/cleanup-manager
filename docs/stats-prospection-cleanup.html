@@ -13,7 +13,8 @@
 <main><h1>Acquisition commerciale</h1><p>Suivi des campagnes CleanUp Manager : vitrine, démonstration, inscriptions et abonnements.</p>
 <section id="loginCard" class="card login"><h2>Connexion administrateur</h2><div class="row"><input id="email" type="email" autocomplete="username" placeholder="Adresse e-mail"><input id="password" type="password" autocomplete="current-password" placeholder="Mot de passe"></div><p><button id="login">Se connecter</button> <button id="googleLogin" class="google">Continuer avec Google</button></p><p id="loginError" class="error" role="alert"></p></section>
 <section id="dash" class="hidden">
-<div class="kpis">
+<div class="card"><h2>Campagnes emailing — 6 départements</h2><p class="note">300 contacts préparés (50 par département). Les campagnes restent visibles avant tout événement de suivi. Les chiffres de visites et conversions proviennent exclusivement de Firebase.</p><div class="row" id="campaignSummary"></div></div>
+ <div class="kpis">
 <div class="kpi"><strong id="pageViews">—</strong><span>Visites vitrine</span></div>
 <div class="kpi"><strong id="demoViews">—</strong><span>Consultations démo</span></div>
 <div class="kpi"><strong id="signupClicks">—</strong><span>Clics inscription</span></div>
@@ -24,11 +25,8 @@
 <div class="card"><div class="row" style="justify-content:space-between"><div><h2>Résultats par campagne</h2><p class="note">Les conversions ne sont comptées que lorsqu'elles sont confirmées côté serveur. Les visites et clics ne sont pas des personnes uniques.</p></div><button id="refresh" class="secondary">Actualiser</button></div>
 <div class="row"><label for="filter">Campagne :</label><select id="filter"><option value="">Toutes les campagnes</option></select></div>
 <div class="tablewrap"><table><thead><tr><th>Source / ville</th><th>Campagne</th><th class="num">Vitrine</th><th class="num">Démo</th><th class="num">Clics inscription</th><th class="num">Comptes gratuits</th><th class="num">Abonnements payants</th><th class="num">Indispensables</th><th>Dernière activité</th></tr></thead><tbody id="tbody"><tr><td colspan="9">Chargement…</td></tr></tbody></table></div><p id="err" class="error" role="alert"></p></div>
-<div class="card links"><h2>Liens de campagne — modèles</h2><p class="note">À utiliser après installation du suivi sur la vitrine et la démo. Les identifiants sont des exemples modifiables, pas des campagnes déjà lancées.</p>
-<p><strong>Orléans :</strong> <code>https://cleanup-manager.fr/?src=conciergerie-orleans&amp;camp=CLEANUP-ORLEANS-01</code></p>
-<p><strong>Tours :</strong> <code>https://cleanup-manager.fr/?src=conciergerie-tours&amp;camp=CLEANUP-TOURS-01</code></p>
-<p><strong>Autres villes :</strong> même format avec une source et une campagne spécifiques.</p></div>
-</section></main>
+<div class="card links"><h2>Liens de campagne à utiliser dans les emails</h2><p class="note">Chaque lien identifie sa campagne et son département. Copiez-le dans les emails correspondants ; les statistiques apparaîtront après réception d'événements dans Firebase.</p><div id="campaignLinks"></div></div>
+ </section></main>
 <script type="module">
 import {initializeApp} from 'https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js';
 import {getAuth,GoogleAuthProvider,signInWithPopup,signInWithEmailAndPassword,signOut,onAuthStateChanged} from 'https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js';
@@ -38,13 +36,27 @@ const auth=getAuth(initializeApp(cfg));
 const STATS_ENDPOINT='https://europe-west1-cleanup-manager-d9301.cloudfunctions.net/marketingStatsCleanup';
 const $=id=>document.getElementById(id);
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const CAMPAIGNS=[
+ {dept:'45',city:'Orléans / Loiret',source:'conciergerie-orleans',id:'CLEANUP-ORLEANS-01',contacts:50},
+ {dept:'41',city:'Blois / Loir-et-Cher',source:'conciergerie-blois',id:'CLEANUP-DEPART-41-01',contacts:50},
+ {dept:'37',city:'Tours / Indre-et-Loire',source:'conciergerie-tours',id:'CLEANUP-TOURS-01',contacts:50},
+ {dept:'31',city:'Toulouse / Haute-Garonne',source:'conciergerie-toulouse',id:'CLEANUP-TOULOUSE-01',contacts:50},
+ {dept:'33',city:'Bordeaux / Gironde',source:'conciergerie-bordeaux',id:'CLEANUP-BORDEAUX-01',contacts:50},
+ {dept:'40',city:'Landes',source:'conciergerie-landes',id:'CLEANUP-LANDES-01',contacts:50}
+];
+const campaignUrl=c=>'https://logiciel-conciergerie.cleanup-manager.fr/?src='+encodeURIComponent(c.source)+'&camp='+encodeURIComponent(c.id);
 let allRows=[];
 const fields=['pageViews','demoViews','signupClicks','freeSignups','paidSubscriptions','indispensablesClicks'];
 const n=(row,k)=>Number(row?.[k]||0);
 function render(){const filter=$('filter').value;const rows=allRows.filter(x=>!filter||x.campaign===filter);for(const key of fields){$(key).textContent=rows.reduce((s,x)=>s+n(x,key),0).toLocaleString('fr-FR')}
 $('tbody').innerHTML=rows.length?rows.map(x=>`<tr><td><span class="pill">${esc(x.source||'direct')}</span></td><td>${esc(x.campaign||'sans campagne')}</td>${fields.map(k=>`<td class="num">${n(x,k).toLocaleString('fr-FR')}</td>`).join('')}<td>${x.lastActivity?esc(new Date(x.lastActivity).toLocaleString('fr-FR')):'—'}</td></tr>`).join(''):'<tr><td colspan="9">Aucune activité pour cette sélection.</td></tr>'}
-async function load(){try{$('err').textContent='';const token=await auth.currentUser.getIdToken();const response=await fetch(STATS_ENDPOINT,{headers:{Authorization:`Bearer ${token}`},cache:'no-store'});const data=await response.json().catch(()=>({}));if(!response.ok)throw Error(data.error||`Erreur HTTP ${response.status}`);if(!Array.isArray(data.rows))throw Error('Réponse de statistiques invalide');allRows=data.rows.filter(x=>String(x.product||'cleanup')==='cleanup');const selected=$('filter').value;const campaigns=[...new Set(allRows.map(x=>String(x.campaign||'sans campagne')))].sort();$('filter').innerHTML='<option value="">Toutes les campagnes</option>'+campaigns.map(x=>`<option value="${esc(x)}">${esc(x)}</option>`).join('');if(campaigns.includes(selected))$('filter').value=selected;render()}catch(error){for(const key of fields)$(key).textContent='—';$('tbody').innerHTML='<tr><td colspan="9">Statistiques indisponibles.</td></tr>';$('err').textContent=error.message+' — La fonction de statistiques doit être installée côté Firebase.'}}
+async function load(){try{$('err').textContent='';const token=await auth.currentUser.getIdToken();const response=await fetch(STATS_ENDPOINT,{headers:{Authorization:`Bearer ${token}`},cache:'no-store'});const data=await response.json().catch(()=>({}));if(!response.ok)throw Error(data.error||`Erreur HTTP ${response.status}`);if(!Array.isArray(data.rows))throw Error('Réponse de statistiques invalide');const liveRows=data.rows.filter(x=>String(x.product||'cleanup')==='cleanup');
+ const active=new Set(liveRows.map(x=>String(x.campaign||'')));
+ allRows=[...CAMPAIGNS.filter(c=>!active.has(c.id)).map(c=>({product:'cleanup',source:c.source,campaign:c.id})),...liveRows];const selected=$('filter').value;const campaigns=[...new Set([...CAMPAIGNS.map(c=>c.id),...allRows.map(x=>String(x.campaign||'sans campagne'))])].sort();$('filter').innerHTML='<option value="">Toutes les campagnes</option>'+campaigns.map(x=>`<option value="${esc(x)}">${esc(x)}</option>`).join('');if(campaigns.includes(selected))$('filter').value=selected;render()}catch(error){for(const key of fields)$(key).textContent='—';$('tbody').innerHTML='<tr><td colspan="9">Statistiques indisponibles.</td></tr>';$('err').textContent=error.message+' — La fonction de statistiques doit être installée côté Firebase.'}}
 function authMessage(e){const c=e?.code||'';if(['auth/invalid-credential','auth/wrong-password','auth/user-not-found'].includes(c))return'Identifiants invalides.';if(c==='auth/popup-closed-by-user')return'Connexion Google annulée.';return e?.message||'Connexion impossible.'}
+$('campaignSummary').innerHTML=CAMPAIGNS.map(c=>`<span class="pill">${esc(c.dept)} · ${c.contacts} contacts</span>`).join('');
+$('campaignLinks').innerHTML=CAMPAIGNS.map(c=>`<p><strong>${esc(c.city)} (${esc(c.dept)}) :</strong> <code>${esc(campaignUrl(c))}</code> <button class="secondary" type="button" data-copy="${esc(c.id)}">Copier</button></p>`).join('');
+$('campaignLinks').addEventListener('click',async event=>{const btn=event.target.closest('button[data-copy]');if(!btn)return;const c=CAMPAIGNS.find(x=>x.id===btn.dataset.copy);if(!c)return;try{await navigator.clipboard.writeText(campaignUrl(c));btn.textContent='Copié';setTimeout(()=>btn.textContent='Copier',1400)}catch(e){btn.textContent='Sélectionnez le lien';}});
 $('login').onclick=async()=>{try{$('loginError').textContent='';await signInWithEmailAndPassword(auth,$('email').value.trim(),$('password').value)}catch(e){$('loginError').textContent=authMessage(e)}};
 $('googleLogin').onclick=async()=>{try{$('loginError').textContent='';await signInWithPopup(auth,new GoogleAuthProvider())}catch(e){$('loginError').textContent=authMessage(e)}};
 $('logout').onclick=()=>signOut(auth);$('refresh').onclick=load;$('filter').onchange=render;
