@@ -1301,6 +1301,12 @@
       opt.textContent = `${h.name || "Logement"}${(h.homeCity || h.city) ? " — " + (h.homeCity || h.city) : ""}`;
       bookingHomeSelect.appendChild(opt);
     }
+    if(!bookingHomeSelect.options.length){
+      const opt = document.createElement("option");
+      opt.value = "";
+      opt.textContent = "Aucun logement disponible";
+      bookingHomeSelect.appendChild(opt);
+    }
     if(selectedId) bookingHomeSelect.value = selectedId;
     renderBookingHomeInfo(bookingHomeSelect.value);
   }
@@ -1330,16 +1336,20 @@
       <div><b>Nom du propriétaire :</b> ${escapeHtml(ownerName)}</div>
       <div><b>Téléphone propriétaire :</b> ${escapeHtml(ownerPhone)}</div>
       <div><b>Email propriétaire :</b> ${escapeHtml(ownerEmail || "—")}</div>
-      <div><b>Compte propriétaire :</b> ${ownerUid ? "✅ actif" : "En attente d’activation — réservation indisponible"}</div>
+      <div><b>Compte propriétaire :</b> ${ownerUid ? "✅ actif" : (!String(h.ownerDocId || "").trim() && getExistingOwnerForHome(h) ? "À associer au logement" : String(h.ownerDocId || "").trim() ? "Invitation en attente" : "Non lié") }</div>
     `;
   }
 
-  // Messages destinés à l'utilisateur : aucun détail technique affiché.
+  // Messages adaptés à la situation du logement et de son propriétaire.
   function bookingOwnerMessage(home){
-    if(String(home?.ownerDocId || "").trim() || getExistingOwnerForHome(home)){
-      return "Le propriétaire est enregistré, mais son compte n'est pas encore activé. Il doit accepter son invitation pour permettre la réservation.";
+    if(!home) return "Aucun logement disponible. Cliquez sur « Annuler », puis sur « + Ajouter » pour créer votre premier logement avant de faire une réservation.";
+    if(!String(home.ownerDocId || "").trim() && getExistingOwnerForHome(home)){
+      return "Ce propriétaire possède déjà un compte. Cliquez sur « Annuler », puis sur « Associer » dans la liste des logements. Vous pourrez ensuite créer votre réservation.";
     }
-    return "Pour créer une réservation, il faut d’abord créer un logement et lui associer un propriétaire. Cliquez sur « Annuler » : si le logement n’existe pas encore, utilisez « + Ajouter » ; sinon, associez son propriétaire et envoyez-lui une invitation. La réservation sera possible après son acceptation.";
+    if(String(home.ownerDocId || "").trim()){
+      return "Le propriétaire est déjà enregistré, mais son invitation est encore en attente. Cliquez sur « Annuler », puis sur « Renvoyer l’invite » si nécessaire. La réservation sera possible après son acceptation.";
+    }
+    return "Aucun propriétaire n'est encore lié à ce logement. Cliquez sur « Annuler », puis sur « Inviter » dans la liste des logements. Vous pourrez créer une réservation après son acceptation.";
   }
 
   function openBookingModal(homeId=null){
@@ -1359,13 +1369,10 @@
 
     const h = allHomes.find(x => x.id === (bookingHomeSelect.value || homeId || ""));
     if(h){
-      if(String(h.ownerDocId || "").trim()){
-        hydrateOwnerSnapshotForHome(h);
-      }
-
-      if(!String(h.ownerUid || "").trim()){
-        showBookingAlert(bookingOwnerMessage(h), false);
-      }
+      if(String(h.ownerDocId || "").trim()) hydrateOwnerSnapshotForHome(h);
+      if(!String(h.ownerUid || "").trim()) showBookingAlert(bookingOwnerMessage(h), false);
+    }else{
+      showBookingAlert(bookingOwnerMessage(null), false);
     }
 
     setTimeout(()=> bookingHomeSelect.focus(), 0);
@@ -1876,7 +1883,7 @@
     const dTime  = (departureTimeInput.value || "").trim();
     const meta   = (metaInput.value || "").trim();
 
-    if (!homeId) return showBookingAlert("Choisis un logement.");
+    if (!homeId) return showBookingAlert(bookingOwnerMessage(null));
     if (!aDate || !dDate) return showBookingAlert("Dates arrivée + départ obligatoires.");
     if(!validateBookingDates(true)) return;
     if (!aTime || !dTime) return showBookingAlert("Heures arrivée + départ obligatoires.");
@@ -1992,20 +1999,16 @@
     const bookingParams = new URLSearchParams(location.search);
     if(bookingParams.get("mode") === "create"){
       const activeHomes = allHomes.filter(h => !isArchived(h));
-      if(!activeHomes.length){
-        showAlert("Ajoute d’abord un logement actif pour créer une réservation.");
-      }else{
-        const requestedHomeId = bookingParams.get("homeId");
-        const validHomeId = activeHomes.some(h => h.id === requestedHomeId) ? requestedHomeId : null;
-        openBookingModal(validHomeId);
-        const date = bookingParams.get("returnDate");
-        if(parseDateKey(date)){
-          arrivalDateInput.value = date;
-          departureDateInput.value = addDays(date, 1);
-        }
-        // Empêche une réouverture involontaire après rechargement.
-        history.replaceState(null, "", "logements.html");
+      const requestedHomeId = bookingParams.get("homeId");
+      const validHomeId = activeHomes.some(h => h.id === requestedHomeId) ? requestedHomeId : null;
+      openBookingModal(validHomeId);
+      const date = bookingParams.get("returnDate");
+      if(parseDateKey(date)){
+        arrivalDateInput.value = date;
+        departureDateInput.value = addDays(date, 1);
       }
+      // Empêche une réouverture involontaire après rechargement.
+      history.replaceState(null, "", "logements.html");
     }
   });
 </script>
