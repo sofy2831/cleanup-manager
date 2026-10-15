@@ -697,6 +697,7 @@
       <p id="bookingModalHint">Renseignez les dates et horaires du séjour.</p>
 
       <div class="b-alert" id="bookingAlert"></div>
+        <div id="bookingQuickAction" style="display:none; margin:8px 0 12px; text-align:left;"></div>
 
       <form id="bookingForm" autocomplete="off">
         <label for="bookingHomeSelect">Logement</label>
@@ -897,6 +898,7 @@
   // ===== booking modal =====
   const bookingBackdrop = document.getElementById("bookingBackdrop");
   const bookingAlert = document.getElementById("bookingAlert");
+  const bookingQuickAction = document.getElementById("bookingQuickAction");
   const bookingForm = document.getElementById("bookingForm");
   const bookingHomeSelect = document.getElementById("bookingHomeSelect");
   const bookingHomeInfo = document.getElementById("bookingHomeInfo");
@@ -1340,16 +1342,48 @@
     `;
   }
 
-  // Messages adaptés à la situation du logement et de son propriétaire.
-  function bookingOwnerMessage(home){
-    if(!home) return "Aucun logement disponible. Cliquez sur « Annuler », puis sur « + Ajouter » pour créer votre premier logement avant de faire une réservation.";
-    if(!String(home.ownerDocId || "").trim() && getExistingOwnerForHome(home)){
-      return "Ce propriétaire possède déjà un compte. Cliquez sur « Annuler », puis sur « Associer » dans la liste des logements. Vous pourrez ensuite créer votre réservation.";
+  // Action contextuelle : aucune navigation inutile vers la liste des logements.
+  function refreshBookingOwnerState(){
+    const h = allHomes.find(x => x.id === bookingHomeSelect.value && !isArchived(x));
+    bookingQuickAction.innerHTML = "";
+    bookingQuickAction.style.display = "none";
+    saveBookingBtn.disabled = !h || !String(h.ownerUid || "").trim();
+    renderBookingHomeInfo(h?.id || "");
+    if(h?.ownerUid){ hideBookingAlert(); return; }
+
+    let message = "";
+    let label = "";
+    let action = null;
+    const ex = h && !String(h.ownerDocId || "").trim() ? getExistingOwnerForHome(h) : null;
+    if(!h){
+      message = "Vous n'avez pas encore de logement. Créez votre premier logement pour pouvoir enregistrer une réservation.";
+      label = "+ Ajouter un logement";
+      action = () => { closeBookingModal(); if(canCreateHome()) openHomeModalCreate(); else showAlert(getHomesLimitMessage()); };
+    }else if(ex){
+      message = "Propriétaire déjà enregistré. Cliquez sur « Associer le propriétaire » pour rattacher son compte à ce logement. Vous pourrez ensuite enregistrer votre réservation, sans nouvelle invitation.";
+      label = "Associer le propriétaire";
+      action = async () => {
+        if(!confirm("Associer ce logement au propriétaire existant ?")) return;
+        await linkHomeToOwner(h.id, ex);
+        refreshBookingOwnerState();
+      };
+    }else if(String(h.ownerDocId || "").trim()){
+      message = "L'invitation du propriétaire est en attente. Il pourra être associé définitivement après son activation.";
+      label = "Gérer l'invitation";
+      action = () => { location.href = buildInviteUrlForHome(h); };
+    }else{
+      message = "Propriétaire non lié. Cliquez sur « Inviter le propriétaire » pour lui envoyer une invitation. Vous pourrez enregistrer la réservation dès qu'il l'aura acceptée.";
+      label = "Inviter le propriétaire";
+      action = () => { location.href = buildInviteUrlForHome(h); };
     }
-    if(String(home.ownerDocId || "").trim()){
-      return "Le propriétaire est déjà enregistré, mais son invitation est encore en attente. Cliquez sur « Annuler », puis sur « Renvoyer l’invite » si nécessaire. La réservation sera possible après son acceptation.";
-    }
-    return "Aucun propriétaire n'est encore lié à ce logement. Cliquez sur « Annuler », puis sur « Inviter » dans la liste des logements. Vous pourrez créer une réservation après son acceptation.";
+    showBookingAlert(message, false);
+    bookingQuickAction.style.display = "block";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn primary";
+    btn.textContent = label;
+    btn.addEventListener("click", action);
+    bookingQuickAction.appendChild(btn);
   }
 
   function openBookingModal(homeId=null){
@@ -1367,13 +1401,7 @@
 
     fillBookingHomeSelect(homeId);
 
-    const h = allHomes.find(x => x.id === (bookingHomeSelect.value || homeId || ""));
-    if(h){
-      if(String(h.ownerDocId || "").trim()) hydrateOwnerSnapshotForHome(h);
-      if(!String(h.ownerUid || "").trim()) showBookingAlert(bookingOwnerMessage(h), false);
-    }else{
-      showBookingAlert(bookingOwnerMessage(null), false);
-    }
+    refreshBookingOwnerState();
 
     setTimeout(()=> bookingHomeSelect.focus(), 0);
   }
@@ -1386,22 +1414,7 @@
     refreshQuotaVisualMessage();
   }
 
-  bookingHomeSelect.addEventListener("change", ()=>{
-    renderBookingHomeInfo(bookingHomeSelect.value);
-
-    const h = allHomes.find(x => x.id === (bookingHomeSelect.value || ""));
-    if(h){
-      if(String(h.ownerDocId || "").trim()){
-        hydrateOwnerSnapshotForHome(h);
-      }
-
-      if(!String(h.ownerUid || "").trim()){
-        showBookingAlert(bookingOwnerMessage(h), false);
-      }else{
-        hideBookingAlert();
-      }
-    }
-  });
+  bookingHomeSelect.addEventListener("change", refreshBookingOwnerState);
 
   cancelBookingBtn.addEventListener("click", closeBookingModal);
   bookingBackdrop.addEventListener("click", (e)=>{ if(e.target === bookingBackdrop) closeBookingModal(); });
@@ -1883,7 +1896,7 @@
     const dTime  = (departureTimeInput.value || "").trim();
     const meta   = (metaInput.value || "").trim();
 
-    if (!homeId) return showBookingAlert(bookingOwnerMessage(null));
+    if (!homeId) return showBookingAlert("Aucun logement disponible. Créez un logement avant de réserver.");
     if (!aDate || !dDate) return showBookingAlert("Dates arrivée + départ obligatoires.");
     if(!validateBookingDates(true)) return;
     if (!aTime || !dTime) return showBookingAlert("Heures arrivée + départ obligatoires.");
@@ -1895,7 +1908,7 @@
     const ownerDocId = String(h?.ownerDocId || "").trim();
 
     if(!ownerUid){
-      showBookingAlert(bookingOwnerMessage(h), false);
+      showBookingAlert("Ce logement nécessite un propriétaire associé avant de réserver.", false);
       return;
     }
 
