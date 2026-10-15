@@ -12,9 +12,10 @@
 <header><div><div class="brand">Clean<b>Up</b> Manager</div><small>Statistiques de prospection · administration</small></div><button id="logout" class="secondary hidden">Déconnexion</button></header>
 <main><h1>Acquisition commerciale</h1><p>Suivi des campagnes CleanUp Manager : vitrine, démonstration, inscriptions et abonnements.</p>
 <section id="loginCard" class="card login"><h2>Connexion administrateur</h2><div class="row"><input id="email" type="email" autocomplete="username" placeholder="Adresse e-mail"><input id="password" type="password" autocomplete="current-password" placeholder="Mot de passe"></div><p><button id="login">Se connecter</button> <button id="googleLogin" class="google">Continuer avec Google</button></p><p id="loginError" class="error" role="alert"></p></section>
-<section id="dash" class="hidden">
+<section id="dash" class="hidden"><div class="card"><h2>Mes appareils de test</h2><p class="note">Enregistre ce navigateur depuis le site CleanUp. Recommence sur ton téléphone. Les visites précédentes ne sont pas reclassées.</p><div class="row"><input id="testDeviceLabel" value="Mon PC" aria-label="Nom de l'appareil"><button id="registerTestDevice" type="button">Enregistrer cet appareil</button></div><p id="testDeviceStatus" class="note"></p></div>
+
 <div class="card"><h2>Campagnes emailing — 6 départements</h2><p class="note">300 contacts préparés (50 par département). Les campagnes restent visibles avant tout événement de suivi. Les chiffres de visites et conversions proviennent exclusivement de Firebase.</p><div class="row" id="campaignSummary"></div></div>
- <div class="kpis">
+ <div class="kpis"><div class="kpi"><strong id="uniquePageVisitors">—</strong><span>Visiteurs uniques vitrine (consentement)</span></div><div class="kpi"><strong id="uniqueDemoVisitors">—</strong><span>Visiteurs uniques démo (consentement)</span></div><div class="kpi"><strong id="testViews">—</strong><span>Mes visites de test suivies</span></div><div class="kpi"><strong id="externalEvents">—</strong><span>Événements externes suivis</span></div>
 <div class="kpi"><strong id="pageViews">—</strong><span>Visites vitrine</span></div>
 <div class="kpi"><strong id="demoViews">—</strong><span>Consultations démo</span></div>
 <div class="kpi"><strong id="signupClicks">—</strong><span>Clics inscription</span></div>
@@ -46,10 +47,10 @@ const CAMPAIGNS=[
 ];
 const campaignUrl=c=>'https://logiciel-conciergerie.cleanup-manager.fr/?src='+encodeURIComponent(c.source)+'&camp='+encodeURIComponent(c.id);
 let allRows=[];
-const fields=['pageViews','demoViews','signupClicks','freeSignups','paidSubscriptions','indispensablesClicks'];
+const fields=['uniquePageVisitors','uniqueDemoVisitors','testViews','externalEvents','pageViews','demoViews','signupClicks','freeSignups','paidSubscriptions','indispensablesClicks'];
 const n=(row,k)=>Number(row?.[k]||0);
 function render(){const filter=$('filter').value;const rows=allRows.filter(x=>!filter||x.campaign===filter);for(const key of fields){$(key).textContent=rows.reduce((s,x)=>s+n(x,key),0).toLocaleString('fr-FR')}
-$('tbody').innerHTML=rows.length?rows.map(x=>`<tr><td><span class="pill">${esc(x.source||'direct')}</span></td><td>${esc(x.campaign||'sans campagne')}</td>${fields.map(k=>`<td class="num">${n(x,k).toLocaleString('fr-FR')}</td>`).join('')}<td>${x.lastActivity?esc(new Date(x.lastActivity).toLocaleString('fr-FR')):'—'}</td></tr>`).join(''):'<tr><td colspan="9">Aucune activité pour cette sélection.</td></tr>'}
+$('tbody').innerHTML=rows.length?rows.map(x=>`<tr><td><span class="pill">${esc(x.source||'direct')}</span></td><td>${esc(x.campaign||'sans campagne')}</td>${['pageViews','demoViews','signupClicks','freeSignups','paidSubscriptions','indispensablesClicks'].map(k=>`<td class="num">${n(x,k).toLocaleString('fr-FR')}</td>`).join('')}<td>${x.lastActivity?esc(new Date(x.lastActivity).toLocaleString('fr-FR')):'—'}</td></tr>`).join(''):'<tr><td colspan="9">Aucune activité pour cette sélection.</td></tr>'}
 async function load(){try{$('err').textContent='';const token=await auth.currentUser.getIdToken();const response=await fetch(STATS_ENDPOINT,{headers:{Authorization:`Bearer ${token}`},cache:'no-store'});const data=await response.json().catch(()=>({}));if(!response.ok)throw Error(data.error||`Erreur HTTP ${response.status}`);if(!Array.isArray(data.rows))throw Error('Réponse de statistiques invalide');const liveRows=data.rows.filter(x=>String(x.product||'cleanup')==='cleanup');
  const active=new Set(liveRows.map(x=>String(x.campaign||'')));
  allRows=[...CAMPAIGNS.filter(c=>!active.has(c.id)).map(c=>({product:'cleanup',source:c.source,campaign:c.id})),...liveRows];const selected=$('filter').value;const campaigns=[...new Set([...CAMPAIGNS.map(c=>c.id),...allRows.map(x=>String(x.campaign||'sans campagne'))])].sort();$('filter').innerHTML='<option value="">Toutes les campagnes</option>'+campaigns.map(x=>`<option value="${esc(x)}">${esc(x)}</option>`).join('');if(campaigns.includes(selected))$('filter').value=selected;render()}catch(error){for(const key of fields)$(key).textContent='—';$('tbody').innerHTML='<tr><td colspan="9">Statistiques indisponibles.</td></tr>';$('err').textContent=error.message+' — La fonction de statistiques doit être installée côté Firebase.'}}
@@ -57,6 +58,18 @@ function authMessage(e){const c=e?.code||'';if(['auth/invalid-credential','auth/
 $('campaignSummary').innerHTML=CAMPAIGNS.map(c=>`<span class="pill">${esc(c.dept)} · ${c.contacts} contacts</span>`).join('');
 $('campaignLinks').innerHTML=CAMPAIGNS.map(c=>`<p><strong>${esc(c.city)} (${esc(c.dept)}) :</strong> <code>${esc(campaignUrl(c))}</code> <button class="secondary" type="button" data-copy="${esc(c.id)}">Copier</button></p>`).join('');
 $('campaignLinks').addEventListener('click',async event=>{const btn=event.target.closest('button[data-copy]');if(!btn)return;const c=CAMPAIGNS.find(x=>x.id===btn.dataset.copy);if(!c)return;try{await navigator.clipboard.writeText(campaignUrl(c));btn.textContent='Copié';setTimeout(()=>btn.textContent='Copier',1400)}catch(e){btn.textContent='Sélectionnez le lien';}});
+
+$('registerTestDevice').onclick=async()=>{
+ const status=$('testDeviceStatus');status.textContent='Enregistrement…';
+ try{
+  const key='cleanup_marketing_device_v1';let deviceId=localStorage.getItem(key);
+  if(!deviceId){deviceId=crypto.randomUUID();localStorage.setItem(key,deviceId);}
+  const token=await auth.currentUser.getIdToken();
+  const response=await fetch('https://europe-west1-cleanup-manager-d9301.cloudfunctions.net/registerCleanupTestDevice',{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`},body:JSON.stringify({deviceId,label:$('testDeviceLabel').value})});
+  const data=await response.json();if(!response.ok)throw Error(data.error||'Erreur');
+  status.textContent='Appareil enregistré. Les prochaines visites identifiées seront classées comme tests.';
+ }catch(e){status.textContent='Erreur : '+e.message;}
+};
 $('login').onclick=async()=>{try{$('loginError').textContent='';await signInWithEmailAndPassword(auth,$('email').value.trim(),$('password').value)}catch(e){$('loginError').textContent=authMessage(e)}};
 $('googleLogin').onclick=async()=>{try{$('loginError').textContent='';await signInWithPopup(auth,new GoogleAuthProvider())}catch(e){$('loginError').textContent=authMessage(e)}};
 $('logout').onclick=()=>signOut(auth);$('refresh').onclick=load;$('filter').onchange=render;
