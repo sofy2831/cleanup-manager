@@ -1902,6 +1902,30 @@ function marketingSafeLabel(value, fallback) {
   return /^[a-zA-Z0-9À-ÿ _.-]{1,90}$/.test(text) ? text : fallback;
 }
 
+// Identifiants aléatoires par navigateur, jamais dérivés d'une adresse IP.
+const cryptoCleanup = require("crypto");
+const validCleanupId = v => /^[a-f0-9-]{32,64}$/i.test(String(v || "")) ? String(v).toLowerCase() : "";
+const cleanupHash = v => cryptoCleanup.createHash("sha256").update(String(v)).digest("hex");
+async function checkCleanupAdmin(req) {
+  const token = /^Bearer (.+)$/i.exec(req.get("authorization") || "")?.[1];
+  if (!token) throw new Error("Connexion requise");
+  const decoded = await admin.auth().verifyIdToken(token, true);
+  const doc = await admin.firestore().collection("users").doc(decoded.uid).get();
+  if (decoded.admin !== true && decoded.superadmin !== true && doc.data()?.marketingStatsAdmin !== true) throw new Error("Accès administrateur requis");
+  return decoded;
+}
+exports.registerCleanupTestDevice = onRequest({region:"europe-west1",cors:ALLOWED_ORIGINS}, async(req,res)=>{
+  if(req.method==="OPTIONS")return res.status(204).send("");
+  if(req.method!=="POST")return res.status(405).json({error:"Method not allowed"});
+  if(!ALLOWED_ORIGINS.includes(req.get("origin")||""))return res.status(403).json({error:"Origin not allowed"});
+  try {
+    const decoded=await checkCleanupAdmin(req), body=ensureJsonBody(req);
+    const id=validCleanupId(body.deviceId);
+    if(!id)return res.status(400).json({error:"Identifiant navigateur invalide"});
+    await admin.firestore().collection("marketingCleanupTestDevices").doc(cleanupHash(id)).set({uid:decoded.uid,label:String(body.label||"Appareil de test").slice(0,60),registeredAt:admin.firestore.FieldValue.serverTimestamp()},{merge:true});
+    return res.json({ok:true});
+  }catch(e){return res.status(403).json({error:e.message||"Accès refusé"});}
+});
 // Endpoint public : uniquement des compteurs anonymes (aucun email, IP ni UID).
 exports.trackMarketingCleanup = onRequest(
   { region: "europe-west1", cors: ALLOWED_ORIGINS },
@@ -1917,7 +1941,26 @@ exports.trackMarketingCleanup = onRequest(
     const campaign = marketingSafeLabel(body.camp, "sans-campagne");
     const key = Buffer.from(JSON.stringify([source, campaign])).toString("base64url");
     try {
+      const deviceId=validCleanupId(body.deviceId);
+      const visitorId=validCleanupId(body.visitorId);
+      const isTest=deviceId && (await admin.firestore().collection("marketingCleanupTestDevices").doc(cleanupHash(deviceId)).get()).exists;
+      const dbCleanup=admin.firestore();
+      // Les compteurs historiques restent intacts ; les nouveaux compteurs sont séparés.
+      const additions={};
+      if(isTest){additions.testViews=admin.firestore.FieldValue.increment(1);}
+      else {additions.externalEvents=admin.firestore.FieldValue.increment(1);}
+      if(visitorId && !isTest && (field==="pageViews"||field==="demoViews")){
+        const uniqueRef=dbCleanup.collection("marketingCleanupUnique").doc(cleanupHash([source,campaign,field,visitorId].join("|")));
+        const created=await dbCleanup.runTransaction(async tx=>{
+          const snap=await tx.get(uniqueRef);
+          if(snap.exists)return false;
+          tx.create(uniqueRef,{source,campaign,field,createdAt:admin.firestore.FieldValue.serverTimestamp()});
+          return true;
+        });
+        if(created)additions[field==="pageViews"?"uniquePageVisitors":"uniqueDemoVisitors"]=admin.firestore.FieldValue.increment(1);
+      }
       await admin.firestore().collection("marketingCleanup").doc(key).set({
+        ...additions,
         product: "cleanup", source, campaign,
         [field]: admin.firestore.FieldValue.increment(1),
         lastActivity: admin.firestore.FieldValue.serverTimestamp(),
@@ -1957,6 +2000,8 @@ exports.marketingStatsCleanup = onRequest(
           pageViews: v.pageViews || 0, demoViews: v.demoViews || 0,
           signupClicks: v.signupClicks || 0, indispensablesClicks: v.indispensablesClicks || 0,
           freeSignups: v.freeSignups || 0, paidSubscriptions: v.paidSubscriptions || 0,
+          testViews:v.testViews||0, externalEvents:v.externalEvents||0,
+          uniquePageVisitors:v.uniquePageVisitors||0, uniqueDemoVisitors:v.uniqueDemoVisitors||0,
           lastActivity: v.lastActivity?.toDate?.().toISOString() || null,
         };
       });
