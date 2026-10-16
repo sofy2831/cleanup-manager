@@ -950,14 +950,14 @@ function nextParisDayKey() {
 function htmlSafe(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[c]);
 }
-async function sendBrevoIcalMail(email, subject, lines) {
+async function sendBrevoIcalMail(email, subject, lines, customHtmlContent = null) {
   const response = await fetch("https://api.brevo.com/v3/smtp/email", {
     method: "POST",
     headers: { "api-key": BREVO_API_KEY.value(), "Content-Type": "application/json", "accept": "application/json" },
     body: JSON.stringify({
       sender: { name: "CleanUp Manager", email: "contact@cleanup-manager.fr" },
       to: [{ email }], subject,
-      htmlContent: `<html><body><p>${lines.map(htmlSafe).join("<br>")}</p></body></html>`,
+      htmlContent: customHtmlContent || `<html><body><p>${lines.map(htmlSafe).join("<br>")}</p></body></html>`,
       textContent: lines.join("\n"),
     }),
   });
@@ -2086,7 +2086,18 @@ exports.sendCleanupInvitation = onCall({
       "Ces liens expirent 24 heures après leur génération.", "", "— CleanUp Manager"];
   }
   try {
-    const result = await sendBrevoIcalMail(email, subject, lines);
+    // Pour les agents, les deux URL sont de vrais liens HTML cliquables.
+    // Le texte brut conserve les URL complètes pour les messageries qui filtrent le HTML.
+    let invitationHtml = null;
+    if (kind === "agent") {
+      invitationHtml = "<html><body>" + lines.map(line => {
+        const match = /^(Checklist|Photos) : (https:\/\/\S+)$/.exec(line);
+        if (!match) return htmlSafe(line);
+        return htmlSafe(match[1]) + ' : <a href="' + htmlSafe(match[2]) + '" style="color:#2563eb;text-decoration:underline;">' + htmlSafe("Ouvrir " + match[1].toLowerCase()) + "</a> " +
+          '<span style="font-size:12px;color:#555;">(ou copiez ce lien : ' + htmlSafe(match[2]) + ")</span>";
+      }).join("<br>") + "</body></html>";
+    }
+    const result = await sendBrevoIcalMail(email, subject, lines, invitationHtml);
     const now = admin.firestore.FieldValue.serverTimestamp();
     await ref.update({ emailStatus: "sent", emailSentAt: now, emailMessageId: result.messageId || "" });
     if (kind === "agent") {
