@@ -2012,3 +2012,102 @@ exports.marketingStatsCleanup = onRequest(
     }
   }
 );
+
+
+// Invitations propriétaires et missions agents : envoi transactionnel Brevo.
+// Le client ne fournit jamais le destinataire ni le contenu : ils sont relus dans Firestore.
+const { onCall, HttpsError } = require("firebase-functions/v2/https");
+exports.sendCleanupInvitation = onCall({
+  region: "europe-west1", secrets: [BREVO_API_KEY], enforceAppCheck: false,
+  timeoutSeconds: 60,
+}, async (request) => {
+  if (!request.auth?.uid) throw new HttpsError("unauthenticated", "Connexion requise.");
+  const kind = String(request.data?.kind || "");
+  const token = String(request.data?.token || "");
+  if (!/^[A-Za-z0-9_-]{12,100}$/.test(token) || !["owner", "agent"].includes(kind)) {
+    throw new HttpsError("invalid-argument", "Invitation invalide.");
+  }
+  const uid = request.auth.uid;
+  const db = admin.firestore();
+  const profile = await db.doc(`users/${uid}`).get();
+  if (!profile.exists || !["conciergerie", "admin"].includes(profile.get("role"))) {
+    throw new HttpsError("permission-denied", "Accès conciergerie requis.");
+  }
+  const ref = db.doc(`${kind === "owner" ? "invites" : "dayTokens"}/${token}`);
+  const snap = await ref.get();
+  if (!snap.exists || snap.get("conciergerieUid") !== uid) {
+    throw new HttpsError("permission-denied", "Invitation inaccessible.");
+  }
+  const d = snap.data();
+  if (kind === "owner" && d.status !== "pending") {
+    throw new HttpsError("failed-precondition", "Invitation déjà utilisée ou annulée.");
+  }
+  if (kind === "agent" && (!d.active || !d.missionDocsReady || (d.expiresAtMs || 0) <= Date.now())) {
+    throw new HttpsError("failed-precondition", "Liens agent expirés ou incomplets. Régénérez-les.");
+  }
+  const email = String(kind === "owner" ? d.email : d.agentEmail || "").trim().toLowerCase();
+  if (!/^\S+@\S+\.\S+$/.test(email)) throw new HttpsError("failed-precondition", "Email destinataire invalide.");
+  // Empêche un double clic de produire deux envois simultanés.
+  const claimed = await db.runTransaction(async tx => {
+    const current = await tx.get(ref);
+    const data = current.data() || {};
+    if (data.emailStatus === "sent") return "sent";
+    if (data.emailStatus === "sending" && Date.now() - Number(data.emailClaimedAtMs || 0) < 120000) return "sending";
+    tx.update(ref, { emailStatus: "sending", emailClaimedAtMs: Date.now() });
+    return "claimed";
+  });
+  if (claimed === "sent") return { success: true, alreadySent: true };
+  if (claimed === "sending") throw new HttpsError("aborted", "Envoi déjà en cours. Réessayez dans deux minutes.");
+  const origin = IS_DEV_PROJECT ? "https://cleanup-manager-dev.web.app" : "https://cleanup-manager.fr";
+  let subject, lines;
+  if (kind === "owner") {
+    const company = String(d.by || "Votre conciergerie").slice(0, 120);
+    subject = "Invitation – Accès propriétaire CleanUp Manager";
+    lines = ["Bonjour" + (d.name ? " " + String(d.name).slice(0, 100) : "") + ",", "",
+      "Voici votre lien pour accéder à votre espace propriétaire :",
+      `${origin}/invite-proprietaire.html?token=${encodeURIComponent(token)}`, "",
+      `Utilisez cette adresse email (${email}) pour accepter l'invitation.`, "",
+      "Vous pourrez ensuite échanger avec votre conciergerie et transmettre les liens iCal de vos logements.", "",
+      "Cordialement,", company];
+  } else {
+    const id = String(d.prestationId || "");
+    const event = await db.doc(`events/${id}`).get();
+    if (!event.exists || event.get("conciergerieUid") !== uid || event.get("dayToken") !== token) {
+      await ref.update({emailStatus:"failed"});
+      throw new HttpsError("failed-precondition", "La prestation ne correspond plus aux liens générés.");
+    }
+    const base = `${origin}/`;
+    subject = "Mission CleanUp — liens (checklist + photos)";
+    lines = ["Bonjour " + String(d.agentName || "").slice(0, 100) + ",", "",
+      "Voici les liens de votre mission :", "",
+      `Checklist : ${base}agent.html?token=${encodeURIComponent(token)}&prestationId=${encodeURIComponent(id)}`,
+      `Photos : ${base}agent-photos.html?token=${encodeURIComponent(token)}&prestationId=${encodeURIComponent(id)}`, "",
+      "Interventions :", ...(Array.isArray(d.selectedInterventions) ? d.selectedInterventions.slice(0, 12).map(iv => `- ${String(iv.label || "Intervention").slice(0, 80)} (${String(iv.dateKey || "")})`) : []), "",
+      "Ces liens expirent 24 heures après leur génération.", "", "— CleanUp Manager"];
+  }
+  try {
+    const result = await sendBrevoIcalMail(email, subject, lines);
+    const now = admin.firestore.FieldValue.serverTimestamp();
+    await ref.update({ emailStatus: "sent", emailSentAt: now, emailMessageId: result.messageId || "" });
+    if (kind === "agent") {
+      const evRef = db.doc(`events/${d.prestationId}`);
+      const patch = {};
+      for (const key of (Array.isArray(d.selectedInterventionKeys) ? d.selectedInterventionKeys : [])) {
+        if (!/^[A-Za-z0-9_-]{1,30}$/.test(key)) continue;
+        const currentEvent = await evRef.get();
+        if (currentEvent.get(`agentLinks.${key}.tokenId`) === token) {
+          patch[`agentLinks.${key}.sentAt`] = now;
+        }
+      }
+      if (Object.keys(patch).length) {
+        try { await evRef.update(patch); }
+        catch (metadataError) { console.error("Agent sentAt update failed", {code: metadataError?.code || "unknown"}); }
+      }
+    }
+    return {success: true};
+  } catch (err) {
+    await ref.update({emailStatus:"failed", emailFailedAt:admin.firestore.FieldValue.serverTimestamp()}).catch(()=>{});
+    console.error("Invitation email failed", {kind, code:err?.code || "brevo-error"});
+    throw new HttpsError("internal", "Échec de l'envoi Brevo. Consultez les journaux Firebase.");
+  }
+});
