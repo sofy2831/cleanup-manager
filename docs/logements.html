@@ -690,11 +690,25 @@
     </div>
   </div>
 
+  <!-- Confirmation intégrée de l'association propriétaire -->
+  <div class="modal-backdrop" id="ownerLinkConfirmBackdrop" aria-hidden="true" style="z-index:110;">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="ownerLinkConfirmTitle" style="max-width:460px;">
+      <h2 id="ownerLinkConfirmTitle">Associer le propriétaire</h2>
+      <p id="ownerLinkConfirmIntro" style="font-size:13px;line-height:1.5;color:#333;font-weight:600;"></p>
+      <div class="kv" id="ownerLinkConfirmDetails" style="display:block;margin:12px 0;padding:14px;"></div>
+      <p style="font-size:12px;line-height:1.5;">Après confirmation, vous retrouverez votre réservation avec les dates et horaires déjà saisis.</p>
+      <div class="modal-actions">
+        <button class="btn" type="button" id="ownerLinkConfirmCancel">Annuler</button>
+        <button class="btn primary" type="button" id="ownerLinkConfirmOk">Confirmer l'association</button>
+      </div>
+    </div>
+  </div>
+
   <!-- MODALE RÉSERVATION -->
   <div class="modal-backdrop" id="bookingBackdrop" aria-hidden="true">
     <div class="modal" role="dialog" aria-modal="true" aria-label="Créer une réservation">
       <h2 id="bookingModalTitle">Créer une réservation</h2>
-      <p id="bookingModalHint">Renseignez les dates et horaires du séjour. <span style="font-size:10px;color:#777">DEV v2 · 16/10</span></p>
+      <p id="bookingModalHint">Renseignez les dates et horaires du séjour.</p>
 
       <div class="b-alert" id="bookingAlert"></div>
         <div id="bookingQuickAction" style="display:none; margin:8px 0 12px; text-align:left;"></div>
@@ -1380,6 +1394,44 @@
     }catch(e){ console.warn("Brouillon réservation illisible", e); return false; }
   }
 
+  // Confirmation non bloquante, intégrée à l'interface (pas de confirm() navigateur).
+  const ownerLinkConfirmBackdrop = document.getElementById("ownerLinkConfirmBackdrop");
+  const ownerLinkConfirmIntro = document.getElementById("ownerLinkConfirmIntro");
+  const ownerLinkConfirmDetails = document.getElementById("ownerLinkConfirmDetails");
+  const ownerLinkConfirmCancel = document.getElementById("ownerLinkConfirmCancel");
+  const ownerLinkConfirmOk = document.getElementById("ownerLinkConfirmOk");
+  let ownerLinkConfirmResolve = null;
+  function finishOwnerLinkConfirmation(confirmed){
+    ownerLinkConfirmBackdrop.style.display = "none";
+    ownerLinkConfirmBackdrop.setAttribute("aria-hidden", "true");
+    const resolve = ownerLinkConfirmResolve;
+    ownerLinkConfirmResolve = null;
+    if(resolve) resolve(confirmed);
+  }
+  ownerLinkConfirmCancel.addEventListener("click", () => finishOwnerLinkConfirmation(false));
+  ownerLinkConfirmOk.addEventListener("click", () => finishOwnerLinkConfirmation(true));
+  ownerLinkConfirmBackdrop.addEventListener("click", e => {
+    if(e.target === ownerLinkConfirmBackdrop) finishOwnerLinkConfirmation(false);
+  });
+  document.addEventListener("keydown", e => {
+    if(e.key === "Escape" && ownerLinkConfirmResolve){
+      e.preventDefault();
+      finishOwnerLinkConfirmation(false);
+    }
+  });
+  function confirmOwnerLink(home, owner){
+    if(ownerLinkConfirmResolve) return Promise.resolve(false);
+    const homeLabel = [home.name || "Logement", home.homeCity || home.city || ""].filter(Boolean).join(" — ");
+    const ownerLabel = owner.fullname || owner.displayName || owner.name || home.ownerName || "Propriétaire";
+    const ownerEmail = owner.email || owner.emailLower || home.ownerAccountEmail || "—";
+    ownerLinkConfirmIntro.textContent = `Vous allez associer le logement ${homeLabel} au compte propriétaire existant.`;
+    ownerLinkConfirmDetails.innerHTML = `<div style="color:#666;font-size:11px;margin-bottom:4px;">Propriétaire</div><div style="font-weight:900;margin-bottom:10px;">${escapeHtml(ownerLabel)}</div><div style="color:#666;font-size:11px;margin-bottom:4px;">Adresse e-mail</div><div style="font-weight:800;overflow-wrap:anywhere;">${escapeHtml(ownerEmail)}</div>`;
+    ownerLinkConfirmBackdrop.style.display = "flex";
+    ownerLinkConfirmBackdrop.setAttribute("aria-hidden", "false");
+    ownerLinkConfirmOk.focus();
+    return new Promise(resolve => { ownerLinkConfirmResolve = resolve; });
+  }
+
   // Action contextuelle : aucune navigation inutile vers la liste des logements.
   function refreshBookingOwnerState(){
     const h = allHomes.find(x => x.id === bookingHomeSelect.value && !isArchived(x));
@@ -1401,7 +1453,7 @@
       message = "Propriétaire déjà enregistré. Cliquez sur « Associer le propriétaire » pour rattacher son compte à ce logement. Vous pourrez ensuite enregistrer votre réservation, sans nouvelle invitation.";
       label = "Associer le propriétaire";
       action = async () => {
-        if(!confirm("Associer ce logement au propriétaire existant ?")) return;
+        if(!await confirmOwnerLink(h, ex)) return;
         btn.disabled = true;
         const linked = await linkHomeToOwner(h.id, ex, { inBookingModal: true });
         if(linked){
