@@ -1116,7 +1116,7 @@
     return ownersByEmailLower.get(emailLower) || null;
   }
 
-  async function linkHomeToOwner(homeId, owner){
+  async function linkHomeToOwner(homeId, owner, { inBookingModal = false } = {}){
     if(!homeId || !owner?.id) return;
 
     const ownerDocId = String(owner.id).trim();
@@ -1153,14 +1153,18 @@
         await markOnboarding(currentUid, "firstOwnerLinked");
       }
 
-      showAlert(ownerUid
-        ? "✅ Logement associé au propriétaire (compte connecté)."
-        : "✅ Logement associé à la fiche propriétaire (compte pas encore accepté).", true);
-
+      if(!inBookingModal){
+        showAlert(ownerUid
+          ? "✅ Logement associé au propriétaire (compte connecté)."
+          : "✅ Logement associé à la fiche propriétaire (compte pas encore accepté).", true);
+      }
       render();
+      return true;
     }catch(err){
       console.error(err);
-      showAlert("Erreur association propriétaire : " + (err?.message || "inconnue"));
+      if(inBookingModal) showBookingAlert("Impossible d'associer le propriétaire : " + (err?.message || "erreur inconnue"));
+      else showAlert("Erreur association propriétaire : " + (err?.message || "inconnue"));
+      return false;
     }
   }
 
@@ -1345,6 +1349,37 @@
     `;
   }
 
+  // Conserve la saisie lors d'un détour par l'invitation (même onglet).
+  const BOOKING_DRAFT_KEY = "cleanup_booking_draft_v1";
+  function saveBookingDraft(){
+    try{
+      sessionStorage.setItem(BOOKING_DRAFT_KEY, JSON.stringify({
+        uid: currentUid, homeId: bookingHomeSelect.value,
+        arrivalDate: arrivalDateInput.value, departureDate: departureDateInput.value,
+        arrivalTime: arrivalTimeInput.value, departureTime: departureTimeInput.value,
+        note: metaInput.value
+      }));
+    }catch(e){ console.warn("Brouillon réservation indisponible", e); }
+  }
+  function restoreBookingDraft(){
+    try{
+      const raw = sessionStorage.getItem(BOOKING_DRAFT_KEY);
+      if(!raw) return false;
+      const draft = JSON.parse(raw);
+      if(draft.uid !== currentUid) return false;
+      sessionStorage.removeItem(BOOKING_DRAFT_KEY);
+      const h = allHomes.find(x => x.id === draft.homeId && !isArchived(x));
+      openBookingModal(h?.id || null);
+      if(draft.arrivalDate) arrivalDateInput.value = draft.arrivalDate;
+      if(draft.departureDate) departureDateInput.value = draft.departureDate;
+      if(draft.arrivalTime) arrivalTimeInput.value = draft.arrivalTime;
+      if(draft.departureTime) departureTimeInput.value = draft.departureTime;
+      metaInput.value = draft.note || "";
+      refreshBookingOwnerState();
+      return true;
+    }catch(e){ console.warn("Brouillon réservation illisible", e); return false; }
+  }
+
   // Action contextuelle : aucune navigation inutile vers la liste des logements.
   function refreshBookingOwnerState(){
     const h = allHomes.find(x => x.id === bookingHomeSelect.value && !isArchived(x));
@@ -1367,17 +1402,25 @@
       label = "Associer le propriétaire";
       action = async () => {
         if(!confirm("Associer ce logement au propriétaire existant ?")) return;
-        await linkHomeToOwner(h.id, ex);
-        refreshBookingOwnerState();
+        btn.disabled = true;
+        const linked = await linkHomeToOwner(h.id, ex, { inBookingModal: true });
+        if(linked){
+          refreshBookingOwnerState();
+          if(String(h.ownerUid || "").trim()){
+            showBookingAlert("Propriétaire associé. Vous pouvez maintenant enregistrer la réservation.", true);
+          }
+        }else{
+          btn.disabled = false;
+        }
       };
     }else if(String(h.ownerDocId || "").trim()){
       message = "L'invitation du propriétaire est en attente. Il pourra être associé définitivement après son activation.";
       label = "Gérer l'invitation";
-      action = () => { location.href = buildInviteUrlForHome(h); };
+      action = () => { saveBookingDraft(); location.href = buildInviteUrlForHome(h); };
     }else{
       message = "Propriétaire non lié. Cliquez sur « Inviter le propriétaire » pour lui envoyer une invitation. Vous pourrez enregistrer la réservation dès qu'il l'aura acceptée.";
       label = "Inviter le propriétaire";
-      action = () => { location.href = buildInviteUrlForHome(h); };
+      action = () => { saveBookingDraft(); location.href = buildInviteUrlForHome(h); };
     }
     showBookingAlert(message, false);
     bookingQuickAction.style.display = "block";
@@ -1414,6 +1457,8 @@
     bookingBackdrop.setAttribute("aria-hidden","true");
     bookingForm.reset();
     hideBookingAlert();
+    bookingQuickAction.innerHTML = "";
+    bookingQuickAction.style.display = "none";
     refreshQuotaVisualMessage();
   }
 
@@ -1874,7 +1919,8 @@
       return false;
     }
 
-    if(showMessage) hideBookingAlert();
+    // Ne pas effacer le message d'association/invitation en changeant les dates.
+    if(showMessage) refreshBookingOwnerState();
     return true;
   }
 
@@ -1967,6 +2013,7 @@
 
       await markOnboarding(user.uid, "firstBookingCreated");
 
+      sessionStorage.removeItem(BOOKING_DRAFT_KEY);
       showBookingAlert("✅ Réservation enregistrée.", true);
 
       const params = new URLSearchParams();
@@ -2027,6 +2074,9 @@
       }
       // Empêche une réouverture involontaire après rechargement.
       history.replaceState(null, "", "logements.html");
+    }else{
+      // Retour depuis l'invitation : reprendre la réservation sans ressaisie.
+      restoreBookingDraft();
     }
   });
 </script>
