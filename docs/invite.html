@@ -320,12 +320,12 @@
 
         <div class="actions">
           <button class="btn" type="button" id="copyBtn" disabled>Copier le lien</button>
-          <button class="btn primary" type="button" id="sendMailBtn" disabled>Ouvrir l’email</button>
+          <button class="btn primary" type="button" id="sendMailBtn" disabled>Envoyer l’invitation</button>
           <button class="btn danger" type="button" id="clearBtn">Effacer</button>
         </div>
 
         <div class="small" style="margin-top:10px;">
-          Étapes : Génère → copie → ouvre l’email → colle le lien → envoie.
+          Étapes : Génère le lien → envoie l’invitation via Brevo.
         </div>
 
         <div class="fineprint">
@@ -347,6 +347,9 @@
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import { doc, setDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+
+    import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-functions.js";
+    const sendInvitation = httpsCallable(getFunctions(undefined, "europe-west1"), "sendCleanupInvitation");
 
     // ===== UI helpers =====
     const alertBox = document.getElementById("alertBox");
@@ -477,29 +480,18 @@
       }
     });
 
-    sendMailBtn.addEventListener("click", ()=>{
+    sendMailBtn.addEventListener("click", async ()=>{
       hideAlert();
-      const email = normalizeEmail(invEmail.value);
-      const by = (invBy.value || "").trim() || "CleanUp Manager";
       const link = (invLink.value || "").trim();
-
-      if(!email) return showAlert("Email manquant.");
-      if(!link) return showAlert("Génère d’abord.");
-
-      const subject = encodeURIComponent("Votre accès propriétaire");
-      const body = encodeURIComponent(
-`Bonjour,
-
-Voici votre lien d’accès propriétaire :
-
-${link}
-
-À bientôt,
-${by}`
-      );
-
-      window.location.href = `mailto:${encodeURIComponent(email)}?subject=${subject}&body=${body}`;
-      showAlert("✅ Email ouvert. Vérifie le contenu puis envoie.", true);
+      if(!link) return showAlert("Génère d’abord le lien.");
+      const token = new URL(link).searchParams.get("token");
+      sendMailBtn.disabled = true;
+      try{
+        await sendInvitation({kind:"owner",token});
+        showAlert("✅ Invitation envoyée via Brevo.", true);
+      }catch(err){
+        showAlert("⛔ Envoi impossible : " + (err?.message || "erreur inconnue"));
+      }finally{sendMailBtn.disabled = false;}
     });
 
     clearBtn.addEventListener("click", ()=>{
