@@ -487,6 +487,9 @@
     serverTimestamp, Timestamp
   } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
+  import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-functions.js";
+  const sendInvitation = httpsCallable(getFunctions(undefined, "europe-west1"), "sendCleanupInvitation");
+
   const helloLine = document.getElementById("helloLine");
   const companyLine = document.getElementById("companyLine");
   const backBtn = document.getElementById("backBtn");
@@ -1466,7 +1469,6 @@
     }
 
     for(const ivKey of selectedKeys){
-      eventPatch[`agentLinks.${ivKey}.sentAt`] = serverTimestamp();
       eventPatch[`agentLinks.${ivKey}.sentToEmail`] = email;
       eventPatch[`agentLinks.${ivKey}.sentToName`] = name;
       eventPatch[`agentLinks.${ivKey}.tokenId`] = tokenId;
@@ -1523,22 +1525,18 @@
     }
   });
 
-  mailtoBtn.addEventListener("click", ()=>{
-    const to = normalizeEmail(agentEmail.value);
-    const name = (agentName.value || "").trim();
-    if(!to) return showAlert("Email agent manquant.");
-    if(!linkBox.value) return showAlert("Génère d’abord les liens.");
-
-    const subject = encodeURIComponent("Mission CleanUp — liens (checklist + photos)");
-    const body = encodeURIComponent(
-      `Bonjour ${name || ""},\n\n` +
-      `Voici tes liens :\n\n` +
-      `${linkBox.value}\n\n` +
-      `⚠️ Les liens (token) expirent sous 24h.\n\n` +
-      `— CleanUp Manager`
-    );
-
-    window.location.href = `mailto:${to}?subject=${subject}&body=${body}`;
+  mailtoBtn.addEventListener("click", async ()=>{
+    if(!linkBox.dataset.generated) return showAlert("Génère d’abord les liens.");
+    const token = String(currentEvent?.dayToken || "");
+    if(!token) return showAlert("Token absent. Recharge la prestation.");
+    mailtoBtn.disabled = true;
+    try{
+      await sendInvitation({kind:"agent", token});
+      showAlert("✅ Mission envoyée à l’agent via Brevo.", true);
+      await load();
+    }catch(err){
+      showAlert("⛔ Envoi impossible : " + (err?.message || "erreur inconnue"));
+    }finally{mailtoBtn.disabled = false;}
   });
 
   genLinkBtn.addEventListener("click", async ()=>{
