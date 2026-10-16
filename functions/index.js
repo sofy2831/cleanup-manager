@@ -2089,6 +2089,14 @@ exports.sendCleanupInvitation = onCall({
     // Pour les agents, les deux URL sont de vrais liens HTML cliquables.
     // Le texte brut conserve les URL complètes pour les messageries qui filtrent le HTML.
     let invitationHtml = null;
+    if (kind === "owner") {
+      const ownerUrl = `${origin}/invite-proprietaire.html?token=${encodeURIComponent(token)}`;
+      invitationHtml = "<html><body>" + lines.map(line => {
+        if (line !== ownerUrl) return htmlSafe(line);
+        return '<a href="' + htmlSafe(ownerUrl) + '" style="color:#2563eb;text-decoration:underline;">Ouvrir mon espace propriétaire</a>' +
+          '<br><span style="font-size:12px;color:#555;">Ou copiez ce lien : ' + htmlSafe(ownerUrl) + "</span>";
+      }).join("<br>") + "</body></html>";
+    }
     if (kind === "agent") {
       invitationHtml = "<html><body>" + lines.map(line => {
         const match = /^(Checklist|Photos) : (https:\/\/\S+)$/.exec(line);
