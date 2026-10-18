@@ -478,6 +478,45 @@ exports.onAgentWrite = onDocumentWritten(
     await Promise.all([...uids].map((uid) => rebuildStatsFor(uid)));
   }
 );
+// Notification commerciale : nouveau compte conciergerie uniquement.
+// Le suivi Firestore évite les doublons lors des mises à jour de profil.
+exports.notifyNewConciergerie = onDocumentWritten({
+  document: "users/{userId}", region: "europe-west1", secrets: [BREVO_API_KEY],
+}, async (event) => {
+  const before = event.data?.before?.exists ? (event.data.before.data() || {}) : null;
+  const after = event.data?.after?.exists ? (event.data.after.data() || {}) : null;
+  if (!after || String(after.role || "").trim().toLowerCase() !== "conciergerie") return;
+  if (String(before?.role || "").trim().toLowerCase() === "conciergerie") return;
+
+  const db = admin.firestore();
+  const uid = String(event.params.userId || "");
+  const notificationRef = db.doc(`conciergerieSignupNotifications/${uid}`);
+  const claimed = await db.runTransaction(async (tx) => {
+    const existing = await tx.get(notificationRef);
+    const d = existing.exists ? (existing.data() || {}) : {};
+    if (d.status === "sent") return false;
+    if (d.status === "sending" && Date.now() - Number(d.claimedAtMs || 0) < 120000) return false;
+    tx.set(notificationRef, {status: "sending", claimedAtMs: Date.now(), updatedAt: admin.firestore.FieldValue.serverTimestamp()}, {merge: true});
+    return true;
+  });
+  if (!claimed) return;
+
+  const company = String(after.businessProfile?.companyName || after.companyName || "Non renseignée").slice(0, 150);
+  const email = String(after.email || "Non renseigné").slice(0, 200);
+  const name = String(after.displayName || after.name || "Non renseigné").slice(0, 150);
+  const createdAt = after.createdAt?.toDate?.();
+  const dateText = createdAt instanceof Date && !isNaN(createdAt) ? createdAt.toLocaleString("fr-FR", {timeZone: "Europe/Paris"}) : new Date().toLocaleString("fr-FR", {timeZone: "Europe/Paris"});
+  const lines = ["Nouvelle conciergerie inscrite sur CleanUp Manager", "", `Conciergerie : ${company}`, `Contact : ${name}`, `Email : ${email}`, `Date : ${dateText}`, `Projet : ${PROJECT_ID}`, `UID : ${uid}`];
+  try {
+    const result = await sendBrevoIcalMail("contact@cleanup-manager.fr", "CleanUp – Nouvelle inscription conciergerie", lines);
+    await notificationRef.set({status: "sent", sentAt: admin.firestore.FieldValue.serverTimestamp(), messageId: result.messageId || ""}, {merge: true});
+  } catch (error) {
+    await notificationRef.set({status: "failed", failedAt: admin.firestore.FieldValue.serverTimestamp()}, {merge: true}).catch(() => {});
+    console.error("notifyNewConciergerie: email failed", {uid, code: error?.code || "brevo-error"});
+    throw error;
+  }
+});
+
 // =====================
 // iCal helpers
 // =====================
