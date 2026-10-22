@@ -117,6 +117,13 @@
     .badge.ok{ background:rgba(27,143,77,0.14); color:var(--ok); }
     .badge.bad{ background:rgba(179,38,30,0.14); color:var(--bad); }
     .badge.blue{ background:rgba(0,163,255,0.14); color:#0067a6; }
+    .badge.archived{ background:#f2e9e5; color:#855341; }
+    .item.is-archived{ background:#faf8f7; border:1px solid #e8d8d0; }
+    .item.is-archived .iTitle{ color:#735c52; }
+    .archive-dialog .modal{ max-width:460px; padding:24px; }
+    .archive-dialog .modal h2{ font-size:20px; margin-bottom:12px; }
+    .archive-dialog .modal p{ font-size:14px; font-weight:500; line-height:1.6; }
+    .archive-dialog .modal-actions{ margin-top:22px; }
 
     .list{ display:flex; flex-direction:column; gap:10px; margin-top:10px; }
     .item{
@@ -358,6 +365,17 @@
           <button class="pill primary" type="submit" id="clientSaveBtn">Enregistrer</button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <div class="modal-backdrop archive-dialog" id="archiveModalBackdrop" aria-hidden="true">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="archiveModalTitle" aria-describedby="archiveModalDescription">
+      <h2 id="archiveModalTitle">Archiver ce propriétaire ?</h2>
+      <p id="archiveModalDescription"></p>
+      <div class="modal-actions">
+        <button class="pill" type="button" id="archiveCancelBtn">Annuler</button>
+        <button class="pill primary" type="button" id="archiveConfirmBtn">Confirmer l’archivage</button>
+      </div>
     </div>
   </div>
 
@@ -716,24 +734,76 @@
     // =========================
     // ARCHIVE
     // =========================
-    async function archiveOwner(ownerDocId){
-      const sure = confirm("Archiver ce propriétaire ? (il restera dans la base)");
-      if(!sure) return;
+    const archiveBackdrop = document.getElementById("archiveModalBackdrop");
+    const archiveTitle = document.getElementById("archiveModalTitle");
+    const archiveDescription = document.getElementById("archiveModalDescription");
+    const archiveConfirmBtn = document.getElementById("archiveConfirmBtn");
+    const archiveCancelBtn = document.getElementById("archiveCancelBtn");
+    let archiveResolve = null;
+    let archivePreviousFocus = null;
 
+    function closeArchiveDialog(confirmed = false){
+      archiveBackdrop.style.display = "none";
+      archiveBackdrop.setAttribute("aria-hidden", "true");
+      archivePreviousFocus?.focus?.();
+      const resolve = archiveResolve;
+      archiveResolve = null;
+      if(resolve) resolve(confirmed);
+    }
+    archiveCancelBtn.addEventListener("click", () => closeArchiveDialog(false));
+    archiveConfirmBtn.addEventListener("click", () => closeArchiveDialog(true));
+    archiveBackdrop.addEventListener("click", (e) => {
+      if(e.target === archiveBackdrop) closeArchiveDialog(false);
+    });
+    document.addEventListener("keydown", (e) => {
+      if(archiveResolve && e.key === "Escape") closeArchiveDialog(false);
+      if(archiveResolve && e.key === "Tab") {
+        const buttons = [archiveCancelBtn, archiveConfirmBtn];
+        const idx = buttons.indexOf(document.activeElement);
+        if(e.shiftKey && idx === 0){ e.preventDefault(); buttons[1].focus(); }
+        else if(!e.shiftKey && idx === 1){ e.preventDefault(); buttons[0].focus(); }
+      }
+    });
+    function confirmOwnerStatus(ownerName, isArchived){
+      if(archiveResolve) return Promise.resolve(false);
+      archivePreviousFocus = document.activeElement;
+      archiveTitle.textContent = isArchived ? "Réactiver ce propriétaire ?" : "Archiver ce propriétaire ?";
+      archiveDescription.textContent = isArchived
+        ? `${ownerName} retrouvera son statut actif. Les alertes des prochaines réservations pourront reprendre. Les données restent conservées.`
+        : `${ownerName} restera dans votre base avec ses logements et réservations. Les alertes de réservation seront suspendues pendant son archivage.`;
+      archiveConfirmBtn.textContent = isArchived ? "Confirmer la réactivation" : "Confirmer l’archivage";
+      archiveBackdrop.style.display = "flex";
+      archiveBackdrop.setAttribute("aria-hidden", "false");
+      archiveCancelBtn.focus();
+      return new Promise(resolve => { archiveResolve = resolve; });
+    }
+
+    async function archiveOwner(ownerDocId, ownerName, isArchived, actionBtn){
+      const sure = await confirmOwnerStatus(ownerName, isArchived);
+      if(!sure) return;
+      if(actionBtn) actionBtn.disabled = true;
       try{
         const ownerRef = doc(db, "owners", ownerDocId);
         const clientRef = doc(db, "clients", "c_owner_" + ownerDocId);
-
+        const statusPatch = isArchived
+          ? { status:"ACTIVE", archivedAt:null, updatedAt:serverTimestamp() }
+          : { status:"ARCHIVED", archivedAt:serverTimestamp(), updatedAt:serverTimestamp() };
         const b = writeBatch(db);
-        b.set(ownerRef, { status:"ARCHIVED", archivedAt: serverTimestamp(), updatedAt: serverTimestamp() }, { merge:true });
-        b.set(clientRef, { status:"ARCHIVED", archivedAt: serverTimestamp(), updatedAt: serverTimestamp() }, { merge:true });
+        b.set(ownerRef, statusPatch, { merge:true });
+        b.set(clientRef, statusPatch, { merge:true });
         await b.commit();
-
-        showAlert("✅ Propriétaire archivé.", true);
+        // Actualisation locale immédiate, avant la relecture de Firestore.
+        const owner = allOwners.find(o => o.id === ownerDocId);
+        if(owner) owner.status = statusPatch.status;
+        const client = clientsByKey.get(ownerDocId);
+        if(client) client.status = statusPatch.status;
+        render();
         await reloadAll();
+        showAlert(isArchived ? "Propriétaire réactivé." : "Propriétaire archivé.", true);
       }catch(err){
         console.error(err);
-        showAlert("Erreur archivage : " + (err?.message || "inconnue"));
+        showAlert("Erreur de mise à jour : " + (err?.message || "inconnue"));
+        if(actionBtn) actionBtn.disabled = false;
       }
     }
 
@@ -770,13 +840,13 @@
         const hasEmail = !!normalizeEmail(x.email);
 
         const div = document.createElement("div");
-        div.className = "item";
+        div.className = "item" + (x.status.toUpperCase() === "ARCHIVED" ? " is-archived" : "");
         div.innerHTML = `
           <div class="iMain">
             <div class="iTop">
               <span class="badge ok">👤 CLIENT</span>
               <span class="badge">${x.homes.length} logement(s)</span>
-              ${x.status ? `<span class="badge blue">${esc(x.status)}</span>` : ``}
+              ${x.status ? `<span class="badge ${x.status.toUpperCase() === "ARCHIVED" ? "archived" : "blue"}">${x.status.toUpperCase() === "ARCHIVED" ? "ARCHIVÉ" : esc(x.status)}</span>` : ``}
               ${hasEmail ? "" : `<span class="badge bad">EMAIL MANQUANT</span>`}
             </div>
 
@@ -800,7 +870,7 @@
           <div class="iActions">
             <button class="mini ghost" type="button" data-owner-view="1" ${x.ownerAuthUid ? "" : "disabled"} title="${x.ownerAuthUid ? "Ouvrir le dashboard propriétaire en consultation" : "Compte propriétaire non activé"}">👁 Voir espace propriétaire</button>
             <button class="mini ghost" type="button" data-edit="1">✏️ Modifier</button>
-            <button class="mini ghost" type="button" data-archive="1">📦 Archiver</button>
+            <button class="mini ghost" type="button" data-archive="1">${x.status.toUpperCase() === "ARCHIVED" ? "↩ Désarchiver" : "📦 Archiver"}</button>
             <button class="mini danger" type="button" data-delete="1" disabled title="Suppression bloquée">🗑️ Suppression bloquée</button>
           </div>
         `;
@@ -847,7 +917,7 @@
         });
 
         div.querySelector('button[data-archive="1"]').addEventListener("click", async ()=>{
-          await archiveOwner(x.ownerDocId);
+          await archiveOwner(x.ownerDocId, x.displayName, x.status.toUpperCase() === "ARCHIVED", div.querySelector('button[data-archive="1"]'));
         });
       }
     }
