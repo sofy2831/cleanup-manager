@@ -379,6 +379,19 @@
     </div>
   </div>
 
+
+  <div class="modal-backdrop archive-dialog" id="deleteModalBackdrop" aria-hidden="true">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="deleteModalTitle">
+      <h2 id="deleteModalTitle">Supprimer ce propriétaire ?</h2>
+      <p id="deleteModalDescription"></p>
+      <p style="color:#b3261e">Cette action est définitive. Le serveur vérifiera qu’aucun logement ni historique n’est associé à cette fiche.</p>
+      <div class="modal-actions">
+        <button class="pill" type="button" id="deleteCancelBtn">Annuler</button>
+        <button class="mini danger" type="button" id="deleteConfirmBtn">Supprimer définitivement</button>
+      </div>
+    </div>
+  </div>
+
   <nav class="bottom-nav" aria-label="Navigation">
     <a href="planning.html">Planning</a>
     <a href="prestation.html">Production</a>
@@ -390,12 +403,14 @@
   <script type="module">
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+    import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-functions.js";
     import {
       doc, getDoc, setDoc, serverTimestamp,
       collection, query, where, getDocs, limit,
       writeBatch
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
+    const deleteUnusedOwner = httpsCallable(getFunctions(undefined, "europe-west1"), "deleteUnusedCleanupOwner");
     const subtitleLine = document.getElementById("subtitleLine");
     const emailLine = document.getElementById("emailLine");
 
@@ -807,6 +822,46 @@
       }
     }
 
+
+    // La suppression définitive est contrôlée par une fonction Firebase côté serveur.
+    const deleteBackdrop = document.getElementById("deleteModalBackdrop");
+    const deleteDescription = document.getElementById("deleteModalDescription");
+    const deleteConfirmBtn = document.getElementById("deleteConfirmBtn");
+    const deleteCancelBtn = document.getElementById("deleteCancelBtn");
+    let deleteResolve = null;
+    function closeDeleteDialog(yes = false){
+      deleteBackdrop.style.display = "none";
+      deleteBackdrop.setAttribute("aria-hidden", "true");
+      const resolve = deleteResolve;
+      deleteResolve = null;
+      if(resolve) resolve(yes);
+    }
+    deleteCancelBtn.addEventListener("click", () => closeDeleteDialog(false));
+    deleteConfirmBtn.addEventListener("click", () => closeDeleteDialog(true));
+    deleteBackdrop.addEventListener("click", e => { if(e.target === deleteBackdrop) closeDeleteDialog(false); });
+    document.addEventListener("keydown", e => { if(deleteResolve && e.key === "Escape") closeDeleteDialog(false); });
+    function confirmDeleteOwner(name){
+      if(deleteResolve) return Promise.resolve(false);
+      deleteDescription.textContent = `Vous allez supprimer définitivement la fiche de ${name}. Cette action ne pourra pas être annulée.`;
+      deleteBackdrop.style.display = "flex";
+      deleteBackdrop.setAttribute("aria-hidden", "false");
+      deleteCancelBtn.focus();
+      return new Promise(resolve => { deleteResolve = resolve; });
+    }
+    async function removeUnusedOwner(ownerDocId, name, btn){
+      if(!await confirmDeleteOwner(name)) return;
+      btn.disabled = true;
+      try{
+        await deleteUnusedOwner({ ownerDocId });
+        await reloadAll();
+        showAlert(`Le propriétaire ${name} a été supprimé.`, true);
+      }catch(err){
+        console.error("deleteUnusedCleanupOwner", err);
+        showAlert("Suppression impossible : " + (err?.message || "vérification refusée"));
+        btn.disabled = false;
+      }
+    }
+
     function render(){
       const q = norm(searchInput.value || "");
       const cards = buildOwnerCards();
@@ -871,7 +926,7 @@
             <button class="mini ghost" type="button" data-owner-view="1" ${x.ownerAuthUid ? "" : "disabled"} title="${x.ownerAuthUid ? "Ouvrir le dashboard propriétaire en consultation" : "Compte propriétaire non activé"}">👁 Voir espace propriétaire</button>
             <button class="mini ghost" type="button" data-edit="1">✏️ Modifier</button>
             <button class="mini ghost" type="button" data-archive="1">${x.status.toUpperCase() === "ARCHIVED" ? "↩ Désarchiver" : "📦 Archiver"}</button>
-            <button class="mini danger" type="button" data-delete="1" disabled title="Suppression bloquée">🗑️ Suppression bloquée</button>
+            <button class="mini danger" type="button" data-delete="1" ${x.homes.length ? 'disabled title="Un logement est associé à ce propriétaire"' : 'title="Supprimer si aucun historique n’existe"'}>${x.homes.length ? "🗑️ Suppression bloquée" : "🗑️ Supprimer"}</button>
           </div>
         `;
 
@@ -919,6 +974,10 @@
         div.querySelector('button[data-archive="1"]').addEventListener("click", async ()=>{
           await archiveOwner(x.ownerDocId, x.displayName, x.status.toUpperCase() === "ARCHIVED", div.querySelector('button[data-archive="1"]'));
         });
+        if(!x.homes.length){
+          const deleteBtn = div.querySelector('button[data-delete="1"]');
+          deleteBtn.addEventListener("click", () => removeUnusedOwner(x.ownerDocId, x.displayName, deleteBtn));
+        }
       }
     }
 

@@ -2098,6 +2098,76 @@ exports.marketingStatsCleanup = onRequest(
 // Invitations propriétaires et missions agents : envoi transactionnel Brevo.
 // Le client ne fournit jamais le destinataire ni le contenu : ils sont relus dans Firestore.
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
+// Suppression sécurisée d'une invitation propriétaire sans activité.
+// Ne concerne que les propriétaires INVITED sans compte activé.
+exports.deleteUnusedCleanupOwner = onCall({
+  region: "europe-west1", enforceAppCheck: false, timeoutSeconds: 60,
+}, async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) throw new HttpsError("unauthenticated", "Connexion requise.");
+  const ownerId = String(request.data?.ownerDocId || "").trim();
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(ownerId)) {
+    throw new HttpsError("invalid-argument", "Identifiant propriétaire invalide.");
+  }
+  const db = admin.firestore();
+  const user = await db.doc(`users/${uid}`).get();
+  if (!user.exists || !["conciergerie", "admin"].includes(String(user.get("role") || "").toLowerCase())) {
+    throw new HttpsError("permission-denied", "Accès conciergerie requis.");
+  }
+  const ownerRef = db.collection("owners").doc(ownerId);
+  const owner = await ownerRef.get();
+  if (!owner.exists || owner.get("conciergerieUid") !== uid) {
+    throw new HttpsError("not-found", "Propriétaire introuvable pour cette conciergerie.");
+  }
+  const data = owner.data() || {};
+  if (String(data.status || "").toUpperCase() !== "INVITED" || data.ownerUid || data.uid) {
+    throw new HttpsError("failed-precondition", "Seule une invitation non acceptée peut être supprimée.");
+  }
+  // Vérification serveur, y compris logements archivés et historiques.
+  // On refuse par précaution toute référence à ce propriétaire.
+  const linkedCollections = [
+    "homes", "icalEvents", "reservations", "bookings", "invoices",
+    "factures", "prestations", "interventions", "payments", "messages",
+    "ownerStatements", "ownerReports", "devis"
+  ];
+  for (const collectionName of linkedCollections) {
+    const ref = db.collection(collectionName);
+    for (const field of ["ownerDocId", "clientKey"]) {
+      const found = await ref.where(field, "==", ownerId).limit(1).get();
+      if (!found.empty) {
+        throw new HttpsError("failed-precondition", `Suppression bloquée : historique dans ${collectionName}.`);
+      }
+    }
+  }
+  const clientRef = db.collection("clients").doc(`c_owner_${ownerId}`);
+  const client = await clientRef.get();
+  if (client.exists && client.get("conciergerieUid") !== uid) {
+    throw new HttpsError("failed-precondition", "Fiche client liée à une autre conciergerie.");
+  }
+  const token = String(data.inviteToken || "").trim();
+  const inviteRef = token ? db.collection("invites").doc(token) : null;
+  const invite = inviteRef ? await inviteRef.get() : null;
+  if (invite?.exists && invite.get("conciergerieUid") !== uid) {
+    throw new HttpsError("failed-precondition", "Invitation incohérente.");
+  }
+  if (invite?.exists && invite.get("status") !== "pending") {
+    throw new HttpsError("failed-precondition", "Invitation déjà utilisée : suppression refusée.");
+  }
+  // Revérifie l'état critique lors de l'écriture atomique.
+  await db.runTransaction(async (tx) => {
+    const current = await tx.get(ownerRef);
+    if (!current.exists || current.get("conciergerieUid") !== uid ||
+        String(current.get("status") || "").toUpperCase() !== "INVITED" ||
+        current.get("ownerUid") || current.get("uid")) {
+      throw new HttpsError("failed-precondition", "Le propriétaire a changé : actualisez la page.");
+    }
+    tx.delete(ownerRef);
+    if (client.exists) tx.delete(clientRef);
+    if (invite?.exists) tx.delete(inviteRef);
+  });
+  return { success: true, ownerDocId: ownerId };
+});
+
 exports.sendCleanupInvitation = onCall({
   region: "europe-west1", secrets: [BREVO_API_KEY], enforceAppCheck: false,
   timeoutSeconds: 60,
