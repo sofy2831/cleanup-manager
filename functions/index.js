@@ -1016,12 +1016,54 @@ exports.sendIcalAlertsScheduled = onSchedule({
   const tomorrow = nextParisDayKey();
   const snap = await db.collection("icalEvents").where("archived", "==", false).get();
   const users = new Map();
-  let sent = 0, failed = 0;
+  const homes = new Map();
+  const owners = new Map();
+  let sent = 0, failed = 0, suspended = 0;
   for (const doc of snap.docs) {
     const e = doc.data() || {};
     const source = String(e.source || "").toLowerCase();
     if (!e.conciergerieUid || !["ical", "manual"].includes(source)) continue;
     const uid = String(e.conciergerieUid);
+
+    // Le rattachement propriétaire se fait par homes.ownerDocId, et non
+    // par isActive (qui reste true après archivage).
+    const homeId = String(e.homeId || "").trim();
+    if (!homeId) {
+      console.warn("Alerte ignorée : homeId absent", doc.id);
+      continue;
+    }
+    if (!homes.has(homeId)) {
+      const homeSnap = await db.collection("homes").doc(homeId).get();
+      homes.set(homeId, homeSnap.exists ? homeSnap.data() || {} : null);
+    }
+    const home = homes.get(homeId);
+    if (!home || String(home.conciergerieUid || "") !== uid) {
+      console.warn("Alerte ignorée : logement absent ou conciergerie différente", doc.id, homeId);
+      continue;
+    }
+    const ownerDocId = String(home.ownerDocId || "").trim();
+    if (!ownerDocId) {
+      console.warn("Alerte ignorée : ownerDocId absent", doc.id, homeId);
+      continue;
+    }
+    if (!owners.has(ownerDocId)) {
+      const ownerSnap = await db.collection("owners").doc(ownerDocId).get();
+      owners.set(ownerDocId, ownerSnap.exists ? ownerSnap.data() || {} : null);
+    }
+    const owner = owners.get(ownerDocId);
+    if (!owner || String(owner.conciergerieUid || "") !== uid) {
+      console.warn("Alerte ignorée : propriétaire absent ou conciergerie différente", doc.id, ownerDocId);
+      continue;
+    }
+    if (String(owner.status || "").trim().toUpperCase() === "ARCHIVED") {
+      // Ne pas conserver une alerte de création en attente qui partirait
+      // lors d'un désarchivage ultérieur.
+      if (e.alertNewPending === true) {
+        await doc.ref.set({alertNewPending: false}, {merge: true});
+      }
+      suspended++;
+      continue;
+    }
     if (!users.has(uid)) {
       const u = await db.collection("users").doc(uid).get();
       users.set(uid, u.exists ? u.data() || {} : {});
@@ -1074,7 +1116,7 @@ exports.sendIcalAlertsScheduled = onSchedule({
       }
     }
   }
-  console.log("Brevo reservation alerts",{sent,failed});
+  console.log("Brevo reservation alerts",{sent,failed,suspended});
 });
 
 // =====================
