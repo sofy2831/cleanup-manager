@@ -2281,3 +2281,69 @@ exports.sendCleanupInvitation = onCall({
     throw new HttpsError("internal", "Échec de l'envoi Brevo. Consultez les journaux Firebase.");
   }
 });
+
+
+// =====================
+// Administration : statistiques conciergeries (lecture seule)
+// Autorisation: rôle admin + email vérifié + allowlist CLEANUP_ADMIN_EMAILS
+// =====================
+const statsDb = admin.firestore();
+exports.cleanupAdminConciergeries = onCall({ region: 'europe-west1', cors: true, maxInstances: 3, timeoutSeconds: 120 }, async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid || request.auth.token.email_verified !== true) throw new HttpsError('unauthenticated', 'Connexion avec email vérifié requise.');
+  const email = String(request.auth.token.email || '').toLowerCase().trim();
+  const allowlist = String(process.env.CLEANUP_ADMIN_EMAILS || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
+  if (!allowlist.length || !allowlist.includes(email)) throw new HttpsError('permission-denied', 'Administrateur non autorisé.');
+  const caller = await statsDb.collection('users').doc(uid).get();
+  if (!caller.exists || String(caller.get('role') || '').toLowerCase() !== 'admin') throw new HttpsError('permission-denied', 'Rôle admin requis.');
+
+  const usersSnap = await statsDb.collection('users').where('role', '==', 'conciergerie').limit(201).get();
+  if (usersSnap.size > 200) throw new HttpsError('resource-exhausted', 'Plus de 200 comptes : pagination serveur nécessaire.');
+  const rows = [];
+  for (const userDoc of usersSnap.docs) {
+    const u = userDoc.data() || {};
+    const tenant = userDoc.id;
+    const profile = u.businessProfile || {};
+    const address = profile.address || {};
+    const statsDoc = await statsDb.collection('statsConciergerie').doc(tenant).get();
+    const s = statsDoc.exists ? statsDoc.data() : {};
+    const [ical, manualEvents, realized, services, invoices] = await Promise.all([
+      statsDb.collection('icalEvents').where('conciergerieUid', '==', tenant).get(),
+      statsDb.collection('events').where('conciergerieUid', '==', tenant).get(),
+      statsDb.collection('events').where('conciergerieUid', '==', tenant).where('status', '==', 'REALISEE').count().get(),
+      statsDb.collection('services').where('conciergerieUid', '==', tenant).get(),
+      statsDb.collection('salesDocuments').where('conciergerieUid', '==', tenant).get()
+    ]);
+    const icalActive = ical.docs.filter(d => d.get('archived') !== true).length;
+    // Les événements issus d'iCal sont déjà comptés dans icalEvents.
+    const manuallyCreated = manualEvents.docs.filter(d => String(d.get('source') || '').toLowerCase() !== 'ical' && !d.get('icalEventId')).length;
+    const issued = invoices.docs.filter(d => {
+      const x = d.data();
+      return x.type === 'INVOICE' && !!x.invoiceIssuedAt && !['CANCELLED','CANCELED','VOID','DRAFT'].includes(String(x.invoiceStatus || '').toUpperCase());
+    });
+    const zip = String(address.zip || u.zip || '').trim();
+    rows.push({
+      uid: tenant,
+      name: String(profile.companyName || u.companyName || u.displayName || u.name || 'Non renseignée'),
+      email: String(u.email || u.billingEmail || profile.billingEmail || ''),
+      city: String(address.city || u.city || ''),
+      zip,
+      department: zip.startsWith('97') || zip.startsWith('98') ? zip.slice(0,3) : zip.slice(0,2),
+      plan: String(u.plan || s.plan || 'inconnu'),
+      registeredAt: u.createdAt?.toMillis?.() || null,
+      homes: Number(s.homesCount ?? 0),
+      activeHomes: Number(s.activeHomes ?? 0),
+      owners: Number(s.ownersCount ?? 0),
+      reservationsIcal: icalActive,
+      reservationsManual: manuallyCreated,
+      reservationsTotal: icalActive + manuallyCreated,
+      eventsTotal: manualEvents.size,
+      interventionsRealized: realized.data().count,
+      servicesConfigured: services.docs.filter(d => d.get('active') !== false).length,
+      invoicesIssued: issued.length,
+      invoicesTotalTTC: Math.round(issued.reduce((sum,d) => sum + Number(d.get('totalTTC') ?? d.get('totals')?.ttc ?? 0),0)*100)/100,
+      statsUpdatedAt: s.updatedAt?.toMillis?.() || null
+    });
+  }
+  return { rows, generatedAt: Date.now(), note: 'Réservations iCal actives + événements non iCal ; statistiques indicatives, contrôles métier à confirmer.' };
+});
