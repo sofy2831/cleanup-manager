@@ -244,7 +244,8 @@
           <div class="cardTitle"><span>Récapitulatif des rémunérations</span><span class="tiny" id="paySummary">—</span></div>
           <div class="tiny" style="line-height:1.5">Missions validées uniquement. Montant convenu prioritaire, sinon tarif du logement pour ménage et linge. Supplément d’urgence distinct. Facturation client ventilée uniquement lorsque la ligne correspond sans ambiguïté à une mission. Ce document ne constitue pas un bulletin de paie.</div>
           <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-            <button class="pill" id="exportCsvBtn" type="button">Exporter le détail CSV</button>
+            <button class="pill" id="exportCsvBtn" type="button">Export interne (avec facturation client)</button>
+            <button class="pill" id="exportAgentCsvBtn" type="button">Export intervenant (sans facturation client)</button>
             <span class="tiny" id="missingRates">—</span>
           </div>
         </div>
@@ -421,6 +422,7 @@
     const paySummary = document.getElementById("paySummary");
     const missingRates = document.getElementById("missingRates");
     const exportCsvBtn = document.getElementById("exportCsvBtn");
+     const exportAgentCsvBtn = document.getElementById("exportAgentCsvBtn");
 
      function validAmount(v){
        if(v === null || v === undefined || v === "") return null;
@@ -475,15 +477,25 @@
        return result;
      }
     function csvCell(v){return '"'+String(v??"").replaceAll('"','""')+'"';}
-    exportCsvBtn.addEventListener("click",()=>{
-      const cols = ["Date","Intervenant","Email","Logement","Prestation","Facturé client (€)","Base intervenant (€)","Supplément urgence (€)","Total intervenant (€)","Origine du tarif"];
-      const rows = currentScoped.map(r=>[r.date,r.agentName,r.agentEmail,r.homeName,r.type,r.amount ?? "",r.agentBase ?? "",r.agentUrgency ?? "",r.agentRate ?? "",r.rateReason]);
+    function exportMissionsCsv(includeClient){
+      const cols = ["Date","Intervenant","Email","Logement","Prestation"];
+      if(includeClient) cols.push("Facturé client (€)");
+      cols.push("Base intervenant (€)","Supplément urgence (€)","Total intervenant (€)","Origine du tarif");
+      const rows = currentScoped.map(r=>{
+        const cells = [r.date,r.agentName,r.agentEmail,r.homeName,r.type];
+        if(includeClient) cells.push(r.amount ?? "");
+        cells.push(r.agentBase ?? "",r.agentUrgency ?? "",r.agentRate ?? "",r.rateReason);
+        return cells;
+      });
       const csv = "\uFEFF"+[cols,...rows].map(a=>a.map(csvCell).join(";")).join("\r\n");
       const blob = new Blob([csv],{type:"text/csv;charset=utf-8;"});
       const url = URL.createObjectURL(blob);
-      const a = document.createElement("a"); a.href=url; a.download="cleanup-equipe-"+new Date().toISOString().slice(0,10)+".csv";
+      const a = document.createElement("a"); a.href=url;
+      a.download=(includeClient ? "cleanup-controle-interne-" : "cleanup-releve-intervenant-")+new Date().toISOString().slice(0,10)+".csv";
       document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
-    });
+    }
+    exportCsvBtn.addEventListener("click",()=>exportMissionsCsv(true));
+    exportAgentCsvBtn.addEventListener("click",()=>exportMissionsCsv(false));
 
     function groupByAgent(rows){
       const m = new Map(); // key -> {agentName,agentEmail,items:[], totalAmount}
@@ -532,6 +544,7 @@
       paySummary.textContent = `${fmtMoney2(totalPay)} • ${priced.length} prestation(s) tarifée(s)`;
       missingRates.textContent = `${scoped.filter(r=>r.rateIncomplete).length} mission(s) sans montant de base ; total partiel si supplément seul`;
       exportCsvBtn.disabled = scoped.length === 0;
+       exportAgentCsvBtn.disabled = scoped.length === 0;
 
       list.innerHTML = "";
       if(!scoped.length){
