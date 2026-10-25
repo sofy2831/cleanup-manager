@@ -240,6 +240,14 @@
           <button class="pill primary" id="refreshBtn" type="button">Rafraîchir</button>
         </div>
 
+        <div class="card" style="margin-top:12px;background:#faf8ff;box-shadow:none;">
+          <div class="cardTitle"><span>Récapitulatif des rémunérations</span><span class="tiny" id="paySummary">—</span></div>
+          <div class="tiny" style="line-height:1.5">Montants indicatifs par prestation, selon les tarifs enregistrés dans les logements. Les tarifs historiques ne sont pas encore figés : une modification des tarifs peut modifier les anciens récapitulatifs. Ne constitue pas un bulletin de paie.</div>
+          <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+            <button class="pill" id="exportCsvBtn" type="button">Exporter le détail CSV</button>
+            <span class="tiny" id="missingRates">—</span>
+          </div>
+        </div>
         <div class="list" id="list"></div>
       </section>
     </div>
@@ -408,6 +416,37 @@
     // state
     let currentUser = null;
     let rawRows = [];
+    let allHomes = [];
+    let currentScoped = [];
+    const paySummary = document.getElementById("paySummary");
+    const missingRates = document.getElementById("missingRates");
+    const exportCsvBtn = document.getElementById("exportCsvBtn");
+
+    function getRate(e, home){
+      const type = String(e?.type || e?.missionId || "").toUpperCase().trim();
+      const field = type === "MENAGE" ? "agentCleaningRate" : type === "LINGE" ? "agentLinenRate" : null;
+      if(!field) return {rate:null, reason:"Type non tarifé"};
+      // Un tarif figé sur la prestation prévaut, si un tel champ est ajouté au parcours de validation.
+      if(e?.[field] !== undefined && e?.[field] !== null && e?.[field] !== ""){
+        const rate = Number(e[field]);
+        if(Number.isFinite(rate) && rate >= 0) return {rate, reason:"Tarif prestation"};
+      }
+      if(!home) return {rate:null, reason:"Logement introuvable"};
+      const value = home[field];
+      if(value === null || value === undefined || value === "") return {rate:null, reason:"Tarif non défini"};
+      const rate = Number(value);
+      return Number.isFinite(rate) && rate >= 0 ? {rate,reason:"Tarif actuel logement"} : {rate:null,reason:"Tarif invalide"};
+    }
+    function csvCell(v){return '"'+String(v??"").replaceAll('"','""')+'"';}
+    exportCsvBtn.addEventListener("click",()=>{
+      const cols = ["Date","Intervenant","Email","Logement","Prestation","Facturé client (€)","Tarif intervenant (€)","Origine du tarif"];
+      const rows = currentScoped.map(r=>[r.date,r.agentName,r.agentEmail,r.homeName,r.type,r.amount,r.agentRate ?? "",r.rateReason]);
+      const csv = "\uFEFF"+[cols,...rows].map(a=>a.map(csvCell).join(";")).join("\r\n");
+      const blob = new Blob([csv],{type:"text/csv;charset=utf-8;"});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a"); a.href=url; a.download="cleanup-equipe-"+new Date().toISOString().slice(0,10)+".csv";
+      document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+    });
 
     function groupByAgent(rows){
       const m = new Map(); // key -> {agentName,agentEmail,items:[], totalAmount}
@@ -449,7 +488,13 @@
         return true;
       });
 
+      currentScoped = scoped;
       countLine.textContent = `${scoped.length} prestation(s)`;
+      const priced = scoped.filter(r=>r.agentRate !== null);
+      const totalPay = priced.reduce((sum,r)=>sum+r.agentRate,0);
+      paySummary.textContent = `${fmtMoney2(totalPay)} • ${priced.length} prestation(s) tarifée(s)`;
+      missingRates.textContent = `${scoped.length-priced.length} prestation(s) sans tarif : exclue(s) du total`;
+      exportCsvBtn.disabled = scoped.length === 0;
 
       list.innerHTML = "";
       if(!scoped.length){
