@@ -242,7 +242,7 @@
 
         <div class="card" style="margin-top:12px;background:#faf8ff;box-shadow:none;">
           <div class="cardTitle"><span>Récapitulatif des rémunérations</span><span class="tiny" id="paySummary">—</span></div>
-          <div class="tiny" style="line-height:1.5">Montants indicatifs par prestation, selon les tarifs enregistrés dans les logements. Les tarifs historiques ne sont pas encore figés : une modification des tarifs peut modifier les anciens récapitulatifs. Ne constitue pas un bulletin de paie.</div>
+          <div class="tiny" style="line-height:1.5">Montants indicatifs par mission validée, selon les tarifs enregistrés dans les logements. Le montant facturé au propriétaire n’est pas ventilé par mission. Les tarifs historiques ne sont pas encore figés : une modification des tarifs peut modifier les anciens récapitulatifs. Ne constitue pas un bulletin de paie.</div>
           <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
             <button class="pill" id="exportCsvBtn" type="button">Exporter le détail CSV</button>
             <span class="tiny" id="missingRates">—</span>
@@ -439,8 +439,8 @@
     }
     function csvCell(v){return '"'+String(v??"").replaceAll('"','""')+'"';}
     exportCsvBtn.addEventListener("click",()=>{
-      const cols = ["Date","Intervenant","Email","Logement","Prestation","Facturé client (€)","Tarif intervenant (€)","Origine du tarif"];
-      const rows = currentScoped.map(r=>[r.date,r.agentName,r.agentEmail,r.homeName,r.type,r.amount,r.agentRate ?? "",r.rateReason]);
+      const cols = ["Date","Intervenant","Email","Logement","Prestation","Facturé client (€) — non ventilé","Tarif intervenant (€)","Origine du tarif"];
+      const rows = currentScoped.map(r=>[r.date,r.agentName,r.agentEmail,r.homeName,r.type,"",r.agentRate ?? "",r.rateReason]);
       const csv = "\uFEFF"+[cols,...rows].map(a=>a.map(csvCell).join(";")).join("\r\n");
       const blob = new Blob([csv],{type:"text/csv;charset=utf-8;"});
       const url = URL.createObjectURL(blob);
@@ -460,7 +460,7 @@
       }
       for(const g of m.values()){
         g.items.sort((a,b)=>(b.doneMs||0)-(a.doneMs||0));
-        g.totalAmount = g.items.reduce((s,x)=> s + (Number(x.amount)||0), 0);
+        g.totalAmount = g.items.reduce((s,x)=> s + (Number(x.agentRate)||0), 0);
       }
       return Array.from(m.values()).sort((a,b)=>{
         const ca = a.items.length, cb = b.items.length;
@@ -519,8 +519,8 @@
               <div class="aMail">${esc(g.agentEmail || "—")}</div>
             </div>
             <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
-              <span class="badge ok">${esc(String(g.items.length))} prestation(s) • ${esc(fmtMoney2(g.totalAmount))}</span>
-              <span class="tiny">Total facturé au client (≠ paie agent)</span>
+              <span class="badge ok">${esc(String(g.items.length))} prestation(s) • ${esc(fmtMoney2(g.totalAmount))} à verser</span>
+              <span class="tiny">Rémunération des missions validées (tarifs disponibles)</span>
             </div>
           </div>
 
@@ -546,59 +546,70 @@
       }
     }
 
+    function missionDateMs(m, e){
+      const key = String(m.scheduledDateKey || "").trim();
+      if(/^\d{4}-\d{2}-\d{2}$/.test(key)){
+        const d = new Date(key + "T12:00:00");
+        if(Number.isFinite(d.getTime())) return d.getTime();
+      }
+      return toMs(m.validatedAt) || toMs(m.agentDoneAt) || pickDoneMs(e);
+    }
+    function findHome(e, homes){
+      const id = String(e.homeId || e.logementId || "").trim();
+      if(id){ const match = homes.find(h => h.id === id); if(match) return match; }
+      const name = norm(e.homeName);
+      const city = norm(e.homeCity || e.city);
+      const matches = homes.filter(h => norm(h.name || h.homeName) === name && (!city || norm(h.city || h.homeCity) === city));
+      return matches.length === 1 ? matches[0] : null;
+    }
     async function loadEvents(){
       hideAlert();
       list.innerHTML = "";
       countLine.textContent = "Chargement…";
-
       const uid = currentUser.uid;
-
-      const qE = query(
-        collection(db,"events"),
-        where("conciergerieUid","==", uid),
-        orderBy("createdAt","desc"),
-        limit(MAX_EVENTS)
-      );
-
       showAlert("Chargement…", true);
-
-      const snap = await getDocs(qE);
-      const events = snap.docs.map(d=>({ id:d.id, ...(d.data()||{}) }));
-
+      const [eventSnap, homeSnap] = await Promise.all([
+        getDocs(query(collection(db,"events"), where("conciergerieUid","==",uid), orderBy("createdAt","desc"), limit(MAX_EVENTS))),
+        getDocs(query(collection(db,"homes"), where("conciergerieUid","==",uid)))
+      ]);
+      const homes = homeSnap.docs.map(d => ({id:d.id,...(d.data()||{})}));
+      const events = eventSnap.docs.map(d => ({id:d.id,...(d.data()||{})}));
       const out = [];
+      const errors = [];
+      // Une ligne = une mission validée. Les autres missions ne déclenchent aucune rémunération.
       for(const e of events){
-        if(!isDoneEvent(e)) continue;
-
-        const agentEmail = normalizeEmail(e?.agentDoneByEmail || e?.assignedToEmail || "");
-        const agentName  = String(e?.agentDoneByName || e?.assignedToName || "").trim();
-
-        if(!agentEmail && !agentName) continue;
-
-        const doneMs = pickDoneMs(e);
-
-        out.push({
-          doneMs,
-          date: fmtDate(doneMs),
-          time: fmtTimeFromEvent(e),
-          agentEmail: agentEmail || "—",
-          agentName: agentName || "Agent",
-          homeName: String(e?.homeName || "Logement").trim() || "Logement",
-          homeCity: String(e?.homeCity || e?.city || "").trim(),
-          homeType: String(e?.homeType || "").trim(),
-          type: typeLabel(e),
-          amount: Number(e?.total || 0)  // ✅ total facturé au client
-        });
+        let missions;
+        try{
+          const snap = await getDocs(collection(db,"events",e.id,"missions"));
+          missions = snap.docs.map(d => ({id:d.id,...(d.data()||{})}));
+        }catch(err){ errors.push(e.homeName || e.id); continue; }
+        const home = findHome(e, homes);
+        for(const m of missions){
+          const status = String(m.status || "").toUpperCase().trim();
+          if(status !== "VALIDEE") continue;
+          const missionType = String(m.type || m.missionId || m.id || "").toUpperCase().trim();
+          if(missionType === "PHOTOS") continue;
+          const agentEmail = normalizeEmail(m.assignedToEmail || m.agentDoneByEmail || e.assignedToEmail || "");
+          const agentName = String(m.assignedToName || m.agentDoneByName || e.assignedToName || "").trim();
+          if(!agentEmail && !agentName) continue;
+          const doneMs = missionDateMs(m,e);
+          const rate = getRate({...m,type:missionType},home);
+          // Le total client d'une prestation peut couvrir plusieurs missions : ne pas le répéter.
+          // Aucun montant facturé n'est attribué à une mission sans ventilation certaine.
+          out.push({
+            doneMs, date:fmtDate(doneMs), time:String(m.scheduledTime||""),
+            agentEmail:agentEmail||"—", agentName:agentName||"Agent",
+            homeName:String(e.homeName||"Logement"), homeCity:String(e.homeCity||e.city||""),
+            homeType:String(e.homeType||""), type:typeLabel({type:missionType}),
+            amount:null, agentRate:rate.rate, rateReason:rate.reason
+          });
+        }
       }
-
       rawRows = out;
-
       hideAlert();
       render();
-
-      if(!rawRows.length){
-        showAlert("Aucune prestation terminée trouvée.", true);
-        setTimeout(hideAlert, 1800);
-      }
+      if(errors.length) showAlert(`${errors.length} prestation(s) non lisible(s) : vérifie les autorisations Firestore pour les missions.`);
+      else if(!rawRows.length) showAlert("Aucune mission validée trouvée pour cette période.",true);
     }
 
     filterPeriod.addEventListener("change", render);
