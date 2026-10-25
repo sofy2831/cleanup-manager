@@ -242,7 +242,7 @@
 
         <div class="card" style="margin-top:12px;background:#faf8ff;box-shadow:none;">
           <div class="cardTitle"><span>Récapitulatif des rémunérations</span><span class="tiny" id="paySummary">—</span></div>
-          <div class="tiny" style="line-height:1.5">Missions validées uniquement. Ménage et linge : tarif du logement ; autres missions : montant convenu lors de l’attribution ; suppléments d’urgence ajoutés séparément. Les tarifs logement non figés peuvent encore modifier les anciens récapitulatifs. Le montant facturé au propriétaire n’est pas ventilé. Ce document ne constitue pas un bulletin de paie.</div>
+          <div class="tiny" style="line-height:1.5">Missions validées uniquement. Montant convenu prioritaire, sinon tarif du logement pour ménage et linge. Supplément d’urgence distinct. Facturation client ventilée uniquement lorsque la ligne correspond sans ambiguïté à une mission. Ce document ne constitue pas un bulletin de paie.</div>
           <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
             <button class="pill" id="exportCsvBtn" type="button">Exporter le détail CSV</button>
             <span class="tiny" id="missingRates">—</span>
@@ -430,28 +430,54 @@
      function getRate(e, home){
        const type = String(e?.type || e?.missionId || "").toUpperCase().trim();
        const field = type === "MENAGE" ? "agentCleaningRate" : type === "LINGE" ? "agentLinenRate" : null;
-       let base = null, reason = "Montant ponctuel non défini";
-       if(field){
+       let base = validAmount(e?.agentPayAmount);
+       let reason = base !== null ? "Montant convenu avec l’agent" : "Montant ponctuel non défini";
+       if(base === null && field){
          base = validAmount(e?.[field]);
          if(base !== null) reason = "Tarif mission figé";
          else {
            base = validAmount(home?.[field]);
            reason = base !== null ? "Tarif actuel logement (non figé)" : (!home ? "Logement introuvable" : "Tarif logement non défini");
          }
-       }else{
-         base = validAmount(e?.agentPayAmount);
-         reason = base !== null ? "Montant convenu à l’attribution" : "Montant ponctuel non défini";
        }
        const urgency = validAmount(e?.agentPayUrgencySupplement);
-       // Un supplément seul est payable, même si le tarif de base n'est pas renseigné.
        const total = base === null && urgency === null ? null : Math.round(((base ?? 0)+(urgency ?? 0))*100)/100;
        return {rate:total, base, urgency, reason: urgency !== null ? reason + " + supplément urgence" : reason,
          incomplete: base === null};
      }
+
+     // Attribution prudente des lignes facturées : aucune ligne ne doit être comptée deux fois.
+     function lineMissionType(line){
+       const label = norm(line?.label || line?.name || line?.title || "");
+       const category = norm(line?.category || "");
+       const txt = label + " " + category;
+       const matches = [];
+       if(/check[- ]?in|arrivee|gestion (des )?cles|remise (des )?cles/.test(txt)) matches.push("CHECKIN");
+       if(/check[- ]?out|depart|recuperation (des )?cles/.test(txt)) matches.push("CHECKOUT");
+       if(/menage|nettoyage|remise en etat|back.to.back/.test(txt)) matches.push("MENAGE");
+       if(/linge|drap|serviette|collecte|lavage|sechage|lessive|blanch/.test(txt)) matches.push("LINGE");
+       if(/maintenance|reparation|bricol|artisan|fuite|serrure|ampoule|joint/.test(txt)) matches.push("MAINTENANCE");
+       if(/kit|consommable|capsule|shampo|savon|reassort/.test(txt)) matches.push("KITS");
+       return matches.length === 1 ? matches[0] : null;
+     }
+     function clientAmountsByMission(event){
+       const result = new Map();
+       const iv = event?.interventions;
+       const packs = iv && typeof iv === "object" ? Object.values(iv) : [{lines:event?.lines || []}];
+       for(const pack of packs){
+         for(const line of (Array.isArray(pack?.lines) ? pack.lines : [])){
+           const type = lineMissionType(line);
+           const qty = Number(line?.qty), price = Number(line?.unitPrice);
+           if(!type || !Number.isFinite(qty) || !Number.isFinite(price)) continue;
+           result.set(type, Math.round(((result.get(type) || 0) + qty*price)*100)/100);
+         }
+       }
+       return result;
+     }
     function csvCell(v){return '"'+String(v??"").replaceAll('"','""')+'"';}
     exportCsvBtn.addEventListener("click",()=>{
-      const cols = ["Date","Intervenant","Email","Logement","Prestation","Facturé client (€) — non ventilé","Base intervenant (€)","Supplément urgence (€)","Total intervenant (€)","Origine du tarif"];
-      const rows = currentScoped.map(r=>[r.date,r.agentName,r.agentEmail,r.homeName,r.type,"",r.agentBase ?? "",r.agentUrgency ?? "",r.agentRate ?? "",r.rateReason]);
+      const cols = ["Date","Intervenant","Email","Logement","Prestation","Facturé client (€)","Base intervenant (€)","Supplément urgence (€)","Total intervenant (€)","Origine du tarif"];
+      const rows = currentScoped.map(r=>[r.date,r.agentName,r.agentEmail,r.homeName,r.type,r.amount ?? "",r.agentBase ?? "",r.agentUrgency ?? "",r.agentRate ?? "",r.rateReason]);
       const csv = "\uFEFF"+[cols,...rows].map(a=>a.map(csvCell).join(";")).join("\r\n");
       const blob = new Blob([csv],{type:"text/csv;charset=utf-8;"});
       const url = URL.createObjectURL(blob);
@@ -595,6 +621,12 @@
           missions = snap.docs.map(d => ({id:d.id,...(d.data()||{})}));
         }catch(err){ errors.push(e.homeName || e.id); continue; }
         const home = findHome(e, homes);
+         const clientAmounts = clientAmountsByMission(e);
+         const typeCounts = new Map();
+         for(const m of missions){
+           const t = String(m.type || m.missionId || m.id || "").toUpperCase().trim();
+           if(t !== "PHOTOS") typeCounts.set(t, (typeCounts.get(t) || 0)+1);
+         }
         for(const m of missions){
           const status = String(m.status || "").toUpperCase().trim();
           if(status !== "VALIDEE") continue;
@@ -612,7 +644,7 @@
             agentEmail:agentEmail||"—", agentName:agentName||"Agent",
             homeName:String(e.homeName||"Logement"), homeCity:String(e.homeCity||e.city||""),
             homeType:String(e.homeType||""), type:typeLabel({type:missionType}),
-            amount:null, agentRate:rate.rate, agentBase:rate.base, agentUrgency:rate.urgency,
+            amount: typeCounts.get(missionType) === 1 ? (clientAmounts.get(missionType) ?? null) : null, agentRate:rate.rate, agentBase:rate.base, agentUrgency:rate.urgency,
              rateReason:rate.reason, rateIncomplete:rate.incomplete
           });
         }
