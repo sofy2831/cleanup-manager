@@ -469,6 +469,12 @@
           <div class="mini" id="sendSelectorEmpty">Aucune intervention exploitable.</div>
         </div>
 
+        <div class="selectorBox" id="agentPayBox" style="display:none;">
+          <div style="font-weight:900;font-size:13px;">Rémunération des intervenants en remplacement</div>
+          <div class="mini">En cas de remplacement, indiquez le montant convenu avec votre intervenant pour chaque prestation. Pour le ménage et le linge, le tarif habituel du logement s’applique si aucun montant n’est saisi. Un supplément d’urgence peut être ajouté séparément.</div>
+          <div id="agentPayFields"></div>
+        </div>
+
         <div class="btnrow">
           <button class="pill primary" id="genLinkBtn" type="button">Générer liens</button>
           <button class="pill" id="shareBtn" type="button" disabled>Partager</button>
@@ -531,6 +537,44 @@
   const conciergerieName = document.getElementById("conciergerieName");
 
   const sendSelectorBox = document.getElementById("sendSelectorBox");
+  const agentPayBox = document.getElementById("agentPayBox");
+  const agentPayFields = document.getElementById("agentPayFields");
+  const payDraft = {};
+  const ONE_OFF_PAY = new Set(["MAINTENANCE","CHECKIN","CHECKOUT","KITS"]);
+
+  function renderAgentPayFields(){
+    // Preserve les saisies en cas de changement de sélection.
+    agentPayFields.querySelectorAll("input[data-pay-type]").forEach(el=>{
+      const t = el.dataset.payType;
+      payDraft[t] ||= {};
+      payDraft[t][el.dataset.payKind] = el.value;
+    });
+    const types = buildMissionTypesFromSelection(currentInterventions, getSelectedInterventionKeys());
+    agentPayBox.style.display = types.length ? "flex" : "none";
+    agentPayFields.innerHTML = types.map(t=>{
+      const manual = true;
+      const d = payDraft[t] || {};
+      return `<div style="padding:10px 0;border-top:1px solid #eee;">
+        <div style="font-weight:800;font-size:12px;">${esc(missionLabel(t))}</div>
+        ${manual ? `<label class="mini" for="pay-${t}">Montant convenu (€) — facultatif</label>
+          <input id="pay-${t}" type="number" min="0" step="0.01" data-pay-type="${t}" data-pay-kind="amount" value="${esc(d.amount ?? '')}" placeholder="À définir" />`
+          : `<div class="mini">Tarif ménage / linge défini dans la fiche logement</div>`}
+        <label class="mini" for="urgent-${t}">Supplément d’urgence autorisé (€) — facultatif</label>
+        <input id="urgent-${t}" type="number" min="0" step="0.01" data-pay-type="${t}" data-pay-kind="urgency" value="${esc(d.urgency ?? '')}" placeholder="Aucun supplément" />
+      </div>`;
+    }).join("");
+  }
+
+  function readMissionPay(){
+    const out = {};
+    for(const el of agentPayFields.querySelectorAll("input[data-pay-type]")){
+      const raw = el.value.trim();
+      if(raw && (!Number.isFinite(Number(raw)) || Number(raw) < 0)) throw new Error("Montant invalide pour " + missionLabel(el.dataset.payType));
+      out[el.dataset.payType] ||= {};
+      out[el.dataset.payType][el.dataset.payKind] = raw === "" ? null : Math.round(Number(raw)*100)/100;
+    }
+    return out;
+  }
 
   const genLinkBtn = document.getElementById("genLinkBtn");
   const shareBtn = document.getElementById("shareBtn");
@@ -882,7 +926,7 @@
     }
 
     sendSelectorBox.querySelectorAll('input[type="checkbox"][data-iv-key]').forEach(el=>{
-      el.addEventListener("change", refreshMissionHintFromSelection);
+      el.addEventListener("change", ()=>{ refreshMissionHintFromSelection(); renderAgentPayFields(); });
     });
   }
 
@@ -1219,6 +1263,7 @@
 
     renderSendSelector(currentInterventions, e.agentLinks || {});
     refreshMissionHintFromSelection();
+    renderAgentPayFields();
 
     agentName.value = e.assignedToName || "";
     agentEmail.value = e.assignedToEmail || "";
@@ -1234,7 +1279,7 @@
     subLine.textContent = "";
   }
 
-  async function upsertMissionForToken({ tokenId, email, name, missionType }){
+  async function upsertMissionForToken({ tokenId, email, name, missionType, pay }){
     const mRef = doc(db, "events", prestationId, "missions", missionType);
 
     let existing = null;
@@ -1277,6 +1322,9 @@
 
       assignedToEmail: email,
       assignedToName: name,
+      agentPayAmount: pay?.amount ?? null,
+      agentPayUrgencySupplement: pay?.urgency ?? null,
+      agentPayAgreedAt: serverTimestamp(),
 
       updatedAt: serverTimestamp()
     }, { merge: true });
@@ -1362,6 +1410,10 @@
       return showAlert("Aucune mission exploitable pour les interventions cochées.");
     }
 
+    let missionPay;
+    try{ missionPay = readMissionPay(); }
+    catch(err){ return showAlert(err.message); }
+
     const tokenId = randomToken(20);
     const expiresAtMs = Date.now() + 24*60*60*1000;
     const expiresAt = Timestamp.fromMillis(expiresAtMs);
@@ -1423,7 +1475,7 @@
     });
 
     for(const t of missionTypes){
-      await upsertMissionForToken({ tokenId, email, name, missionType: t });
+      await upsertMissionForToken({ tokenId, email, name, missionType: t, pay: missionPay[t] || {} });
     }
 
     // Vérification stricte : ne jamais annoncer un lien valide si une mission
