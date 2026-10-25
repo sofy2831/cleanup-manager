@@ -233,19 +233,23 @@
             <option value="LAST_MONTH">Mois dernier</option>
             <option value="THIS_YEAR">Cette année</option>
             <option value="ALL">Toute période</option>
+            <option value="CUSTOM">Dates personnalisées</option>
           </select>
 
+          <select class="select" id="filterAgent"><option value="ALL">Tous les intervenants</option></select>
           <input class="input" id="searchInput" type="search" placeholder="Recherche : agent, mail, logement, type..." />
 
           <button class="pill primary" id="refreshBtn" type="button">Rafraîchir</button>
         </div>
 
+        <div id="customDates" style="display:none;gap:10px;flex-wrap:wrap;margin-top:8px"><label class="tiny">Du <input class="input" id="dateFrom" type="date" /></label><label class="tiny">Au <input class="input" id="dateTo" type="date" /></label></div>
+
         <div class="card" style="margin-top:12px;background:#faf8ff;box-shadow:none;">
           <div class="cardTitle"><span>Récapitulatif des rémunérations</span><span class="tiny" id="paySummary">—</span></div>
           <div class="tiny" style="line-height:1.5">Missions validées uniquement. Montant convenu prioritaire, sinon tarif du logement pour ménage et linge. Supplément d’urgence distinct. Facturation client ventilée uniquement lorsque la ligne correspond sans ambiguïté à une mission. Ce document ne constitue pas un bulletin de paie.</div>
           <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-            <button class="pill" id="exportCsvBtn" type="button">Export interne - Conciergerie</button>
-            <button class="pill" id="exportAgentCsvBtn" type="button">Export rémunérations - Prestataires / Paie</button>
+            <button class="pill" id="exportCsvBtn" type="button">Export interne (avec facturation client)</button>
+            <button class="pill" id="exportAgentCsvBtn" type="button">Export intervenant (sans facturation client)</button>
             <span class="tiny" id="missingRates">—</span>
           </div>
         </div>
@@ -275,6 +279,10 @@
     const alertBox = document.getElementById("alertBox");
 
     const filterPeriod = document.getElementById("filterPeriod");
+    const filterAgent = document.getElementById("filterAgent");
+    const customDates = document.getElementById("customDates");
+    const dateFrom = document.getElementById("dateFrom");
+    const dateTo = document.getElementById("dateTo");
     const searchInput = document.getElementById("searchInput");
 
     const countLine = document.getElementById("countLine");
@@ -338,6 +346,7 @@
     function monthBounds(which){
       const now = new Date();
       if(which === "ALL") return { fromMs: 0, toMs: Number.MAX_SAFE_INTEGER };
+       if(which === "CUSTOM") return {fromMs: dateFrom.value ? new Date(dateFrom.value+"T00:00:00").getTime() : 0, toMs: dateTo.value ? new Date(dateTo.value+"T23:59:59.999").getTime() : Number.MAX_SAFE_INTEGER};
 
       if(which === "THIS_YEAR"){
         const from = new Date(now.getFullYear(), 0, 1, 0,0,0,0).getTime();
@@ -478,6 +487,7 @@
      }
     function csvCell(v){return '"'+String(v??"").replaceAll('"','""')+'"';}
     function exportMissionsCsv(includeClient){
+      if(!includeClient && filterAgent.value === "ALL"){showAlert("Pour transmettre un relevé, sélectionnez un intervenant précis afin de ne pas communiquer les rémunérations des autres agents.");return;}
       const cols = ["Date","Intervenant","Email","Logement","Prestation"];
       if(includeClient) cols.push("Facturé client (€)");
       cols.push("Base intervenant (€)","Supplément urgence (€)","Total intervenant (€)","Origine du tarif");
@@ -491,7 +501,7 @@
       const blob = new Blob([csv],{type:"text/csv;charset=utf-8;"});
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a"); a.href=url;
-      a.download=(includeClient ? "cleanup-controle-interne-" : "cleanup-releve-intervenant-")+new Date().toISOString().slice(0,10)+".csv";
+      a.download=(includeClient ? "cleanup-controle-interne-" : "cleanup-releve-intervenant-")+(filterAgent.value === "ALL" ? "equipe" : "agent")+"-"+new Date().toISOString().slice(0,10)+".csv";
       document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
     }
     exportCsvBtn.addEventListener("click",()=>exportMissionsCsv(true));
@@ -533,7 +543,8 @@
       const scoped = rawRows.filter(r=>{
         if(!r.doneMs) return false;
         if(!(r.doneMs >= fromMs && r.doneMs <= toMs)) return false;
-        if(!matchesSearch(r)) return false;
+        if(filterAgent.value !== "ALL" && (r.agentEmail || r.agentName) !== filterAgent.value) return false;
+         if(!matchesSearch(r)) return false;
         return true;
       });
 
@@ -544,7 +555,7 @@
       paySummary.textContent = `${fmtMoney2(totalPay)} • ${priced.length} prestation(s) tarifée(s)`;
       missingRates.textContent = `${scoped.filter(r=>r.rateIncomplete).length} mission(s) sans montant de base ; total partiel si supplément seul`;
       exportCsvBtn.disabled = scoped.length === 0;
-       exportAgentCsvBtn.disabled = scoped.length === 0;
+       exportAgentCsvBtn.disabled = scoped.length === 0 || filterAgent.value === "ALL";
 
       list.innerHTML = "";
       if(!scoped.length){
@@ -663,13 +674,22 @@
         }
       }
       rawRows = out;
+      const previousAgent = filterAgent.value;
+      const agents = new Map();
+      for(const r of rawRows){const key = r.agentEmail || r.agentName; if(key && !agents.has(key)) agents.set(key, r.agentName + (r.agentEmail && r.agentEmail !== "—" ? " — " + r.agentEmail : ""));}
+      filterAgent.replaceChildren(new Option("Tous les intervenants", "ALL"));
+      for(const [key, label] of [...agents.entries()].sort((a,b)=>a[1].localeCompare(b[1],"fr"))) filterAgent.add(new Option(label,key));
+      filterAgent.value = agents.has(previousAgent) ? previousAgent : "ALL";
       hideAlert();
       render();
       if(errors.length) showAlert(`${errors.length} prestation(s) non lisible(s) : vérifie les autorisations Firestore pour les missions.`);
       else if(!rawRows.length) showAlert("Aucune mission validée trouvée pour cette période.",true);
     }
 
-    filterPeriod.addEventListener("change", render);
+    filterPeriod.addEventListener("change", ()=>{customDates.style.display = filterPeriod.value === "CUSTOM" ? "flex" : "none";render();});
+    filterAgent.addEventListener("change",render);
+    dateFrom.addEventListener("change",render);
+    dateTo.addEventListener("change",render);
     searchInput.addEventListener("input", render);
     refreshBtn.addEventListener("click", ()=> loadEvents().catch(err=>{
       console.error(err);
