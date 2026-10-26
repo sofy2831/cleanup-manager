@@ -489,5 +489,44 @@
       helpBtn.addEventListener("click", () => box.classList.toggle("is-open"));
     }
   </script>
+<script>
+/* Attribution commerciale : conserver la première campagne connue sur 30 jours. */
+(function(){
+  const key='cleanupMarketingAttribution';
+  const params=new URLSearchParams(location.search);
+  const clean=v=>String(v||'').trim().slice(0,100).replace(/[^a-zA-Z0-9_-]/g,'');
+  const now=Date.now(), ttl=30*24*60*60*1000;
+  let saved=null;
+  try { saved=JSON.parse(localStorage.getItem(key)||'null'); if(saved && (!saved.savedAt || now-saved.savedAt>ttl)) saved=null; }catch(e){}
+  const explicitSource=clean(params.get('src'));
+  const explicitCampaign=clean(params.get('camp'));
+  let source=explicitSource, campaign=explicitCampaign;
+  if(!source){
+    try {
+      const host=new URL(document.referrer).hostname.toLowerCase();
+      if(host==='www.instagram.com'||host==='instagram.com'||host.endsWith('.instagram.com'))source='instagram';
+      else if(host==='hospia.eu'||host.endsWith('.hospia.eu'))source='hospia';
+      else if(/(^|\.)(google|bing|duckduckgo|qwant)\./.test(host))source='organic';
+    }catch(e){}
+  }
+  // Une navigation interne ou une visite sans référent ne doit pas effacer une campagne existante.
+  if(!explicitSource && saved){source=saved.source;campaign=saved.campaign;}
+  source=source||'direct'; campaign=campaign||(source==='organic'?'organic':'sans-campagne');
+  const attribution={source,campaign,savedAt:explicitSource||!saved?now:saved.savedAt};
+  try { localStorage.setItem(key,JSON.stringify(attribution)); }catch(e){}
+  // Transfert entre vitrine (sous-domaine) et application (domaine principal).
+  document.querySelectorAll('a[href]').forEach(a=>{
+    try{
+      const u=new URL(a.href,location.href);
+      if(u.protocol!=='https:' && u.protocol!=='http:')return;
+      if(u.hostname==='cleanup-manager.fr'||u.hostname==='logiciel-conciergerie.cleanup-manager.fr'){
+        if(!u.searchParams.has('src'))u.searchParams.set('src',source);
+        if(!u.searchParams.has('camp'))u.searchParams.set('camp',campaign);
+        a.href=u.toString();
+      }
+    }catch(e){}
+  });
+})();
+</script>
 </body>
 </html>

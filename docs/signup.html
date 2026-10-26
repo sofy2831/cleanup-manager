@@ -252,6 +252,35 @@
       return (p.get(name) || "").trim();
     }
 
+    // Attribution commerciale : lire la campagne de l'URL ou celle mémorisée
+    // sur la page d'accueil. Ne pas confondre source commerciale et abonnement.
+    function getMarketingAttribution(){
+      const params = new URLSearchParams(location.search);
+      const clean = (v) => String(v || "").trim().slice(0, 100);
+      let source = clean(params.get("src"));
+      let campaign = clean(params.get("camp"));
+      if (!source || !campaign) {
+        try {
+          const saved = JSON.parse(localStorage.getItem("cleanupMarketingAttribution") || "null");
+          if (saved && typeof saved === "object") {
+            source ||= clean(saved.source);
+            campaign ||= clean(saved.campaign);
+          }
+        } catch (_) {}
+      }
+      if (!source) {
+        const referrer = document.referrer || "";
+        try {
+          const host = new URL(referrer).hostname.toLowerCase();
+          if (/(^|\.)instagram\.com$/.test(host)) source = "instagram";
+          else if (/(^|\.)hospia\.eu$/.test(host)) source = "hospia";
+          else if (/(^|\.)(google|bing|duckduckgo|qwant)\./.test(host)) source = "organic";
+          else source = "direct";
+        } catch (_) { source = "direct"; }
+      }
+      return {source, campaign: campaign || "sans-campagne"};
+    }
+
     function normalizeEmail(e){
       return String(e || "").trim().toLowerCase();
     }
@@ -313,6 +342,7 @@
       const password = document.getElementById("password").value || "";
       const tradeName = (document.getElementById("company").value || "").trim();
       const phone = (document.getElementById("phone").value || "").trim();
+      const marketingAttribution = getMarketingAttribution();
 
       if(!email) { showMsg("Email requis."); lockUI(false); isSubmitting=false; return; }
       if(!email.includes("@")) { showMsg("Email invalide."); lockUI(false); isSubmitting=false; return; }
@@ -365,6 +395,11 @@
               email,
               phone: phone || ""
             },
+
+            // Attribution commerciale figée à l'inscription.
+            marketingSource: marketingAttribution.source,
+            marketingCampaign: marketingAttribution.campaign,
+            marketingAttributedAt: serverTimestamp(),
 
             // abonnement V1 : neutre au signup
             plan: "free",
