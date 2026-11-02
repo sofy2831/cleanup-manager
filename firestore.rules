@@ -851,11 +851,101 @@ allow delete: if signedIn()
       || (parent().ownerUid is string && parent().ownerUid == myUid() && parent().ownerVisible == true)
     );
 
-    allow create: if signedIn()
-      && (parent().conciergerieUid is string)
-      && parent().conciergerieUid == myUid();
+    // Paiements : seul le tenant de la facture peut enregistrer une correction.
+    // Le montant d’origine est immuable. Son annulation exige une écriture
+    // inverse liée et la mise à jour du solde dans la même transaction.
+    function managesPayments() {
+      return signedIn() && parent().conciergerieUid == myUid();
+    }
 
-    allow update, delete: if false;
+    function paymentAmount(data) {
+      return data.get("montantRegle", data.get("amount", 0));
+    }
+
+    function validReason(data) {
+      return data.cancellationReason is string
+        && data.cancellationReason.size() > 0
+        && data.cancellationReason.size() <= 500;
+    }
+
+    function validCancellation() {
+      let original = resource.data;
+      let changed = request.resource.data;
+      let inverseId = "reversal_" + paymentId;
+      let inverse = getAfter(/databases/$(database)/documents/salesDocuments/$(docId)/payments/$(inverseId)).data;
+      let parentAfter = getAfter(/databases/$(database)/documents/salesDocuments/$(docId)).data;
+      let amount = paymentAmount(original);
+      let balance = parent().paidAmount - amount;
+      return original.get("cancelled", false) == false
+        && original.get("entryType", "") != "PAYMENT_REVERSAL"
+        && amount is number && amount > 0
+        && changed.diff(original).affectedKeys().hasOnly([
+          "cancelled", "cancelledAt", "cancelledBy", "cancellationReason", "reversalPaymentId"
+        ])
+        && changed.cancelled == true
+        && changed.cancelledAt == request.time
+        && changed.cancelledBy == myUid()
+        && changed.reversalPaymentId == inverseId
+        && validReason(changed)
+        && !exists(/databases/$(database)/documents/salesDocuments/$(docId)/payments/$(inverseId))
+        && inverse.entryType == "PAYMENT_REVERSAL"
+        && inverse.reversesPaymentId == paymentId
+        && inverse.montantRegle == -amount
+        && inverse.cancellationReason == changed.cancellationReason
+        && inverse.createdBy == myUid()
+        && inverse.createdAt == request.time
+        && balance >= 0
+        && parentAfter.paidAmount >= balance - 0.000001
+        && parentAfter.paidAmount <= balance + 0.000001;
+    }
+
+    function validReversal() {
+      let inverse = request.resource.data;
+      let originalId = inverse.reversesPaymentId;
+      let original = get(/databases/$(database)/documents/salesDocuments/$(docId)/payments/$(originalId)).data;
+      let originalAfter = getAfter(/databases/$(database)/documents/salesDocuments/$(docId)/payments/$(originalId)).data;
+      let parentAfter = getAfter(/databases/$(database)/documents/salesDocuments/$(docId)).data;
+      let amount = paymentAmount(original);
+      let balance = parent().paidAmount - amount;
+      return originalId is string
+        && paymentId == "reversal_" + originalId
+        && inverse.keys().hasOnly([
+          "montantRegle", "modeReglement", "dateReglement", "reference", "note",
+          "entryType", "reversesPaymentId", "cancellationReason", "createdBy", "createdAt"
+        ])
+        && original.get("cancelled", false) == false
+        && original.get("entryType", "") != "PAYMENT_REVERSAL"
+        && amount is number && amount > 0
+        && inverse.montantRegle == -amount
+        && inverse.dateReglement is timestamp
+        && inverse.createdAt == request.time
+        && inverse.createdBy == myUid()
+        && validReason(inverse)
+        && originalAfter.cancelled == true
+        && originalAfter.cancelledAt == request.time
+        && originalAfter.cancelledBy == myUid()
+        && originalAfter.reversalPaymentId == paymentId
+        && originalAfter.cancellationReason == inverse.cancellationReason
+        && balance >= 0
+        && parentAfter.paidAmount >= balance - 0.000001
+        && parentAfter.paidAmount <= balance + 0.000001;
+    }
+
+    allow create: if managesPayments() && (
+      (request.resource.data.get("entryType", "") == "PAYMENT_REVERSAL" && validReversal())
+      || (
+        request.resource.data.get("entryType", "") != "PAYMENT_REVERSAL"
+        && !paymentId.matches("reversal_.*")
+        && paymentAmount(request.resource.data) is number
+        && paymentAmount(request.resource.data) > 0
+        && !request.resource.data.keys().hasAny([
+          "cancelled", "cancelledAt", "cancelledBy", "cancellationReason", "reversalPaymentId", "reversesPaymentId"
+        ])
+      )
+    );
+
+    allow update: if managesPayments() && validCancellation();
+    allow delete: if false;
   }
 }
 
