@@ -211,7 +211,32 @@
 
   .btn.danger{ color:var(--bad); border-color:rgba(179,38,30,.35); }
   .btn:disabled{ opacity:.5; cursor:not-allowed; }
+
+  .cancelDialog{ width:min(560px,calc(100vw - 32px)); max-height:calc(100dvh - 40px); padding:0; border:1px solid #e9e2f4; border-radius:24px; color:var(--text); background:#fff; box-shadow:0 24px 90px rgba(35,20,70,.24); overflow:auto; }
+  .cancelDialog::backdrop{ background:rgba(28,20,48,.5); backdrop-filter:blur(4px); }
+  .cancelHeader{ display:flex; gap:14px; align-items:flex-start; padding:24px 24px 18px; }
+  .cancelIcon{ flex:none; width:44px; height:44px; border-radius:14px; background:#fff0ed; color:#b3261e; display:grid; place-items:center; font-size:23px; font-weight:700; }
+  .cancelHeader h2{ margin:1px 0 6px; font-size:20px; letter-spacing:-.4px; }
+  .cancelHeader p{ margin:0; font-size:13px; color:#696175; line-height:1.5; }
+  .dialogClose{ flex:none; margin-left:auto; padding:0; width:30px; height:30px; border:0; border-radius:50%; background:#f5f2fa; color:#665f72; font-size:22px; cursor:pointer; }
+  .cancelBody{ padding:0 24px 24px; }
+  .cancelSummary{ border:1px solid #eae4f5; border-radius:16px; padding:16px; background:#faf8ff; margin:0 0 18px; display:grid; grid-template-columns:1fr auto; gap:12px; }
+  .cancelSummary dt{ font-size:11px; color:#746a85; margin-bottom:4px; }
+  .cancelSummary dd{ margin:0; font-size:14px; font-weight:700; overflow-wrap:anywhere; }
+  .cancelSummary .amount{ text-align:right; grid-column:2; grid-row:1 / span 2; align-self:center; }
+  .cancelSummary .amount dd{ font-size:24px; letter-spacing:-.6px; }
+  .cancelBody label{ display:block; font-size:13px; font-weight:700; margin:0 0 8px; }
+  .cancelBody textarea{ width:100%; padding:12px; border-radius:12px; border:1px solid #ccc1e1; font:inherit; font-size:13px; line-height:1.5; resize:vertical; min-height:86px; }
+  .cancelBody textarea:focus{ outline:3px solid #eee8ff; border-color:var(--violet); }
+  .cancelHint{ font-size:11px; color:#796e89; margin:6px 0 16px; }
+  .cancelNotice{ padding:12px 14px; border-radius:12px; background:#fff7ed; color:#775126; font-size:12px; line-height:1.6; }
+  .cancelFooter{ padding:18px 24px; border-top:1px solid #eee8f5; display:flex; justify-content:flex-end; gap:10px; background:#fcfbff; }
+  .cancelFooter .btn{ padding:12px 18px; }
+  .cancelFooter .confirmCancel{ background:#b3261e; color:white; border-color:#b3261e; }
+  @media(max-width:480px){ .cancelHeader{padding:20px 18px 16px}.cancelBody{padding:0 18px 20px}.cancelFooter{padding:16px 18px;flex-direction:column-reverse}.cancelFooter .btn{width:100%}.cancelSummary .amount dd{font-size:21px} }
+
   @media print{
+    .cancelDialog{ display:none !important; }
     .noPrint{ display:none !important; }
     @page{
       size:auto;
@@ -431,6 +456,32 @@
     <a href="messagerie.html">Messages</a>
   </nav>
 
+
+  <dialog id="cancelDialog" class="cancelDialog" aria-labelledby="cancelTitle" aria-describedby="cancelDescription">
+    <form id="cancelForm">
+      <div class="cancelHeader">
+        <div class="cancelIcon" aria-hidden="true">↶</div>
+        <div><h2 id="cancelTitle">Annuler ce règlement</h2><p id="cancelDescription">Corrigez une saisie ou une affectation erronée.</p></div>
+        <button type="button" class="dialogClose" id="cancelClose" aria-label="Fermer">×</button>
+      </div>
+      <div class="cancelBody">
+        <dl class="cancelSummary">
+          <div><dt>Facture</dt><dd id="cancelInvoice">—</dd></div>
+          <div><dt>Client · date du règlement</dt><dd id="cancelClient">—</dd></div>
+          <div class="amount"><dt>Montant à annuler</dt><dd id="cancelAmount">—</dd></div>
+        </dl>
+        <label for="cancelReason">Motif de la correction <span aria-hidden="true">*</span></label>
+        <textarea id="cancelReason" maxlength="500" required rows="3" placeholder="Ex. : règlement affecté à la mauvaise facture." autofocus></textarea>
+        <p class="cancelHint">Obligatoire · 500 caractères maximum · conservé dans l’historique</p>
+        <div class="cancelNotice">Le règlement d’origine sera conservé et compensé par une écriture inverse. Le reste à payer sera recalculé.<br><strong>Aucun remboursement bancaire ne sera effectué.</strong></div>
+      </div>
+      <div class="cancelFooter">
+        <button type="button" class="btn" id="cancelBack">Conserver le règlement</button>
+        <button type="submit" class="btn confirmCancel">Confirmer l’annulation</button>
+      </div>
+    </form>
+  </dialog>
+
   <script type="module">
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
@@ -505,6 +556,7 @@
       if(!x) return "—";
       try{
         if(x?.toDate?.()) return x.toDate().toLocaleDateString("fr-FR");
+        if(typeof x === "number") return new Date(x).toLocaleDateString("fr-FR");
         const s = String(x).trim();
         if(!s) return "—";
         if(/^\d{2}\/\d{2}\/\d{4}$/.test(s)) return s;
@@ -697,6 +749,44 @@
     }
 
 
+
+    function askCancellation(p){
+      const dialog = document.getElementById("cancelDialog");
+      if(dialog.open) return Promise.resolve(null);
+      const form = document.getElementById("cancelForm");
+      const input = document.getElementById("cancelReason");
+      document.getElementById("cancelInvoice").textContent = p.invoiceNumber || "—";
+      document.getElementById("cancelClient").textContent = `${p.clientName || "—"} · ${fmtDateFR(p.dateObj || p.dateMs)}`;
+      document.getElementById("cancelAmount").textContent = fmtMoney(p.amount);
+      input.value = "Mauvaise facture sélectionnée";
+      input.setCustomValidity("");
+      return new Promise(resolve => {
+        let result = null;
+        const close = () => dialog.close();
+        const validate = event => {
+          event.preventDefault();
+          const reason = input.value.trim();
+          input.setCustomValidity(!reason ? "Indiquez le motif de l’annulation." : "");
+          if(!form.reportValidity()) return;
+          result = {reason}; dialog.close();
+        };
+        const resetValidity = () => input.setCustomValidity("");
+        const cleanup = () => {
+          form.removeEventListener("submit", validate);
+          input.removeEventListener("input", resetValidity);
+          document.getElementById("cancelClose").removeEventListener("click", close);
+          document.getElementById("cancelBack").removeEventListener("click", close);
+          resolve(result);
+        };
+        form.addEventListener("submit", validate);
+        input.addEventListener("input", resetValidity);
+        document.getElementById("cancelClose").addEventListener("click", close);
+        document.getElementById("cancelBack").addEventListener("click", close);
+        dialog.addEventListener("close", cleanup, {once:true});
+        dialog.showModal();
+      });
+    }
+
     function paymentCents(p){
       const amount = Number(p.montantRegle ?? p.amount);
       if(!Number.isFinite(amount)) throw new Error("Montant de règlement illisible : aucune modification.");
@@ -707,16 +797,9 @@
     // additionnent montantRegle conservent ainsi le bon solde.
     async function cancelPayment(p){
       if(cancelling) return;
-      const reasonInput = window.prompt(
-        `Motif d’annulation — ${p.invoiceNumber}, ${fmtMoney(p.amount)}.\nLe règlement sera conservé avec une écriture inverse. Aucun remboursement bancaire ne sera effectué.`,
-        "Mauvaise facture sélectionnée"
-      );
-      if(reasonInput === null) return;
-      const reason = reasonInput.trim();
-      if(!reason || reason.length > 500){
-        showAlert("Indiquez un motif de 1 à 500 caractères."); return;
-      }
-      if(!window.confirm(`Annuler le règlement de ${fmtMoney(p.amount)} sur ${p.invoiceNumber} ?\nLe solde de cette facture sera recalculé. Ensuite, enregistrez le paiement sur la bonne facture.`)) return;
+      const decision = await askCancellation(p);
+      if(!decision) return;
+      const reason = decision.reason;
       const user = auth.currentUser;
       if(!user){ showAlert("Reconnectez-vous avant de continuer."); return; }
       cancelling = true; render();
