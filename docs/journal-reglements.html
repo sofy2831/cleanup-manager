@@ -209,7 +209,10 @@
   .right{ text-align:right; }
   .ellipsis{ max-width:260px; overflow:hidden; text-overflow:ellipsis; }
 
+  .btn.danger{ color:var(--bad); border-color:rgba(179,38,30,.35); }
+  .btn:disabled{ opacity:.5; cursor:not-allowed; }
   @media print{
+    .noPrint{ display:none !important; }
     @page{
       size:auto;
       margin:12mm;
@@ -409,6 +412,8 @@
                 <th>Référence</th>
                 <th class="right">Montant</th>
                 <th>Note</th>
+                <th>État</th>
+                <th class="noPrint">Action</th>
               </tr>
             </thead>
             <tbody id="tbody"></tbody>
@@ -430,12 +435,12 @@
     import { auth, db } from "./firebase-init.js";
     import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import {
-      collection, query, where, orderBy, limit, getDocs, doc, getDoc
+      collection, query, where, orderBy, limit, getDocs, doc, getDoc,
+      runTransaction, serverTimestamp, Timestamp, deleteField
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     // ✅ LIMITS MVP (évite N+1 qui explose)
     const MAX_INVOICES = 150;
-    const MAX_PAYMENTS_PER_INVOICE = 100;
 
     const helloLine = document.getElementById("helloLine");
     const companyLine = document.getElementById("companyLine");
@@ -455,6 +460,7 @@
     const kpisBox = document.getElementById("kpisBox");
     const tbody = document.getElementById("tbody");
 
+    let cancelling = false;
     let invoices = [];   // salesDocuments (INVOICE-like)
     let payments = [];   // flattened lines
 
@@ -632,12 +638,14 @@
         kpisBox.innerHTML = "";
         return;
       }
-      const count = rows.length;
+      const activeRows = rows.filter(p => !p.cancelled && !p.reversal);
+      const count = activeRows.length;
       let sum = 0;
       const modes = new Map();
 
       for(const p of rows){
         sum += Number(p.amount)||0;
+        if(p.cancelled || p.reversal) continue;
         const k = String(p.mode||"—");
         modes.set(k, (modes.get(k)||0) + 1);
       }
@@ -660,7 +668,7 @@
 
       tbody.innerHTML = "";
       if(!rows.length){
-        tbody.innerHTML = `<tr><td colspan="8" style="color:#666; font-weight:900;">Aucun règlement</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="10" style="color:#666; font-weight:900;">Aucun règlement</td></tr>`;
         return;
       }
 
@@ -675,13 +683,115 @@
           <td class="ellipsis" title="${esc(p.reference||"")}">${esc(p.reference || "—")}</td>
           <td class="right">${fmtMoney(p.amount)}</td>
           <td class="ellipsis" title="${esc(p.note||"")}">${esc(p.note || "—")}</td>
+          <td><span class="badge ${p.cancelled || p.reversal ? 'warn' : 'ok'}">${p.reversal ? 'Annulation' : p.cancelled ? 'Annulé' : 'Enregistré'}</span></td>
+          <td class="noPrint">${!p.cancelled && !p.reversal && p.amount > 0 ? '<button type="button" class="btn danger">Annuler</button>' : '—'}</td>
         `;
+        const cancelBtn = tr.querySelector("button");
+        if(cancelBtn){
+          cancelBtn.disabled = cancelling;
+          cancelBtn.setAttribute("aria-label", `Annuler le règlement de ${fmtMoney(p.amount)} de la facture ${p.invoiceNumber}`);
+          cancelBtn.addEventListener("click", () => cancelPayment(p));
+        }
         tbody.appendChild(tr);
       }
     }
 
+
+    function paymentCents(p){
+      const amount = Number(p.montantRegle ?? p.amount);
+      if(!Number.isFinite(amount)) throw new Error("Montant de règlement illisible : aucune modification.");
+      return Math.round(amount * 100);
+    }
+
+    // Les écritures inverses restent dans payments : les anciens écrans qui
+    // additionnent montantRegle conservent ainsi le bon solde.
+    async function cancelPayment(p){
+      if(cancelling) return;
+      const reasonInput = window.prompt(
+        `Motif d’annulation — ${p.invoiceNumber}, ${fmtMoney(p.amount)}.\nLe règlement sera conservé avec une écriture inverse. Aucun remboursement bancaire ne sera effectué.`,
+        "Mauvaise facture sélectionnée"
+      );
+      if(reasonInput === null) return;
+      const reason = reasonInput.trim();
+      if(!reason || reason.length > 500){
+        showAlert("Indiquez un motif de 1 à 500 caractères."); return;
+      }
+      if(!window.confirm(`Annuler le règlement de ${fmtMoney(p.amount)} sur ${p.invoiceNumber} ?\nLe solde de cette facture sera recalculé. Ensuite, enregistrez le paiement sur la bonne facture.`)) return;
+      const user = auth.currentUser;
+      if(!user){ showAlert("Reconnectez-vous avant de continuer."); return; }
+      cancelling = true; render();
+      let committed = false;
+      try{
+        const invRef = doc(db, "salesDocuments", p.invoiceDocId);
+        const payRef = doc(db, "salesDocuments", p.invoiceDocId, "payments", p.paymentId);
+        const reverseRef = doc(db, "salesDocuments", p.invoiceDocId, "payments", `reversal_${p.paymentId}`);
+        // Lecture complète, sans filtre de dates ni limite d’affichage.
+        const all = await getDocs(collection(db, "salesDocuments", p.invoiceDocId, "payments"));
+        if(all.size > 400) throw new Error("Historique trop volumineux pour cette correction. Contactez le support.");
+        const correctionDate = Timestamp.now();
+        await runTransaction(db, async tx => {
+          const invSnap = await tx.get(invRef);
+          const originalSnap = await tx.get(payRef);
+          const reversalSnap = await tx.get(reverseRef);
+          const paymentSnaps = [];
+          for(const item of all.docs) paymentSnaps.push(await tx.get(item.ref));
+          if(!invSnap.exists() || !originalSnap.exists()) throw new Error("Facture ou règlement introuvable.");
+          const inv = invSnap.data();
+          const original = originalSnap.data();
+          if(inv.conciergerieUid !== user.uid || auth.currentUser?.uid !== user.uid) throw new Error("Accès refusé.");
+          if(reversalSnap.exists() || original.cancelled) throw new Error("Ce règlement est déjà annulé. Actualisez la page.");
+          if(["CANCELLED", "CREDITED", "DRAFT"].includes(String(inv.invoiceStatus || "").toUpperCase())) throw new Error("Le statut de la facture ne permet pas cette correction.");
+          const amount = paymentCents(original);
+          if(amount <= 0 || original.entryType === "PAYMENT_REVERSAL") throw new Error("Cette écriture ne peut pas être annulée.");
+          if(amount !== Math.round(p.amount * 100)) throw new Error("Le règlement a changé. Actualisez la page.");
+          if(paymentSnaps.some(s => !s.exists())) throw new Error("L’historique a changé. Actualisez la page.");
+          if(!paymentSnaps.some(s => s.id === payRef.id)) throw new Error("Historique incomplet. Actualisez la page.");
+          const entries = paymentSnaps.map(s => ({...s.data(), id:s.id}));
+          const sum = entries.reduce((n, item) => n + paymentCents(item), 0);
+          // Détecte aussi un nouveau paiement concurrent qui ne serait pas dans all.
+          const aggregate = Number(inv.paidAmount);
+          if(!Number.isFinite(aggregate) || Math.round(aggregate*100) !== sum) throw new Error("Le total payé et l’historique diffèrent. Aucune modification : actualisez ou contactez le support.");
+          const remaining = sum - amount;
+          const total = Number(inv.totalTTC ?? inv.totals?.ttc);
+          if(remaining < 0 || !Number.isFinite(total) || total <= 0) throw new Error("Solde incohérent : aucune modification.");
+          const status = remaining <= 0 ? "UNPAID" : remaining < Math.round(total*100) ? "PARTIAL" : "PAID";
+          const active = entries.filter(item => item.id !== payRef.id && !item.cancelled && item.entryType !== "PAYMENT_REVERSAL" && paymentCents(item)>0)
+            .sort((a,b) => toMs(b.createdAt || b.dateReglement)-toMs(a.createdAt || a.dateReglement));
+          const latest = active[0];
+          const restoredStatus = inv.sentAt || inv.ownerPublishedAt ? "SENT" : "ISSUED";
+          tx.set(reverseRef, {
+            montantRegle: -amount/100,
+            modeReglement: original.modeReglement || original.mode || "TRANSFER",
+            dateReglement: correctionDate,
+            reference: original.reference || "",
+            note: `Annulation du règlement ${payRef.id} : ${reason}`,
+            entryType: "PAYMENT_REVERSAL", reversesPaymentId: payRef.id,
+            cancellationReason: reason, createdBy: user.uid, createdAt: serverTimestamp()
+          });
+          tx.update(payRef, {cancelled:true, cancelledAt:serverTimestamp(), cancelledBy:user.uid, cancellationReason:reason, reversalPaymentId:reverseRef.id});
+          tx.update(invRef, {
+            paidAmount: remaining/100, paymentStatus:status,
+            invoiceStatus:status === "PAID" ? "PAID" : restoredStatus,
+            invoicePaidAt:status === "PAID" ? (inv.invoicePaidAt || serverTimestamp()) : deleteField(),
+            lastPaymentDate:latest ? (latest.dateReglement || latest.createdAt || deleteField()) : deleteField(),
+            lastPaymentAt:latest ? (latest.createdAt || latest.dateReglement || deleteField()) : deleteField(),
+            invoiceUpdatedAt:serverTimestamp(),
+            lastPaymentCancellationAt:serverTimestamp()
+          });
+        });
+        committed = true;
+        await loadInvoices(user.uid);
+        showAlert(`Règlement annulé sur ${p.invoiceNumber}. Enregistrez ensuite le paiement sur la bonne facture.`, true);
+      }catch(error){
+        console.error(error);
+        showAlert(committed
+          ? "L’annulation est enregistrée, mais le rechargement a échoué. Actualisez la page ; ne recommencez pas l’opération."
+          : "Annulation non effectuée : " + (error?.code === "permission-denied" ? "les règles Firestore refusent cette opération. Transmettez les règles au support." : error.message));
+      }finally{ cancelling = false; render(); }
+    }
+
     function toCSV(rows){
-      const header = ["date_reglement","invoice_number","client","logement","mode","reference","montant","note"];
+      const header = ["date_reglement","invoice_number","client","logement","mode","reference","montant","note","etat","motif_annulation"];
       const escCSV = (v)=>{
         const s = String(v ?? "");
         if(/[",;\n]/.test(s)) return `"${s.replaceAll('"','""')}"`;
@@ -698,7 +808,9 @@
           modeLabel(p.mode),
           p.reference || "",
           String(Number(p.amount)||0),
-          p.note || ""
+          p.note || "",
+          p.reversal ? "ANNULATION" : p.cancelled ? "ANNULE" : "ENREGISTRE",
+          p.cancellationReason || ""
         ].map(escCSV).join(";");
         lines.push(row);
       }
@@ -776,16 +888,8 @@
 
         const payCol = collection(db, "salesDocuments", invId, "payments");
 
-        let payDocs = [];
-        try{
-          const qPay = query(payCol, orderBy("dateReglement","desc"), limit(MAX_PAYMENTS_PER_INVOICE));
-          const sPay = await getDocs(qPay);
-          payDocs = sPay.docs.map(d => ({ id:d.id, ...(d.data()||{}) }));
-        }catch(e){
-          const sPay = await getDocs(payCol);
-          payDocs = sPay.docs.map(d => ({ id:d.id, ...(d.data()||{}) }));
-          payDocs = payDocs.slice(0, MAX_PAYMENTS_PER_INVOICE);
-        }
+        const sPay = await getDocs(payCol);
+        const payDocs = sPay.docs.map(d => ({ ...(d.data()||{}), id:d.id }));
 
         for(const p of payDocs){
           const ms = toMs(p.dateReglement || p.createdAt);
@@ -797,11 +901,14 @@
             clientName,
             homeName,
             paymentId: p.id,
+            cancelled: p.cancelled === true,
+            reversal: p.entryType === "PAYMENT_REVERSAL",
+            cancellationReason: String(p.cancellationReason || ""),
             dateMs: ms,
             dateObj: (p.dateReglement?.toDate?.() ? p.dateReglement.toDate() : null),
             mode: String(p.modeReglement || p.mode || "").trim(),
             reference: String(p.reference || "").trim(),
-            note: String(p.note || "").trim(),
+            note: String(p.cancelled ? `${p.note || ""} — Annulé : ${p.cancellationReason || ""}` : (p.note || "")).trim(),
             amount: Number(p.montantRegle ?? p.amount ?? 0) || 0
           });
         }
