@@ -203,7 +203,7 @@
   import { auth, db } from "./firebase-init.js";
   import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
   import {
-    doc, getDoc, collection, getDocs, addDoc, updateDoc,
+    doc, getDoc, collection, getDocs, updateDoc,
     serverTimestamp, runTransaction, Timestamp
   } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
@@ -224,6 +224,7 @@
   const saveBtn = document.getElementById("saveBtn");
   const historyBtn = document.getElementById("historyBtn");
 
+  let saving = false;
   let currentUser = null;
   let invoiceRef = null;
   let invoiceData = null;
@@ -431,7 +432,7 @@
   saveBtn.addEventListener("click", async ()=>{
     hideAlert();
 
-    if(!invoiceData) return;
+    if(!invoiceData || saving) return;
 
     const raw = Number(amountInput.value);
 
@@ -447,6 +448,8 @@
       return;
     }
 
+    saving = true;
+    let paymentCommitted = false;
     lockUI(true);
 
     try{
@@ -477,14 +480,7 @@
         "payments"
       );
 
-      await addDoc(payCol, {
-        montantRegle,
-        modeReglement,
-        dateReglement: dateReglementTs,
-        reference,
-        note,
-        createdAt: serverTimestamp()
-      });
+      const paymentRef = doc(payCol);
 
       await runTransaction(db, async (tx)=>{
         const s = await tx.get(invoiceRef);
@@ -495,13 +491,19 @@
 
         const inv = s.data() || {};
 
+        if(inv.conciergerieUid !== currentUser.uid) throw new Error("Accès refusé.");
+        if(["DRAFT", "CANCELLED", "CREDITED"].includes(String(inv.invoiceStatus || "").toUpperCase())) throw new Error("Cette facture ne peut pas recevoir de règlement.");
         const currentPaid = Number(inv.paidAmount);
-        const paidAmount =
-          (Number.isFinite(currentPaid) ? currentPaid : 0)
-          + montantRegle;
+        const paidBefore = Number.isFinite(currentPaid) ? currentPaid : alreadyPaid;
+        const paidAmount = Math.round((paidBefore + montantRegle)*100)/100;
 
         const totalNow = computeInvoiceTotalTTC(inv, vatCfg);
+        if(paidAmount > Math.round(totalNow*100)/100 || paidBefore < 0) throw new Error("Le solde a changé. Rechargez la page avant de réessayer.");
         const pStatus = statusFrom(paidAmount, totalNow);
+        tx.set(paymentRef, {
+          montantRegle, modeReglement, dateReglement:dateReglementTs,
+          reference, note, createdAt:serverTimestamp(), createdBy:currentUser.uid
+        });
 
         const patch = {
           paidAmount,
@@ -519,11 +521,15 @@
         tx.update(invoiceRef, patch);
       });
 
+      paymentCommitted = true;
+
       /* CORRECTION ONBOARDING */
-      await updateDoc(doc(db, "users", currentUser.uid), {
-        "onboarding.firstPaymentRecorded": true,
-        "onboarding.updatedAt": serverTimestamp()
-      });
+      try{
+        await updateDoc(doc(db, "users", currentUser.uid), {
+          "onboarding.firstPaymentRecorded": true,
+          "onboarding.updatedAt": serverTimestamp()
+        });
+      }catch(error){ console.warn("Paiement enregistré ; suivi onboarding non actualisé", error); }
 
       showAlert("✅ Règlement enregistré.", true);
 
@@ -536,9 +542,11 @@
 
     }catch(e){
       console.error(e);
-      showAlert("⛔ Erreur : " + (e?.message || "inconnue"));
+      showAlert(paymentCommitted ? "Le règlement est enregistré. Le rechargement a échoué : actualisez la page, sans enregistrer à nouveau." : "⛔ Erreur : " + (e?.message || "inconnue"));
     }finally{
-      lockUI(false);
+      saving = false;
+      saveBtn.disabled = paymentCommitted || statusFrom(Number(invoiceData?.paidAmount)||0, Number(invoiceData?.totalTTC)||0) === "PAID";
+      saveBtn.style.opacity = "1";
     }
   });
 
