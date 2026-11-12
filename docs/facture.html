@@ -670,6 +670,28 @@ function invoiceDueKey(issued,term){
       return x;
     }
 
+
+    // Contrôle du profil propriétaire avant attribution du numéro de facture.
+    async function confirmBillingProfile(ownerId, mode, uid){
+      let type = "";
+      if(ownerId){
+        try {
+          const snap = await getDoc(doc(db, "owners", ownerId));
+          const o = snap.exists() ? snap.data() : null;
+          if(o && String(o.conciergerieUid || "") === String(uid)){
+            const t = String(o.customerType || o.clientType || "").trim().toUpperCase();
+            if(["PROFESSIONAL", "PRO", "PROFESSIONNEL"].includes(t)) type = "B2B";
+            if(["INDIVIDUAL", "PARTICULIER"].includes(t)) type = "B2C";
+          }
+        } catch(e){ console.warn("Profil propriétaire non vérifiable", e); }
+      }
+      if(type === mode) return true;
+      const message = type
+        ? `Incohérence du profil propriétaire : statut ${type === "B2B" ? "Professionnel" : "Particulier"}, régime sélectionné ${mode}.`
+        : "Statut du client non renseigné ou non vérifiable.";
+      return window.confirm(message + "\n\nVérifiez les coordonnées et la qualité du client. Confirmer le régime " + mode + " et émettre la facture ?");
+    }
+
     function getClientType(d){
       const ct = String(d?.clientType || "").toUpperCase().trim();
       if(ct === "PRO") return "PRO";
@@ -1939,6 +1961,8 @@ function invoiceDueKey(issued,term){
           throw new Error("Aucune ligne de facture.");
         }
 
+        if(!invoiceNumber && !(await confirmBillingProfile(resolvedClientSnapshot.ownerDocId, penaltyModeSel.value, currentUser.uid))) return;
+
         const patch = {
           invoiceNotes: (invoiceNotesEl.value || "").trim(),
           invoiceUpdatedAt: serverTimestamp(),
@@ -1984,8 +2008,8 @@ function invoiceDueKey(issued,term){
           totals: computed.totals
         };
 
-        if(!String(docData?.clientType || "").trim()){
-          patch.clientType = getClientType(docData);
+        if(!invoiceNumber){
+          patch.clientType = penaltyModeSel.value === "B2B" ? "PRO" : "PARTICULIER";
         }
 
         saveUiState();
