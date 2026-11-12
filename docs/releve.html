@@ -164,9 +164,25 @@
       const snap = await getDocs(qx);
       return snap.docs.map(s=>({ id:s.id, ...(s.data()||{}) }));
     }
+    function invoiceDateKey(value){
+  if(!value) return "";
+  if(typeof value === "string"){
+    const s=value.trim(); const m=s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/); const k=m?`${m[3]}-${m[2]}-${m[1]}`:s;
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(k)) return "";
+    const d=new Date(k+"T12:00:00Z"); return !isNaN(d)&&d.toISOString().slice(0,10)===k?k:"";
+  }
+  const d=value?.toDate?value.toDate():new Date(value); if(isNaN(d)) return "";
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
+function invoiceDueKey(issued,term){
+  const key=invoiceDateKey(issued); const days={RECEPTION:0,"8J":8,"15J":15,"30J":30,"45J":45}[String(term||"").toUpperCase()];
+  if(!key||days===undefined) return "";
+  const d=new Date(key+"T12:00:00Z"); d.setUTCDate(d.getUTCDate()+days); return d.toISOString().slice(0,10);
+}
+
     function tsToDate(x){ try{ if(!x) return null; if(x?.toDate?.()) return x.toDate(); const d=new Date(x); return isNaN(d.getTime())?null:d; }catch{return null;} }
     function toDateKeyFromDate(d){ if(!(d instanceof Date)||isNaN(d.getTime())) return ""; return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; }
-    function getDocDateKeySafe(d){ const direct=String(d.docDateKey||d.invoiceDateKey||d.creditDateKey||"").trim(); if(/^\d{4}-\d{2}-\d{2}$/.test(direct)) return direct; const c1=tsToDate(d.createdAt); if(c1) return toDateKeyFromDate(c1); const c2=Number(d.createdAtMs); if(Number.isFinite(c2)&&c2>0) return toDateKeyFromDate(new Date(c2)); const c3=Number(d.snapAtMs); if(Number.isFinite(c3)&&c3>0) return toDateKeyFromDate(new Date(c3)); return ""; }
+    function getDocDateKeySafe(d){ const issued=invoiceDateKey(d.invoiceIssuedDate)||invoiceDateKey(d.invoiceIssuedAt); if(String(d.type).toUpperCase()==="INVOICE"&&issued)return issued; const direct=String(d.docDateKey||d.invoiceDateKey||d.creditDateKey||"").trim(); if(/^\d{4}-\d{2}-\d{2}$/.test(direct)) return direct; const c1=tsToDate(d.createdAt); if(c1) return toDateKeyFromDate(c1); const c2=Number(d.createdAtMs); if(Number.isFinite(c2)&&c2>0) return toDateKeyFromDate(new Date(c2)); const c3=Number(d.snapAtMs); if(Number.isFinite(c3)&&c3>0) return toDateKeyFromDate(new Date(c3)); return ""; }
     function isOwnerMatch(docData, ownerUidValue, ownerDocIdValue){ return String(docData.ownerUid||"").trim()===String(ownerUidValue||"").trim() || String(docData.clientOwnerDocId||docData.ownerDocId||"").trim()===String(ownerDocIdValue||"").trim(); }
     function isDateInPeriod(dateKey,startKey,endKey){ return !!dateKey && dateKey>=startKey && dateKey<=endKey; }
     function getDocTotals(d){ const htS=Number(d.totalHT), tvaS=Number(d.totalTVA), ttcS=Number(d.totalTTC); if(Number.isFinite(htS)&&Number.isFinite(ttcS)) return {ht:htS,tva:Number.isFinite(tvaS)?tvaS:Math.max(0,ttcS-htS),ttc:ttcS}; if(Number.isFinite(ttcS)&&Number.isFinite(tvaS)) return {ht:Math.max(0,ttcS-tvaS),tva:tvaS,ttc:ttcS}; if(Number.isFinite(ttcS)) return {ht:ttcS,tva:0,ttc:ttcS}; return {ht:0,tva:0,ttc:0}; }
@@ -182,7 +198,7 @@
       const paidAmount=isInv?Math.max(0,Number(d.paidAmount||0)):0;
       const dueAmount=isInv?Math.max(0,totalTTC-paidAmount):0;
       const rawDue=d.dueDateKey||d.invoiceDueDateKey||d.dueDate||d.invoiceDueDate||d.dateEcheance||d.echeanceDateKey||null;
-      const dueDateKey=typeof rawDue==="string"&&/^\d{4}-\d{2}-\d{2}$/.test(rawDue)?rawDue:toDateKeyFromDate(tsToDate(rawDue));
+      const dueDateKey=isInv?(invoiceDateKey(rawDue)||invoiceDueKey(invoiceDateKey(d.invoiceIssuedDate)||invoiceDateKey(d.invoiceIssuedAt),d.invoicePaymentTerm)):"";
       return { kind, dueDateKey, salesDocId:String(d.id||"").trim(), number, dateKey, homeName:String(d.homeName||"").trim(), clientName:String(d.clientName||d.ownerName||"").trim(), totalHT, totalTVA, totalTTC, invoiceStatus:String(d.invoiceStatus||"").trim(), avoirStatus:String(d.avoirStatus||d.creditStatus||"").trim(), paidAmount, dueAmount };
     }
 
@@ -191,6 +207,7 @@
       for(const invoiceDoc of invoiceDocs){
         const docId=String(invoiceDoc.id||"").trim();
         if(!docId) continue;
+        if(invoiceDoc.paidAmount != null && Number(invoiceDoc.paidAmount) <= 0) continue;
         try{
           const snap=await getDocs(collection(db,"salesDocuments",docId,"payments"));
           if(!snap.empty){
@@ -200,7 +217,7 @@
               if(Number.isFinite(amount)) paid+=amount;
               const rawDate=d.dateReglement||d.createdAt||null;
               const realDate=rawDate?.toDate?.()?rawDate.toDate():(rawDate?new Date(rawDate):null);
-              if(realDate instanceof Date&&!isNaN(realDate.getTime())){ if(!latestDate||realDate>latestDate) latestDate=realDate; }
+              if(amount>0 && realDate instanceof Date&&!isNaN(realDate.getTime())){ if(!latestDate||realDate>latestDate) latestDate=realDate; }
             }
           }else{
             const fallbackPaid=Number(invoiceDoc.paidAmount||0);
@@ -212,7 +229,7 @@
           if(Number.isFinite(fallbackPaid)&&fallbackPaid>0) paid+=fallbackPaid;
         }
       }
-      return { paidTTC:paid, lastPaymentDate:latestDate };
+      return { paidTTC:paid, lastPaymentDate:paid>0?latestDate:null };
     }
 
     async function buildDraft(){
