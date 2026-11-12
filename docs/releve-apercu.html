@@ -447,7 +447,7 @@
             <tr>
               <th class="col-type">Type</th>
               <th class="col-num">N°</th>
-              <th class="col-date">Date</th>
+              <th class="col-date">Date</th><th>Échéance</th>
               <th class="col-client">Client</th>
               <th class="col-home">Logement</th>
               <th class="col-ht right">HT</th>
@@ -528,6 +528,22 @@
       const x = Number(n || 0);
       return x.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " €";
     }
+
+    function invoiceDateKey(value){
+  if(!value) return "";
+  if(typeof value === "string"){
+    const s=value.trim(); const m=s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/); const k=m?`${m[3]}-${m[2]}-${m[1]}`:s;
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(k)) return "";
+    const d=new Date(k+"T12:00:00Z"); return !isNaN(d)&&d.toISOString().slice(0,10)===k?k:"";
+  }
+  const d=value?.toDate?value.toDate():new Date(value); if(isNaN(d)) return "";
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
+function invoiceDueKey(issued,term){
+  const key=invoiceDateKey(issued); const days={RECEPTION:0,"8J":8,"15J":15,"30J":30,"45J":45}[String(term||"").toUpperCase()];
+  if(!key||days===undefined) return "";
+  const d=new Date(key+"T12:00:00Z"); d.setUTCDate(d.getUTCDate()+days); return d.toISOString().slice(0,10);
+}
 
     function fmtDate(value){
       if(!value) return "—";
@@ -722,10 +738,10 @@
       credTTC.textContent = money(totals.creditsTTC || 0);
       netTTC.textContent = money(totals.netTTC || 0);
 
-      paidTTC.textContent = money(computedPaid || pay.paidTTC || 0);
-      dueTTC.textContent = money(computedDue || pay.dueTTC || 0);
+      paidTTC.textContent = money(items.length?computedPaid:(pay.paidTTC||0));
+      dueTTC.textContent = money(items.length?Math.max(0,Number(totals.netTTC||0)-computedPaid):(pay.dueTTC||0));
 
-      lastPaymentDate.textContent = fmtDate(pay.lastPaymentDate);
+      lastPaymentDate.textContent = computedPaid>0 ? fmtDate(pay.lastPaymentDate) : "—";
     }
 
     async function enrichItemsWithSalesDocuments(docData){
@@ -746,7 +762,8 @@
             ...item,
             invoiceStatus: salesDoc.invoiceStatus || item.invoiceStatus || "",
             avoirStatus: salesDoc.avoirStatus || salesDoc.creditStatus || item.avoirStatus || "",
-            paidAmount: Number(salesDoc.paidAmount || item.paidAmount || 0)
+            dueDateKey: invoiceDateKey(salesDoc.invoiceDueDate)||invoiceDueKey(salesDoc.invoiceIssuedDate,salesDoc.invoicePaymentTerm)||item.dueDateKey||"",
+            paidAmount: Number(salesDoc.paidAmount ?? item.paidAmount ?? 0)
           };
         }catch(e){
           console.warn("Erreur lecture salesDocument", salesDocId, e);
@@ -782,7 +799,7 @@
       if(!items.length){
         linesTbody.innerHTML = `
           <tr>
-            <td colspan="11" class="mut">Aucune ligne</td>
+            <td colspan="12" class="mut">Aucune ligne</td>
           </tr>
         `;
         return;
@@ -803,7 +820,7 @@
               <span class="tag ${isCredit ? "credit" : "invoice"}">${esc(tag)}</span>
             </td>
             <td class="col-num">${esc(l?.number || "—")}</td>
-            <td class="col-date">${esc(l?.dateKey || "—")}</td>
+            <td class="col-date">${esc(l?.dateKey || "—")}</td><td>${esc(isCredit?"—":(l?.dueDateKey||"—"))}</td>
             <td class="col-client">${esc(l?.clientName || "—")}</td>
             <td class="col-home">${esc(l?.homeName || "—")}</td>
             <td class="col-ht right">${isCredit ? "−" : ""}${money(l?.totalHT || 0)}</td>
