@@ -774,6 +774,9 @@
   <link rel="icon" href="./favicon.ico" sizes="any">
   <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32.png">
   <link rel="apple-touch-icon" sizes="192x192" href="./favicon-192.png">
+<style>
+.cuDialog{width:min(540px,calc(100% - 32px));max-height:85vh;overflow:auto;border:1px solid #e2d9ff;border-radius:22px;padding:24px;color:#171717;background:#fff;box-shadow:0 24px 80px #21174b40;font:14px Inter,system-ui,sans-serif}.cuDialog::backdrop{background:#21174b66;backdrop-filter:blur(3px)}.cuDialog h2{font-size:19px;margin:0 0 10px}.cuDialog p{line-height:1.55;color:#555;margin:8px 0 16px}.cuDialog .cuActions{display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap;margin-top:20px}.cuDialog button{font:700 13px Inter,system-ui,sans-serif;border:1px solid #7a5cff;border-radius:999px;padding:10px 16px;background:white;color:#6238ff;cursor:pointer}.cuDialog button.cuPrimary{background:#6238ff;color:white}.cuDialog button:disabled{opacity:.5;cursor:wait}.cuDialog label{display:block;margin:12px 0 5px;font-weight:700}.cuDialog input,.cuDialog textarea{width:100%;border:1px solid #d3c7ff;border-radius:10px;padding:10px;font:inherit;box-sizing:border-box}.cuDialog .cuNotice{background:#f5f1ff;padding:12px;border-radius:12px;color:#423477}.cuDialog .cuEntry{border-bottom:1px solid #eee;padding:12px 0;white-space:pre-wrap;overflow-wrap:anywhere}.cuDialog .cuError{color:#b3261e;white-space:pre-wrap}
+</style>
 </head>
 
 <body>
@@ -1055,7 +1058,7 @@
   import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
   import {
     collection, query, where, orderBy, limit, getDocs, doc, getDoc,
-    setDoc, updateDoc, serverTimestamp
+    setDoc, updateDoc, serverTimestamp, runTransaction, Timestamp
   } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
   const alertBox = document.getElementById("alertBox");
@@ -2180,6 +2183,40 @@ async function publishToOwner(){
       : `TVA non applicable. Totaux calculés sur les factures affichées.`;
   }
 
+  function canSupplement(d){
+    return getInvoiceStatusRaw(d)==="ISSUED" && !!d.invoiceNumber && !d.sentAt && !d.ownerVisible && !d.ownerPublishedAt && !getAvoirId(d) && !getStatementForInvoice(d) && !(Number(d.paidAmount||0)>0) && !["PAID","PARTIAL","PARTIALLY_PAID"].includes(String(d.paymentStatus||"").toUpperCase()) && (!d.eInvoice?.status || d.eInvoice.status==="NOT_SUBMITTED");
+  }
+  function invoiceDialog(title){
+    const dlg=document.createElement('dialog');dlg.className='cuDialog';
+    const h=document.createElement('h2');h.textContent=title;dlg.append(h);document.body.append(dlg);
+    dlg.addEventListener('close',()=>dlg.remove(),{once:true});return dlg;
+  }
+  function showInvoiceHistory(id){
+    const dlg=invoiceDialog('Historique de la facture');
+    const body=document.createElement('div');body.textContent='Chargement…';dlg.append(body);
+    const close=document.createElement('button');close.textContent='Fermer';close.onclick=()=>dlg.close();dlg.append(close);dlg.showModal();
+    getDoc(doc(db,'salesDocuments',id)).then(s=>{
+      if(!s.exists()||s.data().conciergerieUid!==currentUser.uid)throw Error('Accès refusé');
+      const d=s.data();body.textContent='';
+      const entry=(label,at,detail='')=>{const el=document.createElement('div');el.className='cuEntry';const dt=toDateFromAny(at);el.textContent=label+' — '+(dt?dt.toLocaleString('fr-FR'):'Date non disponible')+(detail?'\n'+detail:'');body.append(el);};
+      entry('Création',d.createdAt);if(d.invoiceNumber)entry('Émission '+d.invoiceNumber,d.invoiceIssuedAt||d.invoiceIssuedDate);if(d.sentAt)entry('Envoi',d.sentAt);if(d.ownerPublishedAt)entry('Publication propriétaire',d.ownerPublishedAt);
+      for(const x of (Array.isArray(d.invoiceSupplementHistory)?d.invoiceSupplementHistory:[]))entry('Complément de lieu',x.at,'Auteur : '+(x.authorEmail||x.authorUid||'—')+'\nMotif : '+x.reason+'\nAvant : '+[x.before?.address,x.before?.zip,x.before?.city].filter(Boolean).join(' ')+'\nAprès : '+[x.after?.address,x.after?.zip,x.after?.city].filter(Boolean).join(' '));
+      if(!d.invoiceSupplementHistory?.length)entry('Aucun complément enregistré',null);
+    }).catch(e=>{body.textContent=e.message;});
+  }
+  function openInvoiceSupplement(id,d){
+    const dlg=invoiceDialog('Compléter le lieu de prestation');
+    dlg.insertAdjacentHTML('beforeend',`<p class="cuNotice">Facture déjà émise : le document original reste inchangé. Ce complément est identifié séparément sur l’aperçu. Pour rectifier les éléments de facturation, utilisez un avoir et une nouvelle facture.</p><form><label>Adresse du bien</label><input name="address" required maxlength="250"><label>Code postal</label><input name="zip" required maxlength="20"><label>Ville</label><input name="city" required maxlength="100"><label>Motif du complément</label><textarea name="reason" required maxlength="500" rows="3"></textarea><p class="cuError" role="alert"></p><div class="cuActions"><button type="button" data-cancel>Annuler</button><button class="cuPrimary" type="submit">Enregistrer le complément</button></div></form>`);
+    const form=dlg.querySelector('form'), old=d.invoiceLocationSupplement||{};
+    for(const [k,v] of Object.entries({address:old.address||d.homeAddress||'',zip:old.zip||d.homeZip||'',city:old.city||d.homeCity||''}))form.elements[k].value=v;
+    dlg.querySelector('[data-cancel]').onclick=()=>dlg.close();
+    form.onsubmit=async e=>{e.preventDefault();const btn=form.querySelector('[type=submit]');btn.disabled=true;dlg.querySelector('[data-cancel]').disabled=true;const preventClose=e=>e.preventDefault();dlg.addEventListener('cancel',preventClose);try{
+      const after=Object.fromEntries(['address','zip','city'].map(k=>[k,form.elements[k].value.trim()]));const reason=form.elements.reason.value.trim();if(!reason||Object.values(after).some(v=>!v))throw Error('Tous les champs sont obligatoires.');
+      await runTransaction(db,async tx=>{const ref=doc(db,'salesDocuments',id),snap=await tx.get(ref);if(!snap.exists())throw Error('Facture introuvable.');const fresh=snap.data();if(fresh.conciergerieUid!==currentUser.uid||!canSupplement(fresh))throw Error('Cette facture ne peut plus être complétée.');const before=fresh.invoiceLocationSupplement||{address:fresh.homeAddress||'',zip:fresh.homeZip||'',city:fresh.homeCity||''};const history=Array.isArray(fresh.invoiceSupplementHistory)?fresh.invoiceSupplementHistory:[];if(history.length>=50)throw Error('Limite de compléments atteinte.');if(['address','zip','city'].every(k=>before[k]===after[k]))throw Error('Aucun changement.');tx.update(ref,{invoiceLocationSupplement:after,invoiceSupplementHistory:[...history,{before,after,reason,at:Timestamp.now(),authorUid:currentUser.uid,authorEmail:currentUser.email||''}],invoiceSupplementUpdatedAt:serverTimestamp()});});
+      dlg.close();await loadInvoices(currentUser.uid);showAlert('Complément enregistré.',true);
+    }catch(err){if(dlg.open)dlg.querySelector('.cuError').textContent=err.message;else showAlert(err.message);}finally{btn.disabled=false;dlg.querySelector('[data-cancel]').disabled=false;dlg.removeEventListener('cancel',preventClose);}};dlg.showModal();
+  }
+
   function renderItem(id, d){
     const invNum = getInvoiceNumber(d);
     const client = String(d?.clientName || "—").trim();
@@ -2189,7 +2226,7 @@ async function publishToOwner(){
     const st = badgeForStatus(getInvoiceStatusDisplay(d));
     const statement = getStatementForInvoice(d);
 
-    const home = String(d?.homeName || "—").trim();
+    const home = String(d?.homeName || d?.invoiceLocationSupplement?.address || d?.homeAddress || "—").trim();
     const period = (d?.arrivalDateKey || d?.departureDateKey)
       ? `${fmtDateFR(d.arrivalDateKey)} → ${fmtDateFR(d.departureDateKey)}`
       : "—";
@@ -2245,6 +2282,8 @@ const avoirTotal = Number(avoirData.totalTTC || 0);
 
       <div class="right">
         <button class="btn primary" data-preview="${esc(id)}" type="button">${esc(primaryLabel)}</button>
+        ${canSupplement(d) && !avoirActive ? `<button class="btn" data-supplement type="button">Modifier</button>` : ``}
+        <button class="btn" data-history type="button">Historique</button>
         <button class="btn" data-send="${esc(id)}" type="button" ${canSend ? "" : `aria-disabled="true"`}>Envoyer</button>
         <a class="btn" href="reglement.html?docId=${encodeURIComponent(id)}" ${allowReglement ? "" : `aria-disabled="true"`}>Règlement</a>
         ${allowCreateAvoir ? `<a class="btn danger" href="${creerAvoirHref}">Avoir</a>` : ``}
@@ -2265,6 +2304,8 @@ const avoirTotal = Number(avoirData.totalTTC || 0);
       location.href = u.toString();
     });
 
+    card.querySelector('[data-supplement]')?.addEventListener('click',()=>openInvoiceSupplement(id,d));
+    card.querySelector('[data-history]')?.addEventListener('click',()=>showInvoiceHistory(id));
     card.querySelector('button[data-send]')?.addEventListener("click", async ()=>{
       await openSendModal({ id, data:d });
     });
