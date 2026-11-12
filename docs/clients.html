@@ -344,6 +344,10 @@
         <label for="cName">Nom (facturation)</label>
         <input id="cName" type="text" placeholder="Ex. Jean Dupont" required />
 
+        <label for="cCustomerType">Statut du profil propriétaire</label>
+        <input id="cCustomerType" readonly />
+        <label for="cSiret">SIRET (profil propriétaire)</label>
+        <input id="cSiret" readonly />
         <label for="cEmail">Email</label>
         <input id="cEmail" type="email" placeholder="ex: proprio@email.com" />
 
@@ -590,6 +594,13 @@
     // =========================
     // SYNC owners -> clients + homes snapshot
     // =========================
+    function normalizedCustomerType(value){
+      const v = String(value || "").trim().toUpperCase();
+      if(["PROFESSIONAL", "PRO", "PROFESSIONNEL"].includes(v)) return "PROFESSIONAL";
+      if(["INDIVIDUAL", "PARTICULIER"].includes(v)) return "INDIVIDUAL";
+      return "";
+    }
+
     async function syncOwnersToClientsAndHomes(){
       try{
         const BATCH_LIMIT = 450;
@@ -630,11 +641,31 @@
           const clientDocId = "c_owner_" + ownerDocId;
           const exists = clientsByKey.get(ownerDocId);
 
+          // Le profil users est prioritaire ; vérifier le rattachement avant usage.
+          let profile = null;
+          const ownerUid = String(o.ownerUid || o.uid || "").trim();
+          if(ownerUid){
+            try{
+              const us = await getDoc(doc(db,"users",ownerUid));
+              const u = us.exists() ? us.data() : null;
+              if(u && u.conciergerieUid === currentUser.uid && u.ownerDocId === ownerDocId) profile = u;
+            }catch(e){ console.warn("Profil propriétaire inaccessible", e?.code); }
+          }
+          const source = [profile, o, exists].find(x => normalizedCustomerType(x?.customerType || x?.clientType));
+          const customerType = normalizedCustomerType(source?.customerType || source?.clientType);
+          const professionalFields = customerType ? {
+            customerType,
+            clientType: customerType === "PROFESSIONAL" ? "PRO" : "PARTICULIER",
+            siret: customerType === "PROFESSIONAL" ? String(source?.siret ?? exists?.siret ?? "").trim() : "",
+            ape: customerType === "PROFESSIONAL" ? String(source?.ape ?? exists?.ape ?? "").trim() : "",
+            vat: customerType === "PROFESSIONAL" ? String(source?.vat ?? exists?.vat ?? "").trim() : ""
+          } : {};
           const desiredClient = {
+            ...professionalFields,
             conciergerieUid: currentUser.uid,
             clientKey: ownerDocId,
             ownerDocId: ownerDocId,
-            ownerUid: String(o.uid || "").trim(),
+            ownerUid: ownerUid || String(exists?.ownerUid || "").trim(),
             displayName: fullName || (exists?.displayName || ""),
             email: email || (exists?.email || ""),
             phone: phone || (exists?.phone || ""),
@@ -649,11 +680,11 @@
           const clientNeedsSync = !exists || [
             "conciergerieUid","clientKey","ownerDocId","ownerUid",
             "displayName","email","phone","address1","address2",
-            "zip","city","country","status"
+            "zip","city","country","status", ...Object.keys(professionalFields)
           ].some(k => String(exists?.[k] ?? "") !== String(desiredClient[k] ?? ""));
 
           if(clientNeedsSync){
-            pushOp((batch)=>{
+            await pushOp((batch)=>{
               const ref = doc(db,"clients", clientDocId);
               batch.set(ref, {
                 ...desiredClient,
@@ -674,7 +705,7 @@
 
             if(hasSnapshot) continue;
 
-            pushOp((batch)=>{
+            await pushOp((batch)=>{
               batch.update(doc(db,"homes", h.id), {
                 ownerAccountName: fullName || "",
                 ownerFullname: fullName || "",
@@ -1014,6 +1045,9 @@
         };
       })();
 
+      const profileType = normalizedCustomerType(c.customerType || c.clientType || o.customerType || o.clientType);
+      document.getElementById("cCustomerType").value = profileType === "PROFESSIONAL" ? "Professionnel" : profileType === "INDIVIDUAL" ? "Particulier" : "Non renseigné";
+      document.getElementById("cSiret").value = c.siret || o.siret || "";
       cName.value = fullName || "";
       cEmail.value = email || "";
       cPhone.value = phone || "";
