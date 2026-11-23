@@ -588,7 +588,7 @@
       doc, collection, getDoc, setDoc, updateDoc, serverTimestamp, runTransaction,
       getDocs, query, where, limit
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
-    import { PRODUCT_TEMPLATES } from "./catalog-templates.js";
+    import { PRODUCT_TEMPLATES, isTtcCatalogPrice, catalogTtcToHt } from "./catalog-templates.js";
 
     const alertBox = document.getElementById("alertBox");
     const statusBadge = document.getElementById("statusBadge");
@@ -1410,10 +1410,15 @@
       productSelect.innerHTML = `<option value="">— Choisir —</option>` + optGroups + otherOpt;
     }
 
+    function updateCatalogPriceLabel(){
+      const label=document.querySelector('label[for="unitPrice"]');
+      if(label)label.textContent=isTtcCatalogPrice(productSelect.value)?'Prix unitaire TTC (modifiable)':'Prix unitaire (PU HT)';
+    }
     function refreshSuggest(){
       const key = (productSelect.value || "").trim();
 
       if(key === "__OTHER__"){
+        updateCatalogPriceLabel();
         suggestLine.style.display = "none";
         otherNameWrap.style.display = "block";
         return;
@@ -1423,8 +1428,10 @@
       otherNameEl.value = "";
 
       const t = getTemplateByKey(key);
-      if(!t){ suggestLine.style.display = "none"; return; }
+      if(!t){ updateCatalogPriceLabel(); suggestLine.style.display = "none"; return; }
 
+      if(Number.isFinite(t.defaultPrice)) unitPriceEl.value = String(t.defaultPrice);
+      updateCatalogPriceLabel();
       if(t.suggested){
         suggestText.textContent = t.suggested;
         suggestLine.style.display = "block";
@@ -1457,8 +1464,10 @@
 
   const unit = (unitEl.value || "").trim() || "unité";
 
-  const unitPrice = Number(unitPriceEl.value);
-  if(!(unitPrice >= 0)) return { ok:false, msg:"Prix unitaire invalide." };
+  const enteredPrice = Number(unitPriceEl.value);
+  const activeVat = getDocumentVatContext().vatSnapshot;
+  const unitPrice = isTtcCatalogPrice(key) ? catalogTtcToHt(enteredPrice, activeVat.enabled ? Number(activeVat.serviceRate ?? 0.20) : 0) : enteredPrice;
+  if(!Number.isFinite(unitPrice) || (unitPrice < 0 && key !== "REMISE_DIAG")) return { ok:false, msg:"Prix unitaire invalide." };
 
   const detail = (lineDetailEl.value || "").trim();
   const note = (lineNoteEl.value || "").trim();
