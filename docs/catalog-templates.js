@@ -1,166 +1,53 @@
-// docs/catalog-templates.js
-// Source “front” partagée (sans Firestore) pour :
-// - nouvelle-prestation.html (select catalogue + suggestions)
-// - devis-free.html (réf + désignation)
-// - éventuellement interventions/prestations etc.
-//
-// ⚠️ Important :
-// - key = référence stable (ce que tu veux afficher comme "Réf catalogue")
-// - label = désignation affichée
-// - category = catégorie
-// - unit = unité par défaut (cohérent avec tes pages)
-// - suggested = texte “tarif conseillé” (optionnel)
-// - kind = "SERVICE" ou "KIT"
-
-function slugifyRef(s){
-  return String(s || "")
-    .normalize("NFD").replace(/[\u0300-\u036f]/g,"")     // accents
-    .toUpperCase()
-    .replace(/&/g," AND ")
-    .replace(/[^A-Z0-9]+/g,"_")
-    .replace(/^_+|_+$/g,"")
-    .replace(/_+/g,"_");
-}
-
-// --- mapping “unité” de catalogue.html -> unité standard CleanUp ---
-function normalizeUnit(u){
-  const x = String(u||"").toLowerCase().trim();
-  if(!x) return "unité";
-
-  if(x.includes("passage") || x.includes("rotation")) return "passage";
-  if(x.includes("mois")) return "mois";
-  if(x.includes("kit")) return "kit";
-  if(x.includes("intervention")) return "unité";
-  if(x.includes("supp")) return "supplément";
-  if(x.includes("inclus")) return "passage"; // “inclus” => 1 passage à 0€
-  return "unité";
-}
-
-function mapCategoryService(t){
-  const x = String(t||"").trim();
-  // correspondance avec nouvelle-prestation.html (category select)
-  if(x === "Ménage") return "Ménage";
-  if(x === "Linge") return "Linge";
-  if(x === "Check-in / Check-out") return "Check-in/out";
-  if(x === "Maintenance") return "Maintenance";
-  if(x === "Suivi") return "Essentiel";
-  if(x === "Administratif") return "Autre";
-  if(x === "Services complémentaires") return "Autre";
-  return "Autre";
-}
-
-function mapCategoryKit(t){
-  const x = String(t||"").trim();
-  if(x === "Essentiel" || x === "Cuisine" || x === "Salle de bain" || x === "Séjour" || x === "Réassort"){
-    return "Kits & consommables";
-  }
-  return "Kits & consommables";
-}
-
-// ====== RAW depuis ton catalogue.html (services + kits) ======
-const RAW_SERVICES = [
-  { id:101, name:"Ménage standard (inter-séjour)", type:"Ménage", priceSuggested:"45 € (studio/1ch) • 60 € (2ch) • 75 € (3ch) • 90 € (4ch)", unit:"par passage" },
-  { id:102, name:"Ménage intermédiaire (long séjour)", type:"Ménage", priceSuggested:"+15 €", unit:"supplément" },
-  { id:103, name:"Back-to-back (ménage en urgence)", type:"Ménage", priceSuggested:"+20 €", unit:"supplément" },
-  { id:104, name:"Remise en état (logement sale / non conforme)", type:"Remise en état", priceSuggested:"+25 €", unit:"supplément" },
-  { id:105, name:"Signalement anomalies (photos, dégâts)", type:"Suivi", priceSuggested:"0 €", unit:"inclus" },
-
-  { id:120, name:"Rechange linge (rotation complète)", type:"Linge", priceSuggested:"15 €", unit:"par passage" },
-  { id:121, name:"Collecte + lavage + séchage (conciergerie)", type:"Linge", priceSuggested:"25 €", unit:"par rotation" },
-  { id:122, name:"Dépose / reprise blanchisserie externe", type:"Linge", priceSuggested:"20 €", unit:"par rotation" },
-
-  { id:130, name:"Check-in autonome (boîte à clés)", type:"Check-in / Check-out", priceSuggested:"0 €", unit:"inclus" },
-  { id:131, name:"Check-in physique", type:"Check-in / Check-out", priceSuggested:"25 €", unit:"par passage" },
-  { id:132, name:"Check-out", type:"Check-in / Check-out", priceSuggested:"0 €", unit:"inclus" },
-  { id:133, name:"Gestion clés / badges", type:"Check-in / Check-out", priceSuggested:"0 €", unit:"inclus" },
-  { id:134, name:"Récupération clés après sortie", type:"Check-in / Check-out", priceSuggested:"10 €", unit:"par passage" },
-
-  { id:140, name:"Petite maintenance (ampoule, pile, joint…)", type:"Maintenance", priceSuggested:"15 €", unit:"par intervention" },
-  { id:141, name:"Intervention d’urgence (fuite, élec, serrure)", type:"Maintenance", priceSuggested:"40 €", unit:"par intervention" },
-  { id:142, name:"Coordination artisans", type:"Maintenance", priceSuggested:"30 €", unit:"par coordination" },
-
-  { id:150, name:"Photos après ménage", type:"Suivi", priceSuggested:"0 €", unit:"inclus" },
-
-  { id:160, name:"Facturation & suivi des prestations", type:"Administratif", priceSuggested:"0 €", unit:"inclus" },
-  { id:161, name:"Détail par séjour", type:"Administratif", priceSuggested:"0 €", unit:"inclus" },
-  { id:162, name:"Historique des factures", type:"Administratif", priceSuggested:"0 €", unit:"inclus" },
-  { id:163, name:"Récapitulatif mensuel propriétaire", type:"Administratif", priceSuggested:"0 €", unit:"inclus" },
-
-  { id:170, name:"Réponses messages voyageurs", type:"Services complémentaires", priceSuggested:"30 € / logement / mois (ou 2 € / message)", unit:"forfait (ou à l’acte)" },
+// Catalogue partagé CleanUp Manager — source unique des modèles de prestations.
+// Les tarifs sont des suggestions éditables, pas des prix contractuels.
+// Les remises négatives ne sont autorisées que pour la référence REMISE_DIAG.
+export const PRODUCT_TEMPLATES = [
+  { key:'MENAGE_STANDARD', label:'Ménage standard (inter-séjour)', category:'Ménage', suggested:'Ex. 45€ (studio/1ch) • 60€ (2ch) • 75€ (3ch) • 90€ (4ch)', unit:'unité', kind:'SERVICE', lineType:'SERVICE' },
+  { key:'MENAGE_INTERMEDIAIRE', label:'Ménage intermédiaire (long séjour)', category:'Ménage', suggested:'Ex. +15€ supplément Long séjour', unit:'supplément', kind:'SERVICE', lineType:'SERVICE' },
+  { key:'BACK_TO_BACK', label:'Back-to-back (ménage en urgence)', category:'Ménage', suggested:'Ex. +20€ supplément Urgence', unit:'supplément', kind:'SERVICE', lineType:'SERVICE' },
+  { key:'REMISE_EN_ETAT', label:'Remise en état (logement non conforme)', category:'Ménage', suggested:'Ex. +25€ supplément Non conforme', unit:'supplément', kind:'SERVICE', lineType:'SERVICE' },
+  { key:'RECHANGE_LINGE', label:'Rechange linge (rotation complète)', category:'Linge', suggested:'Ex. 15€ par passage Rotation', unit:'passage', kind:'SERVICE', lineType:'SERVICE' },
+  { key:'LAVAGE_SECHAGE', label:'Collecte + lavage + séchage', category:'Linge', suggested:'Ex. 25€ par rotation', unit:'unité', kind:'SERVICE', lineType:'SERVICE' },
+  { key:'BLANCHISSERIE', label:'Dépose / reprise blanchisserie', category:'Linge', suggested:'Ex. 20€ par rotation', unit:'unité', kind:'SERVICE', lineType:'SERVICE' },
+  { key:'CHECKIN_AUTONOME', label:'Check-in autonome (boîte à clés)', category:'Check-in/out', suggested:'Ex. 0€ inclus', unit:'passage', kind:'SERVICE', lineType:'SERVICE' },
+  { key:'CHECKIN_PHYSIQUE', label:'Check-in physique', category:'Check-in/out', suggested:'Ex. 20€ par passage', unit:'passage', kind:'SERVICE', lineType:'SERVICE' },
+  { key:'CHECKOUT', label:'Check-out', category:'Check-in/out', suggested:'Ex. 15€ par passage', unit:'passage', kind:'SERVICE', lineType:'SERVICE' },
+  { key:'GESTION_CLES', label:'Gestion clés / badges', category:'Check-in/out', suggested:'Ex. 10€ par intervention', unit:'unité', kind:'SERVICE', lineType:'SERVICE' },
+  { key:'RECUP_CLES', label:'Récupération clés après sortie', category:'Check-in/out', suggested:'Ex. 10€ par passage', unit:'passage', kind:'SERVICE', lineType:'SERVICE' },
+  { key:'PETITE_MAINTENANCE', label:'Petite maintenance (ampoule, joint…)', category:'Maintenance', suggested:'Ex. 15€ par intervention', unit:'unité', kind:'SERVICE', lineType:'SERVICE' },
+  { key:'URGENCE', label:'Intervention d’urgence (fuite, serrure)', category:'Maintenance', suggested:'Ex. 40€ par intervention', unit:'unité', kind:'SERVICE', lineType:'SERVICE' },
+  { key:'COORD_ARTISANS', label:'Coordination artisans', category:'Maintenance', suggested:'Ex. 30€ par coordination (hors coût artisan)', unit:'unité', kind:'SERVICE', lineType:'SERVICE' },
+  { key:'MESSAGES', label:'Réponses messages voyageurs', category:'Messages voyageurs', suggested:'Ex. 19€/logement/mois (20 mess) + 1,20€/mess supp', unit:'mois', kind:'SERVICE', lineType:'SERVICE' },
+  { key:'KIT_ESSENTIEL', label:'Kit essentiel', category:'Kits & consommables', suggested:'Ex. 5€ par kit', unit:'kit', kind:'KIT', lineType:'PRODUCT' },
+  { key:'KIT_CUISINE', label:'Kit cuisine', category:'Kits & consommables', suggested:'Ex. 7€ par kit', unit:'kit', kind:'KIT', lineType:'PRODUCT' },
+  { key:'KIT_BAIN', label:'Kit bain', category:'Kits & consommables', suggested:'Ex. 4€ par kit', unit:'kit', kind:'KIT', lineType:'PRODUCT' },
+  { key:'KIT_SEJOUR_2', label:'Kit séjour (Pack 2 pers)', category:'Kits & consommables', suggested:'Ex. 14€ par kit', unit:'kit', kind:'KIT', lineType:'PRODUCT' },
+  { key:'KIT_SEJOUR_4', label:'Kit séjour (Pack 4 pers)', category:'Kits & consommables', suggested:'Ex. 28€ par kit', unit:'kit', kind:'KIT', lineType:'PRODUCT' },
+  { key:'KIT_SEJOUR_6', label:'Kit séjour (Pack 6 pers)', category:'Kits & consommables', suggested:'Ex. 42€ par kit', unit:'kit', kind:'KIT', lineType:'PRODUCT' },
+  { key:'KIT_SEJOUR_8', label:'Kit séjour (Pack 8 pers)', category:'Kits & consommables', suggested:'Ex. 56€ par kit', unit:'kit', kind:'KIT', lineType:'PRODUCT' },
+  { key:'REASSORT', label:'Réassort produit unitaire (papier, café…)', category:'Kits & consommables', suggested:'Ex. 1,20€ par unité', unit:'unité', kind:'KIT', lineType:'PRODUCT' },
+  { key:'CREATION_ANNONCE', priceMode:'TTC', label:'Création d’annonce', category:'Essentiel', suggested:'99 € TTC', unit:'unité', kind:'SERVICE', lineType:'SERVICE', defaultPrice:99 },
+  { key:'DIAG_RENTABILITE', priceMode:'TTC', label:'Étude de rentabilité personnalisée', category:'Essentiel', suggested:'49 € TTC', unit:'unité', kind:'SERVICE', lineType:'SERVICE', defaultPrice:49 },
+  { key:'REMISE_DIAG', priceMode:'TTC', label:'Déduction étude de rentabilité déjà réglée', category:'Remise commerciale', suggested:'−49 € TTC (modifiable, si diagnostic déjà réglé)', unit:'unité', kind:'SERVICE', lineType:'SERVICE', defaultPrice:-49 },
+  { key:'SVC_SIGNALEMENT_ANOMALIES_PHOTOS_DEGATS', label:'Signalement anomalies (photos, dégâts)', category:'Essentiel', suggested:'0 €', unit:'unité', kind:'SERVICE', lineType:'SERVICE' },
+  { key:'SVC_PHOTOS_APRES_MENAGE', label:'Photos après ménage', category:'Essentiel', suggested:'0 €', unit:'unité', kind:'SERVICE', lineType:'SERVICE' },
+  { key:'SVC_FACTURATION_SUIVI_DES_PRESTATIONS', label:'Facturation & suivi des prestations', category:'Essentiel', suggested:'0 €', unit:'unité', kind:'SERVICE', lineType:'SERVICE' },
+  { key:'SVC_DETAIL_PAR_SEJOUR', label:'Détail par séjour', category:'Essentiel', suggested:'0 €', unit:'unité', kind:'SERVICE', lineType:'SERVICE' },
+  { key:'SVC_HISTORIQUE_DES_FACTURES', label:'Historique des factures', category:'Essentiel', suggested:'0 €', unit:'unité', kind:'SERVICE', lineType:'SERVICE' },
+  { key:'SVC_RECAPITULATIF_MENSUEL_PROPRIETAIRE', label:'Récapitulatif mensuel propriétaire', category:'Essentiel', suggested:'0 €', unit:'unité', kind:'SERVICE', lineType:'SERVICE' },
+  { key:'__OTHER__', label:'Autre (texte libre)', category:'Autre', suggested:'', unit:'unité', kind:'OTHER', lineType:'SERVICE' }
 ];
+export const TPL_BY_KEY = new Map(PRODUCT_TEMPLATES.map(p => [p.key,p]));
+export const KEY_BY_LABEL = new Map(PRODUCT_TEMPLATES.map(p => [p.label,p.key]));
+export const getTemplateByKey = key => TPL_BY_KEY.get(String(key||"")) || null;
+export const inferRefFromLabel = label => KEY_BY_LABEL.get(String(label||"")) || "";
+export const getTemplatesByKind = kind => PRODUCT_TEMPLATES.filter(p => p.kind === String(kind||"").toUpperCase());
 
-const RAW_KITS = [
-  { id:201, name:"Kit essentiel", type:"Essentiel", priceSuggested:"6,90 €", unit:"par kit" },
-  { id:202, name:"Kit cuisine", type:"Cuisine", priceSuggested:"3,90 €", unit:"par kit" },
-  { id:203, name:"Kit bain", type:"Salle de bain", priceSuggested:"3,90 €", unit:"par kit" },
-  { id:204, name:"Kit séjour (essentiel + cuisine + bain – 2 pers)", type:"Séjour", priceSuggested:"13,90 €", unit:"par kit" },
-  { id:205, name:"Kit séjour (4 pers)", type:"Séjour", priceSuggested:"27,80 €", unit:"par kit" },
-  { id:206, name:"Kit séjour (6 pers)", type:"Séjour", priceSuggested:"41,70 €", unit:"par kit" },
-  { id:207, name:"Kit séjour (8 pers)", type:"Séjour", priceSuggested:"55,60 €", unit:"par kit" },
-  { id:208, name:"Réassort produit unitaire (papier, sac, café…)", type:"Réassort", priceSuggested:"2 €", unit:"par unité" },
-];
-
-// ====== Build templates ======
-function buildTemplates(){
-  const out = [];
-
-  for(const s of RAW_SERVICES){
-    const key = "SVC_" + slugifyRef(s.name);
-    out.push({
-      key,
-      label: s.name,
-      category: mapCategoryService(s.type),
-      unit: normalizeUnit(s.unit),
-      suggested: String(s.priceSuggested || "").trim(),
-      kind: "SERVICE",
-      sourceId: s.id
-    });
-  }
-
-  for(const k of RAW_KITS){
-    const key = "KIT_" + slugifyRef(k.name);
-    out.push({
-      key,
-      label: k.name,
-      category: mapCategoryKit(k.type),
-      unit: normalizeUnit(k.unit),
-      suggested: String(k.priceSuggested || "").trim(),
-      kind: "KIT",
-      sourceId: k.id
-    });
-  }
-
-  // “Autre” (texte libre)
-  out.push({
-    key: "__OTHER__",
-    label: "Autre (texte libre)",
-    category: "Autre",
-    unit: "unité",
-    suggested: "",
-    kind: "OTHER",
-    sourceId: 0
-  });
-
-  return out;
-}
-
-export const PRODUCT_TEMPLATES = buildTemplates();
-
-// index utiles
-export const TPL_BY_KEY = new Map(PRODUCT_TEMPLATES.map(p => [p.key, p]));
-export const KEY_BY_LABEL = new Map(PRODUCT_TEMPLATES.map(p => [String(p.label||"").trim(), p.key]));
-
-// Helpers
-export function getTemplateByKey(key){
-  return TPL_BY_KEY.get(String(key||"").trim()) || null;
-}
-
-export function inferRefFromLabel(label){
-  return KEY_BY_LABEL.get(String(label||"").trim()) || "";
-}
-
-// utile si tu veux filtrer
-export function getTemplatesByKind(kind){
-  const k = String(kind||"").toUpperCase();
-  return PRODUCT_TEMPLATES.filter(p => String(p.kind||"").toUpperCase() === k);
+// Seules ces trois prestations ont un prix catalogue exprimé en TTC.
+// Les autres prestations restent saisies en HT dans les documents de vente.
+export const isTtcCatalogPrice = key => ['CREATION_ANNONCE','DIAG_RENTABILITE','REMISE_DIAG'].includes(String(key||''));
+export function catalogTtcToHt(ttc, rate){
+  const value=Number(ttc), tax=Number(rate)||0;
+  if(!Number.isFinite(value)) return NaN;
+  return Math.round((value/(1+tax)+Number.EPSILON)*100)/100;
 }
